@@ -873,10 +873,15 @@ function extractToolResultText(content: any): string {
   try { return JSON.stringify(content, null, 2); } catch { return String(content); }
 }
 
-// MCP/네임스페이스 prefix 제거 → 순수 도구명. (mcp__pepe_ssh__ssh_read_file → ssh_read_file, pepe_ssh.ssh_exec → ssh_exec)
+// MCP/네임스페이스 prefix 제거 → 순수 도구명.
+//   claude:  mcp__pepe_ssh__ssh_read_file  →  ssh_read_file
+//   codex:   pepe_ssh.ssh_read_file        →  ssh_read_file
+//   gemini:  mcp_pepe_ssh_ssh_read_file    →  ssh_read_file  (single underscore prefix)
 function bareToolName(name: string): string {
   let n = String(name || '');
   if (n.startsWith('mcp__')) { const i = n.lastIndexOf('__'); if (i >= 0) n = n.slice(i + 2); }
+  else if (n.startsWith('mcp_pepe_ssh_')) n = n.slice('mcp_pepe_ssh_'.length);
+  else if (n.startsWith('pepe_ssh_')) n = n.slice('pepe_ssh_'.length);
   else if (n.includes('.')) n = n.slice(n.lastIndexOf('.') + 1);
   return n;
 }
@@ -997,16 +1002,17 @@ function buildToolDetail(name: string, input: any): string {
     case 'Bash':
     case 'PowerShell':
       return cap(String(input.command || ''), 25, 1500);
-    case 'mcp__pepe_ssh__ssh_exec':
-      return cap([input.session ? `[${input.session}]` : '', String(input.command || '')].filter(Boolean).join(' '), 25, 1500);
-    case 'mcp__pepe_ssh__ssh_write':
-      return input.content ? cap(String(input.content).split('\n').map((l: string) => '+ ' + l).join('\n')) : '';
     case 'TodoWrite':
       return Array.isArray(input.todos) ? cap(input.todos.map((td: any) => `• ${td.content || td.activeForm || ''}`).join('\n')) : '';
     case 'ExitPlanMode':
       return input.plan ? cap(String(input.plan), 60, 3000) : '';
-    default:
+    default: {
+      // claude/codex/gemini 모두 동일하게 처리 — bareToolName 으로 SSH MCP 도구 매칭
+      const bn = bareToolName(name);
+      if (bn === 'ssh_exec') return cap([input.session ? `[${input.session}]` : '', String(input.command || '')].filter(Boolean).join(' '), 25, 1500);
+      if (bn === 'ssh_write_file' || bn === 'ssh_write') return input.content ? cap(String(input.content).split('\n').map((l: string) => '+ ' + l).join('\n')) : '';
       return '';
+    }
   }
 }
 
@@ -1120,7 +1126,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   );
   const sshInitRef = useRef(false);
   useEffect(() => {
-    // defaultSshSession 최초 1회 반영 (선택이 비어있을 때만)
+    // defaultSshSession 최초 1회 반영 (선택이 비어있을 때만).
+    // 사용자가 의도적으로 SSH 를 해제했는데 자동으로 다시 채워지는 부작용 회피.
+    // 포크/이력 전환 시의 누락은 send 시점 fallback 으로 따로 처리.
     if (defaultSshSession && !sshInitRef.current && selectedSshTermIds.size === 0) {
       sshInitRef.current = true;
       setSelectedSshTermIds(new Set([defaultSshSession.termId]));
@@ -1452,6 +1460,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 현재 컨텍스트와 어긋남(예: 첫 턴에 SSH 없이 시작 → 다음 턴에 SSH 선택했는데 pepe_ssh 도구가
   // 도구 목록에 안 잡힘). 그래서 변경 감지 시 한 번 새 세션으로 시작해 MCP 가 정상 등록되게 함.
   const lastClaudeMcpEnabledRef = useRef<boolean | null>(null);
+  // 이전 Claude 턴의 effectivePermMode — 이번 턴과 달라지면 --resume 으로 캐시된 도구 목록이
+  // 새 모드와 안 맞으므로(예: plan → bypassPermissions 전환 직후 ssh_exec 가 "No such tool" 로
+  // 차단되는 문제) 한 번 새 세션으로 시작해 도구 목록이 다시 등록되게 한다.
+  const lastClaudeEffectivePermRef = useRef<string | null>(null);
   // Claude CLI 대화 세션 ID (이전 대화 컨텍스트 유지용 --resume)
   const claudeSessionIdRef = useRef<string | null>(null);
   // 대화 이력 목록 (UIPrefs 영속화)
@@ -2334,6 +2346,24 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     }
     // 스트리밍 중엔 messages 가 빠르게 변함 → 디바운스로 마지막 변경 후 1회만 렌더.
     // (미완성 mermaid 블록을 렌더 시도하다 에러 div 가 남는 문제 방지)
+    // 스트리밍 종료 시점에는 error/ascii 로 마킹된 partial 블록의 마킹을 한 번 리셋해서
+    // 완성된 코드로 재렌더 시도되게 한다.
+    if (!streaming) {
+      try {
+        const roots: HTMLElement[] = [];
+        if (scrollRef.current) roots.push(scrollRef.current);
+        document.querySelectorAll<HTMLElement>('.claude-chat-plan-body').forEach(el => roots.push(el));
+        for (const r of roots) {
+          r.querySelectorAll<HTMLElement>('pre > code[data-mermaid-rendered]').forEach(el => {
+            const v = el.getAttribute('data-mermaid-rendered');
+            if (v === 'error' || v === 'ascii') {
+              el.removeAttribute('data-mermaid-rendered');
+              el.removeAttribute('data-mermaid-src');
+            }
+          });
+        }
+      } catch {}
+    }
     const __mermaidTimer = setTimeout(() => {
     // 메시지 영역 + plan 모달 본문 모두 스캔
     const roots: HTMLElement[] = [];
@@ -2684,7 +2714,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     })();
     }, 250);
     return () => clearTimeout(__mermaidTimer);
-  }, [messages, toolTimeline, pendingPlan, currentAgent, activeHistoryId, installed, mermaidEnabled]);
+  }, [messages, toolTimeline, pendingPlan, currentAgent, activeHistoryId, installed, mermaidEnabled, streaming]);
 
   // 메시지/세션ID 변경 시 활성 이력 항목에 동기화
   // 단, 활성 이력이 막 전환되었을 때(loadHistory 직후) 의 첫 실행은 스킵 — 그렇지 않으면
@@ -2797,19 +2827,29 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     // 0) 활성 SSH 세션: 원격 파일/명령은 pepe_ssh MCP 도구로 접근 (WebDAV 제거 — 빠르고 안정적)
     if (activeMount) {
       const multi = activeMounts.length > 1;
+      // 에이전트별 MCP 도구 prefix — 같은 server(pepe_ssh)인데 CLI 마다 노출 이름이 다름.
+      // claude: mcp__pepe_ssh__<tool>, gemini: mcp_pepe_ssh_<tool>, codex: pepe_ssh.<tool>
+      const agt = currentAgentRef.current;
+      const T = (n: string) =>
+        agt === 'gemini' ? `mcp_pepe_ssh_${n}` :
+        agt === 'codex'  ? `pepe_ssh.${n}` :
+                           `mcp__pepe_ssh__${n}`;
       contextLines.push(
         `# 중요: 원격 SSH 접근 규칙 (필수)`,
         ``,
         `현재 SSH 세션: **${activeMount.label}** — 원격 Linux 호스트입니다. 원격 파일은 이 PC 에 없습니다.`,
         `원격 파일/명령은 **반드시 pepe_ssh MCP 도구**로 접근하세요.`,
         `❌ 로컬 Read / Write / Edit / Glob / Grep / LS / Bash 를 원격 경로(\`/view/...\` 등)에 쓰지 마세요 — 동작하지 않습니다.`,
+        `❌ 단축형 \`ssh_exec\` / \`ssh_read_file\` 같은 이름으로 호출하면 "tool not found" 에러가 납니다. 아래 정확한 이름을 그대로 사용하세요.`,
         ``,
         `## 도구 (모든 경로는 원격 Unix 절대경로 그대로 — UNC/Windows 변환 불필요)`,
-        `✅ 파일 읽기: \`ssh_read_file(path="/원격/절대경로")\``,
-        `✅ 파일 쓰기/수정: \`ssh_write_file(path="...", content="...")\` — 수정 시 먼저 ssh_read_file 로 읽고 수정된 전체 내용을 다시 씀`,
-        `✅ 내용 검색(grep): \`ssh_grep(pattern="정규식", path="/dir", glob="*.c")\``,
-        `✅ 파일 찾기(glob): \`ssh_glob(pattern="*.c", path="/dir")\``,
-        `✅ 명령 실행: \`ssh_exec(command="...")\` — cleartool, ctco, git, make, ls, sed 등`,
+        `✅ 파일 읽기: \`${T('ssh_read_file')}(path="/원격/절대경로")\``,
+        `✅ 파일 쓰기/수정: \`${T('ssh_write_file')}(path="...", content="...")\` — 수정 시 먼저 ${T('ssh_read_file')} 로 읽고 수정된 전체 내용을 다시 씀`,
+        `✅ 내용 검색(grep): \`${T('ssh_grep')}(pattern="정규식", path="/dir", glob="*.c")\``,
+        `✅ 파일 찾기(glob): \`${T('ssh_glob')}(pattern="*.c", path="/dir")\``,
+        `✅ 명령 실행: \`${T('ssh_exec')}(command="...")\` — cleartool, ctco, git, make, ls, sed 등`,
+        ``,
+        `⚠ **Plan 모드에서는 ${T('ssh_exec')} / ${T('ssh_write_file')} 가 Claude CLI 측에서 자동 차단됩니다** — 그럴 땐 ${T('ssh_read_file')} / ${T('ssh_grep')} / ${T('ssh_glob')} 같은 읽기 전용 도구만으로 정보 수집·계획을 세우세요. (실제 실행은 사용자 승인 후 다음 턴에 진행)`,
       );
       if (multi) {
         contextLines.push(
@@ -3104,9 +3144,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     const addDirs = addDirsSet.size > 0 ? Array.from(addDirsSet) : undefined;
     // 활성 SSH 세션이 선택되어 있으면 Bash 금지 + MCP ssh_exec 툴 제공
     // 멀티 세션: 대표(첫)는 sshTermId, 전체 목록은 sshSessions 로 전달 (MCP 가 session 인자로 선택)
-    const selForSend = selectedSshSessions.length > 0
+    let selForSend = selectedSshSessions.length > 0
       ? selectedSshSessions.map(s => ({ id: s.termId, label: s.label }))
       : (activeMounts.length > 0 ? activeMounts.map(m => ({ id: m.termId, label: m.label })) : []);
+    // ★ Fallback: 선택은 비었지만 defaultSshSession 이 살아있으면 그걸 사용.
+    // (포크된 새 대화·이력 전환 직후 selectedSshTermIds 가 비어 sshTermId 가 undefined 로 가서
+    //  MCP 가 안 붙고 "pepe_ssh 도구 없음" 으로 응답되던 문제 회피)
+    if (selForSend.length === 0 && defaultSshSession?.termId) {
+      selForSend = [{ id: defaultSshSession.termId, label: defaultSshSession.label }];
+    }
     const sshTermId = selForSend[0]?.id;
     const sshSessions = selForSend.length > 0 ? selForSend : undefined;
     // 전송 후 로컬 파일 첨부는 해제
@@ -3158,22 +3204,39 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         await (window as any).api?.codexSend?.(sessionId, codexPrompt, requestId, model, codexApprovalPolicy, effort, sshTermId, sshSessions);
       } else {
         const disallowBash = !!sshTermId;
-        // MCP 활성 상태가 이전 턴 대비 바뀌면 resume 끊기 — Claude 가 캐시한 도구 목록이 새 상황과
-        // 어긋나 pepe_ssh 도구가 안 잡히는 문제 방지. 첫 턴(null) 은 변경으로 간주하지 않음.
-        const mcpEnabledNow = !!sshTermId;
-        if (lastClaudeMcpEnabledRef.current !== null && lastClaudeMcpEnabledRef.current !== mcpEnabledNow) {
-          console.log('[ClaudeChat] MCP availability changed (was=', lastClaudeMcpEnabledRef.current, 'now=', mcpEnabledNow, ') → 새 Claude 세션으로 시작');
-          claudeSessionIdRef.current = null;
-        }
-        lastClaudeMcpEnabledRef.current = mcpEnabledNow;
+        // ⚠ lastClaudeMcpEnabledRef 자동 reset 로직 — 회귀 원인 의심으로 일단 비활성화.
+        // (MCP availability 가 바뀌면 새 세션으로 시작하던 보조 로직 — 정상 상황에서도 의도치 않게
+        //  claudeSessionIdRef 를 null 로 만들어 매 턴이 첫 턴 취급으로 plan 모드 고정되는 부작용 의심.
+        //  MCP 도구 목록 캐시 문제는 사용자가 새 대화를 직접 시작하면 자연 해결.)
         const resumeSessionId = claudeSessionIdRef.current;
         // 비대화형 모드(-p)에서는 'default' 권한이 항상 거부됨 → 대신 'plan' 모드로 변환
         const approveKeywords = ['실행', '진행', '좋아', 'yes', 'ok', '승인', 'approve', '해줘', 'go ahead', '네'];
         const isApproval = approveKeywords.some(k => text.toLowerCase().includes(k.toLowerCase()));
         let effectivePermMode: string = permissionMode;
         if (permissionMode === 'default') {
-          effectivePermMode = (isApproval && claudeSessionIdRef.current) ? 'bypassPermissions' : 'plan';
+          if (sshTermId) {
+            // SSH 컨텍스트: plan 모드는 MCP 도구(ssh_exec/ssh_glob 등)를 차단해 작업이 불가능 →
+            // bypassPermissions 로 자동 전환. 사용자가 명시적으로 'plan' 을 선택했으면 그대로 존중.
+            effectivePermMode = 'bypassPermissions';
+          } else {
+            effectivePermMode = (isApproval && claudeSessionIdRef.current) ? 'bypassPermissions' : 'plan';
+          }
         }
+        // ★ 모드가 이전 턴과 달라지면 resume 끊기 — Claude 가 캐시한 도구 목록이 새 모드와
+        //   안 맞아 ssh_exec 등이 "No such tool available" 로 차단되는 회귀를 방지.
+        if (lastClaudeEffectivePermRef.current !== null && lastClaudeEffectivePermRef.current !== effectivePermMode) {
+          console.log('[ClaudeChat] effective permission mode changed (was=', lastClaudeEffectivePermRef.current, 'now=', effectivePermMode, ') → 새 Claude 세션으로 시작');
+          claudeSessionIdRef.current = null;
+        }
+        // ★ chat history 로드로 살아있는 옛 세션 잔재 처리 — 새 컴포넌트 인스턴스의 첫 send 시
+        //   claudeSessionIdRef 가 truthy 면 그건 history 에서 복원된 옛 세션 ID. 그 세션이 다른
+        //   권한/도구 등록 상태로 캐시돼 있으면 첫 도구 호출이 "No such tool available" 로 실패.
+        //   안전하게 새 세션으로 시작 (대화 컨텍스트는 prompt prepend 로 inject 됨).
+        if (lastClaudeEffectivePermRef.current === null && claudeSessionIdRef.current && sshTermId) {
+          console.log('[ClaudeChat] 첫 send + 잔존 session_id — SSH 컨텍스트 안전을 위해 새 Claude 세션으로 시작');
+          claudeSessionIdRef.current = null;
+        }
+        lastClaudeEffectivePermRef.current = effectivePermMode;
         // Plan 모드에서는 Claude 에게 ExitPlanMode 툴 사용을 명확히 지시
         if (effectivePermMode === 'plan') {
           contextLines.push(

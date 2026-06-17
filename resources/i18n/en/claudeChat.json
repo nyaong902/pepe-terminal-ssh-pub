@@ -48,6 +48,7 @@
   "stop": "Stop response",
   "stopShort": "Stop",
   "send": "Send (Enter)",
+  "searchPlaceholder": "🔍 Search messages (Enter next, Shift+Enter prev, Esc close)",
   "inputPlaceholder": "Type your question (Shift+Enter for newline)",
   "steer": "Steer",
   "steeringInputPlaceholder": "Type an extra instruction while Codex is running. It will be sent automatically after the current turn finishes.",

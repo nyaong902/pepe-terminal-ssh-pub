@@ -302,6 +302,26 @@ function handleMessage(msg) {
       return;
     }
 
+    // 빈 결과일 때 진단 — 경로가 실제로 존재하는지 + ClearCase view 가 시작됐는지 확인해
+    // "(no matches)" 가 아니라 명확한 사유를 알려준다.
+    function diagnoseEmpty(base, cb) {
+      const dcmd = `if [ ! -e ${shq(base)} ]; then echo "DOES_NOT_EXIST"; elif [ ! -d ${shq(base)} ]; then echo "NOT_A_DIRECTORY"; else (file_count=$(find ${shq(base)} -maxdepth 1 -mindepth 1 2>/dev/null | wc -l); echo "OK_CHILDREN=$file_count"); fi`;
+      callExec(termId, dcmd, 15000)
+        .then(r => cb(String(r.stdout || '').trim()))
+        .catch(() => cb(''));
+    }
+    function withDiagnostic(out, base, baseMsg) {
+      return new Promise(resolve => {
+        if (out) return resolve(out);
+        diagnoseEmpty(base, diag => {
+          if (diag.startsWith('DOES_NOT_EXIST')) resolve(`${baseMsg}\n⚠ 경로 ${base} 가 원격 호스트에 존재하지 않습니다. (ClearCase view 가 시작되지 않았을 수 있음 — "cleartool startview <view>" 또는 경로 확인)`);
+          else if (diag.startsWith('NOT_A_DIRECTORY')) resolve(`${baseMsg}\n⚠ ${base} 는 디렉토리가 아닙니다.`);
+          else if (diag.startsWith('OK_CHILDREN=0')) resolve(`${baseMsg}\n(디렉토리는 존재하나 비어있음)`);
+          else resolve(baseMsg);
+        });
+      });
+    }
+
     if (name === 'ssh_grep') {
       const pattern = String(args.pattern || '');
       if (!pattern.trim()) { sendMsg({ jsonrpc: '2.0', id, error: { code: -32602, message: 'pattern is required' } }); return; }
@@ -312,9 +332,10 @@ function handleMessage(msg) {
       // -rnI: 재귀+줄번호+바이너리 무시. 2>/dev/null 로 권한오류 잡음 제거. head 로 결과 캡.
       const cmd = `grep -rnI ${ic}-E ${inc}-e ${shq(pattern)} ${shq(base)} 2>/dev/null | head -n ${max}`;
       callExec(termId, cmd, 60000)
-        .then(result => {
+        .then(async result => {
           const out = String(result.stdout || '').trimEnd();
-          ok(out ? out : `(no matches for /${pattern}/ under ${base})`);
+          const baseMsg = out ? out : `(no matches for /${pattern}/ under ${base})`;
+          ok(await withDiagnostic(out, base, baseMsg));
         })
         .catch(fail);
       return;
@@ -329,9 +350,10 @@ function handleMessage(msg) {
       const namePat = pattern.replace(/^.*\*\*\/+/, '').replace(/^.*\/+/, '') || pattern;
       const cmd = `find ${shq(base)} -type f -name ${shq(namePat)} 2>/dev/null | head -n ${max}`;
       callExec(termId, cmd, 60000)
-        .then(result => {
+        .then(async result => {
           const out = String(result.stdout || '').trimEnd();
-          ok(out ? out : `(no files matching ${pattern} under ${base})`);
+          const baseMsg = out ? out : `(no files matching ${pattern} under ${base})`;
+          ok(await withDiagnostic(out, base, baseMsg));
         })
         .catch(fail);
       return;

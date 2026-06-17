@@ -5148,11 +5148,16 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
     const effortFlag = (effort && ['low', 'medium', 'high', 'max'].includes(effort)) ? `--effort ${effort}` : '';
     console.log('[claude] model:', model || 'default');
 
-    // 툴 단위 승인 (hooks) — perToolApproval true 일 때만 활성화
+    // 툴 단위 승인 (hooks) — perToolApproval true 일 때 활성화.
+    // ⚠ bypassPermissions(--dangerously-skip-permissions) 모드에서는 hook 을 비활성화 한다.
+    //    그 조합에서 Claude CLI 가 도구 등록을 race-condition 으로 깨먹어 일부 도구가
+    //    "No such tool available" 로 보이는 회귀가 발견됨.
+    //    Edit/Write 모달은 다른 명시 모드(plan/acceptEdits)에서만 동작 — bypass 에선 자동 통과.
     let settingsFlag = '';
     let settingsTmp = '';
     let hookScriptPath = '';
-    if (perToolApproval) {
+    const usePerToolApproval = perToolApproval && permissionMode !== 'bypassPermissions';
+    if (usePerToolApproval) {
       await startMcpControl();
       hookScriptPath = path.join(os.tmpdir(), 'pepe-claude-hook.cjs');
       try {
@@ -5167,7 +5172,10 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
       const settings = {
         hooks: {
           PreToolUse: [{
-            matcher: 'Bash|Edit|Write|Create|Delete|Move|Rename|mcp__.*',
+            // 변경성 도구 + 명령 실행 도구만 hook 으로 가로채 사용자 승인 모달.
+            // - 모달 띄움: Edit/MultiEdit/Write/NotebookEdit + ssh_write_file + Bash + ssh_exec
+            // - 자동 통과: Read/Glob/Grep/LS/ssh_read_file/ssh_grep/ssh_glob (읽기 전용)
+            matcher: 'Bash|Edit|MultiEdit|Write|NotebookEdit|Create|Delete|Move|Rename|mcp__pepe_ssh__ssh_exec|mcp__pepe_ssh__ssh_write_file',
             hooks: [{
               type: 'command',
               command: isWin ? `"${wrapperPath}"` : `node "${hookScriptPath}"`,

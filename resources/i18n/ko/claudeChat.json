@@ -48,6 +48,7 @@
   "stop": "응답 중단",
   "stopShort": "중단",
   "send": "전송 (Enter)",
+  "searchPlaceholder": "🔍 메시지 검색 (Enter 다음, Shift+Enter 이전, Esc 닫기)",
   "inputPlaceholder": "질문을 입력하세요 (Shift+Enter 줄바꿈)",
   "steer": "추가 지시",
   "steeringInputPlaceholder": "Codex 작업 중 추가 지시를 입력하세요. 현재 턴이 끝나면 자동 전송됩니다.",
