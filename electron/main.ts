@@ -4788,6 +4788,14 @@ function markAgentStopped(procKey: string) {
   stoppedAgentProcs.add(procKey);
   setTimeout(() => stoppedAgentProcs.delete(procKey), 60_000);
 }
+// procKey(requestId) 기준으로 webContents.send 자체를 봉인 — stdout/stderr 핸들러
+// 가드 외에 다른 경로(예: 핸들러 안에서 await 사이에 끼어든 send) 잔여 이벤트도 차단.
+function sendAgentStream(channel: string, payload: any) {
+  if (!mainWindow) return;
+  const rid = payload && payload.requestId;
+  if (rid && stoppedAgentProcs.has(rid)) return;
+  try { mainWindow.webContents.send(channel, payload); } catch {}
+}
 
 // GUI .app 실행 환경의 minimal PATH 보강 — npm global bin / Homebrew / nvm 경로 추가.
 // claude:send 와 claude:check 양쪽에서 사용. nvm 은 versions/node/* glob 으로 모든 버전 bin 포함.
@@ -5226,9 +5234,9 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
               sawOverload = true; // 과부하 → 마지막 시도 전까지는 에러 숨기고 재시도
               continue;
             }
-            mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: msg });
+            sendAgentStream('claude:stream', { sessionId, requestId, message: msg });
           } else {
-            mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'text', text: trimmed } });
+            sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'text', text: trimmed } });
           }
         }
       });
@@ -5237,12 +5245,12 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
         const err = data.toString();
         console.log('[claude] stderr:', err);
         if (isOverloadText(err) && !sawContent && attempt < MAX_ATTEMPTS) { sawOverload = true; return; }
-        mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'error', text: err } });
+        sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: err } });
       });
       proc.on('error', (err: any) => {
         if (stoppedAgentProcs.has(procKey)) return;
         console.log('[claude] spawn error:', err);
-        mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'error', text: String(err) } });
+        sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: String(err) } });
       });
       proc.on('close', (code: number) => {
         console.log('[claude] close, code:', code, 'attempt:', attempt, 'overload:', sawOverload);
@@ -5250,12 +5258,12 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
         if (stoppedAgentProcs.has(procKey)) { stoppedAgentProcs.delete(procKey); cleanupTmp(); return; }
         if (sawOverload && !sawContent && attempt < MAX_ATTEMPTS) {
           const delay = 1500 * attempt; // 1.5s, 3s, 4.5s 백오프
-          mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'text', text: `⏳ 서버 과부하(529) — ${Math.round(delay / 1000)}초 후 재시도 (${attempt}/${MAX_ATTEMPTS - 1})...\n` } });
+          sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'text', text: `⏳ 서버 과부하(529) — ${Math.round(delay / 1000)}초 후 재시도 (${attempt}/${MAX_ATTEMPTS - 1})...\n` } });
           setTimeout(() => { if (stoppedAgentProcs.has(procKey)) { stoppedAgentProcs.delete(procKey); cleanupTmp(); } else launch(); }, delay);
           return;
         }
         cleanupTmp();
-        mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'done', code } });
+        sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'done', code } });
       });
     };
     launch();
@@ -5499,22 +5507,37 @@ ipcMain.handle('claude:stop', (_e, { sessionId, requestId }: { sessionId: string
   // 즉시 stream 차단 — taskkill 비동기 완료 전 stdout 버퍼에 남은 데이터/지연 close 가
   // 렌더러로 흘러가서 "응답이 계속 오는" 문제를 막는다.
   markAgentStopped(procKey);
+  // 권한 모달 대기 중인 hook 들도 모두 deny 처리 — hook 자식이 5분 timeout 까지 살아남으면
+  // taskkill /T 로 죽지 않고 새 approval request 를 계속 보내거나, claude CLI 가 hook 응답을
+  // 기다리며 stdout 을 계속 흘릴 수 있음. (동시 다중 chat 은 드물어 전체 deny 가 실용적)
+  for (const [aid, pending] of pendingApprovals) {
+    try { pending.sock.write(JSON.stringify({ id: pending.reqId, result: 'deny', reason: 'User stopped' }) + '\n'); } catch {}
+    pendingApprovals.delete(aid);
+  }
   const proc = claudeProcesses.get(procKey);
   if (proc) {
     // shell 을 통해 spawn 했으므로 proc.kill() 만으로는 자식 claude 가 살아남는다.
-    // Windows: taskkill /T /F 로 프로세스 트리 전체 종료
-    // Unix: process group 시그널 (-pid) — 단 detached 가 아니어도 일반적으론 SIGTERM 전파됨, 강제는 SIGKILL
+    // Windows: taskkill /T /F 를 ★동기★ 로 실행 — 비동기 spawn 직후 곧바로 proc.kill 을 호출하면
+    // cmd.exe 부모가 먼저 죽어 자식들이 orphan 이 되고 taskkill /T 가 트리를 못 따라간다.
+    // (= stop 눌렀는데 claude.exe/node.exe 가 계속 살아있어 새 tool_use 가 흘러나오던 원인)
+    // Unix: process group 시그널 (-pid) → SIGKILL
     try {
       if (process.platform === 'win32') {
         const pid = proc.pid;
         if (pid) {
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+          const { execFileSync } = require('child_process');
+          try {
+            execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+          } catch {
+            // 동기 taskkill 실패 시 fallback — 비동기 + proc.kill
+            try { spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
+            try { proc.kill('SIGKILL'); } catch {}
+          }
         }
       } else {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
       }
     } catch {}
-    try { proc.kill('SIGKILL'); } catch {}
     claudeProcesses.delete(procKey);
   }
   return { success: true };
@@ -5682,7 +5705,7 @@ ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, 
     };
 
     console.log('[gemini] spawn — model:', model || 'default', '| yolo:', yolo !== false);
-    const sendStream = (message: any) => mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message });
+    const sendStream = (message: any) => sendAgentStream('claude:stream', { sessionId, requestId, message });
     // gemini stream-json 이벤트 → claude:stream (Claude 호환 포맷) 변환
     const gIdPrefix = requestId || `gmn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let geminiHadOutput = false;
@@ -5874,12 +5897,19 @@ ipcMain.handle('gemini:stop', (_e, { sessionId, requestId }: { sessionId: string
     try {
       if (process.platform === 'win32') {
         const pid = proc.pid;
-        if (pid) spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        if (pid) {
+          const { execFileSync } = require('child_process');
+          try {
+            execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+          } catch {
+            try { spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
+            try { proc.kill('SIGKILL'); } catch {}
+          }
+        }
       } else {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
       }
     } catch {}
-    try { proc.kill('SIGKILL'); } catch {}
     geminiProcesses.delete(procKey);
   }
   return { success: true };
@@ -6141,7 +6171,7 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
     // codex 의 도구 사용 내역(command_execution, file_change, mcp_tool_call 등)을
     // Claude 의 tool_use/tool_result 포맷으로 매핑 → 렌더러가 그대로 타임라인에 표시.
     const sendStream = (message: any) =>
-      mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message });
+      sendAgentStream('claude:stream', { sessionId, requestId, message });
     // codex item id(item_0, item_1...)는 매 실행마다 0부터 재사용됨 → 요청별 prefix 로
     // 전역 고유 id 생성 (없으면 메시지/툴 id 가 이전 응답과 충돌해 새 응답이 묻힘)
     const idPrefix = requestId || `cdx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -6334,7 +6364,7 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
     proc.on('error', (err: any) => {
       if (stoppedAgentProcs.has(procKey)) return;
       console.log('[codex] spawn error:', err);
-      mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'error', text: String(err) } });
+      sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: String(err) } });
     });
     proc.on('close', (code: number) => {
       console.log('[codex] close, code:', code);
@@ -6345,7 +6375,7 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
         const errLines = codexStderrBuf.split('\n')
           .filter(l => l.trim() && !CODEX_META_RE.test(l) && CODEX_STDERR_ERR.test(l));
         if (errLines.length) {
-          mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'error', text: errLines.join('\n') } });
+          sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: errLines.join('\n') } });
         }
       }
       // 토큰 사용량 + rate_limits(요금 한도) — codex 세션 rollout 파일에서 추출
@@ -6360,7 +6390,7 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
       cleanupTmp();
       codexProcesses.delete(procKey);
       if (stoppedAgentProcs.has(procKey)) { stoppedAgentProcs.delete(procKey); return; }
-      mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message: { type: 'done', code } });
+      sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'done', code } });
     });
     return { success: true };
   } catch (err: any) {
@@ -6378,12 +6408,19 @@ ipcMain.handle('codex:stop', (_e, { sessionId, requestId }: { sessionId: string;
     try {
       if (process.platform === 'win32') {
         const pid = proc.pid;
-        if (pid) spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        if (pid) {
+          const { execFileSync } = require('child_process');
+          try {
+            execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+          } catch {
+            try { spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
+            try { proc.kill('SIGKILL'); } catch {}
+          }
+        }
       } else {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
       }
     } catch {}
-    try { proc.kill('SIGKILL'); } catch {}
     codexProcesses.delete(procKey);
   }
   return { success: true };

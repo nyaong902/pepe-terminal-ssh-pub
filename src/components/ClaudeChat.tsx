@@ -1163,6 +1163,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // Git 상태 — 현재 cwd / 활성 SSH 세션 자동 감지
   const [gitStatus, setGitStatus] = useState<{ ok: boolean; branch?: string; additions?: number; deletions?: number } | null>(null);
   const [input, setInput] = useState('');
+  // Codex steering 큐 — codex 응답 중에 사용자가 추가 지시를 큐잉, 끝나면 순서대로 자동 전송
+  const [pendingCodexSteeringQueue, setPendingCodexSteeringQueue] = useState<string[]>([]);
   // 외부 워크스페이스(예: LogAnalyzer)에서 prompt prefill — 'claude-prefill' window event 로 수신.
   // detail: { text?: string, attachments?: { name, content }[], newConversation?: boolean, agent?: 'claude'|'gemini'|'codex' }
   useEffect(() => {
@@ -1433,6 +1435,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   useEffect(() => { try { localStorage.setItem('claudePerToolApproval', perToolApproval ? '1' : '0'); } catch {} }, [perToolApproval]);
   // 현재 대기 중인 툴 승인 요청 (hook 에서 전달)
   const [pendingToolApproval, setPendingToolApproval] = useState<{ approvalId: string; toolName: string; toolInput: any } | null>(null);
+  // approval 요청 ↔ 합성 timeline entry id 매핑.
+  // PreToolUse hook 으로 승인을 받는 동안 Claude 가 stream-json tool_use 를 늦게 보내는 케이스가 있어
+  // 사용자가 "도구 사용 이력이 안 보임" 으로 느낌 → 승인 요청이 오는 순간 임시 entry 를 push 하고,
+  // 실제 tool_use(toolu_xxx) 가 오면 같은 name+input 항목의 id 를 실제 id 로 교체해 tool_result 매칭이 이어지게 한다.
+  const approvalEntryIdsRef = useRef<Map<string, string>>(new Map());
   const [sessionId] = useState(() => `claude-${Date.now()}-${sessionCounter++}`);
   // 사용자가 전송 버튼을 누를 때까지 파일 컨텍스트를 로컬에서 보관 (다중 첨부)
   const [attachments, setAttachments] = useState<FileContextItem[]>([]);
@@ -1441,6 +1448,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   const [activeMounts, setActiveMounts] = useState<{ termId: string; mountRoot: string; label: string }[]>([]);
   // 대표 마운트 (단일 참조 호환용)
   const activeMount = activeMounts[0] || null;
+  // 이전 Claude 턴의 MCP 활성 상태(=sshTermId 유무) — 변경되면 --resume 으로 캐시된 도구 목록이
+  // 현재 컨텍스트와 어긋남(예: 첫 턴에 SSH 없이 시작 → 다음 턴에 SSH 선택했는데 pepe_ssh 도구가
+  // 도구 목록에 안 잡힘). 그래서 변경 감지 시 한 번 새 세션으로 시작해 MCP 가 정상 등록되게 함.
+  const lastClaudeMcpEnabledRef = useRef<boolean | null>(null);
   // Claude CLI 대화 세션 ID (이전 대화 컨텍스트 유지용 --resume)
   const claudeSessionIdRef = useRef<string | null>(null);
   // 대화 이력 목록 (UIPrefs 영속화)
@@ -1525,6 +1536,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // requestId → historyId 매핑. 비활성 대화의 stream 도 해당 history 항목에 계속 반영하기 위함.
   const requestToHistoryRef = useRef<Map<string, string>>(new Map());
   const requestToAgentRef = useRef<Map<string, AgentType>>(new Map());
+  // 사용자가 명시적으로 stop 한 요청 ID — 이후 도착하는 모든 stream 이벤트를 봉인.
+  // IPC 파이프에 이미 버퍼링된 청크 + 늦게 도착하는 done/error 이벤트가 응답을 계속 키우는 문제 차단.
+  const stoppedRequestsRef = useRef<Set<string>>(new Set());
+  // 사용자가 직전 턴을 stop 시켰음 — 다음 send 시 AI 에게 알려서 끊긴 작업을 그대로 이어가지
+  // 않게 한다. send 가 처리하고 false 로 리셋.
+  const previousTurnStoppedRef = useRef<boolean>(false);
   // codex/gemini 계획(plan) 단계로 전송된 requestId 집합 — 응답 수신 시 계획 모달 표시 판별용
   const codexPlanRequestsRef = useRef<Set<string>>(new Set());
   const geminiPlanRequestsRef = useRef<Set<string>>(new Set());
@@ -1881,12 +1898,44 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 중단 직후 (~3초) 들어오는 모든 hook approval request 는 자동 거부 — stop 직후 hook 이
+  // 보낸 요청이 새 모달로 뜨거나 timeline 에 추가되는 문제 차단.
+  const stopGuardUntilRef = useRef<number>(0);
   // Hook 승인 요청 리스너
   useEffect(() => {
     const dispose = (window as any).api?.onClaudeHookApprovalRequest?.((p: any) => {
+      // stop 직후 잔여 요청은 자동 deny — 사용자에게 노출 없이 hook 만 빠르게 종료시킴
+      if (Date.now() < stopGuardUntilRef.current) {
+        try { (window as any).api?.claudeHookRespond?.(p.approvalId, 'deny', 'User stopped'); } catch {}
+        return;
+      }
       setPendingToolApproval({ approvalId: p.approvalId, toolName: p.toolName, toolInput: p.toolInput });
+      // timeline 에 임시 entry 추가 (실제 tool_use 가 늦게 오는 케이스에도 항상 표시되도록).
+      // 이미 동일 (name, input) 의 running entry 가 있으면(=stream 이 먼저 옴) 추가하지 않고 그 id 를 매핑만 함.
+      const inputKey = JSON.stringify(p.toolInput ?? {});
+      const synthId = `app-${p.approvalId}`;
+      setToolTimeline(prev => {
+        const matched = prev.find(t => t.status === 'running' && t.name === p.toolName && JSON.stringify(((t as any)._input ?? null)) === inputKey);
+        if (matched) {
+          approvalEntryIdsRef.current.set(p.approvalId, matched.id);
+          return prev;
+        }
+        approvalEntryIdsRef.current.set(p.approvalId, synthId);
+        return [...prev, {
+          id: synthId,
+          name: p.toolName,
+          label: buildToolLabel(p.toolName, p.toolInput),
+          labelShort: buildToolLabelShort(p.toolName, p.toolInput),
+          detail: buildToolDetail(p.toolName, p.toolInput),
+          status: 'running',
+          seq: nextSeq(),
+          // 입력 보관 — 이후 실제 tool_use 가 올 때 매칭에 사용
+          ...({ _input: p.toolInput } as any),
+        } as ToolTimelineItem];
+      });
     });
     return () => { if (dispose) dispose(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 선택된 SSH 세션 목록을 AI 대상으로 등록 (WebDAV 마운트 없이 — 파일 접근은 pepe_ssh MCP 도구로).
@@ -1902,9 +1951,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   useEffect(() => {
     const dispose = (window as any).api?.onClaudeStream?.((p: any) => {
       if (p.sessionId !== sessionId) return;
+      const reqId: string | undefined = p.requestId;
+      // 사용자가 stop 누른 요청의 잔여 이벤트는 모두 봉인 — 메시지 키움/툴 업데이트 모두 차단.
+      if (reqId && stoppedRequestsRef.current.has(reqId)) return;
       lastStreamEventAtRef.current = Date.now();
       hadStreamEventRef.current = true; // 에이전트가 출력 시작 — 콜드스타트 유예 해제
-      const reqId: string | undefined = p.requestId;
       // requestId → historyId 매핑으로 어느 대화에 속하는 이벤트인지 판별
       const targetHistoryId = reqId ? requestToHistoryRef.current.get(reqId) : null;
       if (!targetHistoryId) return; // 추적 불가 이벤트 무시
@@ -2015,13 +2066,26 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           }
         } catch {}
 
-        // 툴 호출을 타임라인에 추가 (각 tool_use id 별)
+        // 툴 호출을 타임라인에 추가 (각 tool_use id 별).
+        // 승인 모달이 먼저 떠 임시 entry(app-*)가 있으면, 같은 (name, input) 항목의 id 를 실제 tool_use id 로 교체.
         if (toolUses.length > 0) {
           setToolTimeline(prev => {
             const next = [...prev];
             for (const t of toolUses) {
               if (next.find(x => x.id === t.id)) continue;
-              next.push({ id: t.id, name: t.name, label: buildToolLabel(t.name, t.input), labelShort: buildToolLabelShort(t.name, t.input), detail: buildToolDetail(t.name, t.input), status: 'running', seq: nextSeq() });
+              const inputKey = JSON.stringify(t.input ?? {});
+              const orphanIdx = next.findIndex(x => x.status === 'running' && x.id.startsWith('app-') && x.name === t.name && JSON.stringify(((x as any)._input ?? null)) === inputKey);
+              if (orphanIdx >= 0) {
+                // 임시 entry 의 id 만 실제 id 로 교체 — 라벨/순서 보존, 매핑도 업데이트
+                const synth = next[orphanIdx];
+                const realId = t.id;
+                for (const [aid, eid] of approvalEntryIdsRef.current) {
+                  if (eid === synth.id) approvalEntryIdsRef.current.set(aid, realId);
+                }
+                next[orphanIdx] = { ...synth, id: realId };
+                continue;
+              }
+              next.push({ id: t.id, name: t.name, label: buildToolLabel(t.name, t.input), labelShort: buildToolLabelShort(t.name, t.input), detail: buildToolDetail(t.name, t.input), status: 'running', seq: nextSeq(), ...({ _input: t.input } as any) });
             }
             return next;
           });
@@ -2643,6 +2707,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
 
   // 현재 에이전트 view 에 적용할 streaming — 공유 OFF 시 다른 에이전트 stream 은 제외
   const currentAgentStreaming = shareContext ? streaming : streamingAgents.has(currentAgent);
+  // Codex 가 응답 중인 동안 입력창을 steering 모드로 전환 — 새 입력은 send 대신 큐잉
+  const isCodexSteeringMode = currentAgent === 'codex' && currentAgentStreaming;
   const send = useCallback(async (text: string, contextItems: FileContextItem[]) => {
     // 첨부만 있고 텍스트가 없어도 전송 허용 (이미지/문서만 보내는 경우)
     if (!text.trim() && binaryAttachments.length === 0 && localFileAttachments.length === 0 && (contextItems?.length || 0) === 0) return;
@@ -2665,6 +2731,20 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     activeRequestIdRef.current = requestId;
     let prompt = text;
     let attachBadge = '';
+    // 직전 턴이 사용자에 의해 중단됐다면 그 사실을 AI 에게 알려, 끊긴 작업을 그대로 가정하고
+    // 이어가지 않도록 한다 (예: "방금 호출한 도구는 미완료, 이번 새 요청에 집중").
+    if (previousTurnStoppedRef.current) {
+      previousTurnStoppedRef.current = false;
+      prompt = [
+        '[시스템 알림]',
+        '직전 응답/턴은 사용자가 중단했습니다.',
+        '- 그 턴에서 진행 중이던 도구 호출/명령은 완료되지 않았다고 간주하세요.',
+        '- 직전 작업을 그대로 이어가지 말고, 아래의 새 사용자 요청에 집중하세요.',
+        '- 직전에 했던 내용을 다시 시도해야 하는지 필요하면 한 줄로 짧게 확인 질문만 하세요.',
+        '',
+        prompt,
+      ].join('\n');
+    }
     const addDirsSet = new Set<string>();
     const contextLines: string[] = [];
 
@@ -3078,6 +3158,14 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         await (window as any).api?.codexSend?.(sessionId, codexPrompt, requestId, model, codexApprovalPolicy, effort, sshTermId, sshSessions);
       } else {
         const disallowBash = !!sshTermId;
+        // MCP 활성 상태가 이전 턴 대비 바뀌면 resume 끊기 — Claude 가 캐시한 도구 목록이 새 상황과
+        // 어긋나 pepe_ssh 도구가 안 잡히는 문제 방지. 첫 턴(null) 은 변경으로 간주하지 않음.
+        const mcpEnabledNow = !!sshTermId;
+        if (lastClaudeMcpEnabledRef.current !== null && lastClaudeMcpEnabledRef.current !== mcpEnabledNow) {
+          console.log('[ClaudeChat] MCP availability changed (was=', lastClaudeMcpEnabledRef.current, 'now=', mcpEnabledNow, ') → 새 Claude 세션으로 시작');
+          claudeSessionIdRef.current = null;
+        }
+        lastClaudeMcpEnabledRef.current = mcpEnabledNow;
         const resumeSessionId = claudeSessionIdRef.current;
         // 비대화형 모드(-p)에서는 'default' 권한이 항상 거부됨 → 대신 'plan' 모드로 변환
         const approveKeywords = ['실행', '진행', '좋아', 'yes', 'ok', '승인', 'approve', '해줘', 'go ahead', '네'];
@@ -3121,6 +3209,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   }, [pendingContext, onContextConsumed]);
 
   const handleSend = () => {
+    if (isCodexSteeringMode) {
+      const trimmed = input.trim();
+      if (!trimmed) return;
+      queueCodexSteering(trimmed);
+      setInput('');
+      return;
+    }
     send(input, attachments);
     setAttachments([]);
   };
@@ -3134,6 +3229,20 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     // 명시적 중단 — 활성 대화의 프로세스만 죽임
     const reqId = activeRequestIdRef.current;
     const reqAgent = (reqId ? requestToAgentRef.current.get(reqId) : null) || currentAgentRef.current;
+    // 다음 send 에서 AI 가 끊긴 맥락을 그대로 이어가지 않도록 알림 플래그 set
+    previousTurnStoppedRef.current = true;
+    // 직후 5초 동안 도착하는 hook approval request 는 자동 deny
+    stopGuardUntilRef.current = Date.now() + 5000;
+    // 진행 중이던 권한 모달이 있으면 즉시 deny — hook 이 응답을 받아 종료되면서 claude CLI 도 풀려나옴
+    if (pendingToolApproval) {
+      try { (window as any).api?.claudeHookRespond?.(pendingToolApproval.approvalId, 'deny', 'User stopped'); } catch {}
+      const eid = approvalEntryIdsRef.current.get(pendingToolApproval.approvalId);
+      if (eid) {
+        setToolTimeline(prev => prev.map(t => t.id === eid && t.status === 'running' ? { ...t, status: 'error' as const, resultPreview: '중단됨' } : t));
+        approvalEntryIdsRef.current.delete(pendingToolApproval.approvalId);
+      }
+      setPendingToolApproval(null);
+    }
     try {
       if (reqAgent === 'gemini') {
         (window as any).api?.geminiStop?.(sessionId, reqId || undefined);
@@ -3144,9 +3253,22 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       }
     } catch {}
     if (reqId) {
+      // stream 봉인 — 이후 도착하는 모든 청크/done 이벤트 차단 (IPC 버퍼/지연 이벤트 대응)
+      stoppedRequestsRef.current.add(reqId);
+      // 메모리 누수 방지 — 30초 뒤 제거
+      const sid = reqId;
+      setTimeout(() => stoppedRequestsRef.current.delete(sid), 30_000);
       requestToHistoryRef.current.delete(reqId);
       requestToAgentRef.current.delete(reqId);
     }
+    // 진행 중이던 어시스턴트 메시지를 즉시 마감 — [중단됨] 표시 + running 도구는 error 로 마감
+    const asstId = currentAsstIdRef.current;
+    if (asstId) {
+      setMessages(prev => prev.map(m => m.id === asstId
+        ? { ...m, content: (m.content || '') + (m.content && !m.content.endsWith('\n') ? '\n\n' : '') + '⏹ 중단됨' }
+        : m));
+    }
+    setToolTimeline(prev => prev.map(t => t.status === 'running' ? { ...t, status: 'error' as const, resultPreview: t.resultPreview || '중단됨' } : t));
     activeRequestIdRef.current = null;
     setStreaming(false);
     removeStreamingAgent(reqAgent);
@@ -3165,8 +3287,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     setActivity('');
     setPendingPlan(null);
     setPendingPlanAgent(null);
+    setPendingCodexSteeringQueue([]);
     setStreaming(false);
     claudeSessionIdRef.current = null;
+    lastClaudeMcpEnabledRef.current = null;
     recentLocalPathsRef.current.clear();
     currentAsstIdRef.current = null;
     setActiveHist(null);
@@ -3327,6 +3451,19 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 계획 승인 — "진행해줘" 메시지로 bypass 모드 send 자동 실행
   // streaming 상태 race 방지용 — 승인 시점에 streaming 이 아직 true 면 끝나기를 기다렸다 send
   const pendingApprovalSendRef = useRef<string | null>(null);
+  // Codex steering helpers
+  const buildCodexSteeringPrompt = (text: string) => [
+    '# 작업 중 추가 지시 (steering)',
+    '아래 메시지는 Codex가 현재 작업을 수행하는 도중 사용자가 추가한 지시입니다.',
+    '현재 작업 맥락을 유지한 채, 아래 지시를 최우선으로 반영해 바로 이어서 진행하세요.',
+    '',
+    text.trim(),
+  ].join('\n');
+  const queueCodexSteering = (rawText: string) => {
+    const trimmed = rawText.trim();
+    if (!trimmed) return;
+    setPendingCodexSteeringQueue(prev => [...prev, trimmed]);
+  };
   const approvePlan = () => {
     // 편집 모드면 수정된 계획 내용으로 진행. 원본과 동일하면 기본 메시지.
     const edited = planEditing ? planEditedText.trim() : '';
@@ -3364,15 +3501,22 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       send(text, []);
     }
   };
-  // streaming 이 false 가 되면 큐잉된 승인 메시지 자동 전송
+  // streaming 이 false 가 되면 큐잉된 승인 메시지 / Codex steering 자동 전송
   useEffect(() => {
-    if (!streaming && pendingApprovalSendRef.current) {
+    if (streaming) return;
+    if (pendingApprovalSendRef.current) {
       const pendingTxt = pendingApprovalSendRef.current;
       pendingApprovalSendRef.current = null;
-      // 다음 tick 에 send (현재 render cycle 영향 회피)
       setTimeout(() => send(pendingTxt, []), 0);
+      return;
     }
-  }, [streaming, send]);
+    if (currentAgent !== 'codex') return;
+    if (pendingCodexSteeringQueue.length > 0) {
+      const [pendingTxt, ...rest] = pendingCodexSteeringQueue;
+      setPendingCodexSteeringQueue(rest);
+      setTimeout(() => send(buildCodexSteeringPrompt(pendingTxt), []), 0);
+    }
+  }, [streaming, send, currentAgent, pendingCodexSteeringQueue]);
   const rejectPlan = () => {
     setPlanEditing(false);
     setPlanEditedText('');
@@ -3396,7 +3540,14 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   };
   const denyTool = () => {
     if (!pendingToolApproval) return;
-    (window as any).api?.claudeHookRespond?.(pendingToolApproval.approvalId, 'deny', tt('userDenied'));
+    const aid = pendingToolApproval.approvalId;
+    (window as any).api?.claudeHookRespond?.(aid, 'deny', tt('userDenied'));
+    // timeline 의 임시 entry 가 영원히 running 으로 남지 않도록 error 로 마감
+    const eid = approvalEntryIdsRef.current.get(aid);
+    if (eid) {
+      setToolTimeline(prev => prev.map(t => t.id === eid && t.status === 'running' ? { ...t, status: 'error' as const, resultPreview: tt('userDenied') } : t));
+      approvalEntryIdsRef.current.delete(aid);
+    }
     setPendingToolApproval(null);
   };
 
@@ -4653,6 +4804,24 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           <button className="claude-chat-streaming-stop" onClick={stop} title={tt('stop')}>{tt('stopShort')}</button>
         </div>
       )}
+      {currentAgent === 'codex' && (isCodexSteeringMode || pendingCodexSteeringQueue.length > 0) && (
+        <div className="claude-chat-steering-banner">
+          <div className="claude-chat-steering-text">
+            <span className="claude-chat-steering-title">
+              {pendingCodexSteeringQueue.length > 0
+                ? tt('steeringQueuedCount', { count: pendingCodexSteeringQueue.length })
+                : tt('steeringQueueReady')}
+            </span>
+            <span className="claude-chat-steering-hint">{tt('steeringQueueHint')}</span>
+          </div>
+          <button
+            className="claude-chat-steering-clear"
+            onClick={() => setPendingCodexSteeringQueue([])}
+            disabled={pendingCodexSteeringQueue.length === 0}
+            title={tt('steeringQueueClear')}
+          >{tt('steeringQueueClear')}</button>
+        </div>
+      )}
       <div className="claude-chat-input-area" style={showHistoryPanel ? { display: 'none' } : undefined}>
         {(() => {
           if (!gitStatus?.ok || !gitStatus.branch) return null;
@@ -5087,7 +5256,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           style={{ position: 'relative' }}
         >
           <textarea
-            className="claude-chat-input"
+            className={`claude-chat-input${isCodexSteeringMode ? ' steering-mode' : ''}`}
             value={input}
             onChange={e => setInput(e.target.value)}
             onPaste={onInputPaste}
@@ -5097,9 +5266,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 handleSend();
               }
             }}
-            placeholder={`${tt('inputPlaceholder')}\n\n📎 첨부: 스크린샷은 Ctrl+V · 파일은 📎 + 버튼 · 드래그 앤 드롭`}
+            placeholder={`${isCodexSteeringMode ? tt('steeringInputPlaceholder') : tt('inputPlaceholder')}\n\n📎 첨부: 스크린샷은 Ctrl+V · 파일은 📎 + 버튼 · 드래그 앤 드롭`}
             rows={3}
-            disabled={currentAgentStreaming}
+            disabled={currentAgentStreaming && currentAgent !== 'codex'}
           />
           {isDragOver && (
             <div style={{
@@ -5168,7 +5337,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           {currentAgentStreaming ? (
             <button className="claude-chat-btn stop" onClick={stop}>{tt('stopShort')}</button>
           ) : (
-            <button className="claude-chat-btn send" onClick={handleSend} disabled={!input.trim() && binaryAttachments.length === 0 && localFileAttachments.length === 0}>{tt('send')}</button>
+            <button
+              className={`claude-chat-btn ${isCodexSteeringMode ? 'steer' : 'send'}`}
+              onClick={handleSend}
+              disabled={isCodexSteeringMode ? !input.trim() : (!input.trim() && binaryAttachments.length === 0 && localFileAttachments.length === 0)}
+              title={isCodexSteeringMode ? tt('steeringSendTitle') : undefined}
+            >{isCodexSteeringMode ? tt('steer') : tt('send')}</button>
           )}
         </div>
       </div>
