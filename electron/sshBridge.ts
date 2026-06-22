@@ -3,6 +3,7 @@ import { Client } from 'ssh2';
 import { EventEmitter } from 'events';
 import { Worker } from 'worker_threads';
 import net from 'net';
+import tls from 'tls';
 import fs from 'fs';
 import path from 'path';
 import iconv from 'iconv-lite';
@@ -45,6 +46,10 @@ function setupX11Forwarding(conn: any, displayNum = 0, emit?: (msg: string) => v
     xstream.on('error', () => { try { xclient.end(); } catch {} });
     xstream.on('close', () => { try { xclient.end(); } catch {} });
   });
+}
+
+function quoteShellArg(value: string): string {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
 interface ClientRecord {
@@ -997,11 +1002,10 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
             }
           }
           // 활성 셸 PID 기록 — getCcViewRoot(CLEARCASE_ROOT 조회)가 이 PID 의 environ 을 읽음.
-          // ⚠ ccViewRoots 캐시는 무효화하지 않음 — SFTP 전송 중 PID 변동으로 캐시가 비워지면
-          // resolveCcPath 가 환경 재조회에 실패해 /vobs 가 그대로 SFTP 로 가는 회귀(파일 못찾음) 발생.
-          // 뷰 태그는 세션 내에서 거의 안 바뀌므로 한번 알아낸 값을 그대로 유지.
+          // 새 셸(setview 등)로 바뀌면 뷰 루트 캐시도 무효화.
           if (chosenPid && this.activeShellPids.get(panelId) !== chosenPid) {
             this.activeShellPids.set(panelId, chosenPid);
+            this.ccViewRoots.delete(panelId);
           }
           // 폴백: 기존 단일 경로 추출
           if (!path) {
@@ -1081,13 +1085,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     // 연결 완료 상태
     const rec = this.clients.get(panelId);
     if (rec) {
-      try { rec.stream?.end?.(); } catch {}
-      try { rec.stream?.close?.(); } catch {}
       try { rec.conn.end(); } catch {}
-      const transports = rec.transportConns && rec.transportConns.length
-        ? rec.transportConns
-        : (rec.primaryConn ? [rec.primaryConn] : []);
-      for (const tc of transports) { try { tc?.end?.(); } catch {} }
       this.clients.delete(panelId);
     }
     // 아직 ready 안 된 pending 연결도 정리
@@ -1119,9 +1117,6 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
       try { p.server.close(); } catch {}
       this.socksProxies.delete(proxyId);
     }
-    if (rec || pending) {
-      this.emit('message', { type: 'closed', panelId });
-    }
   }
 
   // 앱 종료 시 — 모든 SSH 연결을 일괄 종료. 비차단(fire-and-forget).
@@ -1133,8 +1128,25 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   // 로컬 포트 포워딩 (SSH 터널) — 활성 SSH 연결을 통해 원격 host:port 를 로컬 127.0.0.1:auto 로 매핑.
   // SqlTool 의 JDBC 연결을 SSH 세션 위로 라우팅할 때 사용.
   private localForwards = new Map<string, { server: net.Server; localPort: number; panelId: string }>();
+  // SOCKS5 프록시 — 브라우저/외부 클라이언트가 활성 SSH 세션을 경유하도록 함.
+  private socksProxies = new Map<string, { server: net.Server; localPort: number; panelId: string }>();
   public hasActiveClient(panelId: string): boolean { return this.clients.has(panelId); }
   public listActivePanels(): string[] { return [...this.clients.keys()]; }
+  public listActiveSessions(): { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number; browserUrl?: string }[] {
+    const out: { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number; browserUrl?: string }[] = [];
+    for (const panelId of this.clients.keys()) {
+      const s = this.sessionStore.get(panelId);
+      out.push({
+        panelId,
+        sessionId: s?.id,
+        sessionName: s?.name,
+        host: s?.host,
+        port: s?.port,
+        browserUrl: s?.browserUrl,
+      });
+    }
+    return out;
+  }
   // 디버그용 — 각 활성 패널의 sessionStore 정보(id, host, port) 한 줄 요약. (메인 콘솔 로그 전용)
   public dumpSessionInfo(): string {
     const lines: string[] = [];
@@ -1380,15 +1392,6 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
     const started = Date.now();
     const timeoutMs = Math.max(1000, Math.min(30000, target.timeoutMs || 10000));
-    const probeTag = `web-probe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const logProbe = (msg: string, extra?: any) => {
-      try {
-        const suffix = extra === undefined ? '' : ` ${typeof extra === 'string' ? extra : JSON.stringify(extra).slice(0, 2000)}`;
-        console.log(`[web-probe] ${probeTag} panel=${panelId} ${msg}${suffix}`);
-      } catch {
-        console.log(`[web-probe] ${probeTag} panel=${panelId} ${msg}`);
-      }
-    };
     const toResult = (raw: string, mode: 'forward' | 'exec') => {
       const firstLine = raw.split(/\r?\n/, 1)[0]?.trim() || '';
       const statusMatch = firstLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/i);
@@ -1405,7 +1408,6 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     };
 
     const probeViaForward = () => new Promise<any>((resolve, reject) => {
-      logProbe('forward:start', { host: target.host, port: target.port, protocol: target.protocol, path: target.path, timeoutMs });
       let settled = false;
       let socket: any = null;
       let secure: any = null;
@@ -1419,14 +1421,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
         try { socket?.destroy?.(); } catch {}
         fn();
       };
-      const fail = (err: any) => finish(() => {
-        logProbe('forward:fail', String(err?.message || err));
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-      const ok = (raw: string) => finish(() => {
-        logProbe('forward:ok', raw.split(/\r?\n/, 1)[0]?.trim() || '(empty status)');
-        resolve(toResult(raw, 'forward'));
-      });
+      const fail = (err: any) => finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+      const ok = (raw: string) => finish(() => resolve(toResult(raw, 'forward')));
 
       timer = setTimeout(() => fail(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
       rec.conn.forwardOut('127.0.0.1', 0, target.host, target.port, (err: any, stream: any) => {
@@ -1477,11 +1473,9 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     const probeViaExec = async () => {
       const url = `${target.protocol}//${target.host}:${target.port}${target.path || '/'}`;
       const timeoutSec = Math.max(1, Math.min(30, Math.ceil(timeoutMs / 1000)));
-      logProbe('exec:start', { url, timeoutSec });
       const shScript = `
 url=${quoteShellArg(url)}
 timeout_sec=${timeoutSec}
-printf '[probe-debug] shell=%s user=%s host=%s pwd=%s\\n' "$SHELL" "$(id -un 2>/dev/null || whoami 2>/dev/null || printf '?')" "$(hostname 2>/dev/null || uname -n 2>/dev/null || printf '?')" "$(pwd 2>/dev/null || printf '?')" >&2
 probe_curl() {
   for bin in /usr/bin/curl /bin/curl curl; do
     if command -v "$bin" >/dev/null 2>&1; then
@@ -1542,18 +1536,9 @@ PY
 }
 probe_curl || probe_wget || probe_python
 `;
-      const encoded = Buffer.from(shScript, 'utf8').toString('base64');
-      const decoder = `PATH=/usr/bin:/bin:/usr/local/bin:$PATH; printf %s ${encoded} | base64 -d | /bin/sh`;
-      const cmd = `/bin/sh -c ${quoteShellArg(decoder)}`;
-      logProbe('exec:command-preview', cmd.slice(0, 1200));
+      const cmd = `sh -lc ${quoteShellArg(shScript)}`;
       const exec = await this.handleExec(panelId, cmd, timeoutMs + 2000);
       const raw = String(exec.stdout || '').trim();
-      const stderr = String(exec.stderr || '').trim();
-      logProbe('exec:done', {
-        exitCode: exec.exitCode,
-        stdout: raw.slice(0, 1000),
-        stderr: stderr.slice(0, 1000),
-      });
       const firstLine = raw.split(/\r?\n/, 1)[0]?.trim() || '';
       const statusMatch = firstLine.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/i);
       if (statusMatch) {
@@ -1568,17 +1553,15 @@ probe_curl || probe_wget || probe_python
           mode: 'exec' as const,
         };
       }
-      throw new Error(`remote probe failed: ${raw || stderr || 'no output'}`);
+      throw new Error(`remote probe failed: ${raw || exec.stderr || 'no output'}`);
     };
 
     try {
       return await probeViaExec();
     } catch (execErr: any) {
-      logProbe('exec:error', String(execErr?.message || execErr));
       try {
         return await probeViaForward();
       } catch (forwardErr: any) {
-        logProbe('all:failed', { exec: String(execErr?.message || execErr), forward: String(forwardErr?.message || forwardErr) });
         throw new Error(`${execErr?.message || execErr} / forward failed: ${forwardErr?.message || forwardErr}`);
       }
     }
@@ -1803,8 +1786,6 @@ probe_curl || probe_wget || probe_python
   }
 
   async handleSFTPDownload(panelId: string, remotePath: string, localPath: string, ctx?: any): Promise<void> {
-    // ClearCase 동적뷰: /vobs/... → /view/<tag>/vobs/... 실경로 변환 (List 와 동일)
-    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = remotePath.split('/').pop() || remotePath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: remotePath, dstPath: localPath } : {};
     // Worker thread 사용 (메인 이벤트 루프 보호)
@@ -1855,7 +1836,6 @@ probe_curl || probe_wget || probe_python
   }
 
   async handleSFTPUpload(panelId: string, localPath: string, remotePath: string, ctx?: any): Promise<void> {
-    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = localPath.replace(/\\/g, '/').split('/').pop() || localPath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: localPath, dstPath: remotePath } : {};
     // 0바이트 파일은 sftp.open/close 사용
@@ -2211,7 +2191,6 @@ probe_curl || probe_wget || probe_python
 
   async handleSFTPDelete(panelId: string, filePath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
-    filePath = await this.resolveCcPath(panelId, filePath);
     // 재귀 구현 — 폴더는 내부 파일/하위폴더 먼저 삭제 후 rmdir
     const deleteRecursive = async (p: string): Promise<void> => {
       const stats: any = await new Promise((res, rej) => sftp.stat(p, (e: any, s: any) => e ? rej(e) : res(s)));
@@ -2232,7 +2211,6 @@ probe_curl || probe_wget || probe_python
 
   async handleSFTPMkdir(panelId: string, dirPath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
-    dirPath = await this.resolveCcPath(panelId, dirPath);
     return new Promise((resolve, reject) => {
       sftp.mkdir(dirPath, (err: any) => err ? reject(err) : resolve());
     });
@@ -2240,8 +2218,6 @@ probe_curl || probe_wget || probe_python
 
   async handleSFTPRename(panelId: string, oldPath: string, newPath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
-    oldPath = await this.resolveCcPath(panelId, oldPath);
-    newPath = await this.resolveCcPath(panelId, newPath);
     return new Promise((resolve, reject) => {
       sftp.rename(oldPath, newPath, (err: any) => err ? reject(err) : resolve());
     });
@@ -2401,15 +2377,6 @@ probe_curl || probe_wget || probe_python
     ctx?: { transferId: string; rootName: string; rel: string; rootIsDir?: boolean; workspaceId?: string },
     workspaceId?: string,
   ): Promise<void> {
-    // ClearCase 동적뷰: /vobs/... → /view/<tag>/vobs/... 실경로로 한번에 변환.
-    // stat / dstStat / isSrcDirectory / computeTreeSize / fastGet 등 모든 후속 SFTP 호출이
-    // 이 src.path/dst.path 를 그대로 사용하므로 진입 시 1회 변환으로 전체 회복.
-    if (src.mode === 'remote' && src.termId) {
-      src = { ...src, path: await this.resolveCcPath(src.termId, src.path) };
-    }
-    if (dst.mode === 'remote' && dst.termId) {
-      dst = { ...dst, path: await this.resolveCcPath(dst.termId, dst.path) };
-    }
     // 최상위 호출이면 ctx 자동 생성 + transfer-start 이벤트 즉시 송출
     const isRoot = !ctx;
     if (isRoot) {

@@ -896,6 +896,60 @@ function App() {
   const [claudeAttaching, setClaudeAttaching] = useState<{ message: string; progress: number; total: number } | null>(null);
   // 글로벌 연결 상태 변경시 일괄전송 카운트 등 재계산을 위해 강제 리렌더 (connectedTick 은 위에 선언됨)
   useEffect(() => subscribeConnectedChange(() => setConnectedTick(n => n + 1)), []);
+  const connectedBrowserSessions = useMemo(() => {
+    const out: { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number }[] = [];
+    const seen = new Set<string>();
+    const walk = (n: any) => {
+      if (n.type === 'leaf') {
+        for (const s of (n.panel?.sessions || [])) {
+          if (!s.termId || !isTermConnected(s.termId) || !s.sessionId) continue;
+          const key = s.sessionId;
+          if (seen.has(key)) continue;
+          const info = getTermSessionInfo(s.termId);
+          out.push({
+            panelId: s.termId,
+            sessionId: s.sessionId,
+            sessionName: info?.sessionName || s.sessionName || info?.host || s.termId,
+            host: info?.host,
+            port: (info as any)?.port,
+          });
+          seen.add(key);
+        }
+      } else if (n.children) {
+        for (const c of n.children) walk(c);
+      }
+    };
+    for (const t of tabs) walk(t.layout);
+    return out;
+  }, [tabs, connectedTick]);
+  const connectedWebdavRestoreInitRef = useRef(false);
+  const prevConnectedWebdavTermIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const current = new Map<string, { termId: string; sessionId?: string; label: string }>();
+    for (const t of tabs) {
+      for (const s of collectAllSessions(t.layout)) {
+        if (!s.termId || !isTermConnected(s.termId)) continue;
+        const info = getTermSessionInfo(s.termId);
+        const label = info?.sessionName || s.sessionName || info?.host || s.termId;
+        current.set(s.termId, { termId: s.termId, sessionId: info?.sessionId, label });
+      }
+    }
+    const currentIds = new Set(current.keys());
+    if (!connectedWebdavRestoreInitRef.current) {
+      connectedWebdavRestoreInitRef.current = true;
+      prevConnectedWebdavTermIdsRef.current = currentIds;
+      return;
+    }
+    const added = [...currentIds].filter(termId => !prevConnectedWebdavTermIdsRef.current.has(termId)).map(termId => current.get(termId)!);
+    prevConnectedWebdavTermIdsRef.current = currentIds;
+    if (added.length === 0) return;
+    console.log('[App][ClaudeWebDAV] connected session(s) added', {
+      added,
+    });
+    window.dispatchEvent(new CustomEvent('claude-webdav-auto-restore', {
+      detail: { sessions: added },
+    }));
+  }, [tabs, connectedTick]);
   // 세션 설정 변경 (X11 forwarding 등) 이벤트 — 활성 연결을 즉시 재접속해서 새 설정 반영
   useEffect(() => {
     const onSettingChanged = (e: any) => {
@@ -3931,7 +3985,11 @@ function App() {
         {tabs.filter(t => t.type === 'browser').map(t => (
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label="브라우저">
-              <BrowserPane initialUrl="https://www.google.com" onTitleChange={(title) => renameTab(t.id, `🌐 ${title}`)} />
+              <BrowserPane
+                initialUrl="https://www.google.com"
+                connectedSessions={connectedBrowserSessions}
+                onTitleChange={(title) => renameTab(t.id, `🌐 ${title}`)}
+              />
             </ErrorBoundary>
           </div>
         ))}
