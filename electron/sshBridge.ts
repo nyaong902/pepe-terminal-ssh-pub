@@ -1081,7 +1081,13 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     // 연결 완료 상태
     const rec = this.clients.get(panelId);
     if (rec) {
+      try { rec.stream?.end?.(); } catch {}
+      try { rec.stream?.close?.(); } catch {}
       try { rec.conn.end(); } catch {}
+      const transports = rec.transportConns && rec.transportConns.length
+        ? rec.transportConns
+        : (rec.primaryConn ? [rec.primaryConn] : []);
+      for (const tc of transports) { try { tc?.end?.(); } catch {} }
       this.clients.delete(panelId);
     }
     // 아직 ready 안 된 pending 연결도 정리
@@ -1103,6 +1109,19 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     this.autoTrackOn.delete(panelId);
     this.homeDirs.delete(panelId);
     this.homeFetching.delete(panelId);
+    for (const [forwardId, f] of [...this.localForwards.entries()]) {
+      if (f.panelId !== panelId) continue;
+      try { f.server.close(); } catch {}
+      this.localForwards.delete(forwardId);
+    }
+    for (const [proxyId, p] of [...this.socksProxies.entries()]) {
+      if (p.panelId !== panelId) continue;
+      try { p.server.close(); } catch {}
+      this.socksProxies.delete(proxyId);
+    }
+    if (rec || pending) {
+      this.emit('message', { type: 'closed', panelId });
+    }
   }
 
   // 앱 종료 시 — 모든 SSH 연결을 일괄 종료. 비차단(fire-and-forget).
