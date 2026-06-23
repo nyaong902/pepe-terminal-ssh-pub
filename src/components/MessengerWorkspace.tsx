@@ -56,9 +56,6 @@ export const MessengerWorkspace: React.FC = () => {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const nameComposing = useRef(false);
-  const [readMarks, setReadMarks] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }
-  });
   const [menu, setMenu] = useState<{ x: number; y: number; peerId: string } | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteSessions, setRemoteSessions] = useState<any[]>([]);
@@ -105,27 +102,6 @@ export const MessengerWorkspace: React.FC = () => {
   const messages = useMemo(() => state.messages.filter(m => m.peerId === selectedPeerId).sort((a, b) => a.ts - b.ts), [state.messages, selectedPeerId]);
   const storedName = state.prefs.displayName ?? '';
   const fallbackName = state.self?.name || '';
-
-  const markRead = (peerId: string, upToTs: number) => {
-    if (!peerId) return;
-    setReadMarks(cur => {
-      if ((cur[peerId] || 0) >= upToTs) return cur;
-      const next = { ...cur, [peerId]: upToTs };
-      try { localStorage.setItem('messenger:readMarks', JSON.stringify(next)); } catch {}
-      return next;
-    });
-  };
-
-  // Viewing a peer's conversation marks all of its incoming messages as read,
-  // including any that arrive while it stays selected.
-  useEffect(() => {
-    if (!selectedPeerId) return;
-    let latest = 0;
-    for (const m of state.messages) {
-      if (m.peerId === selectedPeerId && m.direction === 'in' && m.ts > latest) latest = m.ts;
-    }
-    if (latest > 0) markRead(selectedPeerId, latest);
-  }, [selectedPeerId, state.messages]);
 
   // Seed the local name input from prefs, but never clobber what the user is
   // typing (especially mid Hangul IME composition) — only sync when the value
@@ -342,8 +318,7 @@ export const MessengerWorkspace: React.FC = () => {
         <div className="messenger-peers">
           {state.peers.length === 0 && <div className="messenger-empty">발견된 사용자가 없습니다. 같은 네트워크에서 PePe 메신저 워크스페이스를 열면 표시됩니다.</div>}
           {state.peers.map(peer => {
-            const readTs = readMarks[peer.id] || 0;
-            const unread = state.messages.filter(m => m.peerId === peer.id && m.direction === 'in' && m.ts > readTs).length;
+            const unread = state.messages.filter(m => m.peerId === peer.id && m.direction === 'in').length;
             return (
               <button
                 key={peer.id}
