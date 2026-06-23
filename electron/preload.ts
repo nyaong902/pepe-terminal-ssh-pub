@@ -382,7 +382,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('custom-llm:send', { sessionId, messages, requestId, sshTermId }),
   customStop: (sessionId: string, requestId?: string) =>
     ipcRenderer.invoke('custom-llm:stop', { sessionId, requestId }),
-  customListModels: () => ipcRenderer.invoke('custom-llm:list-models'),
+  customListModels: (baseUrl?: string, apiKey?: string) => ipcRenderer.invoke('custom-llm:list-models', { baseUrl, apiKey }),
   claudeProbeUsage: () => ipcRenderer.invoke('claude:probe-usage'),
   claudeProbeUsageTui: () => ipcRenderer.invoke('claude:probe-usage-tui'),
   claudeFetchUsageApi: () => ipcRenderer.invoke('claude:fetch-usage-api'),

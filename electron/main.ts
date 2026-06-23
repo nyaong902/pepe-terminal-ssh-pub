@@ -4774,6 +4774,9 @@ ipcMain.handle('agent:is-running', (_e, { sessionId, requestId }: { sessionId?: 
     if (requestId && m.has(requestId) && alive(m.get(requestId))) return true;
     if (sessionId && m.has(sessionId) && alive(m.get(sessionId))) return true;
   }
+  // Custom LLM: AbortController 가 살아있고 abort 되지 않았으면 진행 중으로 간주
+  const ac = (requestId && customLlmProcesses.get(requestId)) || (sessionId && customLlmProcesses.get(sessionId));
+  if (ac && !ac.signal.aborted) return true;
   return false;
 });
 
@@ -6479,11 +6482,16 @@ ipcMain.handle('custom-llm:stop', (_e, { sessionId, requestId }: { sessionId: st
   if (ac) { try { ac.abort(); } catch {} customLlmProcesses.delete(procKey); }
   return { success: true };
 });
-ipcMain.handle('custom-llm:list-models', async () => {
+ipcMain.handle('custom-llm:list-models', async (_e, args: { baseUrl?: string; apiKey?: string } = {}) => {
   try {
-    const prefs = loadUIPrefs();
-    const baseUrl = (prefs?.apiKeys?.customBaseUrl || '').toString().trim().replace(/\/+$/, '');
-    const apiKey = (prefs?.apiKeys?.customApiKey || '').toString().trim();
+    // 인자로 받은 값(저장 전 입력 중 값) 우선, 없으면 디스크에서 로드
+    let baseUrl = (args.baseUrl || '').toString().trim().replace(/\/+$/, '');
+    let apiKey = (args.apiKey || '').toString().trim();
+    if (!baseUrl) {
+      const prefs = loadUIPrefs();
+      baseUrl = (prefs?.apiKeys?.customBaseUrl || '').toString().trim().replace(/\/+$/, '');
+      apiKey = apiKey || (prefs?.apiKeys?.customApiKey || '').toString().trim();
+    }
     if (!baseUrl) return { success: false, error: 'Base URL 미설정' };
     const res = await fetch(`${baseUrl}/models`, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -6570,7 +6578,90 @@ ipcMain.handle('custom-llm:send', async (_e, { sessionId, messages, requestId, s
   };
   // 도구 루프: 최대 8회 반복하며 assistant.tool_calls 처리
   let conv = Array.isArray(messages) ? [...messages] : [];
-  const MAX_ITER = 8;
+  // SSH 활성 시: 모델이 도구를 적극적으로 활용하도록 system 메시지 prepend (이미 있으면 skip).
+  if (sshTermId && !conv.some(m => m.role === 'system')) {
+    const sys = [
+      '당신은 원격 SSH 서버의 소스 코드를 철저히 분석하는 시니어 엔지니어입니다.',
+      '제공된 도구 ssh_exec(셸 명령), ssh_read_file(파일 읽기) 를 적극적으로 여러 번 사용해 충분한 정보를 모은 뒤 분석을 작성하세요.',
+      '',
+      '## 필수 절차',
+      '1. ssh_exec 로 `ls -la <경로>` 로 디렉토리 구조 파악',
+      '2. ssh_exec 로 `ls -la <경로>/*.c <경로>/*.h` 또는 find 로 헤더/소스 파일 목록 확보',
+      '3. **최소 3~5개 이상의 핵심 소스 파일/헤더를 ssh_read_file 로 읽으세요.** (메인 진입 함수, 헤더, 핵심 모듈 등)',
+      '4. 충분히 읽었다고 판단되면 한국어 마크다운으로 다음 항목을 **반드시 모두 포함**해 분석 보고서 작성:',
+      '   - **모듈 개요** (디렉토리 역할, 전체 구조)',
+      '   - **주요 파일 설명** (각 파일별 역할, 책임)',
+      '   - **핵심 함수/구조체** (이름, 시그니처, 동작 요약)',
+      '   - **의존 관계** (헤더 include, 모듈 간 호출)',
+      '   - **개선/주의 사항** (있다면)',
+      '',
+      '## 절대 규칙',
+      '- 추측한 파일명을 사용하지 마세요. 반드시 ls 결과에 있는 정확한 이름을 사용하세요.',
+      '- "No such file" 에러가 나면 멈추지 말고 다른 파일을 시도하세요.',
+      '- 1~2개 파일만 읽고 분석을 끝내면 안 됩니다. 최소 3개 이상 읽어야 합니다.',
+      '- 도구 호출이 끝나면 반드시 **상세한 마크다운 보고서**를 작성하세요. 짧은 답변은 금지입니다.',
+      '- **이미 호출한 도구를 같은 인자로 다시 호출하지 마세요.** 이전 결과를 그대로 활용하세요. 같은 인자로 중복 호출을 감지하면 즉시 멈추고 분석을 작성하세요.',
+      '- 도구 호출이 끝났다고 판단되면 **충분히 길고 구체적인 한국어 분석 보고서**(코드 인용 포함)를 마크다운으로 작성하세요.',
+      '',
+      '## 분석 보고서 작성 시 다이어그램 필수',
+      '단순 텍스트만으로는 부족합니다. 사용자 환경은 **mermaid 다이어그램을 자동 SVG 렌더**하므로 반드시 다음을 포함하세요:',
+      '',
+      '1. **모듈 구조도(flowchart)** — 주요 파일들의 호출/의존 관계',
+      '   ```mermaid',
+      '   flowchart TB',
+      '     Main[RrdhMain.c] --> Proc[RrdhProc.c]',
+      '     Proc --> Hdr[Rrdh.h]',
+      '   ```',
+      '',
+      '2. **DFD (데이터 흐름도)** — 입출력/메시지/큐 흐름이 있다면',
+      '   ```mermaid',
+      '   flowchart LR',
+      '     입력원 -->|메시지| 파싱 -->|구조체| 로직 -->|결과| 출력',
+      '   ```',
+      '',
+      '3. **시퀀스 다이어그램** — 함수 호출 순서가 중요하다면',
+      '   ```mermaid',
+      '   sequenceDiagram',
+      '     Main->>Proc: doProcess()',
+      '     Proc->>DB: query()',
+      '     DB-->>Proc: result',
+      '   ```',
+      '',
+      '**다이어그램 작성 규칙:**',
+      '- 라벨에 영문 식별자 권장 (한글 가능하지만 영문이 더 안정적)',
+      '- 노드 ID 는 영문/숫자/언더스코어만, label 에 한글 설명 가능: `Main["메인 진입점"]`',
+      '- 다크 테마이므로 색상은 지정하지 마세요 (style 절 사용 금지)',
+      '- 도형 Unicode(★ ◆ ▲ 등)를 라벨 prefix 로 쓰지 마세요',
+      '',
+      '## 보고서 권장 구조',
+      '1. **개요** (1~2문단)',
+      '2. **모듈 구조도** (mermaid flowchart)',
+      '3. **주요 파일별 역할** (각 파일마다 짧은 설명 + 핵심 함수/구조체)',
+      '4. **데이터 흐름** (mermaid DFD)',
+      '5. **핵심 시퀀스** (mermaid sequenceDiagram, 1~2개)',
+      '6. **개선/주의 사항** (있으면)',
+    ].join('\n');
+    conv = [{ role: 'system', content: sys }, ...conv];
+  }
+  const MAX_ITER = 30;
+  const toolCache = new Map<string, string>(); // name|args → result (재호출 시 그대로 반환)
+  const readPaths = new Set<string>(); // ssh_read_file 로 이미 읽은 경로
+  const execCmds = new Set<string>();  // ssh_exec 로 이미 실행한 command
+  // ls 결과에서 발견한 소스 파일 (.c/.h/.cpp/.hpp). 분석 종료 조건으로 사용.
+  const discoveredSources = new Set<string>();
+  const extractSources = (lsOutput: string, baseDir: string) => {
+    // "drwxr-xr-x. 2 dev users 863 Jun 23 RrdhMain.c" 패턴에서 파일명 추출.
+    // 파일 라인은 보통 -로 시작, 디렉토리(d)는 제외. 한 줄당 1파일.
+    const lines = lsOutput.split('\n');
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || !/^-/.test(t)) continue; // 파일만 (디렉토리 제외)
+      const m = t.match(/([^\s/]+\.(?:c|cpp|cc|h|hpp))$/i);
+      if (m && !/^\./.test(m[1])) {
+        discoveredSources.add(`${baseDir.replace(/\/+$/, '')}/${m[1]}`);
+      }
+    }
+  };
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
       if (stoppedAgentProcs.has(procKey)) break;
@@ -6635,14 +6726,83 @@ ipcMain.handle('custom-llm:send', async (_e, { sessionId, messages, requestId, s
         assistantMsg.tool_calls = toolCallList.map(tc => ({ id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } }));
       }
       conv.push(assistantMsg);
-      if (toolCallList.length === 0 || finishReason === 'stop') break;
-      // 도구 실행 + 결과 메시지 추가
+      // 도구 호출 없이 종료하려는 경우: 발견한 소스 파일 중 안 읽은 게 있으면 강제로 더 읽도록 user 메시지 주입.
+      if (toolCallList.length === 0) {
+        const unreadSources = [...discoveredSources].filter(p => !readPaths.has(p));
+        if (unreadSources.length > 0) {
+          sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: `\n\n— 시스템: 분석 종료 거부 (${unreadSources.length}개 파일 미독). 추가 읽기 강제 —\n\n` } });
+          conv.push({
+            role: 'user',
+            content: [
+              `❌ 아직 분석을 종료하면 안 됩니다. ${unreadSources.length}개의 소스 파일이 안 읽혔습니다.`,
+              `반드시 다음 파일들을 ssh_read_file 로 모두 읽으세요:`,
+              ...unreadSources.map(p => `- ${p}`),
+              `한 번에 여러 파일을 병렬로 호출해도 됩니다. 즉시 ssh_read_file 호출하세요.`,
+            ].join('\n'),
+          });
+          continue;
+        }
+        break; // 도구 호출 없음 + 안 읽은 파일도 없음 → 종료
+      }
+      if (finishReason === 'stop' && toolCallList.length === 0) break;
+      // 도구 실행 + 결과. Claude 와 동일하게 `{type:'assistant', message:{content:[{type:'tool_use',...}]}}`
+      // 와 `{type:'user', message:{content:[{type:'tool_result',...}]}}` 형식으로 emit 해 렌더러의
+      // toolTimeline UI(접이식 카드)와 매칭되도록 함.
+      const toolUseBlocks: any[] = [];
+      const toolResultBlocks: any[] = [];
       for (const tc of assistantMsg.tool_calls) {
-        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: `\n\n🔧 ${tc.function.name}(${tc.function.arguments})\n` } });
-        const result = await runTool(tc.function.name, tc.function.arguments);
-        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: `↳ ${result.slice(0, 200)}${result.length > 200 ? '...' : ''}\n\n` } });
+        const key = `${tc.function.name}|${tc.function.arguments}`;
+        let parsedInput: any = {};
+        try { parsedInput = JSON.parse(tc.function.arguments || '{}'); } catch { parsedInput = { _raw: tc.function.arguments }; }
+        toolUseBlocks.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input: parsedInput });
+        let result: string;
+        if (toolCache.has(key)) {
+          // 이미 호출한 도구 — 실제 실행 skip, 짧은 안내 메시지로 응답.
+          // 모델이 같은 결과를 다시 받으면 또 같은 결정을 내릴 수 있어 "재호출 금지" 명시.
+          const target = tc.function.name === 'ssh_read_file' ? (parsedInput?.path || '') : (parsedInput?.command || '');
+          result = `[SKIPPED — 이미 처리된 호출] ${tc.function.name}(${target})\n이 도구를 같은 인자로 다시 호출하지 마세요. 이미 처리한 결과를 활용하거나 다른 항목을 시도하세요.`;
+        } else {
+          const raw = await runTool(tc.function.name, tc.function.arguments);
+          toolCache.set(key, raw);
+          if (tc.function.name === 'ssh_read_file' && parsedInput?.path) readPaths.add(String(parsedInput.path));
+          if (tc.function.name === 'ssh_exec' && parsedInput?.command) {
+            execCmds.add(String(parsedInput.command));
+            // ls 결과면 소스 파일 목록 자동 추출 (모델에게 어디서 찾아야 할지 알려주기 위함)
+            const cmd = String(parsedInput.command);
+            const lsm = cmd.match(/\bls\b[^|;&]*?(\/[^\s|;&]+)/);
+            if (lsm) extractSources(raw, lsm[1]);
+          }
+          // 진행도 — 발견한 소스 파일 중 안 읽은 게 있으면 명시
+          const unreadSources = [...discoveredSources].filter(p => !readPaths.has(p));
+          const MIN_READS = Math.max(6, discoveredSources.size);
+          const remaining = Math.max(unreadSources.length, MIN_READS - readPaths.size);
+          const progressBlock = remaining > 0
+            ? `\n\n⚠️ **분석 진행도: ${readPaths.size}/${discoveredSources.size || MIN_READS} 소스 파일 읽음.**\n` +
+              `**아직 읽지 않은 파일 (반드시 모두 ssh_read_file 로 읽으세요):**\n${unreadSources.length > 0 ? unreadSources.map(p => `- ${p}`).join('\n') : '(ls 한 번 더 실행해서 새 파일 발견 필요)'}\n\n` +
+              `❌ 분석 종료 금지. 위 파일을 즉시 모두 읽으세요. 한 번에 여러 파일을 병렬 호출해도 됩니다.`
+            : `\n\n✅ 모든 소스 파일(${readPaths.size}개) 읽음 — 충분히 정보를 모았습니다. 이제 **상세한 한국어 마크다운 분석 보고서**를 작성하세요. 짧으면 안 됩니다.`;
+          const hint = [
+            '',
+            '---',
+            `(누적 처리: 읽은파일=${readPaths.size}개, 실행명령=${execCmds.size}개)`,
+            readPaths.size > 0 ? `이미 읽은 파일 (재호출 금지): ${[...readPaths].join(', ')}` : '',
+            execCmds.size > 0 ? `이미 실행한 명령 (재호출 금지): ${[...execCmds].join(' / ')}` : '',
+            '⚠ 같은 인자로 다시 호출하면 SKIPPED 됩니다.',
+            progressBlock,
+          ].filter(Boolean).join('\n');
+          result = raw + hint;
+        }
+        toolResultBlocks.push({ type: 'tool_result', tool_use_id: tc.id, content: result });
         conv.push({ role: 'tool', tool_call_id: tc.id, content: result });
       }
+      sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: {
+        type: 'assistant',
+        message: { id: `asst-${reqId}-${iter}`, content: toolUseBlocks },
+      }});
+      sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: {
+        type: 'user',
+        message: { content: toolResultBlocks },
+      }});
     }
     sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'result', subtype: 'success' } });
   } catch (err: any) {

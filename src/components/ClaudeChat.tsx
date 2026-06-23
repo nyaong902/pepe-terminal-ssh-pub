@@ -1564,7 +1564,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   const refreshCustomModels = async () => {
     setCustomModelListLoading(true);
     try {
-      const r = await (window as any).api?.customListModels?.();
+      // 입력 중인 값으로 즉시 조회 (저장 전이라 디스크엔 없음)
+      const r = await (window as any).api?.customListModels?.(apiKeys.customBaseUrl, apiKeys.customApiKey);
       if (r?.success) setCustomModelList(r.models || []);
       else { setCustomModelList([]); console.warn('[custom-llm] models fetch error:', r?.error); }
     } catch (e) { setCustomModelList([]); console.warn(e); }
@@ -1573,8 +1574,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   type ApiKeysState = { claude: string; gemini: string; codex: string; customBaseUrl: string; customApiKey: string; customModel: string };
   const [apiKeys, setApiKeys] = useState<ApiKeysState>({ claude: '', gemini: '', codex: '', customBaseUrl: 'http://localhost:1234/v1', customApiKey: 'lm-studio', customModel: '' });
   useEffect(() => {
-    // 모달 *열림* 시에만 디스크에서 재로드 — 닫힘에서 재로드하면 방금 저장한 값을 덮어써 race.
-    if (!apiKeyModalOpen) return;
+    // 마운트 시 + 모달 열림 시 디스크에서 로드. 닫힘에서는 로드하지 않음(저장값을 덮어쓰는 race 회피).
     (window as any).api?.getUIPrefs?.()?.then?.((prefs: any) => {
       const k = prefs?.apiKeys || {};
       setApiKeys({
@@ -4680,8 +4680,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             if (!seen.includes(ag)) seen.push(ag);
           }
           if (seen.length === 0) seen.push(h.originAgent || 'claude');
-          const iconFor = (a: string) => a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : ClaudeTabIcon;
-          const labelFor = (a: string) => a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : 'Claude';
+          const iconFor = (a: string) => a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : a === 'custom' ? CustomTabIcon : ClaudeTabIcon;
+          const labelFor = (a: string) => a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : a === 'custom' ? 'Custom LLM' : 'Claude';
           const groupTitle = seen.length > 1 ? seen.map(labelFor).join(' → ') : labelFor(seen[0]);
           return (
           <div
@@ -4965,7 +4965,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                     ? <><GeminiTabIcon /> Gemini</>
                     : (g.m.agent || currentAgent) === 'codex'
                       ? <><CodexTabIcon /> Codex</>
-                      : <><ClaudeTabIcon /> Claude</>
+                      : (g.m.agent || currentAgent) === 'custom'
+                        ? <><CustomTabIcon /> Custom LLM</>
+                        : <><ClaudeTabIcon /> Claude</>
               }</div>
               {(streaming && g.m.role === 'assistant' && g.m.id === currentAsstIdRef.current) ? (
                 // 스트리밍 중에는 마크다운 재파싱 비용 회피 — 평문으로만 표시(메인스레드 점유↓ → 터미널 입력 지연 완화).
@@ -5430,6 +5432,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   </div>
                 )}
               </div>
+            </>
+          ) : currentAgent === 'custom' ? (
+            <>
+              <div
+                className="claude-chat-perm-select"
+                style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 10px', fontSize: 12, color: '#cde', cursor: 'pointer', whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title={apiKeys.customModel ? `Custom LLM: ${apiKeys.customModel} — 클릭하여 변경` : '🔑 모달에서 모델 설정'}
+                onClick={() => setApiKeyModalOpen(true)}
+              >🖥 {apiKeys.customModel || '모델 미설정'}</div>
             </>
           ) : (
             <>
