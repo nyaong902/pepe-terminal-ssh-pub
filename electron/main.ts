@@ -5066,7 +5066,7 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
 
     // npm global bin 을 PATH 에 보강 (Electron 실행 환경에서 누락될 수 있음). claude:check 와 동일 helper.
     const augmentedPath = buildAugmentedPath();
-    const spawnEnv = {
+    const spawnEnv: any = {
       ...process.env,
       PATH: augmentedPath,
       Path: augmentedPath,
@@ -5075,6 +5075,11 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
     };
+    try {
+      const prefs = loadUIPrefs();
+      const ak = (prefs?.apiKeys?.claude || '').toString().trim();
+      if (ak) spawnEnv.ANTHROPIC_API_KEY = ak;
+    } catch {}
 
     // --add-dir 옵션으로 스테이징된 디렉토리를 작업 범위에 추가
     const addDirArgs = (addDirs && addDirs.length > 0)
@@ -5647,6 +5652,18 @@ ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, 
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
     };
+    try {
+      const prefs = loadUIPrefs();
+      const ak = (prefs?.apiKeys?.codex || '').toString().trim();
+      if (ak) spawnEnv.OPENAI_API_KEY = ak;
+    } catch {}
+  // OAuth 무료티어가 차단된 경우(Antigravity 이관 요구) API key 로 인증 가능.
+    // uiPrefs.apiKeys.gemini 가 있으면 환경변수로 주입 — gemini-cli 가 OAuth 대신 이 키 사용.
+    try {
+      const prefs = loadUIPrefs();
+      const ak = (prefs?.apiKeys?.gemini || prefs?.geminiApiKey || '').toString().trim();
+      if (ak) spawnEnv.GEMINI_API_KEY = ak;
+    } catch {}
 
     // ── SSH MCP 서버 연결 — sshTermId 가 있으면 gemini 에 pepe_ssh MCP(ssh_exec/read/write) 제공 ──
     // gemini 는 WebDAV UNC 워크스페이스를 못 쓰므로(realpathSync hang) 원격 파일은 MCP 로 처리.
@@ -5660,7 +5677,7 @@ ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, 
           const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
           if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
         } catch (e) { console.error('[gemini] MCP script extract failed:', e); }
-        const geminiSettings = {
+        const geminiSettings: any = {
           mcpServers: {
             pepe_ssh: {
               command: process.execPath,
@@ -5676,6 +5693,14 @@ ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, 
             },
           },
         };
+        // API 키가 설정돼 있으면 OAuth 무료티어 우회 — gemini-cli 가 GEMINI_API_KEY 모드로 인증.
+        // (이게 없으면 OAuth(_doSetupUser) 흐름으로 빠져 IneligibleTierError 발생)
+        // selectedType + enforcedType 모두 지정해 user 설정의 oauth-personal 을 확실히 override.
+        // GOOGLE_API_KEY 도 호환을 위해 함께 설정.
+        if (spawnEnv.GEMINI_API_KEY) {
+          spawnEnv.GOOGLE_API_KEY = spawnEnv.GEMINI_API_KEY;
+          geminiSettings.security = { auth: { selectedType: 'gemini-api-key', enforcedType: 'gemini-api-key' } };
+        }
         geminiSettingsTmp = path.join(os.tmpdir(), `gemini-mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
         fs.writeFileSync(geminiSettingsTmp, JSON.stringify(geminiSettings), 'utf-8');
         spawnEnv.GEMINI_CLI_SYSTEM_SETTINGS_PATH = geminiSettingsTmp;
@@ -6430,6 +6455,202 @@ ipcMain.handle('codex:stop', (_e, { sessionId, requestId }: { sessionId: string;
       }
     } catch {}
     codexProcesses.delete(procKey);
+  }
+  return { success: true };
+});
+
+// ─── Custom LLM (OpenAI 호환 / LM Studio / Ollama 등) ─────────────────────────
+// 외부 CLI 없이 fetch 로 직접 /v1/chat/completions 스트리밍. 클라이언트 측은 Claude 와
+// 동일한 claude:stream 채널로 청크를 받아 표시한다.
+const customLlmProcesses = new Map<string, AbortController>();
+ipcMain.handle('custom-llm:check', () => {
+  try {
+    const prefs = loadUIPrefs();
+    const baseUrl = (prefs?.apiKeys?.customBaseUrl || '').toString().trim();
+    return { installed: !!baseUrl, version: baseUrl || 'not-configured' };
+  } catch {
+    return { installed: false, version: 'error' };
+  }
+});
+ipcMain.handle('custom-llm:stop', (_e, { sessionId, requestId }: { sessionId: string; requestId?: string }) => {
+  const procKey = requestId || sessionId;
+  markAgentStopped(procKey);
+  const ac = customLlmProcesses.get(procKey);
+  if (ac) { try { ac.abort(); } catch {} customLlmProcesses.delete(procKey); }
+  return { success: true };
+});
+ipcMain.handle('custom-llm:list-models', async () => {
+  try {
+    const prefs = loadUIPrefs();
+    const baseUrl = (prefs?.apiKeys?.customBaseUrl || '').toString().trim().replace(/\/+$/, '');
+    const apiKey = (prefs?.apiKeys?.customApiKey || '').toString().trim();
+    if (!baseUrl) return { success: false, error: 'Base URL 미설정' };
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+    });
+    if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
+    const data: any = await res.json();
+    const ids = Array.isArray(data?.data) ? data.data.map((m: any) => m.id).filter(Boolean) : [];
+    return { success: true, models: ids };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('custom-llm:send', async (_e, { sessionId, messages, requestId, sshTermId }: { sessionId: string; messages: Array<any>; requestId?: string; sshTermId?: string }) => {
+  const procKey = requestId || sessionId;
+  const reqId = requestId || `cus-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let baseUrl = '';
+  let apiKey = '';
+  let model = '';
+  try {
+    const prefs = loadUIPrefs();
+    baseUrl = (prefs?.apiKeys?.customBaseUrl || '').toString().trim().replace(/\/+$/, '');
+    apiKey = (prefs?.apiKeys?.customApiKey || '').toString().trim();
+    model = (prefs?.apiKeys?.customModel || '').toString().trim();
+  } catch {}
+  if (!baseUrl) {
+    sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'error', text: '❌ Custom LLM 설정 누락: 🔑 버튼에서 Base URL 입력' } });
+    return { success: false };
+  }
+  if (!model) {
+    sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'error', text: '❌ Custom LLM 설정 누락: 🔑 버튼에서 Model 이름 입력' } });
+    return { success: false };
+  }
+  const ac = new AbortController();
+  customLlmProcesses.set(procKey, ac);
+  // OpenAI tool schema — SSH 활성 시에만 도구 노출 (LM Studio/오픈소스 모델이 도구 호출 못 해도 텍스트로 응답)
+  const tools = sshTermId ? [
+    {
+      type: 'function',
+      function: {
+        name: 'ssh_exec',
+        description: '활성 SSH 원격 서버에서 셸 명령을 실행하고 stdout/stderr 를 반환합니다. 예: ls, cat, grep, find',
+        parameters: {
+          type: 'object',
+          properties: { command: { type: 'string', description: '실행할 셸 명령' } },
+          required: ['command'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ssh_read_file',
+        description: '활성 SSH 원격 서버의 파일을 읽어 텍스트로 반환합니다.',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: '원격 파일 절대 경로' } },
+          required: ['path'],
+        },
+      },
+    },
+  ] : undefined;
+  const runTool = async (name: string, argsJson: string): Promise<string> => {
+    if (!sshTermId) return 'ERROR: 활성 SSH 세션 없음';
+    let args: any = {};
+    try { args = JSON.parse(argsJson || '{}'); } catch { return 'ERROR: invalid JSON arguments'; }
+    try {
+      const bridge = getSSHBridge();
+      if (name === 'ssh_exec') {
+        const cmd = String(args.command || '').slice(0, 4000);
+        if (!cmd) return 'ERROR: command 비어있음';
+        const out = await bridge.execCommand(sshTermId, cmd, 30000);
+        return out.slice(0, 50000);
+      }
+      if (name === 'ssh_read_file') {
+        const p = String(args.path || '');
+        if (!p) return 'ERROR: path 비어있음';
+        const buf = await bridge.handleSFTPReadFile(sshTermId, p);
+        return buf.toString('utf-8').slice(0, 100000);
+      }
+      return `ERROR: 알 수 없는 도구 ${name}`;
+    } catch (e: any) {
+      return `ERROR: ${String(e?.message || e)}`;
+    }
+  };
+  // 도구 루프: 최대 8회 반복하며 assistant.tool_calls 처리
+  let conv = Array.isArray(messages) ? [...messages] : [];
+  const MAX_ITER = 8;
+  try {
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+      if (stoppedAgentProcs.has(procKey)) break;
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        body: JSON.stringify({ model, stream: true, messages: conv, ...(tools ? { tools, tool_choice: 'auto' } : {}) }),
+        signal: ac.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'error', text: `❌ Custom LLM HTTP ${res.status}: ${body.slice(0, 500)}` } });
+        return { success: false };
+      }
+      const reader = res.body?.getReader();
+      if (!reader) {
+        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'error', text: '❌ 응답 스트림을 읽을 수 없습니다' } });
+        return { success: false };
+      }
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let assistantContent = '';
+      const toolCallsAcc: Record<number, { id: string; name: string; arguments: string }> = {};
+      let finishReason: string | null = null;
+      while (true) {
+        if (stoppedAgentProcs.has(procKey)) break;
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t || !t.startsWith('data:')) continue;
+          const payload = t.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            const ch = j.choices?.[0];
+            const delta = ch?.delta;
+            if (delta?.content) {
+              assistantContent += delta.content;
+              sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: String(delta.content) } });
+            }
+            if (Array.isArray(delta?.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const idx = typeof tc.index === 'number' ? tc.index : 0;
+                if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', name: '', arguments: '' };
+                if (tc.id) toolCallsAcc[idx].id = tc.id;
+                if (tc.function?.name) toolCallsAcc[idx].name = tc.function.name;
+                if (typeof tc.function?.arguments === 'string') toolCallsAcc[idx].arguments += tc.function.arguments;
+              }
+            }
+            if (ch?.finish_reason) finishReason = ch.finish_reason;
+          } catch { /* skip */ }
+        }
+      }
+      const toolCallList = Object.keys(toolCallsAcc).map(k => toolCallsAcc[Number(k)]).filter(tc => tc.name);
+      // assistant 턴 기록
+      const assistantMsg: any = { role: 'assistant', content: assistantContent || null };
+      if (toolCallList.length > 0) {
+        assistantMsg.tool_calls = toolCallList.map(tc => ({ id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`, type: 'function', function: { name: tc.name, arguments: tc.arguments } }));
+      }
+      conv.push(assistantMsg);
+      if (toolCallList.length === 0 || finishReason === 'stop') break;
+      // 도구 실행 + 결과 메시지 추가
+      for (const tc of assistantMsg.tool_calls) {
+        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: `\n\n🔧 ${tc.function.name}(${tc.function.arguments})\n` } });
+        const result = await runTool(tc.function.name, tc.function.arguments);
+        sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'text', text: `↳ ${result.slice(0, 200)}${result.length > 200 ? '...' : ''}\n\n` } });
+        conv.push({ role: 'tool', tool_call_id: tc.id, content: result });
+      }
+    }
+    sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'result', subtype: 'success' } });
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') {
+      sendAgentStream('claude:stream', { sessionId, requestId: reqId, message: { type: 'error', text: `❌ Custom LLM 오류: ${String(err?.message || err)}` } });
+    }
+  } finally {
+    customLlmProcesses.delete(procKey);
   }
   return { success: true };
 });

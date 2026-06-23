@@ -475,6 +475,14 @@ const CodexTabIcon = () => (
     <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" fill="#b0b0b0"/>
   </svg>
 );
+/** Custom LLM (LM Studio / OpenAI 호환 서버) 탭 아이콘 — 서버/플러그 이미지 */
+const CustomTabIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5 3h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 11h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zm2-7h.01M7 18h.01" fill="none" stroke="#7aa2ff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    <circle cx="7" cy="6.5" r="0.8" fill="#7aa2ff"/>
+    <circle cx="7" cy="17.5" r="0.8" fill="#7aa2ff"/>
+  </svg>
+);
 // ────────────────────────────────────────────────────────────────────────────
 
 type CodexApprovalPolicy = 'suggest' | 'auto-edit' | 'full-auto';
@@ -1085,7 +1093,7 @@ const MarkdownMessage = React.memo(({ id, content, className }: MarkdownMessageP
   <div className={className} dangerouslySetInnerHTML={{ __html: renderMdCached(id, content) }} />
 ), (prev, next) => prev.id === next.id && prev.content === next.content && prev.className === next.className);
 
-type AgentType = 'claude' | 'gemini' | 'codex';
+type AgentType = 'claude' | 'gemini' | 'codex' | 'custom';
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -1101,7 +1109,7 @@ type ChatHistoryEntry = {
   pinned: boolean;
   updatedAt: number;
   // 이 대화를 처음 만든 에이전트 (공유 OFF 모드에서 이력 필터링용)
-  originAgent?: 'claude' | 'gemini' | 'codex';
+  originAgent?: 'claude' | 'gemini' | 'codex' | 'custom';
   messages: Message[];
   pendingRequestId?: string | null; // 진행 중 send 의 requestId
   streaming?: boolean; // 진행 중인지
@@ -1137,8 +1145,8 @@ type Props = {
   defaultSshSession?: { termId: string; label: string } | null;
   pinned?: boolean;
   onTogglePin?: () => void;
-  aiAgent?: 'claude' | 'gemini' | 'codex';
-  onAgentChange?: (agent: 'claude' | 'gemini' | 'codex') => void;
+  aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom';
+  onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom') => void;
 };
 
 let sessionCounter = 0;
@@ -1546,6 +1554,51 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     if (!shareContextLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ aiShareContext: shareContext }); } catch {}
   }, [shareContext]);
+  // AI API 키 관리 모달
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  // API 키 입력 필드 표시/숨김 토글
+  const [apiKeyShow, setApiKeyShow] = useState<{ claude: boolean; gemini: boolean; codex: boolean; customApiKey: boolean }>({ claude: false, gemini: false, codex: false, customApiKey: false });
+  // Custom LLM 모델 목록 조회 결과
+  const [customModelList, setCustomModelList] = useState<string[] | null>(null);
+  const [customModelListLoading, setCustomModelListLoading] = useState(false);
+  const refreshCustomModels = async () => {
+    setCustomModelListLoading(true);
+    try {
+      const r = await (window as any).api?.customListModels?.();
+      if (r?.success) setCustomModelList(r.models || []);
+      else { setCustomModelList([]); console.warn('[custom-llm] models fetch error:', r?.error); }
+    } catch (e) { setCustomModelList([]); console.warn(e); }
+    finally { setCustomModelListLoading(false); }
+  };
+  type ApiKeysState = { claude: string; gemini: string; codex: string; customBaseUrl: string; customApiKey: string; customModel: string };
+  const [apiKeys, setApiKeys] = useState<ApiKeysState>({ claude: '', gemini: '', codex: '', customBaseUrl: 'http://localhost:1234/v1', customApiKey: 'lm-studio', customModel: '' });
+  useEffect(() => {
+    // 모달 *열림* 시에만 디스크에서 재로드 — 닫힘에서 재로드하면 방금 저장한 값을 덮어써 race.
+    if (!apiKeyModalOpen) return;
+    (window as any).api?.getUIPrefs?.()?.then?.((prefs: any) => {
+      const k = prefs?.apiKeys || {};
+      setApiKeys({
+        claude: k.claude || '',
+        gemini: k.gemini || prefs?.geminiApiKey || '',
+        codex: k.codex || '',
+        customBaseUrl: k.customBaseUrl || 'http://localhost:1234/v1',
+        customApiKey: k.customApiKey || 'lm-studio',
+        customModel: k.customModel || '',
+      });
+    }).catch(() => {});
+  }, [apiKeyModalOpen]);
+  const saveApiKeys = async (next: ApiKeysState) => {
+    const trimmed: ApiKeysState = {
+      claude: next.claude.trim(),
+      gemini: next.gemini.trim(),
+      codex: next.codex.trim(),
+      customBaseUrl: next.customBaseUrl.trim(),
+      customApiKey: next.customApiKey.trim(),
+      customModel: next.customModel.trim(),
+    };
+    setApiKeys(trimmed);
+    try { await (window as any).api?.setUIPrefs?.({ apiKeys: trimmed }); } catch {}
+  };
   // Mermaid 다이어그램 렌더링 on/off — 렌더 실패/한글 깨짐/메인스레드 점유 회피용.
   // OFF 면 ```mermaid``` 코드블록을 일반 코드블록으로 그대로 표시.
   const [mermaidEnabled, setMermaidEnabled] = useState<boolean>(true);
@@ -1722,10 +1775,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   }, [currentAgent]);
   // 요금제 확인 후 현재 선택 모델이 못 쓰는 모델이면 기본 모델로 자동 전환
   useEffect(() => {
-    if (currentAgent === 'gemini' && geminiTier && !isGeminiModelUsable(model, geminiTier.isPaid)) {
+    if (currentAgent === 'gemini' && geminiTier && !isGeminiModelUsable(model, geminiTier.isPaid || !!apiKeys.gemini?.trim())) {
       setModel('gemini-2.5-flash');
     }
-  }, [geminiTier, currentAgent]);
+  }, [geminiTier, currentAgent, apiKeys.gemini]);
   // 모델 선택 — 에이전트별 기본 모델
   const defaultModelFor = (a: AgentType) => a === 'gemini' ? 'gemini-2.5-flash' : a === 'codex' ? 'gpt-5.5' : 'opus';
   const [model, setModelRaw] = useState<string>(defaultModelFor(aiAgent));
@@ -1926,10 +1979,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         ? await (window as any).api?.geminiCheck?.()
         : currentAgent === 'codex'
         ? await (window as any).api?.codexCheck?.()
+        : currentAgent === 'custom'
+        ? await (window as any).api?.customCheck?.()
         : await (window as any).api?.claudeCheck?.();
       setInstalled(!!res?.installed);
       const v = res?.version || '';
-      setAgentVersions(prev => prev[currentAgent] === v ? prev : { ...prev, [currentAgent]: v });
+      setAgentVersions(prev => (prev as any)[currentAgent] === v ? prev : { ...prev, [currentAgent]: v });
     })();
   }, [currentAgent]);
 
@@ -3153,7 +3208,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     try {
       if (currentAgentRef.current === 'gemini') {
         // 요금제에서 못 쓰는 모델(또는 미등록 모델)이면 안전한 기본 모델로 대체
-        const geminiModel = isGeminiModelUsable(model, geminiTier?.isPaid === true) ? model : 'gemini-2.5-flash';
+        const geminiModel = isGeminiModelUsable(model, (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim())) ? model : 'gemini-2.5-flash';
         // 자동 승인(geminiYolo) OFF + 승인성 발화 아님 → "계획 먼저 보여주고 승인" 단계
         const approveKeywords = ['실행', '진행', '좋아', 'yes', 'ok', '승인', 'approve', '해줘', 'go ahead', '네'];
         const isApproval = approveKeywords.some(k => text.toLowerCase().includes(k.toLowerCase()));
@@ -3172,6 +3227,14 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         }
         // sshTermId 전달 → gemini 에 SSH MCP(pepe_ssh) 제공 (원격 파일/명령)
         await (window as any).api?.geminiSend?.(sessionId, geminiPrompt, requestId, geminiModel, geminiYolo, addDirs, sshTermId, sshSessions);
+      } else if (currentAgentRef.current === 'custom') {
+        // Custom LLM (LM Studio / OpenAI 호환) — 단순 fetch 스트리밍, 도구 호출 미지원
+        // 대화 맥락 유지: 직전 메시지 + 새 user 메시지를 OpenAI 형식으로 보냄.
+        const history = messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role, content: m.content }));
+        const chatMessages = [...history, { role: 'user' as const, content: text }];
+        await (window as any).api?.customSend?.(sessionId, chatMessages, requestId, sshTermId);
       } else if (currentAgentRef.current === 'codex') {
         // codex 는 비대화형(exec)이라 실행 중 승인이 불가 → claude 처럼 "계획 먼저 보여주고 승인" 2단계로 처리.
         // plan 모드(또는 default + 승인성 발화 아님)면 계획 단계로 전송.
@@ -3864,7 +3927,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       ]
     : currentAgent === 'gemini'
     ? GEMINI_MODELS.map(m => {
-        const usable = !m.pro || geminiTier?.isPaid === true;
+        const usable = !m.pro || (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim());
         return {
           id: `model-${m.v}`, section: 'Model',
           label: `Model: ${m.l}${usable ? '' : ' (지원안함)'}`,
@@ -3970,6 +4033,116 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     setCodexApprovalMenuOpen(false);
   };
 
+  // API 키 모달 JSX — early return (installed === null / !installed) 시에도 띄울 수 있도록 변수로 추출.
+  const apiKeyModalJsx = apiKeyModalOpen ? createPortal(
+    <div className="claude-chat-modal-backdrop" onClick={() => setApiKeyModalOpen(false)}>
+      <div
+        className="claude-chat-modal"
+        style={{ minWidth: 460 }}
+        onClick={e => e.stopPropagation()}
+        onKeyDown={e => {
+          e.stopPropagation();
+          if (e.key === 'Escape') setApiKeyModalOpen(false);
+        }}
+      >
+        <div className="claude-chat-modal-title">🔑 AI API 키 관리</div>
+        <div style={{ fontSize: 11, color: '#aaa', marginBottom: 10, lineHeight: 1.5 }}>
+          각 에이전트 spawn 시 환경변수로 주입됩니다. 비워두면 기존 인증(OAuth 등) 그대로 사용.<br/>
+          발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>Gemini</a>{' / '}
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>OpenAI(Codex)</a>{' / '}
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>Anthropic(Claude)</a>
+        </div>
+        {([
+          { k: 'claude', label: 'Claude (ANTHROPIC_API_KEY)', icon: '🤖' },
+          { k: 'gemini', label: 'Gemini (GEMINI_API_KEY)', icon: '✦' },
+          { k: 'codex', label: 'Codex (OPENAI_API_KEY)', icon: '⌬' },
+        ] as const).map(({ k, label, icon }) => (
+          <div key={k} style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: '#cde', marginBottom: 4 }}>{icon} {label}</div>
+            <div style={{ position: 'relative' }}>
+              <input
+                type={apiKeyShow[k] ? 'text' : 'password'}
+                value={apiKeys[k]}
+                onChange={e => setApiKeys(p => ({ ...p, [k]: e.target.value }))}
+                placeholder="sk-... / AI... 형식"
+                style={{ width: '100%', padding: '6px 32px 6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
+              />
+              <button
+                type="button"
+                onClick={() => setApiKeyShow(p => ({ ...p, [k]: !p[k] }))}
+                title={apiKeyShow[k] ? '숨기기' : '표시'}
+                style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', padding: '2px 6px', fontSize: 14 }}
+              >{apiKeyShow[k] ? '🙈' : '👁'}</button>
+            </div>
+          </div>
+        ))}
+        <div style={{ marginTop: 16, paddingTop: 10, borderTop: '1px solid #2a3548' }}>
+          <div style={{ fontSize: 12, color: '#cde', marginBottom: 6, fontWeight: 600 }}>🖥 Custom LLM (OpenAI 호환 / LM Studio / Ollama)</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>Base URL — 예: <code>http://localhost:1234/v1</code> (LM Studio), <code>http://localhost:11434/v1</code> (Ollama)</div>
+          <input
+            type="text"
+            value={apiKeys.customBaseUrl}
+            onChange={e => setApiKeys(p => ({ ...p, customBaseUrl: e.target.value }))}
+            placeholder="http://localhost:1234/v1"
+            style={{ width: '100%', padding: '6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace', marginBottom: 8 }}
+          />
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 4 }}>API Key (필요한 경우만, LM Studio 는 임의 값)</div>
+          <div style={{ position: 'relative', marginBottom: 8 }}>
+            <input
+              type={apiKeyShow.customApiKey ? 'text' : 'password'}
+              value={apiKeys.customApiKey}
+              onChange={e => setApiKeys(p => ({ ...p, customApiKey: e.target.value }))}
+              placeholder="sk-... 또는 lm-studio"
+              style={{ width: '100%', padding: '6px 32px 6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
+            />
+            <button
+              type="button"
+              onClick={() => setApiKeyShow(p => ({ ...p, customApiKey: !p.customApiKey }))}
+              title={apiKeyShow.customApiKey ? '숨기기' : '표시'}
+              style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', padding: '2px 6px', fontSize: 14 }}
+            >{apiKeyShow.customApiKey ? '🙈' : '👁'}</button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: '#aaa' }}>Model 이름 (예: google/gemma-3-4b)</div>
+            <button
+              type="button"
+              className="claude-chat-modal-btn"
+              onClick={refreshCustomModels}
+              disabled={customModelListLoading || !apiKeys.customBaseUrl.trim()}
+              style={{ padding: '2px 8px', fontSize: 10 }}
+            >{customModelListLoading ? '조회중...' : '🔄 서버 목록 조회'}</button>
+          </div>
+          {customModelList && customModelList.length > 0 ? (
+            <select
+              value={apiKeys.customModel}
+              onChange={e => setApiKeys(p => ({ ...p, customModel: e.target.value }))}
+              style={{ width: '100%', padding: '6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
+            >
+              <option value="">(선택)</option>
+              {customModelList.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={apiKeys.customModel}
+              onChange={e => setApiKeys(p => ({ ...p, customModel: e.target.value }))}
+              placeholder="google/gemma-3-4b"
+              style={{ width: '100%', padding: '6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
+            />
+          )}
+          {customModelList && customModelList.length === 0 && (
+            <div style={{ fontSize: 10, color: '#f88', marginTop: 4 }}>서버에서 모델 목록을 가져오지 못했습니다 — 수동 입력 가능</div>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
+          <button className="claude-chat-modal-btn" onClick={() => setApiKeyModalOpen(false)}>취소</button>
+          <button className="claude-chat-modal-btn primary" onClick={async () => { await saveApiKeys(apiKeys); setApiKeyModalOpen(false); }}>저장</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  ) : null;
+
   if (installed === null) {
     return (
       <div className="claude-chat-container">
@@ -3980,18 +4153,20 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <button className={`claude-chat-agent-btn ${currentAgent === 'claude' ? 'active' : ''}`} title="Claude Code" onClick={() => switchAgent('claude')}><ClaudeTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'gemini' ? 'active' : ''}`} title="Gemini" onClick={() => switchAgent('gemini')}><GeminiTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'codex' ? 'active' : ''}`} title="Codex" onClick={() => switchAgent('codex')}><CodexTabIcon /></button>
+              <button className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`} title="Custom LLM (LM Studio / OpenAI 호환)" onClick={() => switchAgent('custom')}><CustomTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
             {onClose && <button className="claude-chat-close" onClick={onClose}>×</button>}
           </div>
         </div>
-        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : tt('loading')}</div>
+        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : currentAgent === 'custom' ? 'Custom LLM 로딩중...' : tt('loading')}</div>
+        {apiKeyModalJsx}
       </div>
     );
   }
   if (!installed) {
-    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : tt('notInstalled');
+    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? 'Custom LLM 설정이 비어있습니다. 우측 상단 🔑 버튼에서 Base URL과 Model 이름을 설정해주세요.' : tt('notInstalled');
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4013,9 +4188,19 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 title="Codex"
                 onClick={() => switchAgent('codex')}
               ><CodexTabIcon /></button>
+              <button
+                className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`}
+                title="Custom LLM (LM Studio / OpenAI 호환)"
+                onClick={() => switchAgent('custom')}
+              ><CustomTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
+            <button
+              className="claude-chat-tool-btn"
+              title="AI API 키 관리 (Claude / Gemini / Codex / Custom)"
+              onClick={() => setApiKeyModalOpen(true)}
+            >🔑</button>
             {onClose && <button className="claude-chat-close" onClick={onClose}>×</button>}
           </div>
         </div>
@@ -4031,6 +4216,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <p>{tt('installCmd')} <code>npm install -g @openai/codex</code></p>
               <p>{tt('loginHint', { cmd: 'codex' })}</p>
             </>
+          ) : currentAgent === 'custom' ? (
+            <>
+              <p>OpenAI 호환 API 서버 주소(예: LM Studio, Ollama, OpenRouter)와 모델 이름을 우측 상단 🔑 버튼에서 설정하세요.</p>
+            </>
           ) : (
             <>
               <p>{tt('installCmd')} <code>npm install -g @anthropic-ai/claude-code</code></p>
@@ -4038,6 +4227,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             </>
           )}
         </div>
+        {apiKeyModalJsx}
       </div>
     );
   }
@@ -4064,10 +4254,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         </div>
         <div className="claude-chat-header-center">
           <div className="claude-chat-agent-switcher">
-            {(['claude', 'gemini', 'codex'] as const).map(a => {
-              const Icon = a === 'claude' ? ClaudeTabIcon : a === 'gemini' ? GeminiTabIcon : CodexTabIcon;
-              const label = a === 'claude' ? 'Claude Code' : a === 'gemini' ? 'Gemini' : 'Codex';
-              const v = agentVersions[a];
+            {(['claude', 'gemini', 'codex', 'custom'] as const).map(a => {
+              const Icon = a === 'claude' ? ClaudeTabIcon : a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : CustomTabIcon;
+              const label = a === 'claude' ? 'Claude Code' : a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : 'Custom LLM';
+              const v = agentVersions[a as 'claude' | 'gemini' | 'codex'];
               const tipText = v ? `${label} · ${v}` : label;
               const showTip = (e: React.MouseEvent<HTMLButtonElement>) => {
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -5072,6 +5262,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           />
           <button
             className="claude-chat-tool-btn"
+            title="AI API 키 관리 (Claude / Gemini / Codex)"
+            onClick={() => setApiKeyModalOpen(true)}
+          >🔑</button>
+          <button
+            className="claude-chat-tool-btn"
             title={`Mermaid 다이어그램 렌더링 ${mermaidEnabled ? 'ON (클릭: ASCII 모드로 전환)' : 'OFF (클릭: SVG 렌더링)'}`}
             onClick={() => setMermaidEnabled(v => !v)}
             style={{ opacity: mermaidEnabled ? 1 : 0.5 }}
@@ -5138,12 +5333,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             <>
               <select
                 className="claude-chat-perm-select"
-                value={isGeminiModelUsable(model, geminiTier?.isPaid === true) ? model : 'gemini-2.5-flash'}
+                value={isGeminiModelUsable(model, (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim())) ? model : 'gemini-2.5-flash'}
                 onChange={e => setModel(e.target.value)}
                 title={geminiTier ? `${tt('geminiModelSelect')} · ${geminiTier.tierName}` : tt('geminiModelSelect')}
               >
                 {GEMINI_MODELS.map(m => {
-                  const usable = !m.pro || geminiTier?.isPaid === true;
+                  const usable = !m.pro || (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim());
                   return (
                     <option key={m.v} value={m.v} disabled={!usable}>
                       {m.icon} {m.l}{!usable ? ' — 지원안함' : ''}
@@ -5563,6 +5758,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         </div>,
         document.body,
       )}
+      {apiKeyModalJsx}
     </div>
   );
 };

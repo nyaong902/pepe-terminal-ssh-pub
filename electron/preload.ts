@@ -377,6 +377,12 @@ contextBridge.exposeInMainWorld('api', {
   codexSend: (sessionId: string, prompt: string, requestId?: string, model?: string, approvalPolicy?: string, effort?: string, sshTermId?: string, sshSessions?: Array<{ id: string; label: string }>) =>
     ipcRenderer.invoke('codex:send', { sessionId, prompt, requestId, model, approvalPolicy, effort, sshTermId, sshSessions }),
   codexStop: (sessionId: string, requestId?: string) => ipcRenderer.invoke('codex:stop', { sessionId, requestId }),
+  customCheck: () => ipcRenderer.invoke('custom-llm:check'),
+  customSend: (sessionId: string, messages: Array<{ role: string; content: string }>, requestId?: string, sshTermId?: string) =>
+    ipcRenderer.invoke('custom-llm:send', { sessionId, messages, requestId, sshTermId }),
+  customStop: (sessionId: string, requestId?: string) =>
+    ipcRenderer.invoke('custom-llm:stop', { sessionId, requestId }),
+  customListModels: () => ipcRenderer.invoke('custom-llm:list-models'),
   claudeProbeUsage: () => ipcRenderer.invoke('claude:probe-usage'),
   claudeProbeUsageTui: () => ipcRenderer.invoke('claude:probe-usage-tui'),
   claudeFetchUsageApi: () => ipcRenderer.invoke('claude:fetch-usage-api'),

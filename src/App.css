@@ -6860,3 +6860,48 @@ mark.claude-search-hit.current {
   line-height: 1;
 }
 .ask-pwd-eye-btn:hover { color: #a0a0d0; }
+
+/* AI API 키 관리 모달 (Claude/Gemini/Codex) */
+.claude-chat-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.claude-chat-modal {
+  background: #13203a;
+  border: 1px solid #4a6fa8;
+  border-radius: 6px;
+  padding: 16px 18px;
+  color: #e5edff;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+.claude-chat-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2a3548;
+}
+.claude-chat-modal-btn {
+  background: #1c2840;
+  color: #cde;
+  border: 1px solid #2a3548;
+  border-radius: 3px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.claude-chat-modal-btn:hover { background: #2a3548; color: #fff; }
+.claude-chat-modal-btn.primary {
+  background: #2b6b9b;
+  border-color: #3d8bc5;
+  color: #fff;
+}
+.claude-chat-modal-btn.primary:hover { background: #3a7fb3; }
