@@ -15,6 +15,22 @@ mermaid.initialize({
   themeVariables: {
     fontFamily: '"Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif',
     fontSize: '14px',
+    // dark 테마 기본값이 너무 흐릿해(에지/라벨이 거의 안 보임) 명시적으로 대비 강한 색상 지정
+    background: '#0d1320',
+    primaryColor: '#1e2a44',
+    primaryTextColor: '#f8fafc',
+    primaryBorderColor: '#7aa2ff',
+    secondaryColor: '#2a3548',
+    tertiaryColor: '#1a2030',
+    lineColor: '#9ab0d8',
+    textColor: '#e5edff',
+    mainBkg: '#1e2a44',
+    nodeBorder: '#7aa2ff',
+    clusterBkg: '#13203a',
+    clusterBorder: '#4a6fa8',
+    edgeLabelBackground: '#0d1320',
+    labelTextColor: '#e5edff',
+    titleColor: '#f8fafc',
   },
   flowchart: { htmlLabels: false, useMaxWidth: true, curve: 'basis' },
   sequence: { useMaxWidth: true },
@@ -179,7 +195,9 @@ function sanitizeMermaidLabels(src: string): string {
     // 특수문자 포함)는 모두 따옴표로 감싼다 — codex/한글 라벨이 unquoted 일 때
     // mermaid v11 파서가 깨지는 문제(예: {D_PABX_GRP_NO 존재?})를 근본 차단.
     if (/^[A-Za-z0-9_]+$/.test(t)) return null;
-    return `"${t.replace(/"/g, '&quot;')}"`;
+    // 우리 환경은 htmlLabels:false (SVG text) 라 &quot; 가 디코드되지 않고 그대로 보임.
+    // 안쪽 큰따옴표는 제거 (시각적으로 외곽 따옴표만 필요).
+    return `"${t.replace(/"/g, '')}"`;
   };
   // id[label]  ([[ / [( 같은 더블/복합 모양은 제외 — 안쪽에 [] 없을 때만)
   out = out.replace(/([A-Za-z0-9_]+)\[([^\[\]\n]+)\]/g, (m, id, label) => {
@@ -277,7 +295,8 @@ function sanitizeMermaidLabels(src: string): string {
     // -. 라벨 .-> / -- 라벨 --> 형태일 때 파서가 자주 깨지는 문제 회피.
     out = out.split('\n').map(line => {
       if (line.includes('|')) return line; // 이미 파이프 라벨이면 그대로
-      const esc = (t: string) => t.trim().replace(/"/g, '&quot;');
+      // htmlLabels:false → SVG text 라 &quot; 디코드 안 됨. 그냥 inner 큰따옴표 제거.
+      const esc = (t: string) => t.trim().replace(/"/g, '');
       // 점선: X -. 라벨 .-> Y  →  X -.->|"라벨"| Y  (공백 유무 무관)
       line = line.replace(/-\.\s*([^>\n][^>\n]*?)\s*\.-*->/g, (m, txt) => {
         const t = esc(txt); if (!t || /^[-.\s]+$/.test(t)) return m;
@@ -498,7 +517,10 @@ function CodexApprovalIcon({ value }: { value: CodexApprovalPolicy }) {
 
 
 function closeDanglingMermaidFences(md: string): string {
-  md = md.replace(/([^\n])```\s*mermaid\b/gi, '$1\n```mermaid');
+  // Gemini 등이 텍스트 뒤에 줄바꿈 없이 ```lang 을 붙이는 경우(예: "다음과 같습니다.```python")
+  // 가 잦아 markdown 파서가 fence 시작을 인식 못 하고 ** ** / # 가 헤더로 폭주.
+  // 모든 언어 fence 앞에 줄바꿈을 강제 삽입.
+  md = md.replace(/([^\n])```([A-Za-z0-9_+-]*)/g, '$1\n```$2');
   const lines = md.split('\n');
   const out: string[] = [];
   let inMermaid = false;
@@ -822,7 +844,9 @@ function summarizeToolInput(name: string, input: any): string {
     case 'Task':
       return truncate(String(input.description || input.subagent_type || ''), 100);
     case 'TodoWrite':
-      return Array.isArray(input.todos) ? `${input.todos.length} todos` : '';
+    case 'write_todos':
+    case 'update_plan':
+      return Array.isArray(input.todos || input.plan) ? `${(input.todos || input.plan).length} todos` : '';
     case 'mcp__pepe_ssh__ssh_exec':
       return truncate([input.session ? `[${input.session}]` : '', String(input.command || '')].filter(Boolean).join(' '), 100);
     case 'mcp__pepe_ssh__ssh_read':
@@ -901,7 +925,7 @@ const TOOL_VERB: Record<string, string> = {
   Grep: '🔍 검색', ssh_grep: '🔍 검색', WebSearch: '🔍 검색',
   Bash: '▶ 실행', PowerShell: '▶ 실행', ssh_exec: '▶ 실행', mcp__pepe_ssh__ssh_exec: '▶ 실행',
   WebFetch: '🌐 가져오기',
-  TodoWrite: '📋 할일', ExitPlanMode: '📋 계획',
+  TodoWrite: '📋 할일', write_todos: '📋 할일', update_plan: '📋 할일', ExitPlanMode: '📋 계획',
   Agent: '🤖 에이전트', Task: '🤖 에이전트',
 };
 // 접힌 상태 라벨 — 동작 + 대상 파일명(경로 제외). 펼치면 buildToolLabel(전체 경로) 표시.
@@ -927,7 +951,11 @@ function buildToolLabelShort(name: string, input: any): string {
     case 'WebFetch':
       try { return `${verb} ${new URL(String(input.url)).hostname}`; } catch { return verb; }
     case 'TodoWrite':
-      return `${verb} ${Array.isArray(input?.todos) ? input.todos.length : 0}개`;
+    case 'write_todos':
+    case 'update_plan': {
+      const items = input?.todos || input?.plan;
+      return `${verb} ${Array.isArray(items) ? items.length : 0}개`;
+    }
     case 'ExitPlanMode':
       return '📋 계획 승인 요청';
     case 'Agent': case 'Task':
@@ -1003,7 +1031,13 @@ function buildToolDetail(name: string, input: any): string {
     case 'PowerShell':
       return cap(String(input.command || ''), 25, 1500);
     case 'TodoWrite':
-      return Array.isArray(input.todos) ? cap(input.todos.map((td: any) => `• ${td.content || td.activeForm || ''}`).join('\n')) : '';
+    case 'write_todos':
+    case 'update_plan': {
+      const items = input.todos || input.plan;
+      if (!Array.isArray(items)) return '';
+      const statusIcon = (s: any) => s === 'completed' ? '✓' : s === 'in_progress' ? '▸' : '○';
+      return cap(items.map((td: any) => `${statusIcon(td.status)} ${td.content || td.description || td.activeForm || td.text || ''}`).join('\n'));
+    }
     case 'ExitPlanMode':
       return input.plan ? cap(String(input.plan), 60, 3000) : '';
     default: {
@@ -1011,6 +1045,17 @@ function buildToolDetail(name: string, input: any): string {
       const bn = bareToolName(name);
       if (bn === 'ssh_exec') return cap([input.session ? `[${input.session}]` : '', String(input.command || '')].filter(Boolean).join(' '), 25, 1500);
       if (bn === 'ssh_write_file' || bn === 'ssh_write') return input.content ? cap(String(input.content).split('\n').map((l: string) => '+ ' + l).join('\n')) : '';
+      // 읽기/검색/탐색 — 펼침에서 전체 경로/패턴 분리 표시 (라벨이 잘려도 여기서 확인 가능)
+      const fp = input.path || input.file_path || input.filePath;
+      if (bn === 'ssh_read_file' || bn === 'ssh_read' || bn === 'Read' || bn === 'LS') {
+        return fp ? `📁 ${fp}` : '';
+      }
+      if (bn === 'ssh_glob' || bn === 'Glob') {
+        return [input.pattern ? `pattern: ${input.pattern}` : '', fp ? `📁 ${fp}` : ''].filter(Boolean).join('\n');
+      }
+      if (bn === 'ssh_grep' || bn === 'Grep') {
+        return [input.pattern ? `pattern: "${input.pattern}"` : '', fp ? `📁 ${fp}` : '', input.glob ? `glob: ${input.glob}` : ''].filter(Boolean).join('\n');
+      }
       return '';
     }
   }
@@ -2414,8 +2459,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         }
         // 처리 시작 전 src 기록 (에러 시 재시도 방지)
         codeEl.setAttribute('data-mermaid-src', source);
+        // gemini 등이 라벨 안 따옴표를 &quot; 로 이미 이스케이프해서 보내는 경우가 있음 — 디코드
+        const decoded = source
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&');
         // 특수문자 라벨을 따옴표로 감싸 mermaid 파서 에러 방지 (codex 다이어그램 대응)
-        const renderSrc = sanitizeMermaidLabels(source);
+        const renderSrc = sanitizeMermaidLabels(decoded);
         let mermaidTimeoutId: ReturnType<typeof setTimeout> | null = null;
         try {
           const { svg } = await Promise.race([
@@ -2441,83 +2493,27 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           const svgHolder = document.createElement('div');
           svgHolder.className = 'claude-chat-mermaid-svg';
           svgHolder.innerHTML = svg;
-          // 'subgraph 별 ...' 같이 title 에 '★' / '⬟' 가 포함된 cluster 의 사각형을
-          // SVG 별 모양 polygon 으로 교체 — mermaid 자체는 별-shape subgraph 를 지원 안 함.
+          // 클러스터/노드 라벨 텍스트에 들어간 도형 Unicode 문자(★☆◆◇▲▼△▽⬢⬣⬠⬟ 등)는
+          // 사용자가 "그게 도형 아닌가?" 라고 오해하게 만들어서 제거 — AI 가 시스템 프롬프트
+          // 무시하고 장식으로 넣어도 시각적으론 안 보이게.
           try {
-            const renderedSvg2 = svgHolder.querySelector('svg');
-            if (renderedSvg2) {
-              const clusters = renderedSvg2.querySelectorAll('g.cluster, g.clusters > g');
-              clusters.forEach(cluster => {
-                const title = cluster.querySelector('text, .cluster-label, .nodeLabel');
-                const titleText = title?.textContent || '';
-                let shapeKind: 'star' | 'pentagon' | 'triangle' | 'diamond' | 'hexagon' | null = null;
-                if (/★|☆|⭐/.test(titleText)) shapeKind = 'star';
-                else if (/⬠|⬟/.test(titleText)) shapeKind = 'pentagon';
-                else if (/△|▲|▽|▼/.test(titleText)) shapeKind = 'triangle';
-                else if (/◆|◇|♦|♢/.test(titleText)) shapeKind = 'diamond';
-                else if (/⬢|⬣|⎔/.test(titleText)) shapeKind = 'hexagon';
-                if (!shapeKind) return;
-                const rect = cluster.querySelector(':scope > rect');
-                if (!rect) return;
-                const x = parseFloat(rect.getAttribute('x') || '0');
-                const y = parseFloat(rect.getAttribute('y') || '0');
-                const w = parseFloat(rect.getAttribute('width') || '0');
-                const h = parseFloat(rect.getAttribute('height') || '0');
-                if (!w || !h) return;
-                const cx = x + w / 2, cy = y + h / 2;
-                const outerR = Math.min(w, h) / 2 - 2;
-                const pts: string[] = [];
-                if (shapeKind === 'star') {
-                  // 10 vertex (5 outer + 5 inner) 별. 내접 비율 ~ 0.38.
-                  const innerR = outerR * 0.38;
-                  for (let i = 0; i < 10; i++) {
-                    const r = i % 2 === 0 ? outerR : innerR;
-                    const ang = -Math.PI / 2 + i * (Math.PI / 5);
-                    pts.push(`${(cx + r * Math.cos(ang)).toFixed(1)},${(cy + r * Math.sin(ang)).toFixed(1)}`);
-                  }
-                  // 별 모양은 좁아서 안에 자식이 안 들어가므로 가로/세로 1.4 배 확장
-                  // → 별 꼭지점이 rect 영역 밖으로 나가지만 viewBox 가 자동 조정되거나
-                  //   별이 더 큼직하게 보임. 내부 자식 위치는 mermaid 의 기존 좌표 그대로.
-                } else if (shapeKind === 'pentagon') {
-                  for (let i = 0; i < 5; i++) {
-                    const ang = -Math.PI / 2 + i * (2 * Math.PI / 5);
-                    pts.push(`${(cx + outerR * Math.cos(ang)).toFixed(1)},${(cy + outerR * Math.sin(ang)).toFixed(1)}`);
-                  }
-                } else if (shapeKind === 'triangle') {
-                  // 정삼각형 (꼭지 위) — rect 영역에 내접. 3개 꼭지점.
-                  // 내용물이 안에 들어가야 하므로 폭/높이를 살짝 확장 (1.15배)
-                  const tw = w / 2 * 1.15;
-                  const th = h / 2 * 1.05;
-                  pts.push(`${cx.toFixed(1)},${(cy - th).toFixed(1)}`);
-                  pts.push(`${(cx + tw).toFixed(1)},${(cy + th).toFixed(1)}`);
-                  pts.push(`${(cx - tw).toFixed(1)},${(cy + th).toFixed(1)}`);
-                } else if (shapeKind === 'diamond') {
-                  // 마름모/다이아몬드 — 4개 꼭지점, 90도 회전
-                  const dw = w / 2;
-                  const dh = h / 2;
-                  pts.push(`${cx.toFixed(1)},${(cy - dh).toFixed(1)}`);
-                  pts.push(`${(cx + dw).toFixed(1)},${cy.toFixed(1)}`);
-                  pts.push(`${cx.toFixed(1)},${(cy + dh).toFixed(1)}`);
-                  pts.push(`${(cx - dw).toFixed(1)},${cy.toFixed(1)}`);
-                } else if (shapeKind === 'hexagon') {
-                  // 정육각형, 평면 위 (납작한 면이 위/아래). 6개 꼭지점.
-                  for (let i = 0; i < 6; i++) {
-                    const ang = i * (Math.PI / 3);
-                    pts.push(`${(cx + outerR * Math.cos(ang)).toFixed(1)},${(cy + outerR * Math.sin(ang)).toFixed(1)}`);
-                  }
+            const renderedSvgStrip = svgHolder.querySelector('svg');
+            if (renderedSvgStrip) {
+              const SHAPE_CHARS = /[★☆⭐◆◇♦♢▲▼△▽⬢⬣⬠⬟⬡]/g;
+              renderedSvgStrip.querySelectorAll<SVGElement>('.cluster-label tspan, .nodeLabel tspan, g.cluster text tspan').forEach(t => {
+                if (t.textContent && SHAPE_CHARS.test(t.textContent)) {
+                  t.textContent = t.textContent.replace(SHAPE_CHARS, '').replace(/^\s+/, '');
                 }
-                const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-                poly.setAttribute('points', pts.join(' '));
-                poly.setAttribute('fill', rect.getAttribute('fill') || 'none');
-                poly.setAttribute('stroke', rect.getAttribute('stroke') || '#bbb');
-                poly.setAttribute('stroke-width', rect.getAttribute('stroke-width') || '1.5');
-                // rect 의 클래스/스타일 정보 유지
-                const cls = rect.getAttribute('class');
-                if (cls) poly.setAttribute('class', cls);
-                rect.replaceWith(poly);
+              });
+              renderedSvgStrip.querySelectorAll<HTMLElement>('foreignObject p, foreignObject span').forEach(t => {
+                if (t.textContent && SHAPE_CHARS.test(t.textContent)) {
+                  t.textContent = t.textContent.replace(SHAPE_CHARS, '').replace(/^\s+/, '');
+                }
               });
             }
           } catch {}
+          // (subgraph cluster 의 사각형을 별/마름모 polygon 으로 자동 변환하던 로직은 제거됨 —
+          //  AI 가 헤더 장식으로 ★◆ 등을 넣을 때 오작동, 시스템 프롬프트에서 명시적 금지로 대체)
           // 모델이 라이트 테마 디렉티브를 넣어 SVG 배경이 하얗게 나오는 경우 방어 —
           // SVG 인라인 배경 및 전체 캔버스 배경 rect 를 투명화해 앱 dark 배경이 비치게 한다.
           try {
@@ -2905,12 +2901,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       `  - 라운드 사각형: \`E(라운드)\`  육각형: \`F{{육각}}\`  원통: \`G[(원통)]\``,
       `**subgraph (중첩 그룹)**: \`subgraph X[제목]\`...\`end\` — 제목에 한글 OK, ID 는 영문.`,
       `**subgraph 를 원형으로 만들기**: \`style X rx:200,ry:200\` — 모서리 반지름을 매우 크게 주면 시각적으로 원/타원처럼 보임. "subgraph 는 항상 사각형이라 원형 못 만든다" 같은 말은 잘못된 것입니다 — rx/ry 트릭으로 충분히 원형이 됩니다.`,
-      `**subgraph 의 모양(컨테이너 박스)을 다양하게 만들기** — title 에 모양 기호를 포함하면 사용자 환경의 SVG 후처리가 사각형을 자동으로 해당 모양 polygon 으로 교체합니다. "subgraph 는 사각형뿐이라 못 만든다"는 잘못된 인식입니다:`,
-      `  - ★ ☆ ⭐ : 별 모양 컨테이너 (예: \`subgraph S["★ 별 영역"]\`)`,
-      `  - △ ▲ ▽ ▼ : **삼각형 모양 컨테이너** — 안에 다른 도형/노드 중첩 가능 (예: \`subgraph T["△ 세모 영역"]\` 안에 동그라미 노드 배치)`,
-      `  - ◆ ◇ ♦ : 마름모 모양 컨테이너`,
-      `  - ⬠ ⬟ : 오각형  /  ⬢ ⬣ : 육각형`,
-      `이 컨벤션 덕에 "삼각형 안에 동그라미" 같은 중첩도 가능합니다 — subgraph 의 title 에 △ 를 넣으세요.`,
+      `**subgraph 컨테이너 박스는 항상 사각형(또는 rx/ry 로 둥근 사각형)** 입니다 — 별/삼각형/마름모 같은 비사각형 모양으로 만들 수 없습니다. 비사각형 모양이 필요하면 subgraph 가 아닌 일반 node 에 \`@{ shape: tri }\` 같은 mermaid v11 문법을 쓰세요.`,
+      `**⚠ subgraph / 노드 제목·라벨에 ★ ☆ ⭐ ◆ ◇ ♦ ▲ ▼ △ ▽ ⬢ ⬣ ⬠ ⬟ 같은 도형 기호(geometric shape Unicode)를 절대로 prefix/장식으로 넣지 마세요.** 사용자가 "그게 그 모양 아닌가?" 라고 오해해서 매우 혼란스럽습니다. 대신 ✓ ✗ ※ ◎ ▶ 같은 비-도형 기호나 그냥 텍스트를 쓰세요.`,
       `**다크 테마 주의**: 사용자 환경은 mermaid dark 테마라 배경이 어둡습니다. **style 에서 색상은 지정하지 마세요 (fill/stroke 생략)** — 테마가 자동으로 밝게 처리합니다. 굳이 색을 줘야 하면 stroke 는 \`#aaa\` 이상의 밝은 색을 쓰세요. \`stroke:#333\` 같은 어두운 색은 거의 안 보입니다.`,
       `**빈 라벨 / 빈 title 절대 만들지 마세요** — 라벨이 있어야 시각적으로 의미가 있습니다. 한글 라벨을 적극 사용하세요.`,
       `완전한 예시 (중첩 + 원형 subgraph + 삼각형 노드):`,

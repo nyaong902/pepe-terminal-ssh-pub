@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 
 export type MenuItem = {
   label?: string;
+  icon?: React.ReactNode;
   onClick?: () => void;
   separator?: boolean;
   header?: boolean;
@@ -79,6 +80,7 @@ export const ContextMenu: React.FC<Props> = ({ x, y, items, onClose }) => {
               onClose();
             }}
           >
+            {item.icon !== undefined && <span className="context-menu-icon">{item.icon}</span>}
             <span className="context-menu-label-text">{item.label || ''}</span>
             {hasSub && <span className="context-menu-arrow">▶</span>}
             {hasSub && openSub?.idx === i && (

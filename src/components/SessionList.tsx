@@ -961,10 +961,10 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                       };
                       return (
                         <>
-                          <div className="context-menu-item" onClick={() => doConnect('minitab')}>{t('ctxConnectMini')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-v')}>{t('ctxConnectVSplit')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-h')}>{t('ctxConnectHSplit')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}>{t('ctxConnectTile')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('minitab')}>🔌 미니탭으로 열기</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-v')}>▥ 좌우 분할로 열기</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-h')}>▤ 상하 분할로 열기</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}>▦ 타일 분할로 열기</div>
                         </>
                       );
                     })()}
@@ -987,6 +987,40 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             </>
           ) : (
           <>
+          {contextMenu.type === 'session' && (() => {
+            const s = sessions.find(x => x.id === contextMenu.id);
+            if (!s) return null;
+            const opts = multiTargetWs === 'current' ? undefined
+              : multiTargetWs === 'new' ? { newWorkspace: true }
+              : { targetTabId: multiTargetWs };
+            const doConnect = (mode: 'minitab' | 'split-h' | 'split-v' | 'split-tile') => {
+              onMultiConnect?.([s], mode, opts);
+              setContextMenu(null);
+            };
+            return (
+              <>
+                <div className="context-menu-label" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px' }}>
+                  <span style={{ fontSize: 11, color: '#aaa' }}>{t('ctxTarget') || '대상:'}</span>
+                  <select
+                    value={multiTargetWs}
+                    onChange={e => setMultiTargetWs(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
+                  >
+                    <option value="current">현재 워크스페이스</option>
+                    <option value="new">새 워크스페이스</option>
+                    {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
+                      <option key={tab.id} value={tab.id}>{tab.title}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="context-menu-item" onClick={() => doConnect('minitab')}>🔌 미니탭으로 열기</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-v')}>▥ 좌우 분할로 열기</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-h')}>▤ 상하 분할로 열기</div>
+                <div className="context-menu-separator" />
+              </>
+            );
+          })()}
           <div className="context-menu-item" onClick={() => { startRename(contextMenu.id, contextMenu.type, contextMenu.name); setContextMenu(null); }}>
             {t('ctxRename')}
           </div>

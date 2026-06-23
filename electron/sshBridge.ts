@@ -947,10 +947,11 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
             }
           }
           // 활성 셸 PID 기록 — getCcViewRoot(CLEARCASE_ROOT 조회)가 이 PID 의 environ 을 읽음.
-          // 새 셸(setview 등)로 바뀌면 뷰 루트 캐시도 무효화.
+          // ⚠ ccViewRoots 캐시는 무효화하지 않음 — SFTP 전송 중 PID 변동으로 캐시가 비워지면
+          // resolveCcPath 가 환경 재조회에 실패해 /vobs 가 그대로 SFTP 로 가는 회귀(파일 못찾음) 발생.
+          // 뷰 태그는 세션 내에서 거의 안 바뀌므로 한번 알아낸 값을 그대로 유지.
           if (chosenPid && this.activeShellPids.get(panelId) !== chosenPid) {
             this.activeShellPids.set(panelId, chosenPid);
-            this.ccViewRoots.delete(panelId);
           }
           // 폴백: 기존 단일 경로 추출
           if (!path) {
@@ -1367,6 +1368,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   }
 
   async handleSFTPDownload(panelId: string, remotePath: string, localPath: string, ctx?: any): Promise<void> {
+    // ClearCase 동적뷰: /vobs/... → /view/<tag>/vobs/... 실경로 변환 (List 와 동일)
+    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = remotePath.split('/').pop() || remotePath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: remotePath, dstPath: localPath } : {};
     // Worker thread 사용 (메인 이벤트 루프 보호)
@@ -1417,6 +1420,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   }
 
   async handleSFTPUpload(panelId: string, localPath: string, remotePath: string, ctx?: any): Promise<void> {
+    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = localPath.replace(/\\/g, '/').split('/').pop() || localPath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: localPath, dstPath: remotePath } : {};
     // 0바이트 파일은 sftp.open/close 사용
@@ -1762,6 +1766,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   async handleSFTPDelete(panelId: string, filePath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
+    filePath = await this.resolveCcPath(panelId, filePath);
     // 재귀 구현 — 폴더는 내부 파일/하위폴더 먼저 삭제 후 rmdir
     const deleteRecursive = async (p: string): Promise<void> => {
       const stats: any = await new Promise((res, rej) => sftp.stat(p, (e: any, s: any) => e ? rej(e) : res(s)));
@@ -1782,6 +1787,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   async handleSFTPMkdir(panelId: string, dirPath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
+    dirPath = await this.resolveCcPath(panelId, dirPath);
     return new Promise((resolve, reject) => {
       sftp.mkdir(dirPath, (err: any) => err ? reject(err) : resolve());
     });
@@ -1789,6 +1795,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   async handleSFTPRename(panelId: string, oldPath: string, newPath: string): Promise<void> {
     const sftp = await this.getSftp(panelId);
+    oldPath = await this.resolveCcPath(panelId, oldPath);
+    newPath = await this.resolveCcPath(panelId, newPath);
     return new Promise((resolve, reject) => {
       sftp.rename(oldPath, newPath, (err: any) => err ? reject(err) : resolve());
     });
@@ -1948,6 +1956,15 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     ctx?: { transferId: string; rootName: string; rel: string; rootIsDir?: boolean; workspaceId?: string },
     workspaceId?: string,
   ): Promise<void> {
+    // ClearCase 동적뷰: /vobs/... → /view/<tag>/vobs/... 실경로로 한번에 변환.
+    // stat / dstStat / isSrcDirectory / computeTreeSize / fastGet 등 모든 후속 SFTP 호출이
+    // 이 src.path/dst.path 를 그대로 사용하므로 진입 시 1회 변환으로 전체 회복.
+    if (src.mode === 'remote' && src.termId) {
+      src = { ...src, path: await this.resolveCcPath(src.termId, src.path) };
+    }
+    if (dst.mode === 'remote' && dst.termId) {
+      dst = { ...dst, path: await this.resolveCcPath(dst.termId, dst.path) };
+    }
     // 최상위 호출이면 ctx 자동 생성 + transfer-start 이벤트 즉시 송출
     const isRoot = !ctx;
     if (isRoot) {

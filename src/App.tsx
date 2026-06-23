@@ -3375,6 +3375,27 @@ function App() {
             const dir: 'row' | 'column' = mode === 'split-v' ? 'row' : 'column';
             // 모든 세션의 termId를 미리 생성
             const newTermIds = sessList.map(() => `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+            // 단일 세션 분할: 현재 패널을 쪼개고 새 패널에 세션 추가
+            if (sessList.length === 1) {
+              const s = sessList[0];
+              const newSess: PanelSession = { termId: newTermIds[0], sessionId: s.id, sessionName: s.name };
+              updateLayout(targetTabId, layout => splitNodeWithSessions(layout, panelId, dir, [newSess], false));
+              setTimeout(() => {
+                const sAny = s as any;
+                if (sAny.scrollback) applyScrollbackToTerm(newTermIds[0], sAny.scrollback);
+                setTimeout(() => {
+                  if (sAny.theme) applyThemeToTerm(newTermIds[0], sAny.theme);
+                  if (sAny.fontFamily || sAny.fontSize) applyFontToTerm(newTermIds[0], sAny.fontFamily, sAny.fontSize);
+                }, 200);
+                registerTermSession(newTermIds[0], s.id, s.name, sAny.host ?? '');
+                startInitialConnectWatchdog(newTermIds[0], s.id);
+                window.api?.connectSSH?.(newTermIds[0], s.id)?.then((r: string) => {
+                  if (r === 'need-password') promptPasswordAndConnect(newTermIds[0], s.id);
+                }).catch(() => {});
+                setTimeout(() => { refitAllTerms(); focusTerm(newTermIds[0]); }, 300);
+              }, 50);
+              return;
+            }
             // 첫 번째는 현재 패널에 세션 추가, 나머지는 분할 패널 생성 — 한 번의 layout 업데이트로 처리
             updateLayout(targetTabId, layout => {
               // 첫 번째 세션을 현재 패널에 추가

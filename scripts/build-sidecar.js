@@ -99,6 +99,13 @@ async function main() {
     console.error(`[build-sidecar] source dir missing: ${SRC_DIR}`);
     process.exit(1);
   }
+
+  // JAR가 이미 있고 --force 없으면 재컴파일 스킵
+  if (!process.argv.includes('--force') && fs.existsSync(TARGET_JAR)) {
+    console.log('[build-sidecar] pepe-jdbc.jar already built — skipping (use --force to rebuild)');
+    return;
+  }
+
   await ensureJackson();
 
   fs.rmSync(BUILD_DIR, { recursive: true, force: true });

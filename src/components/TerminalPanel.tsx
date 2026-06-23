@@ -3836,7 +3836,7 @@ export const TerminalPanel: React.FC<Props> = ({
           x={termCtx.x} y={termCtx.y}
           onClose={() => setTermCtx(null)}
           items={[
-            { label: t('menu.copy'), onClick: () => {
+            { label: t('menu.copy'), icon: '📋', onClick: () => {
               const entry = termStore.get(activeTermId);
               if (!entry) return;
               const settings = getTerminalSettings();
@@ -3846,7 +3846,7 @@ export const TerminalPanel: React.FC<Props> = ({
               if (!settings.includeTrailingNewline) sel = sel.replace(/\n$/, '');
               navigator.clipboard.writeText(sel).catch(() => {});
             }},
-            { label: t('menu.paste'), onClick: () => {
+            { label: t('menu.paste'), icon: '📥', onClick: () => {
               const tid = activeTermId;
               navigator.clipboard.readText().then(text => {
                 if (!text) return;
@@ -3864,32 +3864,32 @@ export const TerminalPanel: React.FC<Props> = ({
                 }
               }).catch(() => {});
             }},
-            { label: t('menu.selectAll'), onClick: () => selectAllInTerm(activeTermId) },
-            { label: t('menu.find'), onClick: () => {
+            { label: t('menu.selectAll'), icon: '☰', onClick: () => selectAllInTerm(activeTermId) },
+            { label: t('menu.find'), icon: '🔍', onClick: () => {
               try { window.dispatchEvent(new CustomEvent('open-search')); } catch {}
             }},
-            { label: t('menu.clearScreen'), onClick: () => { clearScreenInTerm(activeTermId); setTimeout(() => focusTerm(activeTermId), 0); } },
-            { label: t('menu.clearScrollbackBuffer'), onClick: () => { clearScrollbackInTerm(activeTermId); setTimeout(() => focusTerm(activeTermId), 0); } },
-            { label: t('menu.changeScrollback'), onClick: () => {
+            { label: t('menu.clearScreen'), icon: '🧹', onClick: () => { clearScreenInTerm(activeTermId); setTimeout(() => focusTerm(activeTermId), 0); } },
+            { label: t('menu.clearScrollbackBuffer'), icon: '🗑', onClick: () => { clearScrollbackInTerm(activeTermId); setTimeout(() => focusTerm(activeTermId), 0); } },
+            { label: t('menu.changeScrollback'), icon: '📜', onClick: () => {
               const cur = getScrollbackForTerm(activeTermId);
               setScrollbackDialog({ value: String(cur) });
             }},
-            { label: t('menu.changeEncoding'), onClick: async () => {
+            { label: t('menu.changeEncoding'), icon: '🔤', onClick: async () => {
               let current = 'utf-8';
               try { current = (await (window as any).api?.getSSHEncoding?.(activeTermId)) || 'utf-8'; } catch {}
               setEncodingCtx({ x: termCtx.x, y: termCtx.y, current: current.toLowerCase() });
             }},
-            { label: t('menu.fontDots'), onClick: () => {
+            { label: t('menu.fontDots'), icon: '🅰', onClick: () => {
               const entry = termStore.get(activeTermId);
               const curFamily = entry ? (entry.term.options.fontFamily || '') : '';
               const curSize = entry ? (entry.term.options.fontSize || 14) : 14;
               setFontDialog({ termId: activeTermId, family: curFamily, size: curSize, initialFamily: curFamily, initialSize: curSize });
             }},
-            { label: t('menu.changeTheme'), onClick: () => {
+            { label: t('menu.changeTheme'), icon: '🎨', onClick: () => {
               const cur = termThemeCache.get(activeTermId) || '';
               setThemePickerCtx({ x: termCtx.x, y: termCtx.y, current: cur });
             }},
-            { label: t('menu.editSessionDots'), onClick: () => {
+            { label: t('menu.editSessionDots'), icon: '⚙', onClick: () => {
               const info = termSessionMap.get(activeTermId);
               if (info?.sessionId || info?.quickSession) {
                 window.dispatchEvent(new CustomEvent('open-session-editor', { detail: { sessionId: info.sessionId, quickSession: info.quickSession, sessionName: info.sessionName, termId: activeTermId } }));

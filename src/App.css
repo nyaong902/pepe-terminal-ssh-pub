@@ -1225,6 +1225,20 @@ body.popout-options .session-editor h3:first-child {
   font-size: 12px;
   cursor: pointer;
   transition: background 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.context-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.85;
 }
 
 .context-menu-item:hover:not(.disabled) {
@@ -5670,7 +5684,7 @@ mark.claude-search-hit.current {
   overflow-x: auto;
   text-align: center;
 }
-.claude-chat-mermaid svg { max-width: 100%; height: auto; }
+.claude-chat-mermaid svg { max-width: 100%; height: auto; background: #0d1320 !important; }
 /* mermaid 내부 라벨(foreignObject 의 div)에 부모 코드/pre 스타일이 새지 않도록 격리 */
 .claude-chat-mermaid svg foreignObject div,
 .claude-chat-mermaid svg foreignObject span,
@@ -5686,6 +5700,36 @@ mark.claude-search-hit.current {
 }
 .claude-chat-mermaid svg text {
   font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif !important;
+}
+/* 에지 선/화살표 — 다크 배경에서 잘 보이도록 명도 보강 */
+.claude-chat-mermaid svg .flowchart-link,
+.claude-chat-mermaid svg .edge-thickness-normal,
+.claude-chat-mermaid svg path.path {
+  stroke: #9ab0d8 !important;
+  stroke-width: 1.5px !important;
+}
+.claude-chat-mermaid svg marker path,
+.claude-chat-mermaid svg .arrowheadPath,
+.claude-chat-mermaid svg .marker {
+  fill: #9ab0d8 !important;
+  stroke: #9ab0d8 !important;
+}
+/* 에지 라벨(엣지 위 설명 텍스트) — 배경 + 글자색 명시 */
+.claude-chat-mermaid svg .edgeLabel,
+.claude-chat-mermaid svg .edgeLabel * {
+  color: #e5edff !important;
+  fill: #e5edff !important;
+  background-color: #0d1320 !important;
+}
+.claude-chat-mermaid svg .edgeLabel rect,
+.claude-chat-mermaid svg .edgeLabel .label-container {
+  fill: #0d1320 !important;
+  stroke: none !important;
+}
+/* 클러스터(subgraph) 배경 — 너무 밝은 청록 대신 어두운 톤 */
+.claude-chat-mermaid svg .cluster rect {
+  fill: #13203a !important;
+  stroke: #4a6fa8 !important;
 }
 .claude-chat-mermaid-toolbar {
   display: flex;
@@ -6025,11 +6069,17 @@ mark.claude-search-hit.current {
 }
 .claude-chat-timeline-status { width: 16px; flex-shrink: 0; }
 .claude-chat-timeline-label {
-  flex-shrink: 0;
-  max-width: 60%;
+  flex-shrink: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 펼친 timeline item 의 라벨은 잘리지 않고 wrap — 긴 경로/패턴도 전체 확인 */
+.claude-chat-timeline-item.open .claude-chat-timeline-label {
+  white-space: normal;
+  word-break: break-all;
+  overflow: visible;
 }
 /* Git 상태 바 — chat input 영역 위에 표시 */
 .claude-chat-git-bar {
