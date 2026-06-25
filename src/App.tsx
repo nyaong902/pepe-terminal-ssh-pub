@@ -60,7 +60,7 @@ export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from '.
 
 export type TabId = string;
 export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string };
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any };
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
 function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
@@ -2154,6 +2154,7 @@ function App() {
       id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
       sqlTool: tab.sqlTool, editor: tab.editor,
       initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
+      fileExplorerState: tab.fileExplorerState,
     })),
   });
 
@@ -2179,9 +2180,16 @@ function App() {
     const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
-    const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
-    if (res === undefined) return; // IPC 실패
-    removeTabAfterMove(tabId, tab.layout);
+    // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
+    (window as any).__preserveFileExplorerConns = true;
+    try {
+      const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
+      if (res === undefined) return; // IPC 실패
+      removeTabAfterMove(tabId, tab.layout);
+    } finally {
+      // unmount cleanup 이 다 끝난 다음 플래그 해제 (마이크로태스크 두 번)
+      setTimeout(() => { (window as any).__preserveFileExplorerConns = false; }, 0);
+    }
   }, []);
 
   // 현재 활성 세션의 folderId 기준으로 같은 폴더 세션들을 picker 로 띄운다.
@@ -3882,6 +3890,11 @@ function App() {
               initialTermId={t.initialTermId}
               initialRemotePath={t.initialRemotePath}
               tabId={t.id}
+              initialState={t.fileExplorerState}
+              onStateChange={(st) => {
+                // tab.fileExplorerState 에 저장 — serializeTab 시 함께 carry 되어 분리 창에서 복원.
+                setTabs(prev => prev.map(x => x.id === t.id ? { ...x, fileExplorerState: st } : x));
+              }}
             />
           </div>
         ))}

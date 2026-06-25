@@ -28,9 +28,13 @@ type Props = {
   initialRemotePath?: string | null;
   // 이 FileExplorer 가 속한 워크스페이스 탭 id — 세션→파일전송 연결 이벤트를 이 탭으로만 라우팅.
   tabId?: string;
+  // 새 창으로 분리/병합 시 leftTabs/rightTabs/leftActive/rightActive 복원용 스냅샷.
+  initialState?: { leftTabs?: any[]; rightTabs?: any[]; leftActive?: number; rightActive?: number; lazyConns?: string[] } | null;
+  // 상태가 바뀔 때마다 부모(App.tsx)에 보고 — 분리 시 직렬화하기 위해.
+  onStateChange?: (state: { leftTabs: any[]; rightTabs: any[]; leftActive: number; rightActive: number; lazyConns: string[] }) => void;
 };
 
-export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId }) => {
+export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId, initialState, onStateChange }) => {
   // 이 FileExplorer 인스턴스의 고유 ID — 전송 이벤트 필터링에 사용
   const workspaceIdRef = React.useRef(`fe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const { t } = useTranslation('fileExplorer');
@@ -42,10 +46,20 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     id: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     source, path, selected: new Set(),
   });
-  const [leftTabs, setLeftTabs] = useState<PanelTab[]>(() => [makeTab({ mode: 'local', label: localLabel })]);
-  const [rightTabs, setRightTabs] = useState<PanelTab[]>(() => [makeTab({ mode: 'local', label: localLabel })]);
-  const [leftActive, setLeftActive] = useState(0);
-  const [rightActive, setRightActive] = useState(0);
+  // initialState 가 있으면 그걸로 복원(분리 창에서 이어받기). Set 은 직렬화 안 되므로 selected 는 빈 Set 으로.
+  const reviveTabs = (saved?: any[]): PanelTab[] | null => {
+    if (!Array.isArray(saved) || saved.length === 0) return null;
+    return saved.map((t: any) => ({
+      id: String(t.id || `pt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+      source: t.source || { mode: 'local', label: localLabel },
+      path: String(t.path || ''),
+      selected: new Set<string>(Array.isArray(t.selected) ? t.selected : []),
+    }));
+  };
+  const [leftTabs, setLeftTabs] = useState<PanelTab[]>(() => reviveTabs(initialState?.leftTabs) || [makeTab({ mode: 'local', label: localLabel })]);
+  const [rightTabs, setRightTabs] = useState<PanelTab[]>(() => reviveTabs(initialState?.rightTabs) || [makeTab({ mode: 'local', label: localLabel })]);
+  const [leftActive, setLeftActive] = useState(initialState?.leftActive ?? 0);
+  const [rightActive, setRightActive] = useState(initialState?.rightActive ?? 0);
   const leftActiveRef = useRef(0);
   const rightActiveRef = useRef(0);
   useEffect(() => { leftActiveRef.current = leftActive; }, [leftActive]);
@@ -97,7 +111,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 전체 세션 리스트 (드롭다운 확장용 — 미연결 포함)
   const [allSessionsList, setAllSessionsList] = useState<any[]>([]);
   // lazy 연결로 생성된 SFTP 임시 connId — FileExplorer unmount 시 정리
-  const [lazyConns, setLazyConns] = useState<string[]>([]);
+  const [lazyConns, setLazyConns] = useState<string[]>(Array.isArray(initialState?.lazyConns) ? initialState!.lazyConns! : []);
   // 자격증명 입력 프롬프트 — 비밀번호 미저장 세션 연결 실패 시 표시
   const [credPrompt, setCredPrompt] = useState<{ sess: any; side: 'left' | 'right'; jumps: any[] } | null>(null);
   const [credUser, setCredUser] = useState('');
@@ -159,14 +173,26 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return () => { cancelled = true; };
   }, [sessions.length]);
 
-  // 언마운트 시 lazy 연결 정리
+  // 언마운트 시 lazy 연결 정리 — 다만 "새 창 분리" 케이스에서는 보존(window.__preserveFileExplorerConns).
   useEffect(() => {
     return () => {
+      if ((window as any).__preserveFileExplorerConns) return;
       for (const cid of lazyConns) {
         try { api?.feSftpDisconnect?.(cid); } catch {}
       }
     };
   }, [lazyConns]);
+  // 상태 변경 시 부모(App.tsx)에 보고 — 분리 시 사용. selected 는 Set → Array 로 직렬화.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try {
+      onStateChange({
+        leftTabs: leftTabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected) })),
+        rightTabs: rightTabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected) })),
+        leftActive, rightActive, lazyConns,
+      });
+    } catch {}
+  }, [leftTabs, rightTabs, leftActive, rightActive, lazyConns, onStateChange]);
 
   // 초기 경로
   useEffect(() => {
