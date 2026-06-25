@@ -44,7 +44,13 @@ async function waitForUnlock(filePath, maxSeconds) {
 
 function runSigntool(signtoolPath, args, filePath) {
   return new Promise((resolve, reject) => {
-    execFile(signtoolPath, [...args, filePath], { windowsHide: true }, (err, stdout, stderr) => {
+    const opts = { windowsHide: true };
+    const fullArgs = [...args, filePath];
+    if (process.env.PEPE_SIGN_DEBUG) {
+      console.log('[sign-debug] cmd:', signtoolPath);
+      console.log('[sign-debug] args:', JSON.stringify(fullArgs));
+    }
+    execFile(signtoolPath, fullArgs, opts, (err, stdout, stderr) => {
       if (err) {
         err.stdout = stdout; err.stderr = stderr;
         return reject(err);
@@ -75,11 +81,38 @@ function findWindowsKitSigntool() {
   return null;
 }
 
+// 직렬화 큐 — signtool 을 동시에 여러 개 띄우면 CryptoAPI 충돌(0x80096005) 발생.
+// electron-builder 가 여러 파일을 병렬로 dispatch 해도 한 번에 한 signtool 만 실행되도록 잠금.
+let signQueue = Promise.resolve();
+function acquireSignSlot() {
+  let release;
+  const wait = new Promise(r => { release = r; });
+  const prev = signQueue;
+  signQueue = signQueue.then(() => wait);
+  return prev.then(() => release);
+}
+
 // electron-builder 가 호출하는 진입점
 module.exports = async function (configuration) {
+  const release = await acquireSignSlot();
+  try {
+    return await doSign(configuration);
+  } finally {
+    release();
+  }
+};
+
+async function doSign(configuration) {
   const filePath = configuration.path;
   const cscInfo = configuration.options || {};
-  const hash = configuration.hash || (cscInfo.signingHashAlgorithms && cscInfo.signingHashAlgorithms[0]) || 'sha256';
+  // electron-builder 가 기본적으로 SHA-1 + SHA-256 dual signing 을 시도하는데, 현대 Windows 는
+  // SHA-1 코드서명을 거부 → SignerSign() 0x80096005 발생. 무조건 SHA-256 만 사용.
+  const requestedHash = configuration.hash || (cscInfo.signingHashAlgorithms && cscInfo.signingHashAlgorithms[0]) || 'sha256';
+  if (String(requestedHash).toLowerCase() === 'sha1') {
+    console.log(`[sign-with-retry] sha1 요청 무시 — SHA-256 만 서명 (electron-builder dual-sign 회피)`);
+    return; // SHA-1 패스 스킵 — SHA-256 에서 이미 서명됨
+  }
+  const hash = 'sha256';
   // RFC3161 타임스탬프 서버 목록 — 하나가 일시적으로 불통이면 다음 서버로 자동 로테이션.
   const tsServers = [
     'http://timestamp.digicert.com',
@@ -90,7 +123,8 @@ module.exports = async function (configuration) {
 
   // PFX 위치 — package.json 의 win.certificateFile / certificatePassword 사용
   // configuration.cscInfo 또는 configuration.options.cscInfo 위치 차이 처리
-  const cscFile = (configuration.cscInfo && configuration.cscInfo.file) || cscInfo.certificateFile || process.env.CSC_LINK;
+  let cscFile = (configuration.cscInfo && configuration.cscInfo.file) || cscInfo.certificateFile || process.env.CSC_LINK;
+  if (cscFile && !path.isAbsolute(cscFile)) cscFile = path.resolve(__dirname, '..', cscFile);
   const cscPass = (configuration.cscInfo && configuration.cscInfo.password) || cscInfo.certificatePassword || process.env.CSC_KEY_PASSWORD;
   const productName = cscInfo.productName || configuration.name || '';
   const site = configuration.site || '';
@@ -113,13 +147,17 @@ module.exports = async function (configuration) {
 
   const argsFor = (tsUrl) => {
     const a = ['sign', '/tr', tsUrl, '/f', cscFile, '/fd', hash, '/td', hash];
-    if (productName) a.push('/d', productName);
+    if (productName) {
+      const safe = String(productName).replace(/[^A-Za-z0-9 ._-]/g, '').trim().slice(0, 64);
+      if (safe) a.push('/d', safe);
+    }
     if (site) a.push('/du', site);
+    // password 는 마지막에 두면 일부 shell escape 문제 회피.
     if (cscPass) a.push('/p', cscPass);
     return a;
   };
 
-  console.log(`[sign-with-retry] 서명 시작: ${path.basename(filePath)}`);
+  console.log(`[sign-with-retry] 서명 시작: ${path.basename(filePath)} | cscFile=${cscFile || '(MISSING)'} | passLen=${cscPass ? cscPass.length : 0}`);
 
   // 1) 파일 unlock 대기
   await waitForUnlock(filePath, INITIAL_WAIT);

@@ -146,8 +146,9 @@
         "portable"
       ],
       "icon": "public/icon.ico",
-      "cscLink": "cert/PePeTerminal_v2.pfx",
-      "cscKeyPassword": "pepe1234",
+      "certificateFile": "cert/PePeTerminal_v2.pfx",
+      "certificatePassword": "pepe1234",
+      "sign": "./scripts/sign-with-retry.js",
       "extraResources": [
         {
           "from": "resources/openvpn-win",
