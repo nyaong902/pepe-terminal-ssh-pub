@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
 // dev 실행 시에만 [claude]/[codex]/[mcp-control] 등 디버그 로그 출력. console.error/warn 은 유지.
@@ -4743,6 +4743,77 @@ ipcMain.handle('ssh:close-local-forward', (_e, args: { forwardId: string }) => {
     const bridge: any = getSSHBridge();
     const ok = bridge.closeLocalForward?.(args.forwardId);
     return { success: !!ok };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
+ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null }) => {
+  try {
+    const wc = webContents.fromId(args.webContentsId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    const session = wc.session;
+    if (!session) return { success: false, error: 'session not found' };
+    if (!args.proxyRules) {
+      await session.setProxy({ mode: 'direct' });
+      try { await session.closeAllConnections?.(); } catch {}
+      return { success: true };
+    }
+    await session.setProxy({ mode: 'fixed_servers', proxyRules: args.proxyRules, proxyBypassRules: 'localhost,127.0.0.1,::1' });
+    try { await session.closeAllConnections?.(); } catch {}
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 활성 SSH 세션 목록 (브라우저 서버 선택 드롭다운용 — browserUrl 포함).
+ipcMain.handle('ssh:list-active-sessions', () => {
+  try {
+    const bridge: any = getSSHBridge();
+    return bridge.listActiveSessions?.() || [];
+  } catch {
+    return [];
+  }
+});
+// SSH 세션 위에 SOCKS5 프록시 오픈 — 브라우저 트래픽을 점프된 SSH 장비 경유로 전송.
+ipcMain.handle('ssh:open-socks-proxy', async (_e, args: { panelId: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    const r = await bridge.openSocksProxy?.(args.panelId);
+    return { success: !!r, ...(r || {}) };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('ssh:close-socks-proxy', (_e, args: { proxyId: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    const ok = bridge.closeSocksProxy?.(args.proxyId);
+    return { success: !!ok };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 선택한 SSH 세션을 통해 대상 URL 도달 가능 여부 테스트.
+ipcMain.handle('ssh:test-web-target', async (_e, args: { panelId: string; url: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    const raw = String(args.url || '').trim();
+    if (!raw) return { success: false, error: 'URL이 비어 있습니다' };
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { success: false, error: 'http/https URL만 테스트할 수 있습니다' };
+    }
+    const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80);
+    const path = `${parsed.pathname || '/'}${parsed.search || ''}`;
+    const result = await bridge.testWebTarget?.(args.panelId, {
+      protocol: parsed.protocol,
+      host: parsed.hostname,
+      port,
+      path,
+      timeoutMs: 10000,
+    });
+    return { success: true, result };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };
   }
