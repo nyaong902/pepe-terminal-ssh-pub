@@ -22,6 +22,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
 import { StatusBar } from './components/StatusBar';
+import { RemoteShareDialog } from './components/RemoteShareDialog';
 import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle } from './components/TerminalPanel';
 import { marked } from 'marked';
 // @ts-ignore — vite ?raw 로 docs/MANUAL.md 를 번들 문자열로 임베드
@@ -266,6 +267,7 @@ function App() {
   const [termSettings, setTermSettings] = useState<TerminalSettings>(getTerminalSettings);
   const isOptionsPopout = false; // popout 비활성 — localStorage 격리로 데이터 유실 위험
   const [showOptions, setShowOptions] = useState(false);
+  const [showRemoteShare, setShowRemoteShare] = useState(false);
   const [editSessionCtx, setEditSessionCtx] = useState<{ session: any; termId: string; isQuick?: boolean } | null>(null);
   const [editSessionFolders, setEditSessionFolders] = useState<any[]>([]);
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
@@ -2992,6 +2994,8 @@ function App() {
         { label: tMenu('tools.vpnWs'), action: addVpnTab },
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
+        { label: 'PePe 원격 공유', action: () => setShowRemoteShare(true) },
+        { separator: true, label: '' },
         { label: showToolbar ? tMenu('tools.toolbarHide') : tMenu('tools.toolbarShow'), action: () => setShowToolbar(v => !v) },
         { label: showQuickConnect ? tMenu('tools.quickConnectHide') : tMenu('tools.quickConnectShow'), action: () => setShowQuickConnect(v => !v) },
         { label: showClaudeChat ? tMenu('tools.claudeHide') : tMenu('tools.claudeShow'), action: () => setShowClaudeChat(v => !v) },
@@ -4664,6 +4668,7 @@ function App() {
         </div>
         );
       })()}
+      {showRemoteShare && <RemoteShareDialog onClose={() => setShowRemoteShare(false)} />}
 
       {/* 하단 상태바 SFTP 진행률 — 파일전송 탭의 TransferLog 로 대체됨 */}
       <ConflictDialogQueue />

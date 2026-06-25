@@ -6752,3 +6752,174 @@ mark.claude-search-hit.current {
   line-height: 1;
 }
 .ask-pwd-eye-btn:hover { color: #a0a0d0; }
+.remote-share-backdrop {
+  z-index: 12000;
+  background: rgba(2, 9, 14, 0.74);
+  backdrop-filter: blur(8px);
+}
+
+.remote-share-dialog {
+  width: min(480px, calc(100vw - 32px));
+  padding: 26px;
+  border: 1px solid rgba(100, 176, 202, 0.35);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 90% 0%, rgba(35, 129, 157, 0.22), transparent 38%),
+    linear-gradient(145deg, #10242f, #09151d 68%);
+  color: #eaf5f7;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.58);
+}
+
+.remote-share-dialog header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.remote-share-dialog h2 {
+  margin: 5px 0 0;
+  font-size: 24px;
+  letter-spacing: -0.4px;
+}
+
+.remote-share-kicker {
+  color: #65c8df;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.8px;
+}
+
+.remote-share-close {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  color: #b9d0d8;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.remote-share-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.remote-share-status-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #667982;
+  box-shadow: 0 0 0 5px rgba(102, 121, 130, 0.12);
+}
+
+.remote-share-status.running .remote-share-status-dot {
+  background: #56d69b;
+  box-shadow: 0 0 0 5px rgba(86, 214, 155, 0.13), 0 0 18px rgba(86, 214, 155, 0.55);
+}
+
+.remote-share-status div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.remote-share-status small,
+.remote-share-note,
+.remote-share-intro p {
+  color: #9cb5bf;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.remote-share-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.remote-share-card label {
+  margin-top: 7px;
+  color: #88a9b6;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.remote-share-address {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 14px;
+  border: 1px solid #315567;
+  border-radius: 11px;
+  background: #07131a;
+  color: #dff7ff;
+  cursor: pointer;
+}
+
+.remote-share-address em {
+  color: #68c8df;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.remote-share-pin {
+  padding: 13px;
+  border-radius: 11px;
+  background: rgba(67, 174, 200, 0.1);
+  color: #9ceaff;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 10px;
+  text-align: center;
+}
+
+.remote-share-intro {
+  margin: 18px 0;
+  padding: 17px;
+  border-left: 3px solid #3fa7c2;
+  background: rgba(45, 126, 151, 0.1);
+}
+
+.remote-share-intro p {
+  margin: 6px 0 0;
+}
+
+.remote-share-error {
+  margin: 15px 0;
+  padding: 11px 13px;
+  border: 1px solid rgba(239, 103, 92, 0.35);
+  border-radius: 10px;
+  background: rgba(125, 35, 31, 0.22);
+  color: #ffb0a8;
+  font-size: 12px;
+}
+
+.remote-share-primary {
+  width: 100%;
+  margin-top: 16px;
+  padding: 13px;
+  border: 0;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #348ead, #236b87);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.remote-share-primary.stop {
+  background: linear-gradient(135deg, #a54f49, #74312f);
+}
+
+.remote-share-primary:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
