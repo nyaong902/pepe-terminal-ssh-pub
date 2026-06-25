@@ -599,6 +599,15 @@ ipcMain.handle('sessions:open-editor', () => {
 
 ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
+// 윈도우 테마 변경 — 저장 후 모든 창(메인/옵션·세션편집 팝아웃/분리된 탭)에 broadcast → 라이브 반영.
+ipcMain.handle('window-theme:set', (_e, id: string) => {
+  const themeId = String(id || '');
+  try { saveUIPrefs({ windowTheme: themeId }); } catch {}
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send('window-theme:changed', themeId); } catch {}
+  }
+  return true;
+});
 
 // ── LAN Mini Messenger ─────────────────────────────────────────────
 type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
@@ -1052,6 +1061,15 @@ ipcMain.handle('messenger:delete-peer', (_e, { peerId }: { peerId: string }) => 
 });
 ipcMain.handle('messenger:clear-all', () => {
   messengerMessages = [];
+  messengerSaveMessages();
+  messengerEmit({ type: 'state', state: messengerState() });
+  return { success: true };
+});
+// 전체 사용자(피어) 삭제 — 발견된 사용자 목록과 그 대화내역을 모두 초기화.
+ipcMain.handle('messenger:clear-peers', () => {
+  messengerPeers.clear();
+  messengerMessages = [];
+  messengerSavePeers();
   messengerSaveMessages();
   messengerEmit({ type: 'state', state: messengerState() });
   return { success: true };

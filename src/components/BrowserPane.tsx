@@ -56,12 +56,13 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const [proxyBusy, setProxyBusy] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string>('');
+  const [testOk, setTestOk] = useState(false);
   const proxySeqRef = useRef(0);
   const lastAutoLoadedRef = useRef<string>('');
   const liveTargets = connectedSessions.length > 0 ? connectedSessions : sshTargets;
 
   const currentProxyLabel = useMemo(() => {
-    if (!targetSessionId) return '직접 연결';
+    if (!targetSessionId) return t('directConnect');
     const stored = storedSessions.find(s => s.id === targetSessionId);
     const match = liveTargets.find(t => t.sessionId === targetSessionId);
     const title = stored?.name?.trim() || match?.sessionName || match?.sessionId || targetSessionId;
@@ -182,7 +183,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       if (seq !== proxySeqRef.current) return;
       if (!r?.success || !r?.proxyId) {
         setTargetPanelId('');
-        setTestResult(`실패: SSH 포워딩 프록시를 열 수 없습니다. ${r?.error || '포워딩이 차단되었을 수 있습니다.'}`);
+        setTestOk(false);
+        setTestResult(t('proxyOpenFailed', { reason: r?.error || t('proxyForwardingBlocked') }));
         setProxyState(null);
         return;
       }
@@ -211,7 +213,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
             wv?.loadURL?.(currentUrl).catch((err: any) => {
               const msg = String(err?.message || err || '');
               if (!/aborted/i.test(msg)) {
-                setTestResult(`실패: 브라우저 로드 실패 - ${msg}`);
+                setTestOk(false);
+                setTestResult(t('browserLoadFailed', { msg }));
               }
             });
           } catch {}
@@ -288,7 +291,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const msg = String(e?.errorCode || e?.type || '');
       const url = String(e?.url || '');
       if (msg || url) {
-        setTestResult(`실패: 브라우저 로드 실패 ${msg}${url ? ` (${url})` : ''}`);
+        setTestOk(false);
+        setTestResult(t('browserLoadFailedUrl', { msg, url: url ? ` (${url})` : '' }));
       }
     };
     wv.addEventListener('did-navigate', onNav);
@@ -324,18 +328,19 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   };
 
   const go = async (target: string) => {
-    const t = resolveBrowserUrl(target);
-    if (!t) return;
+    const goUrl = resolveBrowserUrl(target);
+    if (!goUrl) return;
     setTestResult('');
     if (!targetSessionId) {
       await clearProxy();
     }
     try {
-      await webviewRef.current?.loadURL(t);
+      await webviewRef.current?.loadURL(goUrl);
     } catch (err: any) {
       const msg = String(err?.message || err || '');
       if (!/aborted/i.test(msg)) {
-        setTestResult(`실패: 브라우저 로드 실패 - ${msg}`);
+        setTestOk(false);
+        setTestResult(t('browserLoadFailed', { msg }));
       }
     }
   };
@@ -343,23 +348,27 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const runTargetTest = async () => {
     setTestResult('');
     if (!targetSessionId) {
-      setTestResult('테스트할 SSH 세션을 먼저 선택하세요.');
+      setTestOk(false);
+      setTestResult(t('testSelectSessionFirst'));
       return;
     }
     const targetUrl = resolveBrowserUrl(editUrl || resolveBrowserUrlForSession(targetSessionId));
     if (!targetUrl) {
-      setTestResult('테스트할 URL이 비어 있습니다.');
+      setTestOk(false);
+      setTestResult(t('testUrlEmpty'));
       return;
     }
     let parsed: URL;
     try {
       parsed = new URL(targetUrl);
     } catch {
-      setTestResult('URL 형식이 올바르지 않습니다.');
+      setTestOk(false);
+      setTestResult(t('testUrlInvalid'));
       return;
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      setTestResult('http/https URL만 테스트할 수 있습니다.');
+      setTestOk(false);
+      setTestResult(t('testHttpOnly'));
       return;
     }
     setTestBusy(true);
@@ -367,17 +376,21 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const testPanelId = targetPanelId || (liveTargets.find(t => t.sessionId === targetSessionId)?.panelId || '');
       const r: any = await (window as any).api?.sshTestWebTarget?.({ panelId: testPanelId, url: targetUrl });
       if (!r?.success) {
-        setTestResult(`실패: ${r?.error || '알 수 없는 오류'}`);
+        setTestOk(false);
+        setTestResult(t('testFailed', { reason: r?.error || t('unknownError') }));
         return;
       }
       const res = r.result || {};
       const code = typeof res.statusCode === 'number' ? ` status=${res.statusCode}` : '';
       const line = res.statusLine ? ` (${res.statusLine})` : '';
       const proto = (res.protocol || parsed.protocol).replace(/:$/, '');
-      const via = res.mode === 'exec' ? ' (원격 실행)' : '';
-      setTestResult(`성공${via}: ${proto}://${res.host || parsed.hostname}:${res.port || (parsed.protocol === 'https:' ? 443 : 80)}${res.path || parsed.pathname}${code}${line} / ${res.elapsedMs ?? '?'}ms`);
+      const via = res.mode === 'exec' ? t('remoteExec') : '';
+      const detail = `${proto}://${res.host || parsed.hostname}:${res.port || (parsed.protocol === 'https:' ? 443 : 80)}${res.path || parsed.pathname}${code}${line} / ${res.elapsedMs ?? '?'}ms`;
+      setTestOk(true);
+      setTestResult(t('testSuccess', { via, detail }));
     } catch (e: any) {
-      setTestResult(`실패: ${String(e?.message || e)}`);
+      setTestOk(false);
+      setTestResult(t('testFailed', { reason: String(e?.message || e) }));
     } finally {
       setTestBusy(false);
     }
@@ -447,7 +460,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         <button className="panel-btn" onClick={zoomIn} title={t('zoomIn')}>+</button>
         <div style={{ width: 1, height: 18, background: '#333', margin: '0 2px' }} />
         <button className="panel-btn" onClick={() => { try { webviewRef.current?.openDevTools(); } catch {} }} title={t('devTools')}>{'<>'}</button>
-        <button className="panel-btn" onClick={runTargetTest} disabled={testBusy} title="선택한 SSH 세션으로 현재 URL 도달 테스트">테스트</button>
+        <button className="panel-btn" onClick={runTargetTest} disabled={testBusy} title={t('testTooltip')}>{t('test')}</button>
         <div style={{ width: 1, height: 18, background: '#333', margin: '0 2px' }} />
         <select
           value={targetSessionId}
@@ -461,9 +474,9 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           }}
           disabled={proxyBusy}
           style={{ minWidth: 260, maxWidth: 420, padding: '4px 8px', background: '#111', border: '1px solid #333', borderRadius: 3, color: '#ddd', fontSize: 12 }}
-          title="선택한 SSH 세션을 통해 브라우저 트래픽을 전송"
+          title={t('proxySelectTooltip')}
         >
-          <option value="">직접 연결</option>
+          <option value="">{t('directConnect')}</option>
           {connectedSessionTargets.map(tgt => {
             const sid = tgt.sessionId || '';
             return (
@@ -474,12 +487,12 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
             </option>
           )})}
         </select>
-        <span style={{ color: '#9aa3ad', fontSize: 12, marginLeft: 2 }} title={proxyState ? `SOCKS5 127.0.0.1:${proxyState.localPort}` : '직접 연결'}>
-          {proxyBusy ? '프록시 적용 중...' : currentProxyLabel}
+        <span style={{ color: '#9aa3ad', fontSize: 12, marginLeft: 2 }} title={proxyState ? `SOCKS5 127.0.0.1:${proxyState.localPort}` : t('directConnect')}>
+          {proxyBusy ? t('proxyApplying') : currentProxyLabel}
         </span>
       </div>
       {testResult ? (
-        <div style={{ padding: '4px 10px 0', color: testResult.startsWith('성공') ? '#86efac' : '#fda4af', fontSize: 12, lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
+        <div style={{ padding: '4px 10px 0', color: testOk ? '#86efac' : '#fda4af', fontSize: 12, lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
           {testResult}
         </div>
       ) : null}

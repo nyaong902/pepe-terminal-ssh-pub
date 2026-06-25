@@ -4064,22 +4064,22 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 에이전트별 Model 섹션
   const paletteModelActions: PaletteAction[] = currentAgent === 'codex'
     ? [
-        { id: 'model-gpt55',    section: 'Model', label: 'Model: GPT-5.5 (기본)',  desc: '🚀',  run: () => setModel('gpt-5.5') },
+        { id: 'model-gpt55',    section: 'Model', label: `Model: GPT-5.5 ${tt('defaultSuffix')}`,  desc: '🚀',  run: () => setModel('gpt-5.5') },
         { id: 'model-gpt54',    section: 'Model', label: 'Model: GPT-5.4',        desc: '🔵',  run: () => setModel('gpt-5.4') },
         { id: 'model-gpt54m',   section: 'Model', label: 'Model: GPT-5.4 Mini',   desc: '⚡',  run: () => setModel('gpt-5.4-mini') },
         { id: 'model-gpt53c',   section: 'Model', label: 'Model: GPT-5.3 Codex',  desc: '🧠',  run: () => setModel('gpt-5.3-codex') },
         { id: 'model-gpt52',    section: 'Model', label: 'Model: GPT-5.2',        desc: '🟣',  run: () => setModel('gpt-5.2') },
-        { id: 'model-codexmini',section: 'Model', label: 'Model: Codex Mini (API키 전용)', desc: '🧠', run: () => setModel('codex-mini-latest') },
-        { id: 'model-o4mini',   section: 'Model', label: 'Model: o4-mini (API키 전용)',    desc: '⚡', run: () => setModel('o4-mini') },
-        { id: 'model-o3',       section: 'Model', label: 'Model: o3 (API키 전용)',         desc: '🔵', run: () => setModel('o3') },
-        { id: 'model-gpt4o',    section: 'Model', label: 'Model: GPT-4o (API키 전용)',     desc: '🟢', run: () => setModel('gpt-4o') },
+        { id: 'model-codexmini',section: 'Model', label: `Model: Codex Mini ${tt('apiKeyOnlySuffix')}`, desc: '🧠', run: () => setModel('codex-mini-latest') },
+        { id: 'model-o4mini',   section: 'Model', label: `Model: o4-mini ${tt('apiKeyOnlySuffix')}`,    desc: '⚡', run: () => setModel('o4-mini') },
+        { id: 'model-o3',       section: 'Model', label: `Model: o3 ${tt('apiKeyOnlySuffix')}`,         desc: '🔵', run: () => setModel('o3') },
+        { id: 'model-gpt4o',    section: 'Model', label: `Model: GPT-4o ${tt('apiKeyOnlySuffix')}`,     desc: '🟢', run: () => setModel('gpt-4o') },
       ]
     : currentAgent === 'gemini'
     ? GEMINI_MODELS.map(m => {
         const usable = !m.pro || (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim());
         return {
           id: `model-${m.v}`, section: 'Model',
-          label: `Model: ${m.l}${usable ? '' : ' (지원안함)'}`,
+          label: `Model: ${m.l}${usable ? '' : ` (${tt('unsupported')})`}`,
           desc: usable ? m.icon : '🚫', run: () => { if (usable) setModel(m.v); },
         };
       })
@@ -4120,10 +4120,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     ...paletteModelActions,
     // Effort — Claude / Codex 사용 (Gemini 제외), 에이전트별 레이블
     ...(currentAgent === 'codex' ? [
-      { id: 'effort-low',    section: 'Effort', label: '추론 강도: 낮음',     run: () => setEffort('low') },
-      { id: 'effort-medium', section: 'Effort', label: '추론 강도: 중간',     run: () => setEffort('medium') },
-      { id: 'effort-high',   section: 'Effort', label: '추론 강도: 높음',     run: () => setEffort('high') },
-      { id: 'effort-max',    section: 'Effort', label: '추론 강도: 매우높음', run: () => setEffort('max') },
+      { id: 'effort-low',    section: 'Effort', label: tt('paletteEffortLowCodex'),    run: () => setEffort('low') },
+      { id: 'effort-medium', section: 'Effort', label: tt('paletteEffortMediumCodex'), run: () => setEffort('medium') },
+      { id: 'effort-high',   section: 'Effort', label: tt('paletteEffortHighCodex'),   run: () => setEffort('high') },
+      { id: 'effort-max',    section: 'Effort', label: tt('paletteEffortMaxCodex'),    run: () => setEffort('max') },
     ] : currentAgent === 'claude' ? [
       { id: 'effort-low',    section: 'Effort', label: tt('palette.effortLow'),    run: () => setEffort('low') },
       { id: 'effort-medium', section: 'Effort', label: tt('palette.effortMedium'), run: () => setEffort('medium') },
@@ -4194,10 +4194,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           if (e.key === 'Escape') setApiKeyModalOpen(false);
         }}
       >
-        <div className="claude-chat-modal-title">🔑 AI API 키 관리</div>
+        <div className="claude-chat-modal-title">{tt('apiKeyModalTitle')}</div>
         <div style={{ fontSize: 11, color: '#aaa', marginBottom: 10, lineHeight: 1.5 }}>
-          각 에이전트 spawn 시 환경변수로 주입됩니다. 비워두면 기존 인증(OAuth 등) 그대로 사용.<br/>
-          발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>Gemini</a>{' / '}
+          {tt('apiKeyModalDesc')}<br/>
+          {tt('apiKeyIssueLabel')} <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>Gemini</a>{' / '}
           <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>OpenAI(Codex)</a>{' / '}
           <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style={{ color: '#7aa2ff' }}>Anthropic(Claude)</a>
         </div>
@@ -4213,21 +4213,21 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 type={apiKeyShow[k] ? 'text' : 'password'}
                 value={apiKeys[k]}
                 onChange={e => setApiKeys(p => ({ ...p, [k]: e.target.value }))}
-                placeholder="sk-... / AI... 형식"
+                placeholder={tt('apiKeyPlaceholder')}
                 style={{ width: '100%', padding: '6px 32px 6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
               />
               <button
                 type="button"
                 onClick={() => setApiKeyShow(p => ({ ...p, [k]: !p[k] }))}
-                title={apiKeyShow[k] ? '숨기기' : '표시'}
+                title={apiKeyShow[k] ? tt('hide') : tt('show')}
                 style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', padding: '2px 6px', fontSize: 14 }}
               >{apiKeyShow[k] ? '🙈' : '👁'}</button>
             </div>
           </div>
         ))}
         <div style={{ marginTop: 16, paddingTop: 10, borderTop: '1px solid #2a3548' }}>
-          <div style={{ fontSize: 12, color: '#cde', marginBottom: 6, fontWeight: 600 }}>🖥 Custom LLM (OpenAI 호환 / LM Studio / Ollama)</div>
-          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>Base URL — 예: <code>http://localhost:1234/v1</code> (LM Studio), <code>http://localhost:11434/v1</code> (Ollama)</div>
+          <div style={{ fontSize: 12, color: '#cde', marginBottom: 6, fontWeight: 600 }}>{tt('customLlmHeading')}</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>{tt('customBaseUrlExample')} <code>http://localhost:1234/v1</code> (LM Studio), <code>http://localhost:11434/v1</code> (Ollama)</div>
           <input
             type="text"
             value={apiKeys.customBaseUrl}
@@ -4235,31 +4235,31 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             placeholder="http://localhost:1234/v1"
             style={{ width: '100%', padding: '6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace', marginBottom: 8 }}
           />
-          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 4 }}>API Key (필요한 경우만, LM Studio 는 임의 값)</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 4 }}>{tt('customApiKeyHint')}</div>
           <div style={{ position: 'relative', marginBottom: 8 }}>
             <input
               type={apiKeyShow.customApiKey ? 'text' : 'password'}
               value={apiKeys.customApiKey}
               onChange={e => setApiKeys(p => ({ ...p, customApiKey: e.target.value }))}
-              placeholder="sk-... 또는 lm-studio"
+              placeholder={tt('customApiKeyPlaceholder')}
               style={{ width: '100%', padding: '6px 32px 6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
             />
             <button
               type="button"
               onClick={() => setApiKeyShow(p => ({ ...p, customApiKey: !p.customApiKey }))}
-              title={apiKeyShow.customApiKey ? '숨기기' : '표시'}
+              title={apiKeyShow.customApiKey ? tt('hide') : tt('show')}
               style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', padding: '2px 6px', fontSize: 14 }}
             >{apiKeyShow.customApiKey ? '🙈' : '👁'}</button>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 11, color: '#aaa' }}>Model 이름 (예: google/gemma-3-4b)</div>
+            <div style={{ fontSize: 11, color: '#aaa' }}>{tt('customModelHint')}</div>
             <button
               type="button"
               className="claude-chat-modal-btn"
               onClick={refreshCustomModels}
               disabled={customModelListLoading || !apiKeys.customBaseUrl.trim()}
               style={{ padding: '2px 8px', fontSize: 10 }}
-            >{customModelListLoading ? '조회중...' : '🔄 서버 목록 조회'}</button>
+            >{customModelListLoading ? tt('loadingShort') : tt('refreshServerModels')}</button>
           </div>
           {customModelList && customModelList.length > 0 ? (
             <select
@@ -4267,7 +4267,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               onChange={e => setApiKeys(p => ({ ...p, customModel: e.target.value }))}
               style={{ width: '100%', padding: '6px 8px', background: '#0d1320', color: '#e5edff', border: '1px solid #2a3548', borderRadius: 3, fontSize: 12, fontFamily: 'monospace' }}
             >
-              <option value="">(선택)</option>
+              <option value="">{tt('selectOption')}</option>
               {customModelList.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           ) : (
@@ -4280,19 +4280,28 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             />
           )}
           {customModelList && customModelList.length === 0 && (
-            <div style={{ fontSize: 10, color: '#f88', marginTop: 4 }}>서버에서 모델 목록을 가져오지 못했습니다 — 수동 입력 가능</div>
+            <div style={{ fontSize: 10, color: '#f88', marginTop: 4 }}>{tt('customModelFetchFailed')}</div>
           )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
-          <button className="claude-chat-modal-btn" onClick={() => setApiKeyModalOpen(false)}>취소</button>
-          <button className="claude-chat-modal-btn primary" onClick={async () => { await saveApiKeys(apiKeys); setApiKeyModalOpen(false); }}>저장</button>
+          <button className="claude-chat-modal-btn" onClick={() => setApiKeyModalOpen(false)}>{tt('cancel')}</button>
+          <button className="claude-chat-modal-btn primary" onClick={async () => { await saveApiKeys(apiKeys); setApiKeyModalOpen(false); }}>{tt('save')}</button>
         </div>
       </div>
     </div>,
     document.body,
   ) : null;
 
-  if (installed === null) {
+  // AI Chat / 메신저 전환 탭 바 — 로딩/미설치 안내 페이지에서도 탭이 가려지지 않도록 공통 사용.
+  const viewTabsBar = (
+    <div className="claude-chat-view-tabs">
+      <button className={`claude-chat-view-tab ${activeView === 'ai' ? 'active' : ''}`} onClick={() => onViewChange?.('ai')}>🤖 AI Chat</button>
+      <button className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`} onClick={() => onViewChange?.('messenger')}>💬 {tt('messenger')}</button>
+    </div>
+  );
+
+  // 메신저 뷰는 AI 에이전트 설치/로딩 상태와 무관하게 항상 표시 (custom LLM 등 미설정 시에도 메신저 탭 유지).
+  if (activeView !== 'messenger' && installed === null) {
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4303,20 +4312,21 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <button className={`claude-chat-agent-btn ${currentAgent === 'gemini' ? 'active' : ''}`} title="Gemini" onClick={() => switchAgent('gemini')}><GeminiTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`} title="Antigravity CLI (agy)" onClick={() => switchAgent('antigravity')}><AntigravityTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'codex' ? 'active' : ''}`} title="Codex" onClick={() => switchAgent('codex')}><CodexTabIcon /></button>
-              <button className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`} title="Custom LLM (LM Studio / OpenAI 호환)" onClick={() => switchAgent('custom')}><CustomTabIcon /></button>
+              <button className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`} title={tt('customLlmTitle')} onClick={() => switchAgent('custom')}><CustomTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
             {onClose && <button className="claude-chat-close" onClick={onClose}>×</button>}
           </div>
         </div>
-        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : currentAgent === 'custom' ? 'Custom LLM 로딩중...' : currentAgent === 'antigravity' ? 'Antigravity 로딩중...' : tt('loading')}</div>
+        {viewTabsBar}
+        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : currentAgent === 'custom' ? tt('loadingCustom') : currentAgent === 'antigravity' ? tt('loadingAntigravity') : tt('loading')}</div>
         {apiKeyModalJsx}
       </div>
     );
   }
-  if (!installed) {
-    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? 'Custom LLM 설정이 비어있습니다. 우측 상단 🔑 버튼에서 Base URL과 Model 이름을 설정해주세요.' : currentAgent === 'antigravity' ? 'Antigravity CLI(agy.exe)가 설치돼 있지 않습니다.' : tt('notInstalled');
+  if (activeView !== 'messenger' && !installed) {
+    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? tt('notInstalledCustom') : currentAgent === 'antigravity' ? tt('notInstalledAntigravity') : tt('notInstalled');
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4345,7 +4355,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               ><CodexTabIcon /></button>
               <button
                 className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`}
-                title="Custom LLM (LM Studio / OpenAI 호환)"
+                title={tt('customLlmTitle')}
                 onClick={() => switchAgent('custom')}
               ><CustomTabIcon /></button>
             </div>
@@ -4353,12 +4363,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           <div className="claude-chat-header-actions">
             <button
               className="claude-chat-tool-btn"
-              title="AI API 키 관리 (Claude / Gemini / Codex / Custom)"
+              title={tt('apiKeyManageTitleFull')}
               onClick={() => setApiKeyModalOpen(true)}
             >🔑</button>
             {onClose && <button className="claude-chat-close" onClick={onClose}>×</button>}
           </div>
         </div>
+        {viewTabsBar}
         <div className="claude-chat-notinstalled">
           <p>{notInstalledMsg}</p>
           {currentAgent === 'gemini' ? (
@@ -4373,13 +4384,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             </>
           ) : currentAgent === 'custom' ? (
             <>
-              <p>OpenAI 호환 API 서버 주소(예: LM Studio, Ollama, OpenRouter)와 모델 이름을 우측 상단 🔑 버튼에서 설정하세요.</p>
+              <p>{tt('customSetupHint')}</p>
             </>
           ) : currentAgent === 'antigravity' ? (
             <>
-              <p><b>설치:</b> <code>irm https://antigravity.google/cli/install.ps1 | iex</code></p>
-              <p><b>로그인:</b> 터미널에서 <code>agy</code> 실행 → 브라우저에서 Google 계정 로그인</p>
-              <p style={{ fontSize: 11, color: '#aaa', marginTop: 6 }}>설치 후 PePe를 재시작하면 자동 인식됩니다.</p>
+              <p><b>{tt('installLabel')}</b> <code>irm https://antigravity.google/cli/install.ps1 | iex</code></p>
+              <p><b>{tt('loginLabel')}</b> {tt('antigravityLoginHint')}</p>
+              <p style={{ fontSize: 11, color: '#aaa', marginTop: 6 }}>{tt('antigravityRestartHint')}</p>
             </>
           ) : (
             <>
@@ -4406,10 +4417,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               title={pinned ? tt('unpin') : tt('pin')}
             >📌</button>
           )}
-          <button onClick={() => setShowSearch(v => !v)} title={tt('search') || '검색'} className={showSearch ? 'active' : ''}>🔍</button>
+          <button onClick={() => setShowSearch(v => !v)} title={tt('search')} className={showSearch ? 'active' : ''}>🔍</button>
           <button
             onClick={() => setShareContext(v => !v)}
-            title={shareContext ? '에이전트 간 컨텍스트 공유 켜짐 — 클릭하여 끄기' : '에이전트 간 컨텍스트 공유 꺼짐 — 클릭하여 켜기'}
+            title={shareContext ? tt('shareContextOn') : tt('shareContextOff')}
             className={`claude-chat-share-toggle ${shareContext ? 'on' : 'off'}`}
           >🔗</button>
         </div>
@@ -4445,7 +4456,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             <button
               className={`claude-chat-view-toggle ${activeView === 'messenger' ? 'messenger' : 'ai'}`}
               onClick={() => onViewChange(activeView === 'messenger' ? 'ai' : 'messenger')}
-              title={activeView === 'messenger' ? 'AI chat로 전환' : '메신저로 전환'}
+              title={activeView === 'messenger' ? tt('switchToAiChat') : tt('switchToMessenger')}
             >
               {activeView === 'messenger' ? '🤖' : '💬'}
             </button>
@@ -4461,7 +4472,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         <button
           className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`}
           onClick={() => onViewChange?.('messenger')}
-        >💬 메신저</button>
+        >💬 {tt('messenger')}</button>
       </div>
       {activeView === 'messenger' ? (
         <div className="claude-chat-messenger-pane">
@@ -4486,9 +4497,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
             const fmtReset = (unixSec: number, withDate: boolean): string => {
               const d = new Date(unixSec * 1000);
-              if (withDate) return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+              if (withDate) return tt('dateMonthDay', { month: d.getMonth() + 1, day: d.getDate() });
               const h = d.getHours(); const m = d.getMinutes();
-              const ap = h < 12 ? '오전' : '오후';
+              const ap = h < 12 ? tt('am') : tt('pm');
               const h12 = h % 12 === 0 ? 12 : h % 12;
               return `${ap} ${h12}:${String(m).padStart(2, '0')}`;
             };
@@ -4507,27 +4518,27 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <>
                 <div className="claude-chat-usage-divider" />
                 <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
-                  <span className="claude-chat-usage-label">━ Codex 컨텍스트</span>
+                  <span className="claude-chat-usage-label">{tt('ctxCodex')}</span>
                   <span className="claude-chat-usage-val">{fmt(used)} / {fmt(maxCtx)} ({ctxPct}%)</span>
                 </div>
-                <Row label="캐시 적중" val={fmt(usage.lastTurnCacheRead)} />
-                <Row label="새 입력" val={fmt(usage.lastTurnFreshInput)} />
-                <Row label="출력(+추론)" val={fmt(usage.lastTurnOutput)} />
+                <Row label={tt('cacheHitLabel')} val={fmt(usage.lastTurnCacheRead)} />
+                <Row label={tt('freshInputLabel')} val={fmt(usage.lastTurnFreshInput)} />
+                <Row label={tt('outputReasoningLabel')} val={fmt(usage.lastTurnOutput)} />
                 {(p || s) && (() => {
                   // rollout 스냅샷이 오래돼 resets_at 이 이미 지났으면 그 창은 리셋됨 → ~100% 남음
                   const winVal = (w: CodexRateWindow, withDate: boolean): string => {
-                    if (w.resets_at * 1000 < Date.now()) return `~100% 남음 (창 리셋됨 · codex 실행 시 갱신)`;
-                    return `${Math.max(0, 100 - w.used_percent)}% 남음 · ${fmtReset(w.resets_at, withDate)} 리셋`;
+                    if (w.resets_at * 1000 < Date.now()) return tt('windowResetRefresh');
+                    return tt('windowRemainingReset', { pct: Math.max(0, 100 - w.used_percent), reset: fmtReset(w.resets_at, withDate) });
                   };
                   return (
                     <>
                       <div className="claude-chat-usage-divider" />
                       <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
-                        <span className="claude-chat-usage-label">━ 남은 요금 한도</span>
+                        <span className="claude-chat-usage-label">{tt('remainingRateLimit')}</span>
                         <span className="claude-chat-usage-val">{codexInfo?.planType || ''}</span>
                       </div>
-                      {p && <Row label="5시간" val={winVal(p, false)} />}
-                      {s && <Row label="1주" val={winVal(s, true)} />}
+                      {p && <Row label={tt('window5h')} val={winVal(p, false)} />}
+                      {s && <Row label={tt('window1w')} val={winVal(s, true)} />}
                     </>
                   );
                 })()}
@@ -4544,12 +4555,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 const d = new Date(iso);
                 if (d.getFullYear() < 2000) return '';
                 const h = d.getHours(), mi = d.getMinutes();
-                const ap = h < 12 ? '오전' : '오후'; const h12 = h % 12 === 0 ? 12 : h % 12;
+                const ap = h < 12 ? tt('am') : tt('pm'); const h12 = h % 12 === 0 ? 12 : h % 12;
                 const diff = d.getTime() - Date.now();
                 let rel = '';
                 if (diff > 0) {
                   const hrs = Math.floor(diff / 3600000), mins = Math.floor((diff % 3600000) / 60000);
-                  rel = hrs > 0 ? ` (${hrs}시간 후)` : ` (${mins}분 후)`;
+                  rel = hrs > 0 ? ` ${tt('relHoursLater', { hours: hrs })}` : ` ${tt('relMinsLater', { mins })}`;
                 }
                 return `${ap} ${h12}:${String(mi).padStart(2, '0')}${rel}`;
               } catch { return ''; }
@@ -4567,17 +4578,17 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <>
                 <div className="claude-chat-usage-divider" />
                 <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
-                  <span className="claude-chat-usage-label">━ Gemini 컨텍스트</span>
+                  <span className="claude-chat-usage-label">{tt('ctxGemini')}</span>
                   <span className="claude-chat-usage-val">{fmt(used)} / 1M ({ctxPct}%)</span>
                 </div>
-                <Row label="캐시 적중" val={fmt(usage.lastTurnCacheRead)} />
-                <Row label="새 입력" val={fmt(usage.lastTurnFreshInput)} />
-                <Row label="출력" val={fmt(usage.lastTurnOutput)} />
+                <Row label={tt('cacheHitLabel')} val={fmt(usage.lastTurnCacheRead)} />
+                <Row label={tt('freshInputLabel')} val={fmt(usage.lastTurnFreshInput)} />
+                <Row label={tt('outputLabel')} val={fmt(usage.lastTurnOutput)} />
                 {geminiQuota && geminiQuota.length > 0 && (
                   <>
                     <div className="claude-chat-usage-divider" />
                     <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
-                      <span className="claude-chat-usage-label">━ 모델별 사용량</span>
+                      <span className="claude-chat-usage-label">{tt('perModelUsage')}</span>
                       <span className="claude-chat-usage-val">{geminiTier?.tierName || ''}</span>
                     </div>
                     {geminiQuota.map(b => {
@@ -4585,7 +4596,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                       const reset = fmtReset(b.resetTime);
                       return (
                         <Row key={b.modelId} label={b.modelId}
-                          val={`${usedPct != null ? usedPct + '% 사용' : '?'}${reset ? ' · ' + reset + ' 리셋' : ''}`} />
+                          val={`${usedPct != null ? tt('pctUsed', { pct: usedPct }) : '?'}${reset ? ' · ' + tt('resetSuffix', { reset }) : ''}`} />
                       );
                     })}
                   </>
@@ -4602,12 +4613,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <>
                 <div className="claude-chat-usage-divider" />
                 <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
-                  <span className="claude-chat-usage-label">━ Antigravity 컨텍스트</span>
+                  <span className="claude-chat-usage-label">{tt('ctxAntigravity')}</span>
                   <span className="claude-chat-usage-val">{fmt(used)} / {fmt(maxCtx)} ({ctxPct}%)</span>
                 </div>
-                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">캐시 적중</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnCacheRead)}</span></div>
-                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">새 입력</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnFreshInput)}</span></div>
-                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">출력</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnOutput)}</span></div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">{tt('cacheHitLabel')}</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnCacheRead)}</span></div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">{tt('freshInputLabel')}</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnFreshInput)}</span></div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">{tt('outputLabel')}</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnOutput)}</span></div>
               </>
             );
           })()}
@@ -4627,13 +4638,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   {g.weekly && (
                     <div className="claude-chat-usage-row">
                       <span className="claude-chat-usage-label">  Weekly</span>
-                      <span className="claude-chat-usage-val">{g.weekly.remainingPct}% 남음{g.weekly.refreshIn ? ' · ' + g.weekly.refreshIn : ''}</span>
+                      <span className="claude-chat-usage-val">{tt('pctRemaining', { pct: g.weekly.remainingPct })}{g.weekly.refreshIn ? ' · ' + g.weekly.refreshIn : ''}</span>
                     </div>
                   )}
                   {g.fiveHour && (
                     <div className="claude-chat-usage-row">
                       <span className="claude-chat-usage-label">  5-Hour</span>
-                      <span className="claude-chat-usage-val">{g.fiveHour.remainingPct}% 남음{g.fiveHour.refreshIn ? ' · ' + g.fiveHour.refreshIn : ''}</span>
+                      <span className="claude-chat-usage-val">{tt('pctRemaining', { pct: g.fiveHour.remainingPct })}{g.fiveHour.refreshIn ? ' · ' + g.fiveHour.refreshIn : ''}</span>
                     </div>
                   )}
                 </React.Fragment>
@@ -4721,18 +4732,18 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   const r: any = await (window as any).api?.claudeProbeUsage?.();
                   if (r?.success) {
                     const fmt = (n: number) => n.toLocaleString();
-                    let out = `📊 전체 누적 (~/.claude/projects 스캔)\n`;
+                    let out = `${tt('scanReportTitle')}\n`;
                     out += `─────────────────────────\n`;
-                    out += `세션 수    : ${r.sessionCount}\n`;
-                    out += `메시지 수  : ${r.msgCount}\n`;
-                    out += `입력 토큰  : ${fmt(r.totalIn)}\n`;
-                    out += `출력 토큰  : ${fmt(r.totalOut)}\n`;
-                    out += `캐시 생성  : ${fmt(r.totalCacheCreate)}\n`;
-                    out += `캐시 읽기  : ${fmt(r.totalCacheRead)}\n`;
+                    out += `${tt('scanReportSessions')} : ${r.sessionCount}\n`;
+                    out += `${tt('scanReportMessages')} : ${r.msgCount}\n`;
+                    out += `${tt('scanReportInputTokens')} : ${fmt(r.totalIn)}\n`;
+                    out += `${tt('scanReportOutputTokens')} : ${fmt(r.totalOut)}\n`;
+                    out += `${tt('scanReportCacheCreate')} : ${fmt(r.totalCacheCreate)}\n`;
+                    out += `${tt('scanReportCacheRead')} : ${fmt(r.totalCacheRead)}\n`;
                     out += `─────────────────────────\n`;
-                    out += `📁 프로젝트별 Top ${r.projects?.length || 0}\n`;
+                    out += `${tt('scanReportTopProjects', { count: r.projects?.length || 0 })}\n`;
                     for (const p of r.projects || []) {
-                      out += `  ${p.project.slice(0, 60)}\n    in ${fmt(p.in)} / out ${fmt(p.out)} / cache ${fmt(p.cacheRead)} (${p.sessions} 세션)\n`;
+                      out += `  ${p.project.slice(0, 60)}\n    in ${fmt(p.in)} / out ${fmt(p.out)} / cache ${fmt(p.cacheRead)} (${tt('scanReportSessionsCount', { count: p.sessions })})\n`;
                     }
                     setUsageProbe(out);
                   } else {
@@ -4850,7 +4861,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               ? tt('sessionNone')
               : selectedSshSessions.length === 1
                 ? selectedSshSessions[0].label
-                : tt('sessionCount', { count: selectedSshSessions.length, defaultValue: `세션 ${selectedSshSessions.length}개` })}
+                : tt('sessionCount', { count: selectedSshSessions.length })}
           </span>
           <span style={{ flexShrink: 0, opacity: 0.6, fontSize: 10 }}>▾</span>
         </button>
@@ -5000,7 +5011,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             ref={searchInputRef}
             className="claude-chat-search-input"
             value={searchQuery}
-            placeholder={tt('searchPlaceholder') || '메시지 검색...'}
+            placeholder={tt('searchPlaceholder')}
             onChange={e => setSearchQuery(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
@@ -5013,9 +5024,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           <span className="claude-chat-search-count">
             {searchQuery.trim() ? (searchHitCount > 0 ? `${searchCurrent + 1}/${searchHitCount}` : '0/0') : ''}
           </span>
-          <button className="claude-chat-search-btn" onClick={prevSearchHit} disabled={searchHitCount === 0} title="이전">↑</button>
-          <button className="claude-chat-search-btn" onClick={nextSearchHit} disabled={searchHitCount === 0} title="다음">↓</button>
-          <button className="claude-chat-search-btn" onClick={closeSearch} title="닫기 (Esc)">×</button>
+          <button className="claude-chat-search-btn" onClick={prevSearchHit} disabled={searchHitCount === 0} title={tt('searchPrev')}>↑</button>
+          <button className="claude-chat-search-btn" onClick={nextSearchHit} disabled={searchHitCount === 0} title={tt('searchNext')}>↓</button>
+          <button className="claude-chat-search-btn" onClick={closeSearch} title={tt('searchClose')}>×</button>
         </div>
       )}
       <div className="claude-chat-messages" ref={scrollRef} style={showHistoryPanel ? { display: 'none' } : undefined}>
@@ -5050,9 +5061,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                     if (!planEditing) { setPlanEditedText(pendingPlan); setPlanEditing(true); }
                     else { setPlanEditing(false); }
                   }}
-                  title={planEditing ? '미리보기로 전환' : '편집 모드'}
+                  title={planEditing ? tt('switchToPreview') : tt('editMode')}
                 >
-                  {planEditing ? '👁 미리보기' : '✎ 편집'}
+                  {planEditing ? tt('previewBtn') : tt('editBtn')}
                 </button>
               </div>
               {planEditing ? (
@@ -5069,11 +5080,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 />
               )}
               <div style={{ padding: '8px 16px', borderTop: '1px solid #2a3a50', background: '#0f1318' }}>
-                <div style={{ fontSize: 11, color: '#8aa', marginBottom: 4 }}>➕ 추가 요구사항 (선택)</div>
+                <div style={{ fontSize: 11, color: '#8aa', marginBottom: 4 }}>{tt('planExtraNoteLabel')}</div>
                 <textarea
                   value={planExtraNote}
                   onChange={e => setPlanExtraNote(e.target.value)}
-                  placeholder="예: 테스트 코드도 추가해줘 / 주석 한글로 써줘 / dry-run 으로 먼저 보여줘 ..."
+                  placeholder={tt('planExtraNotePlaceholder')}
                   rows={2}
                   style={{ resize: 'vertical', background: '#0a0f1a', color: '#cde', border: '1px solid #2a3a50', outline: 'none', fontFamily: 'inherit', fontSize: 12, lineHeight: 1.5, padding: '6px 10px', width: '100%', boxSizing: 'border-box', borderRadius: 4 }}
                   onKeyDown={e => {
@@ -5331,7 +5342,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           const msgMatch = msgHitsDetailed.length > 0;
           if (!toolMatch && !msgMatch) return null;
           return (
-          <div className="claude-chat-git-bar" title={activeSshSession ? `원격 SSH (${activeSshSession.label})` : '로컬'}>
+          <div className="claude-chat-git-bar" title={activeSshSession ? tt('gitRemoteSsh', { label: activeSshSession.label }) : tt('gitLocal')}>
             <span className="claude-chat-git-branch">
               <span style={{ opacity: 0.7 }}>⎇</span> {gitStatus.branch}
             </span>
@@ -5342,11 +5353,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 <span style={{ color: '#ff7a7a' }}>−{(gitStatus.deletions || 0).toLocaleString()}</span>
               </span>
             ) : (
-              <span className="claude-chat-git-diff" style={{ opacity: 0.5 }}>변경 없음</span>
+              <span className="claude-chat-git-diff" style={{ opacity: 0.5 }}>{tt('gitNoChanges')}</span>
             )}
             <button
               className="claude-chat-git-pr-btn"
-              title="현재 변경사항으로 PR 생성을 AI 에게 요청"
+              title={tt('gitPrButtonTitle')}
               onClick={() => {
                 // AI 에게 PR 생성 요청 메시지 자동 전송
                 const branch = gitStatus.branch || 'HEAD';
@@ -5354,7 +5365,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 const text = `현재 변경사항으로 PR 을 생성해줘.\n- branch: \`${branch}\`\n- diff: ${stat}\n\n변경 요약과 함께 \`gh pr create\` 명령어로 PR 을 만들어 줘.`;
                 send(text, []);
               }}
-            >PR 생성</button>
+            >{tt('gitPrButton')}</button>
           </div>
           );
         })()}
@@ -5384,7 +5395,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   {m.isDir ? '📁' : '📄'}
                   <span
                     className="claude-chat-attachment-path"
-                    title={m.isDir ? `${m.remotePath}\n(폴더 - 미리보기 불가)` : `${m.remotePath}\n클릭하여 내용 보기`}
+                    title={m.isDir ? `${m.remotePath}\n${tt('folderNoPreview')}` : `${m.remotePath}\n${tt('clickToView')}`}
                     onClick={async () => {
                       if (m.isDir) return;
                       try {
@@ -5393,10 +5404,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                           const fname = m.remotePath.match(/[^\\/]+$/)?.[0] || m.remotePath;
                           setAttachmentPreview({ name: fname, content: result.text || '' });
                         } else {
-                          setAttachmentPreview({ name: m.remotePath, content: `(읽기 실패: ${result?.error || '알 수 없음'})` });
+                          setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: result?.error || tt('unknown') }) });
                         }
                       } catch (err: any) {
-                        setAttachmentPreview({ name: m.remotePath, content: `(읽기 실패: ${err?.message || err})` });
+                        setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: err?.message || err }) });
                       }
                     }}
                     style={{ cursor: m.isDir ? 'default' : 'pointer', textDecoration: m.isDir ? 'none' : 'underline dotted', textUnderlineOffset: 2 }}
@@ -5431,8 +5442,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         {binaryAttachments.length > 0 && (
           <div className="claude-chat-attachments">
             <div className="claude-chat-attachments-header">
-              <span>🖼 첨부 {binaryAttachments.length}개 (paste/drop)</span>
-              <button className="claude-chat-attachments-clear" onClick={() => setBinaryAttachments([])}>모두 제거</button>
+              <span>{tt('attachBinaryCount', { count: binaryAttachments.length })}</span>
+              <button className="claude-chat-attachments-clear" onClick={() => setBinaryAttachments([])}>{tt('removeAll')}</button>
             </div>
             <div className="claude-chat-attachments-list">
               {binaryAttachments.map((b, i) => (
@@ -5463,7 +5474,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                     className="claude-chat-attachment-path"
                     onClick={() => setAttachmentPreview({ name: f.name, content: f.content })}
                     style={{ cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 2 }}
-                    title="클릭하여 내용 보기"
+                    title={tt('clickToView')}
                   >{f.name}</span>
                   <span style={{ color: '#888', fontSize: 10 }}>{(f.content.length / 1024).toFixed(1)}KB</span>
                   <button className="claude-chat-attachment-remove" onClick={() => setLocalFileAttachments(prev => prev.filter((_, x) => x !== i))}>×</button>
@@ -5475,7 +5486,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         <div className="claude-chat-toolbar">
           <button
             className="claude-chat-tool-btn"
-            title={`파일 첨부 (이미지/PDF/zip 등 모두 지원) — 또는 입력창에 Ctrl+V 로 스크린샷 붙여넣기`}
+            title={tt('attachFileTitle')}
             onClick={() => fileUploadRef.current?.click()}
           >📎 +</button>
           <input
@@ -5506,12 +5517,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           />
           <button
             className="claude-chat-tool-btn"
-            title="AI API 키 관리 (Claude / Gemini / Codex)"
+            title={tt('apiKeyManageTitle')}
             onClick={() => setApiKeyModalOpen(true)}
           >🔑</button>
           <button
             className="claude-chat-tool-btn"
-            title={`Mermaid 다이어그램 렌더링 ${mermaidEnabled ? 'ON (클릭: ASCII 모드로 전환)' : 'OFF (클릭: SVG 렌더링)'}`}
+            title={mermaidEnabled ? tt('mermaidToggleOn') : tt('mermaidToggleOff')}
             onClick={() => setMermaidEnabled(v => !v)}
             style={{ opacity: mermaidEnabled ? 1 : 0.5 }}
           >{mermaidEnabled ? '◆' : '◇'}</button>
@@ -5585,7 +5596,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   const usable = !m.pro || (geminiTier?.isPaid === true || !!apiKeys.gemini?.trim());
                   return (
                     <option key={m.v} value={m.v} disabled={!usable}>
-                      {m.icon} {m.l}{!usable ? ' — 지원안함' : ''}
+                      {m.icon} {m.l}{!usable ? ` — ${tt('unsupported')}` : ''}
                     </option>
                   );
                 })}
@@ -5603,28 +5614,28 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 onChange={e => setModel(e.target.value)}
                 title={tt('codexModelSelect')}
               >
-                <option value="gpt-5.5">🚀 GPT-5.5 (기본)</option>
+                <option value="gpt-5.5">🚀 GPT-5.5 {tt('defaultSuffix')}</option>
                 <option value="gpt-5.4">🔵 GPT-5.4</option>
                 <option value="gpt-5.4-mini">⚡ GPT-5.4 Mini</option>
                 <option value="gpt-5.3-codex">🧠 GPT-5.3 Codex</option>
                 <option value="gpt-5.2">🟣 GPT-5.2</option>
-                <option value="codex-mini-latest">🧠 Codex Mini (API키 전용)</option>
-                <option value="o4-mini">⚡ o4-mini (API키 전용)</option>
-                <option value="o3">🔵 o3 (API키 전용)</option>
-                <option value="gpt-4o">🟢 GPT-4o (API키 전용)</option>
+                <option value="codex-mini-latest">🧠 Codex Mini {tt('apiKeyOnlySuffix')}</option>
+                <option value="o4-mini">⚡ o4-mini {tt('apiKeyOnlySuffix')}</option>
+                <option value="o3">🔵 o3 {tt('apiKeyOnlySuffix')}</option>
+                <option value="gpt-4o">🟢 GPT-4o {tt('apiKeyOnlySuffix')}</option>
               </select>
               <select
                 className="claude-chat-perm-select"
                 value={effort}
                 onChange={e => setEffort(e.target.value)}
-                title="추론 강도"
+                title={tt('reasoningEffort')}
               >
-                <option value="low">낮음</option>
-                <option value="medium">중간</option>
-                <option value="high">높음</option>
-                <option value="max">매우 높음</option>
+                <option value="low">{tt('effort.low')}</option>
+                <option value="medium">{tt('effortMidLabel')}</option>
+                <option value="high">{tt('effort.high')}</option>
+                <option value="max">{tt('effortVeryHighLabel')}</option>
               </select>
-              <label className="claude-chat-tool-approval-label" title="도구 실행마다 승인 요청">
+              <label className="claude-chat-tool-approval-label" title={tt('toolApprovalEachTitle')}>
                 <input
                   type="checkbox"
                   checked={codexApprovalPolicy === 'suggest'}
@@ -5632,7 +5643,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                     setCodexApproval(e.target.checked ? 'suggest' : 'full-auto');
                   }}
                 />
-                툴별 승인
+                {tt('toolApprovalLabel')}
               </label>
               <div
                 className="codex-approval-menu-wrap"
@@ -5680,9 +5691,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <div
                 className="claude-chat-perm-select"
                 style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 10px', fontSize: 12, color: '#cde', cursor: 'pointer', whiteSpace: 'nowrap', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                title={apiKeys.customModel ? `Custom LLM: ${apiKeys.customModel} — 클릭하여 변경` : '🔑 모달에서 모델 설정'}
+                title={apiKeys.customModel ? tt('customModelChange', { model: apiKeys.customModel }) : tt('customModelSetInModal')}
                 onClick={() => setApiKeyModalOpen(true)}
-              >🖥 {apiKeys.customModel || '모델 미설정'}</div>
+              >🖥 {apiKeys.customModel || tt('modelNotSet')}</div>
             </>
           ) : currentAgent === 'antigravity' ? (
             <>
@@ -5690,15 +5701,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 className="claude-chat-perm-select"
                 value={ANTIGRAVITY_MODELS.some(m => m.v === model) ? model : ANTIGRAVITY_MODELS[0].v}
                 onChange={e => setModel(e.target.value)}
-                title="Antigravity 모델 선택"
+                title={tt('antigravityModelSelect')}
               >
                 {ANTIGRAVITY_MODELS.map(m => (
                   <option key={m.v} value={m.v}>{m.icon} {m.l}</option>
                 ))}
               </select>
-              <label className="claude-chat-tool-approval-label" title="--dangerously-skip-permissions: 모든 파일 읽기/쓰기/실행을 자동 승인">
+              <label className="claude-chat-tool-approval-label" title={tt('antigravityYoloTitle')}>
                 <input type="checkbox" checked={antigravityYolo} onChange={e => setAntigravityYolo(e.target.checked)} />
-                자동 승인
+                {tt('geminiAutoApprove')}
               </label>
             </>
           ) : (
@@ -5735,7 +5746,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                     <option value="opus[1m]">🟣 Opus 4.7 1M</option>
                     <option value="sonnet">🔵 Sonnet 4.6</option>
                     <option value="haiku">⚡ Haiku 4.5</option>
-                    <option value="claude-opus-4-6">🕘 Opus 4.6 레거시</option>
+                    <option value="claude-opus-4-6">🕘 {tt('opusLegacy')}</option>
                   </>
                 )}
               </select>
@@ -5786,7 +5797,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 handleSend();
               }
             }}
-            placeholder={`${isCodexSteeringMode ? tt('steeringInputPlaceholder') : tt('inputPlaceholder')}\n\n📎 첨부: 스크린샷은 Ctrl+V · 파일은 📎 + 버튼 · 드래그 앤 드롭`}
+            placeholder={`${isCodexSteeringMode ? tt('steeringInputPlaceholder') : tt('inputPlaceholder')}\n\n${tt('attachInputHint')}`}
             rows={3}
             disabled={currentAgentStreaming && currentAgent !== 'codex'}
           />
@@ -5796,7 +5807,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               border: '2px dashed #58a6ff', background: 'rgba(88,166,255,0.08)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: '#58a6ff', fontSize: 13, fontWeight: 600, borderRadius: 4,
-            }}>📎 파일을 놓으면 첨부됩니다</div>
+            }}>{tt('dropToAttach')}</div>
           )}
         </div>
         <div className="claude-chat-input-actions">
@@ -5826,7 +5837,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   <div className="claude-chat-usage-tooltip">
                     <div><b>Context</b> {fmt(usage.lastTurnInput)} / {fmt(maxCtx)} ({ctxPct}%)</div>
                     {(p || s) && (
-                      <div>{p ? `5시간 ${winPct(p)}` : ''}{p && s ? ' · ' : ''}{s ? `1주 ${winPct(s)}` : ''}</div>
+                      <div>{p ? `${tt('window5h')} ${winPct(p)}` : ''}{p && s ? ' · ' : ''}{s ? `${tt('window1w')} ${winPct(s)}` : ''}</div>
                     )}
                   </div>
                 );
@@ -5839,7 +5850,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 return (
                   <div className="claude-chat-usage-tooltip">
                     <div><b>Context</b> {fmt(usage.lastTurnInput)} / 1M ({ctxPct}%)</div>
-                    {curUsed != null && <div>현재 모델 사용량 {curUsed}%</div>}
+                    {curUsed != null && <div>{tt('currentModelUsage', { pct: curUsed })}</div>}
                   </div>
                 );
               }
@@ -5977,7 +5988,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             <div className="rn-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {attachmentPreview.name}</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: '#888' }}>
-                {(attachmentPreview.content.length / 1024).toFixed(1)} KB · {attachmentPreview.content.split('\n').length} 줄
+                {(attachmentPreview.content.length / 1024).toFixed(1)} KB · {tt('lineCount', { count: attachmentPreview.content.split('\n').length })}
               </span>
             </div>
             <div className="rn-body" style={{ flex: 1, minHeight: 0, padding: 0 }}>
@@ -5996,13 +6007,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 onClick={() => {
                   try { navigator.clipboard.writeText(attachmentPreview.content); } catch {}
                 }}
-                title="내용 클립보드 복사"
-              >📋 복사</button>
+                title={tt('copyContentTitle')}
+              >📋 {tt('copyBtn')}</button>
               <button
                 className="rn-btn rn-btn-primary"
                 onClick={() => setAttachmentPreview(null)}
                 autoFocus
-              >닫기</button>
+              >{tt('close')}</button>
             </div>
           </div>
         </div>,
@@ -6012,10 +6023,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       {deleteHistoryConfirm && createPortal(
         <div className="rn-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDeleteHistoryConfirm(null); }}>
           <div className="rn-dialog" onMouseDown={e => e.stopPropagation()}>
-            <div className="rn-title">삭제 확인</div>
+            <div className="rn-title">{tt('deleteConfirmTitle')}</div>
             <div className="rn-body" style={{ maxWidth: 480 }}>
               <div style={{ fontSize: 12, lineHeight: '1.5em' }}>
-                <b>1개</b> 대화를 삭제하시겠습니까?
+                {tt('deleteConfirmBody')}
               </div>
               <div style={{ fontSize: 11, color: '#aaa', marginTop: 6, wordBreak: 'break-all' }}>
                 {deleteHistoryConfirm.title}
@@ -6030,8 +6041,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   if (e.key === 'Enter') { e.preventDefault(); deleteHistory(deleteHistoryConfirm.id); setDeleteHistoryConfirm(null); }
                   else if (e.key === 'Escape') { e.preventDefault(); setDeleteHistoryConfirm(null); }
                 }}
-              >삭제</button>
-              <button className="rn-btn" onClick={() => setDeleteHistoryConfirm(null)}>취소</button>
+              >{tt('deleteBtn')}</button>
+              <button className="rn-btn" onClick={() => setDeleteHistoryConfirm(null)}>{tt('cancel')}</button>
             </div>
           </div>
         </div>,

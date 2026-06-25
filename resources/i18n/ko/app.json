@@ -1,0 +1,270 @@
+{
+  "common": {
+    "close": "닫기",
+    "unknownError": "알 수 없는 오류",
+    "unknown": "알 수 없음"
+  },
+  "manual": {
+    "loadFail": "매뉴얼 로드 실패",
+    "title": "📖 PePe Terminal(SSH) 매뉴얼"
+  },
+  "connect": {
+    "fail": "연결 실패",
+    "failDetail": "{{name}}: {{error}}"
+  },
+  "messenger": {
+    "defaultPeerName": "메신저",
+    "filePrefix": "파일: {{name}}",
+    "attachedFile": "첨부 파일"
+  },
+  "x11": {
+    "settingChanged": "X11 설정이 변경되었습니다. 적용하려면 활성 세션 {{count}}개를 수동으로 재접속하세요. (미니탭 우클릭 → 세션 재연결)"
+  },
+  "broadcast": {
+    "textLabel": "텍스트",
+    "enterText": "텍스트를 입력하세요",
+    "noTargets": "대상 세션이 없습니다",
+    "sentToast": "{{label}} → {{count}}개 세션 전송",
+    "close": "닫기",
+    "labelTooltip": "텍스트 일괄 전송",
+    "scopeTooltip": "전송 대상",
+    "scopeVisible": "보이는 탭 ({{count}})",
+    "scopeCurrent": "현재 세션 ({{count}})",
+    "scopeConnected": "연결된 세션 ({{count}})",
+    "inputPlaceholder": "전송할 텍스트 (Enter 전송, Ctrl+C/^C, Ctrl+D/^D)",
+    "historyTooltip": "전송 이력",
+    "appendNewlineTooltip": "끝에 개행(Enter) 추가",
+    "sendTooltip": "텍스트 전송 (Enter)",
+    "send": "전송",
+    "fileTransferTooltip": "여러 세션에 파일/폴더 일괄 업로드",
+    "fileTransfer": "📤 파일전송",
+    "arrowUpTooltip": "위 방향키 (이전 명령) 전송",
+    "arrowDownTooltip": "아래 방향키 (다음 명령) 전송",
+    "sigintTooltip": "Ctrl+C (SIGINT) 전송",
+    "eofTooltip": "Ctrl+D (EOF) 전송"
+  },
+  "ai": {
+    "serviceRequiredTitle": "AI 서비스 필요",
+    "serviceRequiredDesc": "세션 리스트 자동 정리는 AI 서비스가 하나라도 연결되어 있을 때만 사용할 수 있습니다. 먼저 Claude, Gemini, 또는 Codex를 연결해 주세요.",
+    "organizingToast": "AI({{agent}})로 세션 리스트를 정리하는 중...",
+    "parseFail": "AI 응답을 JSON으로 해석하지 못했습니다: {{error}}",
+    "invalidFormat": "AI 응답 형식이 올바르지 않습니다.",
+    "noApplicableSessions": "AI 응답에 적용 가능한 세션이 없습니다.",
+    "saveFail": "세션 리스트 저장 실패",
+    "organizeDoneTitle": "세션 리스트 정리 완료",
+    "organizeDoneDesc": "AI({{agent}})가 세션 {{sessions}}개와 폴더 {{folders}}개를 정리했습니다.",
+    "organizeFailTitle": "세션 자동 정리 실패"
+  },
+  "sessionWipe": {
+    "backupToast": "세션 백업을 저장했습니다. 이제 전체 목록을 삭제합니다.",
+    "deleteFail": "세션 삭제 실패",
+    "emptiedTitle": "세션 리스트 비움",
+    "emptiedBackupDesc": "백업 후 세션 리스트를 삭제했습니다.",
+    "emptiedDesc": "세션 리스트를 삭제했습니다.",
+    "emptyFailTitle": "세션 리스트 비우기 실패",
+    "dialogTitle": "세션 리스트 비우기",
+    "dialogDesc": "전체 세션 리스트를 삭제합니다. 먼저 백업할지 선택해 주세요.",
+    "cancel": "취소하기",
+    "backup": "백업하기",
+    "delete": "삭제하기"
+  },
+  "claudeAttach": {
+    "mountPreparing": "WebDAV 마운트 준비 중...",
+    "mountFail": "마운트 실패: {{error}}",
+    "pathConvertFail": "경로 변환 실패: {{error}}",
+    "attached": "첨부 완료 (WebDAV 실시간 접근)",
+    "attachFail": "첨부 실패: {{error}}"
+  },
+  "tabs": {
+    "browser": "🌐 브라우저",
+    "compare": "🔍 파일 비교",
+    "logAnalyzer": "📈 로그 분석",
+    "vpn": "🔒 VPN",
+    "i18nEditor": "🌍 다국어 편집",
+    "fileTransfer": "📁 파일 전송"
+  },
+  "term": {
+    "connectCancelled": "✕ 연결 취소됨.",
+    "retryHint": "▶ 다시 시도하려면: 터미널 클릭 또는 미니탭 우클릭 → 재연결"
+  },
+  "fileTransfer": {
+    "connectFail": "파일 전송 연결 실패",
+    "connectFailDetail": "{{name}}\n\n{{msg}}",
+    "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nDevTools Console 에 [sftp-connect] 로그 확인 권장.",
+    "connectException": "파일 전송 연결 예외"
+  },
+  "sessionMenu": {
+    "wipe": "세션 비우기",
+    "autoOrganize": "세션 리스트 자동 정리"
+  },
+  "workspace": {
+    "cannotConnectTitle": "연결할 수 없는 워크스페이스",
+    "cannotConnectTab": "'{{title}}' 은(는) 터미널 세션을 추가할 수 없는 워크스페이스입니다.\n\n새 워크스페이스로 엽니다.",
+    "cannotConnectActive": "현재 워크스페이스 '{{title}}' 은(는) 터미널 세션을 추가할 수 없습니다.\n\n새 워크스페이스로 엽니다."
+  },
+  "titlebar": {
+    "restore": "복원",
+    "maximize": "최대화"
+  },
+  "toolbar": {
+    "dragHint": "드래그하여 빠른연결 좌/우 또는 상단으로",
+    "fileTransferTooltip": "파일 전송",
+    "resetSplitTooltip": "패널 비율 균등 정렬 (현재 워크스페이스의 모든 분할 비율 리셋)",
+    "quickConnectShow": "빠른 연결 바 표시",
+    "quickConnectHide": "빠른 연결 바 숨기기",
+    "broadcastShow": "텍스트 일괄 전송 바 표시",
+    "broadcastHide": "텍스트 일괄 전송 바 숨기기",
+    "terminalPin": "터미널 패널 고정",
+    "terminalUnpin": "터미널 패널 고정 해제 (세로 탭으로 최소화)",
+    "xStart": "X 서버 시작 (DISPLAY=:0)",
+    "xStop": "X 서버 중지",
+    "xStatus": "X 서버 상태",
+    "options": "옵션",
+    "dragTargetTop": "상단",
+    "dragTargetQcLeft": "빠른연결 왼쪽",
+    "dragTargetQcRight": "빠른연결 오른쪽",
+    "dragHintPrefix": "→ {{target}}"
+  },
+  "xServer": {
+    "startTitle": "X 서버 시작",
+    "startOk": "✅ DISPLAY=:0  PID={{pid}}",
+    "startNoBundle": "⚠️ 번들/외부 X 서버 사용 안 함\n\n{{logs}}",
+    "startFail": "X 서버 시작 실패",
+    "stopTitle": "X 서버 중지",
+    "stopOk": "✅ 중지 완료.",
+    "stopFail": "X 서버 중지 실패",
+    "statusTitle": "X 서버 상태",
+    "statusRunning": "🟢 실행 중",
+    "statusNone": "⚫ 실행 중인 X 서버 없음.",
+    "statusFail": "X 서버 상태 조회 실패"
+  },
+  "fileTree": {
+    "triggerTooltip": "클릭=토글 / 2.5초 오버=자동 열림",
+    "triggerLabel": "📁 파일 트리",
+    "unpinTooltip": "Unpin (자동 숨김)",
+    "pinTooltip": "Pin (고정)",
+    "resizeTooltip": "드래그=폭 조절, 더블클릭=기본값(240)",
+    "resizeTooltip2": "드래그하여 너비 조절 (더블클릭: 기본값 240)"
+  },
+  "errorBoundary": {
+    "browser": "브라우저",
+    "compare": "파일 비교",
+    "logAnalyzer": "로그 분석",
+    "i18nEditor": "다국어 편집"
+  },
+  "panel": {
+    "openTerminalTooltip": "터미널 열기",
+    "pinTerminalTooltip": "터미널 패널 고정"
+  },
+  "claudeChat": {
+    "triggerTooltip": "클릭=토글 / 2.5초 오버=자동 열림",
+    "resizeTooltip": "드래그하여 너비 조절 (더블클릭: 기본값)"
+  },
+  "splitPicker": {
+    "titleRow": "세션 선택 (가로 분할 (좌/우))",
+    "titleCol": "세션 선택 (세로 분할 (상/하))",
+    "cancel": "취소"
+  },
+  "infoModal": {
+    "closeTooltip": "닫기 (Esc)"
+  },
+  "update": {
+    "title": "🔄 업데이트",
+    "titleChecking": "🔄 업데이트 확인 중",
+    "titleAvailable": "🎉 새 버전 사용 가능",
+    "titleDownloading": "⬇ 업데이트 다운로드 중",
+    "titleDownloaded": "✅ 업데이트 준비 완료",
+    "titleNotAvailable": "✔ 최신 버전",
+    "titleUnsupported": "자동 업데이트 미지원",
+    "titleError": "⚠ 업데이트 오류",
+    "check": "🔄 업데이트 확인",
+    "closeTooltip": "닫기 (Esc)",
+    "checkingMsg": "업데이트를 확인하고 있습니다…",
+    "availableMsgPlain": "새 버전 v{{ver}} 이(가) 있습니다. 지금 다운로드할까요?",
+    "downloadingMsg": "v{{ver}} 다운로드 중… {{pct}}%",
+    "downloadedMsg": "v{{ver}} 다운로드가 완료되었습니다.",
+    "downloadedMsg2": "지금 재시작하여 설치할까요? (작업 중인 내용은 저장 후 진행하세요)",
+    "notAvailableMsg": "현재 최신 버전입니다.{{suffix}}",
+    "unsupportedMsg": "이 빌드(개발 모드 또는 포터블)에서는 자동 업데이트를 사용할 수 없습니다.",
+    "unsupportedMsg2": "설치본(installer)에서만 동작합니다.",
+    "errorMsg": "업데이트 중 오류가 발생했습니다.",
+    "later": "나중에",
+    "downloadNow": "지금 다운로드",
+    "restartNow": "지금 재시작하여 설치",
+    "background": "백그라운드로",
+    "ok": "확인"
+  },
+  "remotePicker": {
+    "title": "🌐 원격 파일 선택",
+    "sourceSession": "소스 세션 (전체 목록, 미연결 세션 선택 시 백그라운드 SFTP 연결)",
+    "quickConnect": "빠른연결",
+    "quickConnectSuffix": " (빠른연결)",
+    "selectSession": "(세션 선택)",
+    "groupConnected": "🟢 연결됨",
+    "groupDisconnected": "⚪ 연결 안됨",
+    "connecting": "연결 중...",
+    "path": "경로",
+    "parentTooltip": "상위 폴더",
+    "refreshTooltip": "새로고침",
+    "selectSessionHint": "세션을 선택하세요",
+    "loading": "로딩 중...",
+    "emptyOrError": "(비어있음 또는 경로 에러)",
+    "legend": "🟢 연결된 세션 / ⚪ 미연결 (선택 시 자동 연결). 클릭: 선택 / 더블클릭: 폴더 진입. {{count}}개 선택됨",
+    "close": "닫기",
+    "addSelected": "선택 항목 추가 ({{count}}개)"
+  },
+  "cred": {
+    "title": "🔒 자격증명 입력",
+    "connectTo": "{{host}} 에 연결",
+    "hide": "숨기기",
+    "show": "보이기",
+    "cancel": "취소",
+    "connecting": "연결 중...",
+    "connect": "연결"
+  },
+  "bcastXfer": {
+    "title": "📤 일괄 파일 전송",
+    "targetSession": "대상 세션",
+    "scopeVisible": "보이는 세션 모두",
+    "scopeCurrent": "현재 세션",
+    "scopeConnected": "연결된 세션 전체",
+    "count": "{{count}}개",
+    "remotePath": "원격 경로 (비우면 각 세션의 현재 경로 사용)",
+    "remotePathPlaceholder": "예: /tmp (선택사항)",
+    "uploadFiles": "업로드할 파일/폴더",
+    "addLocalFile": "+ 로컬 파일",
+    "addLocalFolder": "+ 로컬 폴더",
+    "addRemoteFile": "+ 원격 파일 (다른 서버)",
+    "removeAll": "모두 제거",
+    "emptyHint": "파일 또는 폴더를 추가하세요",
+    "remoteSourcePrefix": "원격({{label}}):",
+    "localSourcePrefix": "로컬:",
+    "close": "닫기",
+    "noTargets": "대상 세션이 없습니다",
+    "startLog": "▶ {{targets}}개 세션 × {{files}}개 항목 전송 시작",
+    "skipSameSession": "↷ {{label}}: {{filename}} (소스와 동일 세션, 건너뜀)",
+    "doneLog": "● 완료: 성공 {{ok}}, 실패 {{err}}",
+    "doneToast": "파일전송 완료 (성공 {{ok}}/{{total}})",
+    "sending": "전송 중...",
+    "send": "전송"
+  },
+  "askPwd": {
+    "credTitle": "자격증명 입력",
+    "pwdTitle": "비밀번호 입력",
+    "cancelTooltip": "취소",
+    "connectToPlain": "{{host}} 에 연결",
+    "needCred": "연결을 위해 자격증명이 필요합니다.",
+    "hide": "숨기기",
+    "show": "보이기",
+    "cancel": "취소",
+    "connect": "연결",
+    "waiting": "대기 중 {{count}}개 — 다른 세션 탭에서 입력 가능"
+  },
+  "savePwd": {
+    "title": "비밀번호를 세션에 저장할까요?",
+    "desc": "다음 접속부터는 비밀번호 입력 없이 바로 연결됩니다.",
+    "dontSave": "저장 안 함",
+    "savedToast": "비밀번호가 세션에 저장되었습니다.",
+    "save": "저장"
+  }
+}

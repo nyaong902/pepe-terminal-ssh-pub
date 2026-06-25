@@ -1,6 +1,7 @@
 // src/components/ChmodDialog.tsx
 // 권한 변경 다이얼로그 — SSH/SFTP 세션 전용
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const api = (window as any).api || {};
 
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export const ChmodDialog: React.FC<Props> = ({ mode, termId, paths, initialMode, hasDir, onClose, onApplied }) => {
+  const { t: tr } = useTranslation('fileExplorer');
   const initOctal = (initialMode ?? 0o644) & 0o777;
   const [octal, setOctal] = useState<string>(initOctal.toString(8).padStart(3, '0'));
   const [recursive, setRecursive] = useState(false);
@@ -48,10 +50,10 @@ export const ChmodDialog: React.FC<Props> = ({ mode, termId, paths, initialMode,
     setErr(null);
     try {
       const m = parseInt(octal, 8);
-      if (isNaN(m) || m < 0 || m > 0o7777) { setErr('유효하지 않은 권한 값입니다'); setBusy(false); return; }
+      if (isNaN(m) || m < 0 || m > 0o7777) { setErr(tr('chmodInvalidValue')); setBusy(false); return; }
       const r = await api.feChmod?.({ mode, termId, paths, octal: m, recursive });
       if (r?.success === false) {
-        setErr(r.error || '권한 변경 실패');
+        setErr(r.error || tr('chmodFail'));
         setBusy(false);
         return;
       }
@@ -79,12 +81,12 @@ export const ChmodDialog: React.FC<Props> = ({ mode, termId, paths, initialMode,
     <div className="cf-backdrop">
       <div className="cf-dialog chmod-dialog" onKeyDown={onKeyDown} tabIndex={-1}>
         <div className="cf-titlebar">
-          <span className="cf-title">권한 변경</span>
-          <button className="cf-close" onClick={onClose} title="취소">✕</button>
+          <span className="cf-title">{tr('chmodTitle')}</span>
+          <button className="cf-close" onClick={onClose} title={tr('cancel')}>✕</button>
         </div>
         <div className="cf-body">
           <div className="cf-row chmod-octal-row">
-            <span className="cf-label">파일/폴더 권한(P):</span>
+            <span className="cf-label">{tr('chmodPermLabel')}</span>
             <input
               className="cf-input chmod-octal-input"
               value={octal}
@@ -94,39 +96,39 @@ export const ChmodDialog: React.FC<Props> = ({ mode, termId, paths, initialMode,
           </div>
           <div className="chmod-grid">
             <div className="chmod-col">
-              <div className="chmod-col-title">소유자</div>
-              <label><input type="checkbox" checked={!!(o & 4)} onChange={e => bitOn('o', 4, e.target.checked)} /> 읽기</label>
-              <label><input type="checkbox" checked={!!(o & 2)} onChange={e => bitOn('o', 2, e.target.checked)} /> 쓰기</label>
-              <label><input type="checkbox" checked={!!(o & 1)} onChange={e => bitOn('o', 1, e.target.checked)} /> 실행</label>
+              <div className="chmod-col-title">{tr('chmodOwner')}</div>
+              <label><input type="checkbox" checked={!!(o & 4)} onChange={e => bitOn('o', 4, e.target.checked)} /> {tr('chmodRead')}</label>
+              <label><input type="checkbox" checked={!!(o & 2)} onChange={e => bitOn('o', 2, e.target.checked)} /> {tr('chmodWrite')}</label>
+              <label><input type="checkbox" checked={!!(o & 1)} onChange={e => bitOn('o', 1, e.target.checked)} /> {tr('chmodExec')}</label>
             </div>
             <div className="chmod-col">
-              <div className="chmod-col-title">그룹</div>
-              <label><input type="checkbox" checked={!!(g & 4)} onChange={e => bitOn('g', 4, e.target.checked)} /> 읽기</label>
-              <label><input type="checkbox" checked={!!(g & 2)} onChange={e => bitOn('g', 2, e.target.checked)} /> 쓰기</label>
-              <label><input type="checkbox" checked={!!(g & 1)} onChange={e => bitOn('g', 1, e.target.checked)} /> 실행</label>
+              <div className="chmod-col-title">{tr('chmodGroup')}</div>
+              <label><input type="checkbox" checked={!!(g & 4)} onChange={e => bitOn('g', 4, e.target.checked)} /> {tr('chmodRead')}</label>
+              <label><input type="checkbox" checked={!!(g & 2)} onChange={e => bitOn('g', 2, e.target.checked)} /> {tr('chmodWrite')}</label>
+              <label><input type="checkbox" checked={!!(g & 1)} onChange={e => bitOn('g', 1, e.target.checked)} /> {tr('chmodExec')}</label>
             </div>
             <div className="chmod-col">
-              <div className="chmod-col-title">기타</div>
-              <label><input type="checkbox" checked={!!(t & 4)} onChange={e => bitOn('t', 4, e.target.checked)} /> 읽기</label>
-              <label><input type="checkbox" checked={!!(t & 2)} onChange={e => bitOn('t', 2, e.target.checked)} /> 쓰기</label>
-              <label><input type="checkbox" checked={!!(t & 1)} onChange={e => bitOn('t', 1, e.target.checked)} /> 실행</label>
+              <div className="chmod-col-title">{tr('chmodOther')}</div>
+              <label><input type="checkbox" checked={!!(t & 4)} onChange={e => bitOn('t', 4, e.target.checked)} /> {tr('chmodRead')}</label>
+              <label><input type="checkbox" checked={!!(t & 2)} onChange={e => bitOn('t', 2, e.target.checked)} /> {tr('chmodWrite')}</label>
+              <label><input type="checkbox" checked={!!(t & 1)} onChange={e => bitOn('t', 1, e.target.checked)} /> {tr('chmodExec')}</label>
             </div>
           </div>
           {hasDir && (
             <label className="chmod-recursive">
               <input type="checkbox" checked={recursive} onChange={e => setRecursive(e.target.checked)} />
-              하위 디렉터리 포함(I)
+              {tr('chmodRecursive')}
             </label>
           )}
-          <div className="chmod-note">이 명령은 일부 UNIX 호스트에서만 적용됩니다.</div>
+          <div className="chmod-note">{tr('chmodNote')}</div>
           {err && <div className="chmod-error">{err}</div>}
           <div className="chmod-target-list">
-            {paths.length > 1 ? `${paths.length}개 항목` : paths[0]}
+            {paths.length > 1 ? tr('chmodItemCount', { count: paths.length }) : paths[0]}
           </div>
         </div>
         <div className="cf-actions">
-          <button className="cf-btn cf-btn-primary" disabled={busy} onClick={apply}>{busy ? '적용 중...' : '확인'}</button>
-          <button className="cf-btn" onClick={onClose}>취소</button>
+          <button className="cf-btn cf-btn-primary" disabled={busy} onClick={apply}>{busy ? tr('chmodApplying') : tr('confirm')}</button>
+          <button className="cf-btn" onClick={onClose}>{tr('cancel')}</button>
         </div>
       </div>
     </div>

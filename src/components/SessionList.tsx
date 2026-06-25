@@ -154,9 +154,9 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   const searchQuery = searchValue.trim().toLowerCase();
   const folderById = useMemo(() => new Map(folders.map(f => [f.id, f])), [folders]);
   const searchScopeLabel: Record<SearchScope, string> = {
-    name: '이름',
-    basic: '연결정보',
-    all: '설정정보',
+    name: t('scopeName'),
+    basic: t('scopeBasic'),
+    all: t('scopeAll'),
   };
 
   const folderPathById = useMemo(() => {
@@ -741,17 +741,17 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             className="session-search-select"
             value={searchScope}
             onChange={e => setSearchScope(e.target.value as SearchScope)}
-            title="검색 기준"
+            title={t('searchScopeTitle')}
           >
-            <option value="name">이름</option>
-            <option value="basic">연결정보</option>
-            <option value="all">설정정보</option>
+            <option value="name">{t('scopeName')}</option>
+            <option value="basic">{t('scopeBasic')}</option>
+            <option value="all">{t('scopeAll')}</option>
           </select>
           <input
             className="session-search-input"
             value={searchValue}
             onChange={e => setSearchValue(e.target.value)}
-            placeholder={`${searchScopeLabel[searchScope]} 검색`}
+            placeholder={t('searchPlaceholder', { scope: searchScopeLabel[searchScope] })}
             spellCheck={false}
           />
           {searchValue && (
@@ -759,7 +759,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               className="session-search-clear"
               type="button"
               onClick={() => setSearchValue('')}
-              title="검색 지우기"
+              title={t('searchClear')}
             >
               ×
             </button>
@@ -957,10 +957,10 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                       };
                       return (
                         <>
-                          <div className="context-menu-item" onClick={() => doConnect('minitab')}>🔌 미니탭으로 열기</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-v')}>▥ 좌우 분할로 열기</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-h')}>▤ 상하 분할로 열기</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}>▦ 타일 분할로 열기</div>
+                          <div className="context-menu-item" onClick={() => doConnect('minitab')}>{t('ctxOpenMini')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-v')}>{t('ctxOpenVSplit')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-h')}>{t('ctxOpenHSplit')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}>{t('ctxOpenTile')}</div>
                         </>
                       );
                     })()}
@@ -996,23 +996,23 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             return (
               <>
                 <div className="context-menu-label" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px' }}>
-                  <span style={{ fontSize: 11, color: '#aaa' }}>{t('ctxTarget') || '대상:'}</span>
+                  <span style={{ fontSize: 11, color: '#aaa' }}>{t('ctxTarget')}</span>
                   <select
                     value={multiTargetWs}
                     onChange={e => setMultiTargetWs(e.target.value)}
                     onClick={e => e.stopPropagation()}
                     style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
                   >
-                    <option value="current">현재 워크스페이스</option>
-                    <option value="new">새 워크스페이스</option>
+                    <option value="current">{t('ctxCurrentWs')}</option>
+                    <option value="new">{t('ctxNewWs')}</option>
                     {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
                       <option key={tab.id} value={tab.id}>{tab.title}</option>
                     ))}
                   </select>
                 </div>
-                <div className="context-menu-item" onClick={() => doConnect('minitab')}>🔌 미니탭으로 열기</div>
-                <div className="context-menu-item" onClick={() => doConnect('split-v')}>▥ 좌우 분할로 열기</div>
-                <div className="context-menu-item" onClick={() => doConnect('split-h')}>▤ 상하 분할로 열기</div>
+                <div className="context-menu-item" onClick={() => doConnect('minitab')}>{t('ctxOpenMini')}</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-v')}>{t('ctxOpenVSplit')}</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-h')}>{t('ctxOpenHSplit')}</div>
                 <div className="context-menu-separator" />
               </>
             );

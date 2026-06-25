@@ -3,12 +3,17 @@
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #0a0a0a;
+  color: var(--win-text, rgba(255, 255, 255, 0.87));
+  background-color: var(--win-bg, #0a0a0a);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 밝은 윈도우 테마 — 네이티브 스크롤바/폼 컨트롤도 밝게 */
+html.win-theme-light {
+  color-scheme: light;
 }
 
 html,

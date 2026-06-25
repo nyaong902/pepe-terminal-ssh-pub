@@ -39,7 +39,8 @@
     "newWorkspace": "+ 새 워크스페이스로 이동",
     "changeScrollback": "스크롤 버퍼 크기 변경...",
     "clearScrollbackBuffer": "스크롤 버퍼 지우기",
-    "fontDots": "글꼴..."
+    "fontDots": "글꼴...",
+    "openInNewWindow": "새 창으로 열기"
   },
   "float": "플로팅",
   "unfloat": "플로팅 해제",
@@ -77,7 +78,10 @@
     "tryingSSH": "▶ SSH 연결을 시도하는 중...",
     "recordEnd": "● 녹화 종료 — {{path}}",
     "recordBegin": "● 녹화 시작 — {{path}}",
-    "recordFailed": "✕ 녹화 시작 실패: {{reason}}"
+    "recordFailed": "✕ 녹화 시작 실패: {{reason}}",
+    "retryHint": "▶ 다시 시도하려면: 터미널 클릭 또는 미니탭 우클릭 → 재연결",
+    "reasonNoResponse": "10초 응답 없음",
+    "reasonError": "에러"
   },
   "ui": {
     "newSession": "새 세션",

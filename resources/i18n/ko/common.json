@@ -33,5 +33,7 @@
   "about": "정보",
   "exit": "종료",
   "language": "언어",
-  "languageEditor": "언어 편집"
+  "languageEditor": "언어 편집",
+  "componentError": "⚠ 컴포넌트 오류 — {{label}}",
+  "retry": "다시 시도"
 }

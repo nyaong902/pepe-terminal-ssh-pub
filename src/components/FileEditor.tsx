@@ -128,7 +128,7 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
   // AI 분석 요청 — 파일 내용을 첨부로 claude-prefill 이벤트 발행 (LogAnalyzer 와 동일 경로)
   const requestAnalyze = (agent: 'claude' | 'gemini' | 'codex' | 'antigravity' | 'custom') => {
     const fname = fileName || (remotePath.match(/[^\\/]+$/)?.[0] || 'file');
-    const promptText = `첨부된 파일 \`${fname}\` 을 분석해줘.\n- 경로: ${remotePath}`;
+    const promptText = t('analyzePrompt', { name: fname, path: remotePath });
     try {
       window.dispatchEvent(new CustomEvent('claude-prefill', {
         detail: {
@@ -273,7 +273,7 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
           className="file-editor-encoding"
           value={encoding.toLowerCase()}
           onChange={e => loadWithEncoding(e.target.value)}
-          title="파일 인코딩 (변경 시 재로드)"
+          title={t('encodingTitle')}
           style={{ background: '#1a1a2e', color: '#ccc', border: '1px solid #3a3a5a', borderRadius: 4, fontSize: 11, padding: '2px 4px' }}
         >
           <option value="utf-8">UTF-8</option>
@@ -286,17 +286,17 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
         </select>
         {onAnalyzeWithAI && (
           <>
-          <label style={{ fontSize: 11, color: '#aac', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }} title="체크: 새 대화로 시작 / 해제: 현재 대화창에 이어서">
+          <label style={{ fontSize: 11, color: '#aac', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }} title={t('newConversationTitle')}>
             <input type="checkbox" checked={aiNewConversation} onChange={e => setAiNewConversation(e.target.checked)} style={{ margin: 0 }} />
-            새 대화
+            {t('newConversation')}
           </label>
           <div style={{ position: 'relative', display: 'inline-flex' }}>
             <button
               className="file-editor-claude"
               onClick={e => { e.stopPropagation(); setAiAgentMenuOpen(v => !v); }}
-              title="AI 분석 요청"
+              title={t('aiAnalyze')}
             >
-              🤖 AI 분석 요청 ▾
+              🤖 {t('aiAnalyze')} ▾
             </button>
             {aiAgentMenuOpen && (
               <div
@@ -331,7 +331,7 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     <a.Icon />
-                    <span>{a.label} 로 분석</span>
+                    <span>{t('analyzeWithAgent', { agent: a.label })}</span>
                   </button>
                 ))}
               </div>

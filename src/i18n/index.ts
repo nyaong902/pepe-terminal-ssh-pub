@@ -7,6 +7,18 @@ import { initReactI18next } from 'react-i18next';
 const api = (window as any).api || {};
 
 const LANG_KEY = 'app:lang';
+
+// RTL 언어 — 문서 방향(dir)을 rtl 로 전환해 입력/텍스트/메뉴가 우→좌로 표시되게 함.
+const RTL_LANGS = new Set(['ar', 'he', 'fa', 'ur']);
+export function applyDocumentDir(lang: string) {
+  try {
+    const base = (lang || '').split('-')[0];
+    const dir = RTL_LANGS.has(base) ? 'rtl' : 'ltr';
+    document.documentElement.setAttribute('dir', dir);
+    document.documentElement.setAttribute('lang', lang || 'en');
+  } catch {}
+}
+
 function detectInitialLang(): string {
   try {
     const saved = localStorage.getItem(LANG_KEY);
@@ -45,9 +57,14 @@ i18n
     saveMissing: false,
   });
 
+// 초기 + 언어 변경 시 문서 방향 동기화.
+applyDocumentDir(detectInitialLang());
+i18n.on('languageChanged', (lng: string) => applyDocumentDir(lng));
+
 export function setLanguage(lang: string) {
   try { localStorage.setItem(LANG_KEY, lang); } catch {}
   i18n.changeLanguage(lang);
+  applyDocumentDir(lang);
   try { api.i18nSetLang?.(lang); } catch {}
 }
 

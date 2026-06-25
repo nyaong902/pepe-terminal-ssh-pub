@@ -33,5 +33,7 @@
   "about": "About",
   "exit": "Exit",
   "language": "Language",
-  "languageEditor": "Edit Translations"
+  "languageEditor": "Edit Translations",
+  "componentError": "⚠ Component error — {{label}}",
+  "retry": "Retry"
 }

@@ -33,5 +33,7 @@
   "confirmDeleteConfig": "삭제하시겠습니까?\n{{path}}",
   "confirmClearCreds": "저장된 ID/비밀번호를 삭제하시겠습니까?",
   "importFailed": "가져오기 실패: {{reason}}",
-  "connectFailed": "연결 실패: {{reason}}"
+  "connectFailed": "연결 실패: {{reason}}",
+  "deleteTitle": "삭제",
+  "clearCredsTitle": "자격증명 삭제"
 }

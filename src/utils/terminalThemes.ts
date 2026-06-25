@@ -161,8 +161,8 @@ export const terminalThemes: TerminalTheme[] = [
     name: 'Tango',
     theme: {
       background: '#000000',
-      foreground: '#00ff00',
-      cursor: '#00ff00',
+      foreground: '#d3d7cf',
+      cursor: '#d3d7cf',
       cursorAccent: '#000000',
       selectionBackground: 'rgba(52,101,164,0.65)',
       selectionForeground: '#ffffff',

@@ -39,7 +39,8 @@
     "newWorkspace": "+ Move to new workspace",
     "changeScrollback": "Change scrollback size...",
     "clearScrollbackBuffer": "Clear scrollback buffer",
-    "fontDots": "Font..."
+    "fontDots": "Font...",
+    "openInNewWindow": "Open in new window"
   },
   "float": "Float",
   "unfloat": "Unfloat",
@@ -77,7 +78,10 @@
     "tryingSSH": "▶ Attempting SSH connection...",
     "recordEnd": "● Recording stopped — {{path}}",
     "recordBegin": "● Recording started — {{path}}",
-    "recordFailed": "✕ Recording failed to start: {{reason}}"
+    "recordFailed": "✕ Recording failed to start: {{reason}}",
+    "retryHint": "▶ To retry: click the terminal or right-click the mini-tab → Reconnect",
+    "reasonNoResponse": "No response for 10s",
+    "reasonError": "Error"
   },
   "ui": {
     "newSession": "New session",

@@ -8,5 +8,22 @@
   "zoomOut": "Zoom out (Ctrl+-)",
   "zoomReset": "100% (Ctrl+0)",
   "zoomIn": "Zoom in (Ctrl+=)",
-  "devTools": "DevTools"
+  "devTools": "DevTools",
+  "directConnect": "Direct connection",
+  "proxyApplying": "Applying proxy...",
+  "test": "Test",
+  "testTooltip": "Test reachability of the current URL via the selected SSH session",
+  "proxySelectTooltip": "Route browser traffic through the selected SSH session",
+  "testSelectSessionFirst": "Please select an SSH session to test first.",
+  "testUrlEmpty": "The URL to test is empty.",
+  "testUrlInvalid": "The URL format is invalid.",
+  "testHttpOnly": "Only http/https URLs can be tested.",
+  "proxyOpenFailed": "Failed: Could not open SSH forwarding proxy. {{reason}}",
+  "proxyForwardingBlocked": "Forwarding may be blocked.",
+  "browserLoadFailed": "Failed: browser load failed - {{msg}}",
+  "browserLoadFailedUrl": "Failed: browser load failed {{msg}}{{url}}",
+  "testFailed": "Failed: {{reason}}",
+  "unknownError": "Unknown error",
+  "remoteExec": " (remote exec)",
+  "testSuccess": "Success{{via}}: {{detail}}"
 }

@@ -19,6 +19,8 @@
   "view": {
     "title": "보기",
     "theme": "🎨 테마",
+    "terminalTheme": "🎨 터미널 테마",
+    "windowTheme": "🪟 윈도우 테마",
     "fontSizeUp": "🔠 글꼴 크기 +",
     "fontSizeDown": "🔡 글꼴 크기 -",
     "wheelUp": "Ctrl+휠 위",
@@ -65,6 +67,7 @@
     "xStatusFail": "X 서버 상태 조회 실패",
     "options": "⚙ 옵션..."
   },
+  "hamburgerTooltip": "메뉴",
   "help": {
     "title": "도움말",
     "manual": "📖 매뉴얼...",

@@ -169,7 +169,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           onClose={() => setContextMenu(null)}
           items={[
             { label: tc('rename'), onClick: () => startRename(contextMenu.tabId) },
-            ...(onDetachTab ? [{ label: '새 창으로 열기', onClick: () => onDetachTab(contextMenu.tabId) }] : []),
+            ...(onDetachTab ? [{ label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
             { label: tc('close'), onClick: () => onCloseTab(contextMenu.tabId) },
           ]}
         />

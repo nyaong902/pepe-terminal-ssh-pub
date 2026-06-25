@@ -9,6 +9,7 @@
 //        if (await notifyConfirm('삭제', '정말 삭제할까요?')) { ... }
 
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export type NotifyKind = 'info' | 'success' | 'error';
 export interface NotifyMsg {
@@ -38,6 +39,7 @@ export function notifyConfirm(title: string, message = ''): Promise<boolean> {
 
 // 한 번만 App 루트에 마운트. 큐의 첫 메시지를 보여줌.
 export const NotifyHost: React.FC = () => {
+  const { t } = useTranslation('common');
   const [msgs, setMsgs] = useState<NotifyMsg[]>([]);
   useEffect(() => {
     const l: Listener = setMsgs; _listeners.add(l);
@@ -75,14 +77,14 @@ export const NotifyHost: React.FC = () => {
             <button
               onClick={() => close(false)}
               style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-            >취소</button>
+            >{t('cancel')}</button>
           )}
           <button
             autoFocus
             onKeyDown={e => { if (e.key === 'Escape') close(false); }}
             onClick={() => close(true)}
             style={{ background: isConfirm ? '#c0392b' : '#0e639c', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-          >확인</button>
+          >{t('ok')}</button>
         </div>
       </div>
     </div>

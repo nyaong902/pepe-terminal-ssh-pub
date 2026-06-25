@@ -14,5 +14,6 @@
   "scrollPrev": "Previous",
   "scrollNext": "Next",
   "renameContext": "Rename",
-  "closeContext": "Close"
+  "closeContext": "Close",
+  "openInNewWindow": "Open in new window"
 }

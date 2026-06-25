@@ -11,6 +11,7 @@
 //   synonym   : Declaration
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
 import type { JdbcBackend, ColumnInfo } from './jdbcBackend';
 import type { EditorTab, ObjectKind } from './SqlToolWorkspace';
@@ -42,7 +43,7 @@ interface Props {
 
 // info(관리/시스템 정보) 결과 후처리 — DBeaver 모델과 동일한 컬럼으로 가공. Altibase 타입변환 오류 회피용으로 JS 에서 처리.
 type RowDetail = { name: string; value: string }[];
-function transformInfoResult(key: string, columns: string[], rows: any[][]): { columns: string[]; rows: any[][]; rowDetails?: RowDetail[] } {
+function transformInfoResult(key: string, columns: string[], rows: any[][], tr: (k: string) => string): { columns: string[]; rows: any[][]; rowDetails?: RowDetail[] } {
   const idx = (name: string) => columns.findIndex(c => c.toUpperCase() === name.toUpperCase());
   const s = (v: any) => (v == null ? '' : String(v)).trim();
   if (key === 'altibaseProperty') {
@@ -75,7 +76,7 @@ function transformInfoResult(key: string, columns: string[], rows: any[][]): { c
       det.push({ name: 'Attr', value: s(r[iAttr]) });
       rowDetails.push(det);
     }
-    return { columns: ['Name', 'Dynamic', '값'], rows: out, rowDetails };
+    return { columns: ['Name', 'Dynamic', tr('objectDetailValue')], rows: out, rowDetails };
   }
   if (key === 'altibaseMemoryModule') {
     // DBeaver AltibaseMemoryModule: 이름 / Allocated Size(ByteNumberFormat) / Allocation Count
@@ -96,7 +97,7 @@ function transformInfoResult(key: string, columns: string[], rows: any[][]): { c
       { name: 'Allocated Size', value: s(r[iSize]) },
       { name: 'Allocation Count', value: s(r[iCount]) },
     ]);
-    return { columns: ['이름', 'Allocated Size', 'Allocation Count'], rows: out, rowDetails };
+    return { columns: [tr('objectDetailName'), 'Allocated Size', 'Allocation Count'], rows: out, rowDetails };
   }
   return { columns, rows };
 }
@@ -105,6 +106,7 @@ const ICON_MAP: Record<ObjectKind, string> = { table: '📄', view: '👁', inde
 const LABEL_MAP: Record<ObjectKind, string> = { table: 'TABLE', view: 'VIEW', index: 'INDEX', sequence: 'SEQUENCE', procedure: 'PROCEDURE', function: 'FUNCTION', synonym: 'PUBLIC SYNONYM', package: 'PACKAGE', trigger: 'TRIGGER', tablespace: 'TABLESPACE', replication: 'REPLICATION', info: 'INFO' };
 
 export const ObjectDetailPanel: React.FC<Props> = (p) => {
+  const { t: tr } = useTranslation('sqlTool');
   const { tab, backend, connected, running, colsCacheRef, pksCacheRef, defsCacheRef, inflightDefRef, detailCacheRef,
     columnsRev, pkRev, defRev, objDetailRev, setDefRev, setObjDetailRev,
     loadColumns, loadPrimaryKey, loadDefinition, runSql, setActiveEditorTabId, onSubTab, onPropSubTab } = p;
@@ -165,7 +167,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
     // 프로시저/함수 — 소스 + 파라미터
     if (isRoutine && sub === 'source' && srcText === undefined) {
       backend.routineSource(objName, objKind as 'procedure' | 'function', objSchema).then(t => {
-        defsCacheRef.current.set(srcKey, t || '-- (본문 없음)'); setDefRev(v => v + 1);
+        defsCacheRef.current.set(srcKey, t || `-- ${tr('objectDetailNoBody')}`); setDefRev(v => v + 1);
       });
     }
     if (isRoutine && sub === 'parameters' && params === undefined) {
@@ -241,7 +243,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
           ddl = parts.join('\n') + ';';
         }
       } else {
-        ddl = `-- 인덱스 정보 없음 (조회 실패 또는 카탈로그 미지원)`;
+        ddl = `-- ${tr('objectDetailNoIndexInfo')}`;
       }
       defsCacheRef.current.set(declKey, ddl); setDefRev(v => v + 1);
     }
@@ -250,7 +252,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
       const d: Record<string, string> = detail || {};
       const keys = Object.keys(d);
       if (keys.length === 0) {
-        defsCacheRef.current.set(declKey, `-- 시퀀스 정보 없음`);
+        defsCacheRef.current.set(declKey, `-- ${tr('objectDetailNoSequenceInfo')}`);
       } else {
         const startKey = keys.find(k => /START/i.test(k));
         const incKey = keys.find(k => /INCREMENT/i.test(k));
@@ -295,7 +297,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
       backend.exec(tab.objectInfoSql, 5000)
         .then(r => {
           const t = tab.objectInfoTransform
-            ? transformInfoResult(tab.objectInfoTransform, r.columns || [], r.rows || [])
+            ? transformInfoResult(tab.objectInfoTransform, r.columns || [], r.rows || [], tr)
             : { columns: r.columns || [], rows: r.rows || [], rowDetails: undefined as RowDetail[] | undefined };
           detailCacheRef.current.set(detailKey, { columns: t.columns, rows: t.rows, rowDetails: t.rowDetails, error: '' }); setObjDetailRev(v => v + 1);
         })
@@ -309,7 +311,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
         const name = isPublic ? objName : `${objSchema}.${objName}`;
         const ddl = t
           ? `${head} ${name} FOR ${t.ownerName ? t.ownerName + '.' : ''}${t.objectName};`
-          : `-- 시노님 대상 정보 없음`;
+          : `-- ${tr('objectDetailNoSynonymTarget')}`;
         defsCacheRef.current.set(declKey, ddl); setDefRev(v => v + 1);
       });
     }
@@ -330,17 +332,17 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
   // ── 상단 탭 정의 (kind 별) ──
   const topTabs: { id: string; label: string }[] = (() => {
     switch (objKind) {
-      case 'table':     return [{ id: 'properties', label: 'Properties' }, { id: 'data', label: 'Data' }, { id: 'er', label: '엔티티 관계도' }];
-      case 'view':      return [{ id: 'properties', label: 'Properties' }, { id: 'data', label: 'Data' }, { id: 'er', label: '엔티티 관계도' }];
-      case 'index':     return [{ id: 'columns', label: '인덱스 칼럼' }, { id: 'declaration', label: 'Declaration' }];
+      case 'table':     return [{ id: 'properties', label: 'Properties' }, { id: 'data', label: 'Data' }, { id: 'er', label: tr('objectDetailEr') }];
+      case 'view':      return [{ id: 'properties', label: 'Properties' }, { id: 'data', label: 'Data' }, { id: 'er', label: tr('objectDetailEr') }];
+      case 'index':     return [{ id: 'columns', label: tr('objectDetailIndexColumns') }, { id: 'declaration', label: 'Declaration' }];
       case 'sequence':  return [{ id: 'declaration', label: 'Declaration' }];
-      case 'procedure': return [{ id: 'parameters', label: '프로시저 파라미터' }, { id: 'source', label: 'Source' }];
-      case 'function':  return [{ id: 'parameters', label: '함수 파라미터' }, { id: 'source', label: 'Source' }];
+      case 'procedure': return [{ id: 'parameters', label: tr('objectDetailProcParams') }, { id: 'source', label: 'Source' }];
+      case 'function':  return [{ id: 'parameters', label: tr('objectDetailFuncParams') }, { id: 'source', label: 'Source' }];
       case 'synonym':   return [{ id: 'declaration', label: 'Declaration' }];
-      case 'package':   return [{ id: 'pkgProcs', label: '프로시저' }, { id: 'pkgFuncs', label: '함수' }, { id: 'source', label: 'Source' }];
+      case 'package':   return [{ id: 'pkgProcs', label: tr('objectDetailProcedures') }, { id: 'pkgFuncs', label: tr('objectDetailFunctions') }, { id: 'source', label: 'Source' }];
       case 'trigger':   return [{ id: 'source', label: 'Source' }];
-      case 'tablespace': return [{ id: 'datafiles', label: '데이터 파일' }, { id: 'tbsTables', label: '테이블' }, { id: 'tbsIndexes', label: '인덱스' }];
-      case 'replication': return [{ id: 'properties', label: 'Properties' }, { id: 'replItems', label: '이중화 대상' }, { id: 'replHosts', label: '원격 호스트' }];
+      case 'tablespace': return [{ id: 'datafiles', label: tr('objectDetailDataFiles') }, { id: 'tbsTables', label: tr('objectDetailTables') }, { id: 'tbsIndexes', label: tr('objectDetailIndexes') }];
+      case 'replication': return [{ id: 'properties', label: 'Properties' }, { id: 'replItems', label: tr('objectDetailReplItems') }, { id: 'replHosts', label: tr('objectDetailReplHosts') }];
       case 'info':      return [{ id: 'properties', label: 'Properties' }];
       default:          return [];
     }
@@ -348,16 +350,16 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
 
   const propsNestedTabs: { id: string; label: string }[] = objKind === 'table'
     ? [
-        { id: 'columns', label: '컬럼' },
-        { id: 'constraints', label: '제약조건' },
-        { id: 'fks', label: '외래키' },
-        { id: 'indexes', label: '인덱스' },
-        { id: 'refs', label: '참조' },
-        { id: 'triggers', label: '트리거' },
+        { id: 'columns', label: tr('objectDetailColumns') },
+        { id: 'constraints', label: tr('objectDetailConstraints') },
+        { id: 'fks', label: tr('objectDetailForeignKeys') },
+        { id: 'indexes', label: tr('objectDetailIndexes') },
+        { id: 'refs', label: tr('objectDetailRefs') },
+        { id: 'triggers', label: tr('objectDetailTriggers') },
         { id: 'ddl', label: 'DDL' },
       ]
     : objKind === 'view'
-    ? [{ id: 'columns', label: '컬럼' }, { id: 'definition', label: 'Definition' }]
+    ? [{ id: 'columns', label: tr('objectDetailColumns') }, { id: 'definition', label: 'Definition' }]
     : [];
 
   const tabBtnStyle = (active: boolean): React.CSSProperties => ({
@@ -394,7 +396,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
         <thead>
           <tr style={{ position: 'sticky', top: 0, background: '#2d2d2d', color: '#9cdcfe' }}>
             {columns.map((c, ci) => (
-              <th key={ci} onClick={() => toggleTableSort(sortId, ci)} title="클릭: 정렬"
+              <th key={ci} onClick={() => toggleTableSort(sortId, ci)} title={tr('objectDetailClickSort')}
                 style={{ padding: '4px 8px', textAlign: c.align || 'left', borderBottom: '1px solid #3f3f46', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', ...c.thStyle }}>
                 {c.label}<span style={{ color: '#dcdcaa' }}>{sc && sc.col === ci ? (sc.dir === 'asc' ? ' ▲' : ' ▼') : ''}</span>
               </th>
@@ -415,20 +417,20 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
   };
 
   const renderColumnsTable = () => {
-    if (!colsCache) return <div style={{ padding: 12, color: '#888' }}>로딩...</div>;
-    if (colsCache.length === 0) return <div style={{ padding: 12, color: '#666' }}>컬럼 정보 없음</div>;
+    if (!colsCache) return <div style={{ padding: 12, color: '#888' }}>{tr('objectDetailLoading')}</div>;
+    if (colsCache.length === 0) return <div style={{ padding: 12, color: '#666' }}>{tr('objectDetailNoColumnInfo')}</div>;
     const isPkOf = (c: ColumnInfo) => pkCols.some(p => p.toUpperCase() === c.name.toUpperCase());
     return renderSortableTable(`cols:${objName}`, [
       { label: '#', align: 'right', value: (_r, i) => i, render: (_r, i) => <span style={{ color: '#888' }}>{i + 1}</span> },
-      { label: '컬럼명', value: r => r.name, render: r => <span style={{ color: r.nullable ? '#d4d4d4' : '#ffd680' }}>{r.name}</span> },
-      { label: '타입', value: r => r.typeText || '', render: r => <span style={{ color: '#9cdcfe' }}>{r.typeText || '-'}</span> },
+      { label: tr('objectDetailColumnName'), value: r => r.name, render: r => <span style={{ color: r.nullable ? '#d4d4d4' : '#ffd680' }}>{r.name}</span> },
+      { label: tr('objectDetailType'), value: r => r.typeText || '', render: r => <span style={{ color: '#9cdcfe' }}>{r.typeText || '-'}</span> },
       { label: 'NULL', align: 'center', value: r => (r.nullable ? 1 : 0), render: r => (r.nullable ? 'Y' : 'N') },
       { label: 'PK', align: 'center', value: r => (isPkOf(r) ? 1 : 0), render: r => <span style={{ color: isPkOf(r) ? '#ffd680' : '#666' }}>{isPkOf(r) ? '🔑' : ''}</span> },
     ], colsCache);
   };
 
-  const renderSimpleListTable = (data: any[] | undefined, headers: { key: string; label: string; render?: (row: any) => React.ReactNode }[], emptyMsg = '없음', sortId = 'list') => {
-    if (data === undefined) return <div style={{ padding: 12, color: '#888' }}>로딩...</div>;
+  const renderSimpleListTable = (data: any[] | undefined, headers: { key: string; label: string; render?: (row: any) => React.ReactNode }[], emptyMsg = tr('objectDetailNone'), sortId = 'list') => {
+    if (data === undefined) return <div style={{ padding: 12, color: '#888' }}>{tr('objectDetailLoading')}</div>;
     if (data.length === 0) return <div style={{ padding: 12, color: '#666' }}>{emptyMsg}</div>;
     const sortVal = (row: any, key: string) => { const v = row[key]; return Array.isArray(v) ? v.join(', ') : v; };
     return renderSortableTable(`${sortId}:${objName}`, headers.map(h => ({
@@ -439,7 +441,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
   };
 
   const renderMonacoText = (text: string | undefined, language = 'sql') => {
-    if (text === undefined) return <div style={{ padding: 12, color: '#888' }}>로딩...</div>;
+    if (text === undefined) return <div style={{ padding: 12, color: '#888' }}>{tr('objectDetailLoading')}</div>;
     return (
       <Editor height="100%" language={language} theme="vs-dark" value={text}
         options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, fontFamily: 'monospace', lineNumbers: 'on', renderLineHighlight: 'none', scrollBeyondLastLine: false, automaticLayout: true, wordWrap: 'on' }} />
@@ -455,30 +457,30 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
     if (objKind !== 'table') return null;
     if (propSub === 'columns') return renderColumnsTable();
     if (propSub === 'constraints') return renderSimpleListTable(constraints, [
-      { key: 'name', label: '이름' },
-      { key: 'owner', label: '소유자' },
+      { key: 'name', label: tr('objectDetailName') },
+      { key: 'owner', label: tr('objectDetailOwner') },
       { key: 'type', label: 'Type' },
       { key: 'validated', label: 'Validated', render: r => r.validated === 'true' ? '[ ✓ ]' : (r.validated === 'false' ? '[   ]' : '') },
       { key: 'condition', label: 'Condition' },
-      { key: 'columns', label: '컬럼', render: r => (r.columns || []).join(', ') },
-    ], '없음', 'constraints');
+      { key: 'columns', label: tr('objectDetailColumns'), render: r => (r.columns || []).join(', ') },
+    ], tr('objectDetailNone'), 'constraints');
     if (propSub === 'fks') return renderSimpleListTable(fks, [
-      { key: 'name', label: '이름' },
-      { key: 'columns', label: '컬럼', render: r => (r.columns || []).join(', ') },
-      { key: 'refTable', label: '참조 테이블' },
-      { key: 'refColumns', label: '참조 컬럼', render: r => (r.refColumns || []).join(', ') },
-    ], '없음', 'fks');
+      { key: 'name', label: tr('objectDetailName') },
+      { key: 'columns', label: tr('objectDetailColumns'), render: r => (r.columns || []).join(', ') },
+      { key: 'refTable', label: tr('objectDetailRefTable') },
+      { key: 'refColumns', label: tr('objectDetailRefColumns'), render: r => (r.refColumns || []).join(', ') },
+    ], tr('objectDetailNone'), 'fks');
     if (propSub === 'indexes') return renderSimpleListTable(detailCacheRef.current.get(subDataKey('indexes')), [
-      { key: 'name', label: '이름' },
-      { key: 'columns', label: '컬럼', render: r => (r.columns || []).join(', ') },
-    ], '없음', 'indexes');
+      { key: 'name', label: tr('objectDetailName') },
+      { key: 'columns', label: tr('objectDetailColumns'), render: r => (r.columns || []).join(', ') },
+    ], tr('objectDetailNone'), 'indexes');
     if (propSub === 'refs') return renderSimpleListTable(refs, [
-      { key: 'name', label: '이름' }, { key: 'fromTable', label: '참조하는 테이블' },
-      { key: 'fromColumns', label: '컬럼', render: r => (r.fromColumns || []).join(', ') },
-    ], '없음', 'refs');
+      { key: 'name', label: tr('objectDetailName') }, { key: 'fromTable', label: tr('objectDetailReferencingTable') },
+      { key: 'fromColumns', label: tr('objectDetailColumns'), render: r => (r.fromColumns || []).join(', ') },
+    ], tr('objectDetailNone'), 'refs');
     if (propSub === 'triggers') return renderSimpleListTable(triggers, [
-      { key: 'name', label: '이름' }, { key: 'event', label: '이벤트' }, { key: 'timing', label: 'BEFORE/AFTER' },
-    ], '없음', 'triggers');
+      { key: 'name', label: tr('objectDetailName') }, { key: 'event', label: tr('objectDetailEvent') }, { key: 'timing', label: 'BEFORE/AFTER' },
+    ], tr('objectDetailNone'), 'triggers');
     if (propSub === 'ddl') return renderMonacoText(ddlText);
     return null;
   };
@@ -600,7 +602,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
           }} title={b.name}>📄 {b.name}</div>
           <div>
             {shown.length === 0 ? (
-              <div style={{ height: RH, lineHeight: `${RH}px`, padding: '0 8px', color: '#666' }}>(컬럼 로딩...)</div>
+              <div style={{ height: RH, lineHeight: `${RH}px`, padding: '0 8px', color: '#666' }}>{tr('objectDetailColumnsLoading')}</div>
             ) : shown.map((c, i) => (
               <div key={c.name} style={{
                 height: RH, lineHeight: `${RH}px`, padding: '0 8px', display: 'flex', gap: 6,
@@ -611,7 +613,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
                 <span style={{ color: '#6a9955', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.type}</span>
               </div>
             ))}
-            {extra > 0 && <div style={{ height: RH, lineHeight: `${RH}px`, padding: '0 8px', color: '#888' }}>… 외 {extra}개</div>}
+            {extra > 0 && <div style={{ height: RH, lineHeight: `${RH}px`, padding: '0 8px', color: '#888' }}>{tr('objectDetailMoreColumns', { count: extra })}</div>}
           </div>
         </div>
       );
@@ -620,7 +622,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
     return (
       <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', background: '#1e1e1e' }}>
         <div style={{ position: 'absolute', top: 6, right: 10, zIndex: 5, color: '#888', fontSize: 11, background: 'rgba(30,30,30,0.8)', padding: '2px 8px', borderRadius: 3 }}>
-          🔑 PK · 🔗 FK · 선: 관계({links.length})
+          {tr('objectDetailErLegend', { count: links.length })}
         </div>
         <div style={{ position: 'relative', width: canvasW, height: canvasH }}>
           <svg width={canvasW} height={canvasH} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
@@ -640,7 +642,7 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
           {allBoxes.map(renderBox)}
           {objKind === 'table' && links.length === 0 && (
             <div style={{ position: 'absolute', left: central.x, top: central.y + central.h + 16, color: '#888', fontSize: 12 }}>
-              이 테이블과 연결된 외래키 관계가 없습니다.
+              {tr('objectDetailNoFkRelations')}
             </div>
           )}
         </div>
@@ -659,11 +661,11 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
         <div style={{ flex: '0 0 auto', borderBottom: '1px solid #333', background: '#252526' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 8px' }}>
             <button onClick={refresh} disabled={!connected || running}
-              style={{ background: '#0e639c', color: '#fff', border: 0, padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}>↻ 새로 고침</button>
-            <button onClick={() => setShowInfoSql(v => !v)} title="실행 쿼리 보기/숨기기"
+              style={{ background: '#0e639c', color: '#fff', border: 0, padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}>↻ {tr('objectDetailRefresh')}</button>
+            <button onClick={() => setShowInfoSql(v => !v)} title={tr('objectDetailToggleQueryTitle')}
               style={{ background: showInfoSql ? '#37373d' : 'transparent', color: '#bbb', border: '1px solid #3f3f46', padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}>
-              {showInfoSql ? '쿼리 숨기기' : '쿼리 보기'}</button>
-            {detail !== undefined && !d.error && <span style={{ marginLeft: 'auto', color: '#888', fontSize: 11 }}>{rows.length.toLocaleString()}행</span>}
+              {showInfoSql ? tr('objectDetailHideQuery') : tr('objectDetailShowQuery')}</button>
+            {detail !== undefined && !d.error && <span style={{ marginLeft: 'auto', color: '#888', fontSize: 11 }}>{tr('objectDetailRowCount', { count: rows.length.toLocaleString() })}</span>}
           </div>
           {showInfoSql && (
             <div style={{ padding: '6px 10px', borderTop: '1px solid #333', maxHeight: 110, overflow: 'auto', color: '#9cdcfe', fontSize: 11, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#1e1e1e' }}>{tab.objectInfoSql}</div>
@@ -671,9 +673,9 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
         </div>
       );
       let body: React.ReactNode;
-      if (detail === undefined) body = <div style={{ padding: 12, color: '#888' }}>로딩...</div>;
+      if (detail === undefined) body = <div style={{ padding: 12, color: '#888' }}>{tr('objectDetailLoading')}</div>;
       else if (d.error) body = <div style={{ padding: 12, color: '#f48771', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 12 }}>✗ {d.error}</div>;
-      else if (cols.length === 0) body = <div style={{ padding: 12, color: '#666' }}>결과 없음</div>;
+      else if (cols.length === 0) body = <div style={{ padding: 12, color: '#666' }}>{tr('objectDetailNoResult')}</div>;
       else {
         // 헤더 클릭 정렬 — 원본 인덱스 배열(order)을 정렬해 rows/rowDetails 정합성 유지.
         const order = rows.map((_, i) => i);
@@ -702,9 +704,15 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
           if (/^sql$|query/i.test(name)) return 'SQL';
           if (/lock/i.test(name)) return 'Wait';
           if (/time.?limit|timeout/i.test(name)) return 'Timeout';
-          if (/login|idle|time.?zone|territory/i.test(name)) return '시간/세션';
-          if (/client|comm|connection|protocol|pid|app/i.test(name)) return '연결';
-          return '기타';
+          if (/login|idle|time.?zone|territory/i.test(name)) return 'timeSession';
+          if (/client|comm|connection|protocol|pid|app/i.test(name)) return 'connection';
+          return 'other';
+        };
+        const grpLabel = (g: string): string => {
+          if (g === 'timeSession') return tr('objectDetailGroupTimeSession');
+          if (g === 'connection') return tr('objectDetailGroupConnection');
+          if (g === 'other') return tr('objectDetailGroupOther');
+          return g;
         };
         const grid = (
           <div style={{ flex: 1, minHeight: 80, overflow: 'auto' }}>
@@ -755,11 +763,11 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
             {sqlColIdx >= 0 && (
               <div style={{ flex: '0 0 42%', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
                 <div style={{ padding: '4px 8px', color: '#9cdcfe', fontSize: 11, background: '#252526', borderBottom: '1px solid #333' }}>📄 SQL</div>
-                <textarea readOnly value={sqlText || '(없음)'} style={{ flex: 1, resize: 'none', border: 0, outline: 'none', background: '#1e1e1e', color: '#d4d4d4', fontFamily: 'monospace', fontSize: 12, padding: 8, whiteSpace: 'pre-wrap' }} />
+                <textarea readOnly value={sqlText || tr('objectDetailEmptyParen')} style={{ flex: 1, resize: 'none', border: 0, outline: 'none', background: '#1e1e1e', color: '#d4d4d4', fontFamily: 'monospace', fontSize: 12, padding: 8, whiteSpace: 'pre-wrap' }} />
               </div>
             )}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <div style={{ padding: '4px 8px', color: '#9cdcfe', fontSize: 11, background: '#252526', borderBottom: '1px solid #333' }}>🗂 상세 (행 {selectedInfoRow + 1})</div>
+              <div style={{ padding: '4px 8px', color: '#9cdcfe', fontSize: 11, background: '#252526', borderBottom: '1px solid #333' }}>🗂 {tr('objectDetailDetailRow', { row: selectedInfoRow + 1 })}</div>
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'monospace', fontSize: 12 }}>
                   <tbody>
@@ -768,16 +776,16 @@ export const ObjectDetailPanel: React.FC<Props> = (p) => {
                       rowDetail.map((kv, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid #2a2a2a' }}>
                           <td style={{ padding: '3px 8px', color: '#9cdcfe', width: 160, verticalAlign: 'top', whiteSpace: 'nowrap' }}>{kv.name}</td>
-                          <td style={{ padding: '3px 8px', color: '#d4d4d4', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{kv.value === '' ? <span style={{ color: '#666' }}>(없음)</span> : kv.value}</td>
+                          <td style={{ padding: '3px 8px', color: '#d4d4d4', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{kv.value === '' ? <span style={{ color: '#666' }}>{tr('objectDetailEmptyParen')}</span> : kv.value}</td>
                         </tr>
                       ))
                     ) : (
-                      ['SQL', 'Wait', 'Timeout', '시간/세션', '연결', '기타'].map(group => {
+                      ['SQL', 'Wait', 'Timeout', 'timeSession', 'connection', 'other'].map(group => {
                         const idxs = cols.map((c, i) => ({ c, i })).filter(x => grp(x.c) === group);
                         if (idxs.length === 0) return null;
                         return (
                           <React.Fragment key={group}>
-                            <tr><td colSpan={2} style={{ padding: '3px 8px', color: '#dcdcaa', background: '#2a2a2a', fontWeight: 700, borderBottom: '1px solid #3f3f46' }}>{group}</td></tr>
+                            <tr><td colSpan={2} style={{ padding: '3px 8px', color: '#dcdcaa', background: '#2a2a2a', fontWeight: 700, borderBottom: '1px solid #3f3f46' }}>{grpLabel(group)}</td></tr>
                             {idxs.map(({ c, i }) => (
                               <tr key={i} style={{ borderBottom: '1px solid #2a2a2a' }}>
                                 <td style={{ padding: '3px 8px 3px 18px', color: '#9cdcfe', width: 220, verticalAlign: 'top', whiteSpace: 'nowrap' }}>{c}</td>

@@ -13,7 +13,6 @@
   "renameContext": "Renommer",
   "closeContext": "Fermer",
   "workspace": "Espace de travail",
-  "i18nWorkspace": "🌐 Espace de localisation",
   "fileTransferTab": "📁 Transfert de fichiers",
   "workspaceN": "Espace de travail {{n}}"
 }

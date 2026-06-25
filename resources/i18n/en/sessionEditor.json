@@ -78,7 +78,19 @@
     "expect": "Expect",
     "send": "Send",
     "globalDefault": "(Global Default)",
-    "rootFolder": "(Root)"
+    "rootFolder": "(Root)",
+    "showFileTree": "Show file tree",
+    "autoTrackFileTree": "Auto-track file tree",
+    "logPath": "Log location",
+    "codePath": "Code location",
+    "jdbcDriver": "JDBC driver",
+    "dbmsHost": "Host",
+    "dbmsPort": "Port",
+    "dbmsDatabase": "Database",
+    "dbmsUser": "User",
+    "dbmsPassword": "Password",
+    "sshTunnel": "SSH tunnel",
+    "directInput": "Direct input"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / domain",
@@ -108,6 +120,38 @@
   },
   "preview": "Preview:",
   "advancedHint": "Pick a sub-item (file tree / X11 forwarding etc.) from the left tree.",
+  "keys": {
+    "category": "Key sequences",
+    "deleteLegend": "Delete key sequence",
+    "backspaceLegend": "Backspace key sequence"
+  },
+  "advanced": {
+    "logPathTooltip": "Log file path auto-filled when this session is selected in LogAnalyzer",
+    "logPathPlaceholder": "e.g. /var/log/myapp/app.log",
+    "codePathTooltip": "Base directory auto-filled when this session is selected in the file compare workspace",
+    "codePathPlaceholder": "e.g. /home/user/project/src"
+  },
+  "filetree": {
+    "disabledHint": "Available only when Show file tree is enabled",
+    "autoTrackTooltip": "Auto-refresh file tree path on cd in terminal"
+  },
+  "dbms": {
+    "driverLoading": "(Loading...)",
+    "directInput": "Direct input",
+    "copy": "Copy",
+    "urlPlaceholder": "(Select a driver)",
+    "testConnect": "🔌 Test connection",
+    "useSshTunnelJump": "Connect JDBC from the final SSH host of the jump chain",
+    "useSshTunnelNormal": "Port-forward over the SSH session, then connect JDBC locally",
+    "noDriver": "❌ No driver selected",
+    "driverJarMissing": "❌ Driver JAR missing — add the JAR in Driver Manager",
+    "testing": "Testing...",
+    "sshIpcMissing": "❌ SSH tunnel IPC not registered — restart Electron main",
+    "sshOpening": "Opening SSH tunnel...",
+    "sshFailed": "❌ SSH tunnel failed: {{error}} — connect a terminal for the same session first",
+    "sshTunnelOk": "SSH tunnel OK ({{remoteHost}}:{{remotePort}} → local={{localPort}}) — testing JDBC...",
+    "exception": "❌ Exception: {{error}}"
+  },
   "actions": {
     "save": "Save",
     "cancel": "Cancel",

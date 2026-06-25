@@ -8,6 +8,12 @@ import './index.css'
 import App from './App'
 import SessionEditorPopout from './SessionEditorPopout'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
+import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
+
+// 저장된 윈도우(앱 chrome) 테마를 렌더 전에 적용 — 깜빡임 방지. popout 창에도 동일 적용.
+initWindowTheme();
+// 다른 창에서 테마가 바뀌면 이 창에도 즉시 반영 (재저장·재브로드캐스트 없이 적용만).
+try { (window as any).api?.onWindowTheme?.((id: string) => applyWindowTheme(id, false)); } catch {}
 
 const params = new URLSearchParams(window.location.search);
 const popout = params.get('popout');

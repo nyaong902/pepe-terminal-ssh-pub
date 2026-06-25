@@ -55,7 +55,7 @@ function statusColor(s: DiffStatus): string {
     case 'changed': return '#d8b556';
     case 'left-only': return '#e36b6b';
     case 'right-only': return '#7fcf6e';
-    case 'same': return '#888';
+    case 'same': return 'var(--win-text-dim, #888)';
   }
 }
 function statusBg(s: DiffStatus, selected: boolean): string {
@@ -191,7 +191,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   // 파일 비교용 picker (단일 파일 선택)
   const renderFilePicker = (side: Side, src: Source) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-      <span style={{ fontSize: 12, color: '#bbb', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
+      <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
       <select
         value={src.mode === 'remote' ? (src.termId || '') : 'local'}
         onChange={e => {
@@ -217,7 +217,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       <input
         type="text"
         value={src.basePath}
-        placeholder={src.mode === 'local' ? t('filePathPlaceholderLocal', '파일 경로...') : t('filePathPlaceholderRemote', '원격 파일 경로...')}
+        placeholder={src.mode === 'local' ? t('filePathPlaceholderLocal') : t('filePathPlaceholderRemote')}
         onChange={e => updateSrc(side, { basePath: e.target.value })}
         onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') startFileCompare(); }}
         style={{ flex: 1, minWidth: 0, fontSize: 12, padding: '3px 6px' }}
@@ -234,7 +234,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
             setPickerSide(side);
           }
         }}
-        title={t('filePicker', '파일 선택')}
+        title={t('filePicker')}
         style={{ padding: '3px 8px', fontSize: 12, flexShrink: 0 }}
       >📄</button>
     </div>
@@ -447,9 +447,9 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       // 내용 동일 안내 — 크기 휴리스틱 오탐(EOL 차이) 케이스 + 진짜 동일 케이스 모두
       if (!leftErr && !rightErr && leftC === rightC) {
         if (row.status === 'changed') {
-          setSameNote('내용이 동일합니다 (개행 방식만 다름)');
+          setSameNote(t('sameContentEolOnly'));
         } else {
-          setSameNote('두 파일이 완전히 일치합니다 (All match)');
+          setSameNote(t('sameContentAllMatch'));
           setAllMatchModal({ left: row.relPath || '', right: row.relPath || '' });
         }
       }
@@ -490,7 +490,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         // 양쪽 내용 비교 — 동일하면 안내
         const otherC = side === 'left' ? rightContent : leftContent;
         if (c === otherC) {
-          setSameNote('두 파일이 완전히 일치합니다 (All match)');
+          setSameNote(t('sameContentAllMatch'));
           const lp = side === 'left' ? newPath.trim() : leftFilePath;
           const rp = side === 'right' ? newPath.trim() : rightFilePath;
           setAllMatchModal({ left: lp, right: rp });
@@ -539,7 +539,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       }
       // 양쪽 모두 성공 + 내용 동일 → 안내 + 모달
       if (lOK && rOK && lC === rC) {
-        setSameNote('두 파일이 완전히 일치합니다 (All match)');
+        setSameNote(t('sameContentAllMatch'));
         setAllMatchModal({ left: leftSrc.basePath, right: rightSrc.basePath });
       }
     } catch (err: any) {
@@ -789,7 +789,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
 
   const renderSourcePicker = (side: Side, src: Source) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-      <span style={{ fontSize: 12, color: '#bbb', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
+      <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
       <select
         value={src.mode === 'remote' ? (src.termId || '') : 'local'}
         onChange={e => {
@@ -896,9 +896,9 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   }, [rows]);
 
   return (
-    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#1a1a1a' }}>
+    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', background: 'var(--win-surface, #1a1a1a)' }}>
       {/* 헤더: 양쪽 소스 + 비교 버튼 */}
-      <div style={{ padding: '8px 10px', background: '#222', borderBottom: '1px solid #333', display: diffExpanded ? 'none' : 'flex', flexDirection: 'column', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+      <div style={{ padding: '8px 10px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)', display: diffExpanded ? 'none' : 'flex', flexDirection: 'column', gap: 6, minWidth: 0, overflow: 'hidden' }}>
         {/* 모드 탭 */}
         <div style={{ display: 'flex', gap: 0, alignSelf: 'flex-start' }}>
           {(['dir', 'file'] as const).map((m, i) => (
@@ -938,11 +938,11 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
             }} style={{
               padding: '3px 12px', fontSize: 12, cursor: 'pointer',
               borderRadius: i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
-              background: compareMode === m ? '#4a7a9b' : '#2a2a2a',
-              color: compareMode === m ? '#fff' : '#888',
-              border: '1px solid #444', borderLeft: i === 0 ? undefined : 'none',
+              background: compareMode === m ? '#4a7a9b' : 'var(--win-surface-2, #2a2a2a)',
+              color: compareMode === m ? '#fff' : 'var(--win-text-dim, #888)',
+              border: '1px solid var(--win-border, #444)', borderLeft: i === 0 ? undefined : 'none',
             }}>
-              {m === 'dir' ? `📁 ${t('dirMode', '디렉토리')}` : `📄 ${t('fileMode', '파일')}`}
+              {m === 'dir' ? `📁 ${t('dirMode')}` : `📄 ${t('fileMode')}`}
             </button>
           ))}
         </div>
@@ -967,7 +967,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                 setLeftDirSrc(rightDirSrc); setRightDirSrc(leftDirSrc);
                 setRows([]); setSelectedRel(null);
               }} title={t('switchTitle')} style={{ padding: '4px 10px' }}>{t('switch')}</button>
-              <label style={{ fontSize: 12, color: '#bbb', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <label style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <input type="checkbox" checked={hideSame} onChange={e => setHideSame(e.target.checked)} />
                 {t('hideSame')}
               </label>
@@ -1019,7 +1019,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                 </div>,
                 document.body,
               )}
-              <label style={{ fontSize: 12, color: '#bbb', display: 'flex', alignItems: 'center', gap: 4 }} title={t('hideUnpairedTitle')}>
+              <label style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', display: 'flex', alignItems: 'center', gap: 4 }} title={t('hideUnpairedTitle')}>
                 <input type="checkbox" checked={hideUnpaired} onChange={e => setHideUnpaired(e.target.checked)} />
                 {t('hideUnpaired')}
               </label>
@@ -1036,7 +1036,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
             </>
           )}
           {rows.length > 0 && (
-            <span style={{ fontSize: 11, color: '#888' }}>
+            <span style={{ fontSize: 11, color: 'var(--win-text-dim, #888)' }}>
               {t('countChanged')} <span style={{ color: statusColor('changed') }}>{counts.c}</span> ·
               {t('countSourceOnly')} <span style={{ color: statusColor('left-only') }}>{counts.l}</span> ·
               {t('countTargetOnly')} <span style={{ color: statusColor('right-only') }}>{counts.r}</span> ·
@@ -1049,7 +1049,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       </div>
 
       {/* 상단: 비교 결과 트리 (가상화) — 디렉토리 모드만 표시 */}
-      {!diffExpanded && compareMode === 'file' && <div style={{ height: 4, background: '#333', flexShrink: 0 }} />}
+      {!diffExpanded && compareMode === 'file' && <div style={{ height: 4, background: 'var(--win-border, #333)', flexShrink: 0 }} />}
       {/* list+resizer+diff 를 함께 담는 split 컨테이너 — 남은 공간 전체 차지, 내부를 픽셀로 분할 */}
       <div ref={setSplitWrapRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{
@@ -1069,31 +1069,31 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
           <div style={{
             display: 'flex', alignItems: 'center', height: LIST_HEADER_H,
             padding: '0 10px', background: '#1c1c1c', borderBottom: '1px solid #2d2d2d',
-            fontSize: 11, color: '#888', flexShrink: 0, userSelect: 'none', boxSizing: 'border-box',
+            fontSize: 11, color: 'var(--win-text-dim, #888)', flexShrink: 0, userSelect: 'none', boxSizing: 'border-box',
           }}>
             <span style={{ width: 70, display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
               <span
                 onClick={() => toggleSort('status')}
                 style={{ cursor: 'pointer', opacity: sortBy === 'status' ? 1 : 0.4 }}
-                title="상태로 정렬"
+                title={t('sortByStatus')}
               >{sortBy === 'status' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
               <select
                 value={filterStatus}
                 onChange={e => setFilterStatus(e.target.value as '' | DiffStatus)}
                 style={{
                   flex: 1, minWidth: 0, fontSize: 10, padding: '1px 2px',
-                  background: filterStatus ? '#2a1e1e' : '#252525',
-                  border: `1px solid ${filterStatus ? '#7a3a3a' : '#333'}`,
+                  background: filterStatus ? '#2a1e1e' : 'var(--win-surface-2, #252525)',
+                  border: `1px solid ${filterStatus ? '#7a3a3a' : 'var(--win-border, #333)'}`,
                   borderRadius: 3,
-                  color: filterStatus ? statusColor(filterStatus) : '#888',
+                  color: filterStatus ? statusColor(filterStatus) : 'var(--win-text-dim, #888)',
                   outline: 'none', cursor: 'pointer',
                 }}
               >
-                <option value="">상태</option>
-                <option value="changed">변경됨</option>
-                <option value="left-only">소스만</option>
-                <option value="right-only">타겟만</option>
-                <option value="same">동일</option>
+                <option value="">{t('statusCol')}</option>
+                <option value="changed">{t('changed')}</option>
+                <option value="left-only">{t('sourceOnly')}</option>
+                <option value="right-only">{t('targetOnly')}</option>
+                <option value="same">{t('same')}</option>
               </select>
             </span>
             {/* 좌측: Source 폴더 */}
@@ -1101,7 +1101,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               <span
                 onClick={() => toggleSort('path')}
                 style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
-                title="경로로 정렬"
+                title={t('sortByPath')}
               >
                 Source
                 <span style={{ opacity: sortBy === 'path' ? 1 : 0.3 }}>{sortBy === 'path' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
@@ -1111,27 +1111,27 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                 value={filterText}
                 onChange={e => setFilterText(e.target.value)}
                 onKeyDown={e => e.stopPropagation()}
-                placeholder="필터..."
+                placeholder={t('filterPlaceholder')}
                 style={{
                   flex: 1, minWidth: 0, fontSize: 11, padding: '1px 5px',
-                  background: filterText ? '#1e2a1e' : '#252525',
-                  border: `1px solid ${filterText ? '#3a5a3a' : '#333'}`,
-                  borderRadius: 3, color: '#ccc', outline: 'none',
+                  background: filterText ? '#1e2a1e' : 'var(--win-surface-2, #252525)',
+                  border: `1px solid ${filterText ? '#3a5a3a' : 'var(--win-border, #333)'}`,
+                  borderRadius: 3, color: 'var(--win-text, #ccc)', outline: 'none',
                 }}
               />
               {filterText && (
-                <button onClick={() => setFilterText('')} style={{ padding: '0 4px', fontSize: 11, background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                <button onClick={() => setFilterText('')} style={{ padding: '0 4px', fontSize: 11, background: 'transparent', border: 'none', color: 'var(--win-text-dim, #888)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
               )}
             </span>
             {/* 중앙: Δ Lines + size 정렬 (콤팩트) */}
-            <span style={{ width: 70, textAlign: 'center', flexShrink: 0, color: '#aaa' }} title="변경된 라인 수">Δ Lines</span>
+            <span style={{ width: 70, textAlign: 'center', flexShrink: 0, color: 'var(--win-text-dim, #aaa)' }} title={t('changedLineCount')}>Δ Lines</span>
             {/* 우측: Target 폴더 */}
             <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
               <span style={{ flexShrink: 0 }}>Target</span>
               <span
                 onClick={() => toggleSort('leftSize')}
                 style={{ marginLeft: 'auto', width: 50, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, flexShrink: 0, fontSize: 10, color: '#666' }}
-                title="소스 크기로 정렬"
+                title={t('sortBySourceSize')}
               >
                 <span style={{ opacity: sortBy === 'leftSize' ? 1 : 0.3 }}>{sortBy === 'leftSize' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
                 Lsize
@@ -1139,7 +1139,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               <span
                 onClick={() => toggleSort('rightSize')}
                 style={{ width: 50, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, flexShrink: 0, fontSize: 10, color: '#666' }}
-                title="타겟 크기로 정렬"
+                title={t('sortByTargetSize')}
               >
                 <span style={{ opacity: sortBy === 'rightSize' ? 1 : 0.3 }}>{sortBy === 'rightSize' ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</span>
                 Rsize
@@ -1170,7 +1170,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                     fontSize: 12,
                     cursor: row.isDir ? 'default' : 'pointer',
                     background: statusBg(row.status, sel),
-                    color: sel ? '#fff' : '#ccc',
+                    color: sel ? '#fff' : 'var(--win-text, #ccc)',
                     boxSizing: 'border-box',
                   }}
                   onClick={() => {
@@ -1186,7 +1186,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                       {row.status === 'right-only' ? '' : `${row.isDir ? '📁' : '📄'} ${row.relPath}`}
                     </span>
-                    <span style={{ width: 50, textAlign: 'right', color: '#888', fontSize: 11, flexShrink: 0 }}>
+                    <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
                       {row.status !== 'right-only' ? formatSize(row.leftSize) : ''}
                     </span>
                   </span>
@@ -1199,7 +1199,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                       {row.status === 'left-only' ? '' : `${row.isDir ? '📁' : '📄'} ${row.relPath}`}
                     </span>
-                    <span style={{ width: 50, textAlign: 'right', color: '#888', fontSize: 11, flexShrink: 0 }}>
+                    <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
                       {row.status !== 'left-only' ? formatSize(row.rightSize) : ''}
                     </span>
                   </span>
@@ -1215,27 +1215,27 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       {showList && (
         <div
           onMouseDown={onResizeStart}
-          style={{ height: RESIZER_H, cursor: 'row-resize', background: '#333', flexShrink: 0 }}
+          style={{ height: RESIZER_H, cursor: 'row-resize', background: 'var(--win-border, #333)', flexShrink: 0 }}
           title={t('resizerTooltip')}
         />
       )}
 
       {/* 하단: Monaco DiffEditor — 픽셀 높이 (split * (100-topPct)/100). file 모드/diffExpanded 면 전체 */}
-      <div style={{ height: diffH, flexShrink: 0, minHeight: 80, position: 'relative', background: '#1e1e1e', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ height: diffH, flexShrink: 0, minHeight: 80, position: 'relative', background: 'var(--win-surface, #1e1e1e)', display: 'flex', flexDirection: 'column' }}>
         {!selectedRel ? (
           <div style={{ color: '#666', fontSize: 12, padding: 16, textAlign: 'center' }}>
-            {compareMode === 'file' ? t('fileCompareHint', '양쪽 파일 경로를 입력하고 비교 버튼을 누르세요') : t('selectFileHint')}
+            {compareMode === 'file' ? t('fileCompareHint') : t('selectFileHint')}
           </div>
         ) : contentLoading ? (
-          <div style={{ color: '#888', fontSize: 12, padding: 16, textAlign: 'center' }}>{t('loading')}</div>
+          <div style={{ color: 'var(--win-text-dim, #888)', fontSize: 12, padding: 16, textAlign: 'center' }}>{t('loading')}</div>
         ) : contentErr ? (
           <div style={{ color: '#e36b6b', fontSize: 12, padding: 16 }}>{contentErr}</div>
         ) : (
           <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 8px', background: '#222', borderBottom: '1px solid #333', fontSize: 11, minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 8px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)', fontSize: 11, minWidth: 0, overflow: 'hidden' }}>
               {/* 1행: 경로(편집 가능 input) + 저장 + 전체 적용 */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
-                <span style={{ color: '#888', fontSize: 11, flexShrink: 0 }}>{leftDirty && '● '}{t('source')}</span>
+                <span style={{ color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>{leftDirty && '● '}{t('source')}</span>
                 <input
                   type="text"
                   value={leftPathDraft}
@@ -1245,20 +1245,20 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   placeholder={t('noPath')}
                   title={t('sourceLabelLine', { path: leftPathDraft || '' })}
                   spellCheck={false}
-                  style={{ flex: 1, minWidth: 80, padding: '2px 6px', fontSize: 11, background: '#1a1a1a', color: leftDirty ? '#d8b556' : '#ddd', border: '1px solid #333', borderRadius: 3, fontFamily: 'monospace' }}
+                  style={{ flex: 1, minWidth: 80, padding: '2px 6px', fontSize: 11, background: 'var(--win-surface, #1a1a1a)', color: leftDirty ? '#d8b556' : 'var(--win-text, #ddd)', border: '1px solid var(--win-border, #333)', borderRadius: 3, fontFamily: 'monospace' }}
                 />
                 <button onClick={() => saveSide('left')} disabled={!leftDirty} title={t('saveSourceTitle')} style={{ padding: '2px 8px', fontSize: 11 }}>{t('saveSource')}</button>
                 <button
                   onClick={async () => {
                     const name = (leftFilePath.split(/[\\/]/).pop() || 'source.txt');
                     const r: any = await (window as any).api?.compareDownload?.(name, leftContent, leftEnc);
-                    if (r?.success) setSavingMsg(`✓ 다운로드: ${r.path}`);
-                    else if (!r?.canceled) setSavingMsg(`✕ 다운로드 실패: ${r?.error || ''}`);
+                    if (r?.success) setSavingMsg(t('downloadOk', { path: r.path }));
+                    else if (!r?.canceled) setSavingMsg(t('downloadFailed', { error: r?.error || '' }));
                     setTimeout(() => setSavingMsg(''), 2500);
                   }}
-                  title="Source 내용(편집된 상태 포함)을 로컬로 다운로드"
+                  title={t('downloadSourceTitle')}
                   style={{ padding: '2px 8px', fontSize: 11 }}
-                >⬇ 소스</button>
+                >{t('downloadSource')}</button>
                 <button onClick={() => applyAll('right-to-left')} title={t('applyAllRightToLeftTitle')} style={{ padding: '2px 8px', fontSize: 11 }}>{t('applyAllToSource')}</button>
                 <button onClick={() => applyAll('left-to-right')} title={t('applyAllLeftToRightTitle')} style={{ padding: '2px 8px', fontSize: 11 }}>{t('applyAllToTarget')}</button>
                 <button onClick={() => saveSide('right')} disabled={!rightDirty} title={t('saveTargetTitle')} style={{ padding: '2px 8px', fontSize: 11 }}>{t('saveTarget')}</button>
@@ -1266,14 +1266,14 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   onClick={async () => {
                     const name = (rightFilePath.split(/[\\/]/).pop() || 'target.txt');
                     const r: any = await (window as any).api?.compareDownload?.(name, rightContent, rightEnc);
-                    if (r?.success) setSavingMsg(`✓ 다운로드: ${r.path}`);
-                    else if (!r?.canceled) setSavingMsg(`✕ 다운로드 실패: ${r?.error || ''}`);
+                    if (r?.success) setSavingMsg(t('downloadOk', { path: r.path }));
+                    else if (!r?.canceled) setSavingMsg(t('downloadFailed', { error: r?.error || '' }));
                     setTimeout(() => setSavingMsg(''), 2500);
                   }}
-                  title="Target 내용(편집된 상태 포함)을 로컬로 다운로드"
+                  title={t('downloadTargetTitle')}
                   style={{ padding: '2px 8px', fontSize: 11 }}
-                >⬇ 타겟</button>
-                <span style={{ color: '#888', fontSize: 11, flexShrink: 0 }}>{t('target')}{rightDirty && ' ●'}</span>
+                >{t('downloadTarget')}</button>
+                <span style={{ color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>{t('target')}{rightDirty && ' ●'}</span>
                 <input
                   type="text"
                   value={rightPathDraft}
@@ -1283,12 +1283,12 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   placeholder={t('noPath')}
                   title={t('targetLabelLine', { path: rightPathDraft || '' })}
                   spellCheck={false}
-                  style={{ flex: 1, minWidth: 80, padding: '2px 6px', fontSize: 11, background: '#1a1a1a', color: rightDirty ? '#d8b556' : '#ddd', border: '1px solid #333', borderRadius: 3, fontFamily: 'monospace' }}
+                  style={{ flex: 1, minWidth: 80, padding: '2px 6px', fontSize: 11, background: 'var(--win-surface, #1a1a1a)', color: rightDirty ? '#d8b556' : 'var(--win-text, #ddd)', border: '1px solid var(--win-border, #333)', borderRadius: 3, fontFamily: 'monospace' }}
                 />
                 <button
                   onClick={() => setDiffExpanded(v => !v)}
-                  title={diffExpanded ? '축소' : '전체 화면으로 확대'}
-                  style={{ padding: '2px 6px', lineHeight: 1, flexShrink: 0, background: diffExpanded ? '#2a3a2a' : undefined, border: diffExpanded ? '1px solid #3a5a3a' : undefined, color: diffExpanded ? '#7fcf6e' : '#aaa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  title={diffExpanded ? t('collapse') : t('expandFullScreen')}
+                  style={{ padding: '2px 6px', lineHeight: 1, flexShrink: 0, background: diffExpanded ? '#2a3a2a' : undefined, border: diffExpanded ? '1px solid #3a5a3a' : undefined, color: diffExpanded ? '#7fcf6e' : 'var(--win-text-dim, #aaa)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   {diffExpanded ? (
                     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -1306,7 +1306,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               </div>
               {/* 2행: hunk 단위 양방향 적용 */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ color: '#888', flex: 1 }}>{t('currentChange')}</span>
+                <span style={{ color: 'var(--win-text-dim, #888)', flex: 1 }}>{t('currentChange')}</span>
                 <button onClick={() => navigateHunk('prev')} title={t('prevHunkTitle', { combo: formatKeyComboForOS(getKeybinding('diffPrevHunk')) })} style={{ padding: '2px 8px', fontSize: 11 }}>{t('prevHunk')}</button>
                 <button onClick={() => navigateHunk('next')} title={t('nextHunkTitle', { combo: formatKeyComboForOS(getKeybinding('diffNextHunk')) })} style={{ padding: '2px 8px', fontSize: 11 }}>{t('nextHunk')}</button>
                 <button onClick={() => applyCurrentHunk('right-to-left')} title={t('applyLeftTitle', { combo: formatKeyComboForOS(getKeybinding('diffApplyLeft')) })} style={{ padding: '2px 8px', fontSize: 11 }}>{t('applyToSource')}</button>
@@ -1328,10 +1328,10 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               )}
             </div>
             {sameNote && (
-              <div style={{ padding: '3px 10px', fontSize: 11, color: '#a0c4ff', background: '#1a2a3a', borderBottom: '1px solid #333' }}>ℹ {sameNote}</div>
+              <div style={{ padding: '3px 10px', fontSize: 11, color: '#a0c4ff', background: '#1a2a3a', borderBottom: '1px solid var(--win-border, #333)' }}>ℹ {sameNote}</div>
             )}
             {savingMsg && (
-              <div style={{ padding: '3px 10px', fontSize: 11, color: savingMsg.startsWith('✕') ? '#e36b6b' : '#7fcf6e', background: '#1a1a1a', borderBottom: '1px solid #333' }}>{savingMsg}</div>
+              <div style={{ padding: '3px 10px', fontSize: 11, color: savingMsg.startsWith('✕') ? '#e36b6b' : '#7fcf6e', background: 'var(--win-surface, #1a1a1a)', borderBottom: '1px solid var(--win-border, #333)' }}>{savingMsg}</div>
             )}
             <div style={{ flex: 1, minHeight: 0 }}>
               <DiffEditor
@@ -1414,9 +1414,9 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
               <span style={{ fontSize: 28, color: '#7fcf6e', textShadow: '0 0 12px rgba(127,207,110,0.7)' }}>✓</span>
-              <span style={{ fontSize: 16, fontWeight: 600 }}>All match — 두 파일이 완전히 일치합니다</span>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>{t('allMatchTitle')}</span>
             </div>
-            <div style={{ fontSize: 12, color: '#a0c8a0', marginBottom: 4 }}>비교 결과 차이가 없습니다.</div>
+            <div style={{ fontSize: 12, color: '#a0c8a0', marginBottom: 4 }}>{t('allMatchDesc')}</div>
             {(allMatchModal.left || allMatchModal.right) && (
               <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, fontSize: 11, fontFamily: 'monospace', lineHeight: 1.5 }}>
                 {allMatchModal.left && <div><span style={{ color: '#7a9' }}>L</span> {allMatchModal.left}</div>}
@@ -1433,7 +1433,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   fontSize: 13, fontWeight: 500,
                 }}
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setAllMatchModal(null); }}
-              >확인</button>
+              >{t('confirm')}</button>
             </div>
           </div>
         </div>

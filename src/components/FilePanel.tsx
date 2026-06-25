@@ -74,10 +74,10 @@ function formatDate(ts: number): string {
 }
 
 // 확장자 → 유형 라벨 추론 (탐색기의 "유형" 컬럼)
-function getFileTypeLabel(name: string, isDir: boolean): string {
-  if (isDir) return '파일 폴더';
+function getFileTypeLabel(name: string, isDir: boolean, t: (key: string, opts?: any) => string): string {
+  if (isDir) return t('fileTypeFolder');
   const idx = name.lastIndexOf('.');
-  if (idx <= 0) return '파일';
+  if (idx <= 0) return t('fileTypeFile');
   const ext = name.slice(idx + 1).toLowerCase();
   const labels: Record<string, string> = {
     txt: '텍스트 문서', md: '마크다운', log: '로그 파일', rtf: 'RTF 문서',
@@ -110,7 +110,7 @@ function getFileTypeLabel(name: string, isDir: boolean): string {
     if (lower === '.viminfo') return 'VIMINFO';
     if (lower === '.viminfz.tmp' || lower === '.viminfo.tmp') return 'TMP 파일';
   }
-  return labels[ext] || `${ext.toUpperCase()} 파일`;
+  return labels[ext] || t('fileTypeUnknown', { ext: ext.toUpperCase() });
 }
 
 // 항목 이름 / shellPath 로 적절한 emoji 아이콘 결정 — Windows 탐색기 아이콘 모사
@@ -450,7 +450,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         const errStr = String(result.error);
         setFiles([]);
         if (isPathNotFoundError(errStr)) {
-          setErrorMessage(`경로를 찾을 수 없습니다.\n\n${dir}`);
+          setErrorMessage(t('pathNotFound', { dir }));
         } else {
           setError(errStr);
         }
@@ -461,7 +461,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       const errStr = String(e?.message || e);
       setFiles([]);
       if (isPathNotFoundError(errStr)) {
-        setErrorMessage(`경로를 찾을 수 없습니다.\n\n${dir}`);
+        setErrorMessage(t('pathNotFound', { dir }));
       } else {
         setError(errStr);
       }
@@ -512,7 +512,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       if (result?.error) {
         const errStr = String(result.error);
         if (isPathNotFoundError(errStr)) {
-          setErrorMessage(`경로를 찾을 수 없습니다.\n\n${dir}`);
+          setErrorMessage(t('pathNotFound', { dir }));
           return; // 경로 미변경
         }
         // 다른 종류 에러는 일단 경로 이동 후 loadDir 가 inline 에러 표시
@@ -523,7 +523,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     } catch (e: any) {
       const errStr = String(e?.message || e);
       if (isPathNotFoundError(errStr)) {
-        setErrorMessage(`경로를 찾을 수 없습니다.\n\n${dir}`);
+        setErrorMessage(t('pathNotFound', { dir }));
         return;
       }
       onPathChange(dir);
@@ -806,7 +806,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       const filePath = currentPath.endsWith(sep) ? currentPath + name : currentPath + sep + name;
       const r = await api.feCreateFile?.(source.mode, filePath, source.termId);
       if (r && r.success === false) {
-        setErrorMessage(`파일 생성 실패: ${r.error}`);
+        setErrorMessage(t('createFileFail', { err: r.error }));
         return;
       }
       // ★ 중복 케이스에서는 rename 모드를 loadDir(아이콘 PowerShell spawn 트리거) 보다 먼저 켜서
@@ -822,7 +822,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         el?.scrollIntoView({ block: 'nearest' });
       }, 30);
     } catch (err: any) {
-      setErrorMessage(`파일 생성 실패: ${err?.message || err}`);
+      setErrorMessage(t('createFileFail', { err: err?.message || err }));
     }
   };
 
@@ -834,7 +834,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       const dirPath = currentPath.endsWith(sep) ? currentPath + name : currentPath + sep + name;
       const r = await api.feMkdir?.(source.mode, dirPath, source.termId);
       if (r && r.success === false) {
-        setErrorMessage(`폴더 생성 실패: ${r.error}`);
+        setErrorMessage(t('createFolderFail', { err: r.error }));
         return;
       }
       console.log(`[ps-dbg] handleMkdir feMkdir DONE hasFocus=${document.hasFocus()}`);
@@ -852,7 +852,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         el?.scrollIntoView({ block: 'nearest' });
       }, 30);
     } catch (err: any) {
-      setErrorMessage(`폴더 생성 실패: ${err?.message || err}`);
+      setErrorMessage(t('createFolderFail', { err: err?.message || err }));
     }
   };
 
@@ -877,14 +877,14 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       const r = await api.feRename?.(source.mode, oldPath, newPath, source.termId);
       setRenamingFile(null);
       if (r && r.success === false) {
-        setErrorMessage(`이름 변경 실패: ${r.error}`);
+        setErrorMessage(t('renameFail', { err: r.error }));
       } else {
         onSelectionChange(new Set([newName]));
       }
       loadDir(currentPath);
     } catch (err: any) {
       setRenamingFile(null);
-      setErrorMessage(`이름 변경 실패: ${err?.message || err}`);
+      setErrorMessage(t('renameFail', { err: err?.message || err }));
     } finally {
       renameInFlight.current = false;
     }
@@ -965,15 +965,15 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       <div className="fe-path-bar">
         {/* 이전 폴더 (history back) + 드롭다운 */}
         <div className="fe-nav-group">
-          <button className="fe-path-btn fe-nav-btn" onClick={goBack} disabled={!canGoBack} title="이전 폴더">←</button>
-          <button className="fe-path-btn fe-nav-dropdown" disabled={!canGoBack} title="이전 폴더 기록"
+          <button className="fe-path-btn fe-nav-btn" onClick={goBack} disabled={!canGoBack} title={t('prevFolder')}>←</button>
+          <button className="fe-path-btn fe-nav-dropdown" disabled={!canGoBack} title={t('prevFolderHistory')}
             onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setHistoryMenu({ x: r.left, y: r.bottom, direction: 'back' }); }}
           >▾</button>
         </div>
         {/* 다음 폴더 (history forward) + 드롭다운 */}
         <div className="fe-nav-group">
-          <button className="fe-path-btn fe-nav-btn" onClick={goForward} disabled={!canGoForward} title="다음 폴더">→</button>
-          <button className="fe-path-btn fe-nav-dropdown" disabled={!canGoForward} title="다음 폴더 기록"
+          <button className="fe-path-btn fe-nav-btn" onClick={goForward} disabled={!canGoForward} title={t('nextFolder')}>→</button>
+          <button className="fe-path-btn fe-nav-dropdown" disabled={!canGoForward} title={t('nextFolderHistory')}
             onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setHistoryMenu({ x: r.left, y: r.bottom, direction: 'forward' }); }}
           >▾</button>
         </div>
@@ -1023,25 +1023,25 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           </div>
         )}
         {/* 우측 — 인코딩 / 상위 폴더 / 새로고침 */}
-        <button className="fe-path-btn fe-path-btn-right" title={`파일명 인코딩: ${encoding}`}
+        <button className="fe-path-btn fe-path-btn-right" title={t('encodingTooltip', { encoding })}
           onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setEncodingMenu({ x: r.left, y: r.bottom }); }}
         >🌐</button>
-        <button className="fe-path-btn fe-path-btn-right" onClick={goUp} title="상위 폴더">↑</button>
-        <button className="fe-path-btn fe-path-btn-right" onClick={() => loadDir(currentPath)} title="새로고침">⟳</button>
+        <button className="fe-path-btn fe-path-btn-right" onClick={goUp} title={t('parentFolderUp')}>↑</button>
+        <button className="fe-path-btn fe-path-btn-right" onClick={() => loadDir(currentPath)} title={t('refresh')}>⟳</button>
       </div>
       <div className="fe-file-header">
         <span className="fe-col-name" style={{ width: colWidths.name }} onClick={() => toggleSort('name')}>{t('colName')}{sortIcon('name')}</span>
         <div className="fe-col-resize" onMouseDown={startColResize('name')} />
         <span className="fe-col-size" style={{ width: colWidths.size }} onClick={() => toggleSort('size')}>{t('colSize')}{sortIcon('size')}</span>
         <div className="fe-col-resize" onMouseDown={startColResize('size')} />
-        <span className="fe-col-type" style={{ width: colWidths.type }}>유형</span>
+        <span className="fe-col-type" style={{ width: colWidths.type }}>{t('colType')}</span>
         <div className="fe-col-resize" onMouseDown={startColResize('type')} />
         <span className="fe-col-date" style={{ width: colWidths.date }} onClick={() => toggleSort('mtime')}>{t('colDate')}{sortIcon('mtime')}</span>
         <div className="fe-col-resize" onMouseDown={startColResize('date')} />
         {source.mode === 'remote' && (<>
-          <span className="fe-col-mode" style={{ width: colWidths.mode }}>특성</span>
+          <span className="fe-col-mode" style={{ width: colWidths.mode }}>{t('colMode')}</span>
           <div className="fe-col-resize" onMouseDown={startColResize('mode')} />
-          <span className="fe-col-owner" style={{ width: colWidths.owner }}>소유자</span>
+          <span className="fe-col-owner" style={{ width: colWidths.owner }}>{t('colOwner')}</span>
           <div className="fe-col-resize" onMouseDown={startColResize('owner')} />
         </>)}
       </div>
@@ -1311,7 +1311,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
             <div className="fe-col-resize" />
             <span className="fe-col-size" style={{ width: colWidths.size }}>{file.isDir ? '' : formatSize(file.size)}</span>
             <div className="fe-col-resize" />
-            <span className="fe-col-type" style={{ width: colWidths.type }}>{getFileTypeLabel(file.name, file.isDir)}</span>
+            <span className="fe-col-type" style={{ width: colWidths.type }}>{getFileTypeLabel(file.name, file.isDir, t)}</span>
             <div className="fe-col-resize" />
             <span className="fe-col-date" style={{ width: colWidths.date }}>{formatDate(file.mtime)}</span>
             <div className="fe-col-resize" />
@@ -1374,24 +1374,24 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} items={[
           ...(contextMenu.file ? [
-            { label: '복사', onClick: () => handleCopyToClipboard(fileKey(contextMenu.file!)) },
-            { label: '붙여넣기', onClick: handlePaste, disabled: !getFileClipboard() },
-            { label: '경로 복사', onClick: () => handleCopyPath(fileKey(contextMenu.file!)) },
+            { label: t('ctxCopy'), onClick: () => handleCopyToClipboard(fileKey(contextMenu.file!)) },
+            { label: t('ctxPaste'), onClick: handlePaste, disabled: !getFileClipboard() },
+            { label: t('copyPath'), onClick: () => handleCopyPath(fileKey(contextMenu.file!)) },
             { separator: true } as const,
             { label: t('rename'), onClick: () => { setRenamingFile(contextMenu.file!.name); setRenameValue(contextMenu.file!.name); } },
             { label: t('deleteFile'), onClick: () => handleDelete(fileKey(contextMenu.file!)) },
             ...(source.mode === 'remote' ? [
               { separator: true } as const,
-              { label: '권한 변경...', onClick: () => handleChmod(fileKey(contextMenu.file!)) },
+              { label: t('chmodMenu'), onClick: () => handleChmod(fileKey(contextMenu.file!)) },
             ] : []),
             { separator: true } as const,
           ] : [
-            { label: '붙여넣기', onClick: handlePaste, disabled: !getFileClipboard() },
+            { label: t('ctxPaste'), onClick: handlePaste, disabled: !getFileClipboard() },
             { separator: true } as const,
           ]),
-          { label: '새로 만들기', submenu: [
+          { label: t('newMenu'), submenu: [
             { label: t('newFolder'), onClick: handleMkdir },
-            { label: '새 파일', onClick: handleMkfile },
+            { label: t('newFile'), onClick: handleMkfile },
           ]},
           { label: t('refresh'), onClick: () => loadDir(currentPath) },
         ]} />
@@ -1411,7 +1411,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       {errorMessage && createPortal(
         <div className="rn-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setErrorMessage(null); }}>
           <div className="rn-dialog" onMouseDown={e => e.stopPropagation()}>
-            <div className="rn-title">오류</div>
+            <div className="rn-title">{t('error')}</div>
             <div className="rn-body" style={{ maxWidth: 480 }}>
               <div style={{ fontSize: 12, lineHeight: '1.5em', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 {errorMessage}
@@ -1422,7 +1422,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
                 ref={el => { if (el) setTimeout(() => el.focus(), 0); }}
                 onClick={() => setErrorMessage(null)}
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); setErrorMessage(null); } }}
-              >확인</button>
+              >{t('confirm')}</button>
             </div>
           </div>
         </div>,
@@ -1431,10 +1431,10 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       {deleteConfirm && createPortal(
         <div className="rn-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDeleteConfirm(null); }}>
           <div className="rn-dialog" onMouseDown={e => e.stopPropagation()}>
-            <div className="rn-title">삭제 확인</div>
+            <div className="rn-title">{t('deleteConfirmTitle')}</div>
             <div className="rn-body" style={{ maxWidth: 480 }}>
               <div style={{ fontSize: 12, lineHeight: '1.5em' }}>
-                <b>{deleteConfirm.targets.length}개</b> 항목을 삭제하시겠습니까?
+                {t('deleteConfirmCount', { count: deleteConfirm.targets.length })}
               </div>
               <div style={{ fontSize: 11, color: '#aaa', maxHeight: 120, overflowY: 'auto', wordBreak: 'break-all' }}>
                 {deleteConfirm.targets.join(', ')}
@@ -1445,8 +1445,8 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
                 ref={el => { if (el) setTimeout(() => el.focus(), 0); }}
                 onClick={() => doDelete(deleteConfirm.targets)}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); doDelete(deleteConfirm.targets); } else if (e.key === 'Escape') { e.preventDefault(); setDeleteConfirm(null); } }}
-              >삭제</button>
-              <button className="rn-btn" onClick={() => setDeleteConfirm(null)}>취소</button>
+              >{t('deleteAction')}</button>
+              <button className="rn-btn" onClick={() => setDeleteConfirm(null)}>{t('cancel')}</button>
             </div>
           </div>
         </div>,

@@ -1,0 +1,270 @@
+{
+  "common": {
+    "close": "Close",
+    "unknownError": "Unknown error",
+    "unknown": "Unknown"
+  },
+  "manual": {
+    "loadFail": "Failed to load manual",
+    "title": "📖 PePe Terminal(SSH) Manual"
+  },
+  "connect": {
+    "fail": "Connection failed",
+    "failDetail": "{{name}}: {{error}}"
+  },
+  "messenger": {
+    "defaultPeerName": "Messenger",
+    "filePrefix": "File: {{name}}",
+    "attachedFile": "Attached file"
+  },
+  "x11": {
+    "settingChanged": "X11 settings changed. To apply, manually reconnect {{count}} active session(s). (Right-click mini-tab → Reconnect session)"
+  },
+  "broadcast": {
+    "textLabel": "Text",
+    "enterText": "Enter text",
+    "noTargets": "No target sessions",
+    "sentToast": "{{label}} → sent to {{count}} session(s)",
+    "close": "Close",
+    "labelTooltip": "Broadcast text",
+    "scopeTooltip": "Target",
+    "scopeVisible": "Visible tabs ({{count}})",
+    "scopeCurrent": "Current session ({{count}})",
+    "scopeConnected": "Connected sessions ({{count}})",
+    "inputPlaceholder": "Text to send (Enter to send, Ctrl+C/^C, Ctrl+D/^D)",
+    "historyTooltip": "Send history",
+    "appendNewlineTooltip": "Append newline (Enter) at end",
+    "sendTooltip": "Send text (Enter)",
+    "send": "Send",
+    "fileTransferTooltip": "Bulk upload files/folders to multiple sessions",
+    "fileTransfer": "📤 File transfer",
+    "arrowUpTooltip": "Send Up arrow (previous command)",
+    "arrowDownTooltip": "Send Down arrow (next command)",
+    "sigintTooltip": "Send Ctrl+C (SIGINT)",
+    "eofTooltip": "Send Ctrl+D (EOF)"
+  },
+  "ai": {
+    "serviceRequiredTitle": "AI service required",
+    "serviceRequiredDesc": "Auto-organizing the session list is only available when at least one AI service is connected. Please connect Claude, Gemini, or Codex first.",
+    "organizingToast": "Organizing session list with AI ({{agent}})...",
+    "parseFail": "Failed to parse AI response as JSON: {{error}}",
+    "invalidFormat": "AI response format is invalid.",
+    "noApplicableSessions": "No applicable sessions in the AI response.",
+    "saveFail": "Failed to save session list",
+    "organizeDoneTitle": "Session list organized",
+    "organizeDoneDesc": "AI ({{agent}}) organized {{sessions}} session(s) and {{folders}} folder(s).",
+    "organizeFailTitle": "Auto-organize failed"
+  },
+  "sessionWipe": {
+    "backupToast": "Session backup saved. Now deleting the entire list.",
+    "deleteFail": "Failed to delete sessions",
+    "emptiedTitle": "Session list emptied",
+    "emptiedBackupDesc": "Deleted the session list after backup.",
+    "emptiedDesc": "Deleted the session list.",
+    "emptyFailTitle": "Failed to empty session list",
+    "dialogTitle": "Empty session list",
+    "dialogDesc": "This deletes the entire session list. Please choose whether to back up first.",
+    "cancel": "Cancel",
+    "backup": "Back up",
+    "delete": "Delete"
+  },
+  "claudeAttach": {
+    "mountPreparing": "Preparing WebDAV mount...",
+    "mountFail": "Mount failed: {{error}}",
+    "pathConvertFail": "Path conversion failed: {{error}}",
+    "attached": "Attached (WebDAV live access)",
+    "attachFail": "Attach failed: {{error}}"
+  },
+  "tabs": {
+    "browser": "🌐 Browser",
+    "compare": "🔍 File Compare",
+    "logAnalyzer": "📈 Log Analyzer",
+    "vpn": "🔒 VPN",
+    "i18nEditor": "🌍 Translation Editor",
+    "fileTransfer": "📁 File transfer"
+  },
+  "term": {
+    "connectCancelled": "✕ Connection cancelled.",
+    "retryHint": "▶ To retry: click the terminal or right-click the mini-tab → Reconnect"
+  },
+  "fileTransfer": {
+    "connectFail": "File transfer connection failed",
+    "connectFailDetail": "{{name}}\n\n{{msg}}",
+    "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nCheck the [sftp-connect] log in the DevTools Console.",
+    "connectException": "File transfer connection exception"
+  },
+  "sessionMenu": {
+    "wipe": "Empty sessions",
+    "autoOrganize": "Auto-organize session list"
+  },
+  "workspace": {
+    "cannotConnectTitle": "Workspace cannot connect",
+    "cannotConnectTab": "'{{title}}' is a workspace that cannot add terminal sessions.\n\nOpening in a new workspace.",
+    "cannotConnectActive": "Current workspace '{{title}}' cannot add terminal sessions.\n\nOpening in a new workspace."
+  },
+  "titlebar": {
+    "restore": "Restore",
+    "maximize": "Maximize"
+  },
+  "toolbar": {
+    "dragHint": "Drag to move quick-connect left/right or to the top",
+    "fileTransferTooltip": "File transfer",
+    "resetSplitTooltip": "Equalize panel ratios (reset all split ratios in current workspace)",
+    "quickConnectShow": "Show quick-connect bar",
+    "quickConnectHide": "Hide quick-connect bar",
+    "broadcastShow": "Show broadcast bar",
+    "broadcastHide": "Hide broadcast bar",
+    "terminalPin": "Pin terminal panel",
+    "terminalUnpin": "Unpin terminal panel (minimize to vertical tab)",
+    "xStart": "Start X server (DISPLAY=:0)",
+    "xStop": "Stop X server",
+    "xStatus": "X server status",
+    "options": "Options",
+    "dragTargetTop": "Top",
+    "dragTargetQcLeft": "Left of quick-connect",
+    "dragTargetQcRight": "Right of quick-connect",
+    "dragHintPrefix": "→ {{target}}"
+  },
+  "xServer": {
+    "startTitle": "Start X server",
+    "startOk": "✅ DISPLAY=:0  PID={{pid}}",
+    "startNoBundle": "⚠️ Bundled/external X server not used\n\n{{logs}}",
+    "startFail": "Failed to start X server",
+    "stopTitle": "Stop X server",
+    "stopOk": "✅ Stopped.",
+    "stopFail": "Failed to stop X server",
+    "statusTitle": "X server status",
+    "statusRunning": "🟢 Running",
+    "statusNone": "⚫ No X server running.",
+    "statusFail": "Failed to query X server status"
+  },
+  "fileTree": {
+    "triggerTooltip": "Click=toggle / hover 2.5s=auto open",
+    "triggerLabel": "📁 File tree",
+    "unpinTooltip": "Unpin (auto-hide)",
+    "pinTooltip": "Pin",
+    "resizeTooltip": "Drag=resize width, double-click=default (240)",
+    "resizeTooltip2": "Drag to resize width (double-click: default 240)"
+  },
+  "errorBoundary": {
+    "browser": "Browser",
+    "compare": "File Compare",
+    "logAnalyzer": "Log Analyzer",
+    "i18nEditor": "Translation Editor"
+  },
+  "panel": {
+    "openTerminalTooltip": "Open terminal",
+    "pinTerminalTooltip": "Pin terminal panel"
+  },
+  "claudeChat": {
+    "triggerTooltip": "Click=toggle / hover 2.5s=auto open",
+    "resizeTooltip": "Drag to resize width (double-click: default)"
+  },
+  "splitPicker": {
+    "titleRow": "Select session (Split horizontally (left/right))",
+    "titleCol": "Select session (Split vertically (top/bottom))",
+    "cancel": "Cancel"
+  },
+  "infoModal": {
+    "closeTooltip": "Close (Esc)"
+  },
+  "update": {
+    "title": "🔄 Update",
+    "titleChecking": "🔄 Checking for updates",
+    "titleAvailable": "🎉 New version available",
+    "titleDownloading": "⬇ Downloading update",
+    "titleDownloaded": "✅ Update ready",
+    "titleNotAvailable": "✔ Up to date",
+    "titleUnsupported": "Auto-update not supported",
+    "titleError": "⚠ Update error",
+    "check": "🔄 Check for updates",
+    "closeTooltip": "Close (Esc)",
+    "checkingMsg": "Checking for updates…",
+    "availableMsgPlain": "New version v{{ver}} is available. Download now?",
+    "downloadingMsg": "Downloading v{{ver}}… {{pct}}%",
+    "downloadedMsg": "v{{ver}} download complete.",
+    "downloadedMsg2": "Restart now to install? (Save your work before proceeding)",
+    "notAvailableMsg": "You are on the latest version.{{suffix}}",
+    "unsupportedMsg": "Auto-update is not available in this build (dev mode or portable).",
+    "unsupportedMsg2": "It only works in the installer build.",
+    "errorMsg": "An error occurred during the update.",
+    "later": "Later",
+    "downloadNow": "Download now",
+    "restartNow": "Restart and install now",
+    "background": "Run in background",
+    "ok": "OK"
+  },
+  "remotePicker": {
+    "title": "🌐 Select remote file",
+    "sourceSession": "Source session (full list; selecting a disconnected session triggers a background SFTP connect)",
+    "quickConnect": "Quick connect",
+    "quickConnectSuffix": " (Quick connect)",
+    "selectSession": "(Select session)",
+    "groupConnected": "🟢 Connected",
+    "groupDisconnected": "⚪ Disconnected",
+    "connecting": "Connecting...",
+    "path": "Path",
+    "parentTooltip": "Parent folder",
+    "refreshTooltip": "Refresh",
+    "selectSessionHint": "Select a session",
+    "loading": "Loading...",
+    "emptyOrError": "(Empty or path error)",
+    "legend": "🟢 Connected sessions / ⚪ Disconnected (auto-connects when selected). Click: select / Double-click: enter folder. {{count}} selected",
+    "close": "Close",
+    "addSelected": "Add selected ({{count}})"
+  },
+  "cred": {
+    "title": "🔒 Enter credentials",
+    "connectTo": "Connect to {{host}}",
+    "hide": "Hide",
+    "show": "Show",
+    "cancel": "Cancel",
+    "connecting": "Connecting...",
+    "connect": "Connect"
+  },
+  "bcastXfer": {
+    "title": "📤 Bulk file transfer",
+    "targetSession": "Target session",
+    "scopeVisible": "All visible sessions",
+    "scopeCurrent": "Current session",
+    "scopeConnected": "All connected sessions",
+    "count": "{{count}}",
+    "remotePath": "Remote path (if empty, uses each session's current path)",
+    "remotePathPlaceholder": "e.g.: /tmp (optional)",
+    "uploadFiles": "Files/folders to upload",
+    "addLocalFile": "+ Local file",
+    "addLocalFolder": "+ Local folder",
+    "addRemoteFile": "+ Remote file (another server)",
+    "removeAll": "Remove all",
+    "emptyHint": "Add files or folders",
+    "remoteSourcePrefix": "Remote({{label}}):",
+    "localSourcePrefix": "Local:",
+    "close": "Close",
+    "noTargets": "No target sessions",
+    "startLog": "▶ Starting transfer: {{targets}} session(s) × {{files}} item(s)",
+    "skipSameSession": "↷ {{label}}: {{filename}} (same session as source, skipped)",
+    "doneLog": "● Done: {{ok}} succeeded, {{err}} failed",
+    "doneToast": "File transfer complete (success {{ok}}/{{total}})",
+    "sending": "Sending...",
+    "send": "Send"
+  },
+  "askPwd": {
+    "credTitle": "Enter credentials",
+    "pwdTitle": "Enter password",
+    "cancelTooltip": "Cancel",
+    "connectToPlain": "Connect to {{host}}",
+    "needCred": "Credentials are required to connect.",
+    "hide": "Hide",
+    "show": "Show",
+    "cancel": "Cancel",
+    "connect": "Connect",
+    "waiting": "{{count}} waiting — can enter in other session tabs"
+  },
+  "savePwd": {
+    "title": "Save the password to this session?",
+    "desc": "From the next connection, you'll connect directly without entering the password.",
+    "dontSave": "Don't save",
+    "savedToast": "Password saved to session.",
+    "save": "Save"
+  }
+}

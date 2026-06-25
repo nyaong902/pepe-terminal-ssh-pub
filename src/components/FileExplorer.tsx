@@ -710,7 +710,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
               <button
                 className="fe-panel-tab-close"
                 onClick={e => { e.stopPropagation(); closePanelTab(side, idx); }}
-                title="탭 닫기"
+                title={t('tabClose')}
               >×</button>
             )}
           </div>
@@ -738,7 +738,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         <button
           className="fe-panel-tab-add"
           onClick={() => addPanelTab(side)}
-          title="새 탭 (현재 위치 복제)"
+          title={t('newTabDup')}
         >+</button>
       </div>
     );
@@ -827,7 +827,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
                   className="cred-modal-eye-btn"
                   tabIndex={-1}
                   onClick={() => setCredShowPass(v => !v)}
-                  title={credShowPass ? '숨기기' : '보이기'}
+                  title={credShowPass ? t('hide') : t('show')}
                 >
                   {credShowPass ? '🙈' : '👁'}
                 </button>

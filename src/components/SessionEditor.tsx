@@ -307,7 +307,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     { id: 'login-script', label: t('categories.loginScript'), depth: 1 },
     { id: 'terminal', label: t('categories.terminal'), depth: 0 },
     { id: 'appearance', label: t('categories.appearance'), depth: 1 },
-    { id: 'keys', label: '키 시퀀스', depth: 1 },
+    { id: 'keys', label: t('keys.category'), depth: 1 },
     { id: 'advanced', label: t('categories.advanced'), depth: 0 },
     { id: 'filetree', label: t('categories.filetree'), depth: 1 },
     { id: 'x11', label: t('categories.x11'), depth: 1 },
@@ -568,7 +568,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
               return (
                 <div style={{ display: 'flex', gap: 20, padding: '8px 4px' }}>
                   <fieldset style={{ flex: 1, border: '1px solid #444', borderRadius: 4, padding: '8px 12px' }}>
-                    <legend style={{ padding: '0 6px', color: '#bbb', fontSize: 12 }}>Delete 키 시퀀스</legend>
+                    <legend style={{ padding: '0 6px', color: '#bbb', fontSize: 12 }}>{t('keys.deleteLegend')}</legend>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {opts.map(o => (
                         <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12 }}>
@@ -579,7 +579,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                     </div>
                   </fieldset>
                   <fieldset style={{ flex: 1, border: '1px solid #444', borderRadius: 4, padding: '8px 12px' }}>
-                    <legend style={{ padding: '0 6px', color: '#bbb', fontSize: 12 }}>Backspace 키 시퀀스</legend>
+                    <legend style={{ padding: '0 6px', color: '#bbb', fontSize: 12 }}>{t('keys.backspaceLegend')}</legend>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {opts.map(o => (
                         <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12 }}>
@@ -594,19 +594,19 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
             })()}
             {category === 'advanced' && (
               <div className="session-editor-grid">
-                <label title="LogAnalyzer 에서 이 세션 선택 시 자동으로 채울 로그 파일 경로">로그 위치</label>
+                <label title={t('advanced.logPathTooltip')}>{t('fields.logPath')}</label>
                 <input
                   type="text"
                   value={logPath}
                   onChange={e => setLogPath(e.target.value)}
-                  placeholder="예: /var/log/myapp/app.log"
+                  placeholder={t('advanced.logPathPlaceholder')}
                 />
-                <label title="파일 비교 워크스페이스에서 이 세션 선택 시 자동으로 채울 base 디렉토리">코드 위치</label>
+                <label title={t('advanced.codePathTooltip')}>{t('fields.codePath')}</label>
                 <input
                   type="text"
                   value={codePath}
                   onChange={e => setCodePath(e.target.value)}
-                  placeholder="예: /home/user/project/src"
+                  placeholder={t('advanced.codePathPlaceholder')}
                 />
               </div>
             )}
@@ -614,7 +614,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
               <div className="session-editor-grid">
                 <label>{t('fields.initialPath')}</label>
                 <input type="text" value={initialPath} onChange={e => setInitialPath(e.target.value)} placeholder={t('placeholders.initialPath')} />
-                <label>파일트리 보여주기</label>
+                <label>{t('fields.showFileTree')}</label>
                 <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', justifySelf: 'start' }}>
                   <input
                     type="checkbox"
@@ -629,11 +629,11 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                 </label>
                 <label
                   style={{ opacity: fileTreeEnabled ? 1 : 0.45, cursor: fileTreeEnabled ? 'pointer' : 'not-allowed' }}
-                  title={!fileTreeEnabled ? '파일트리 보여주기가 켜져 있어야 사용 가능' : '터미널에서 cd 시 파일트리 경로 자동 갱신'}
-                >파일트리 자동추적</label>
+                  title={!fileTreeEnabled ? t('filetree.disabledHint') : t('filetree.autoTrackTooltip')}
+                >{t('fields.autoTrackFileTree')}</label>
                 <label
                   style={{ display: 'inline-flex', alignItems: 'center', cursor: fileTreeEnabled ? 'pointer' : 'not-allowed', justifySelf: 'start', opacity: fileTreeEnabled ? 1 : 0.45 }}
-                  title={!fileTreeEnabled ? '파일트리 보여주기가 켜져 있어야 사용 가능' : '터미널에서 cd 시 파일트리 경로 자동 갱신'}
+                  title={!fileTreeEnabled ? t('filetree.disabledHint') : t('filetree.autoTrackTooltip')}
                 >
                   <input
                     type="checkbox"
@@ -674,10 +674,10 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
               const effectiveUrl = dbmsUrlEditMode && dbmsUrlOverride ? dbmsUrlOverride : composedUrl;
               const driverUsable = selectedDriver?.diag?.usable;
               const runTest = async () => {
-                if (!selectedDriver) { setDbmsTestResult('❌ 드라이버 미선택'); return; }
-                if (!driverUsable) { setDbmsTestResult('❌ 드라이버 JAR 누락 — 드라이버 관리자에서 JAR 추가 필요'); return; }
+                if (!selectedDriver) { setDbmsTestResult(t('dbms.noDriver')); return; }
+                if (!driverUsable) { setDbmsTestResult(t('dbms.driverJarMissing')); return; }
                 setDbmsTesting(true);
-                setDbmsTestResult('테스트 중...');
+                setDbmsTestResult(t('dbms.testing'));
                 const cid = `test-${Date.now().toString(36)}`;
                 const api: any = (window as any).api || {};
                 let testUrl = effectiveUrl;
@@ -688,9 +688,9 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                   const useSshTunnel = dbmsUseSshTunnel || forceSshTunnel;
                   if (useSshTunnel && session?.id) {
                     if (typeof api.sshOpenLocalForward !== 'function') {
-                      setDbmsTestResult('❌ SSH 터널 IPC 미등록 — Electron 메인 재시작 필요'); return;
+                      setDbmsTestResult(t('dbms.sshIpcMissing')); return;
                     }
-                    setDbmsTestResult('SSH 터널 여는 중...');
+                    setDbmsTestResult(t('dbms.sshOpening'));
                     const remoteHost = dbmsRemoteHostForCurrentSession();
                     const remotePort = dbmsPort || selectedDriver?.defaultPort || 0;
                     const fwd = await api.sshOpenLocalForward({
@@ -702,13 +702,13 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                     });
                     console.log('[SessionEditor] sshOpenLocalForward =', fwd);
                     if (!fwd?.success) {
-                      setDbmsTestResult(`❌ SSH 터널 실패: ${fwd?.error || '?'} — 먼저 같은 세션 터미널 연결 필요`); return;
+                      setDbmsTestResult(t('dbms.sshFailed', { error: fwd?.error || '?' })); return;
                     }
                     forwardId = fwd.forwardId;
                     // 원래 호스트:포트를 127.0.0.1:localPort 로 치환
                     const orig = `${dbmsHost || '127.0.0.1'}:${dbmsPort || selectedDriver?.defaultPort || 0}`;
                     testUrl = effectiveUrl.replace(orig, `127.0.0.1:${fwd.localPort}`);
-                    setDbmsTestResult(`SSH 터널 OK (${remoteHost}:${remotePort} → local=${fwd.localPort}) — JDBC 테스트 중...`);
+                    setDbmsTestResult(t('dbms.sshTunnelOk', { remoteHost, remotePort, localPort: fwd.localPort }));
                   }
                   const cr = await api.jdbcConnect?.({
                     connectionId: cid,
@@ -722,7 +722,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                   setDbmsTestResult(`✅ ${info.productName || ''} ${info.productVersion || ''} (driver: ${info.driverName || '?'})${forwardId ? ' [via SSH tunnel]' : ''}`);
                   await api.jdbcDisconnect?.(cid);
                 } catch (e: any) {
-                  setDbmsTestResult(`❌ 예외: ${e?.message || e}`);
+                  setDbmsTestResult(t('dbms.exception', { error: e?.message || e }));
                 } finally {
                   if (forwardId) { try { await api.sshCloseLocalForward?.({ forwardId }); } catch {} }
                   setDbmsTesting(false);
@@ -735,7 +735,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                   <span>{t('fields.sqlToolEnable')}</span>
                 </label>
                 <div className="session-editor-grid">
-                  <label>JDBC 드라이버</label>
+                  <label>{t('fields.jdbcDriver')}</label>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     <select
                       value={dbmsDriverId}
@@ -749,7 +749,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                       disabled={!dbmsEnabled}
                       style={{ flex: 1 }}
                     >
-                      {jdbcDrivers.length === 0 && <option value="">(로딩...)</option>}
+                      {jdbcDrivers.length === 0 && <option value="">{t('dbms.driverLoading')}</option>}
                       {jdbcDrivers.map(d => (
                         <option key={d.id} value={d.id}>
                           {d.diag?.usable ? '✓' : '⚠'} {d.name} [{d.dialect}]
@@ -758,23 +758,23 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                     </select>
                   </div>
 
-                  <label>호스트</label>
+                  <label>{t('fields.dbmsHost')}</label>
                   <input type="text" value={dbmsHost} onChange={e => setDbmsHost(e.target.value)} placeholder="127.0.0.1" disabled={!dbmsEnabled} />
-                  <label>포트</label>
+                  <label>{t('fields.dbmsPort')}</label>
                   <input type="number" value={dbmsPort} onChange={e => setDbmsPort(Number(e.target.value) || 0)} placeholder={String(selectedDriver?.defaultPort || 0)} disabled={!dbmsEnabled} min={1} max={65535} />
-                  <label>Database</label>
+                  <label>{t('fields.dbmsDatabase')}</label>
                   <input type="text" value={dbmsDatabase} onChange={e => setDbmsDatabase(e.target.value)} placeholder={selectedDriver?.dialect === 'sqlite' ? '/path/to/file.db' : 'mydb'} disabled={!dbmsEnabled} />
-                  <label>사용자</label>
+                  <label>{t('fields.dbmsUser')}</label>
                   <input type="text" value={dbmsUser} onChange={e => setDbmsUser(e.target.value)} placeholder="ipageon" disabled={!dbmsEnabled} autoComplete="off" />
-                  <label>비밀번호</label>
+                  <label>{t('fields.dbmsPassword')}</label>
                   <div style={{ display: 'flex', gap: 4 }}>
                     <input type={showDbmsPassword ? 'text' : 'password'} value={dbmsPassword} onChange={e => setDbmsPassword(e.target.value)} disabled={!dbmsEnabled} style={{ flex: 1 }} autoComplete="off" />
                     <button type="button" onClick={() => setShowDbmsPassword(v => !v)} disabled={!dbmsEnabled}>{showDbmsPassword ? '🙈' : '👁'}</button>
                   </div>
-                  <label>SSH 터널</label>
+                  <label>{t('fields.sshTunnel')}</label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#bbb', fontSize: 12 }}>
                     <input type="checkbox" checked={dbmsUseSshTunnel || hasConfiguredJumps()} onChange={e => setDbmsUseSshTunnel(e.target.checked)} disabled={!dbmsEnabled || hasConfiguredJumps()} />
-                    <span>{hasConfiguredJumps() ? '점프 최종 SSH 장비 기준으로 JDBC 접속' : 'SSH 세션 위에 포트 포워딩 후 로컬에서 JDBC 접속'}</span>
+                    <span>{hasConfiguredJumps() ? t('dbms.useSshTunnelJump') : t('dbms.useSshTunnelNormal')}</span>
                   </label>
                 </div>
 
@@ -783,22 +783,22 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                     <span style={{ fontWeight: 600, fontSize: 12, color: '#9cdcfe' }}>JDBC URL</span>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#aaa', fontSize: 11 }}>
                       <input type="checkbox" checked={dbmsUrlEditMode} onChange={e => { setDbmsUrlEditMode(e.target.checked); if (e.target.checked && !dbmsUrlOverride) setDbmsUrlOverride(composedUrl); }} disabled={!dbmsEnabled} />
-                      <span>직접 입력</span>
+                      <span>{t('fields.directInput')}</span>
                     </label>
                     {!dbmsUrlEditMode && composedUrl && (
-                      <button type="button" onClick={() => navigator.clipboard.writeText(composedUrl)} style={{ marginLeft: 'auto', background: 'transparent', color: '#aaa', border: '1px solid #444', padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>복사</button>
+                      <button type="button" onClick={() => navigator.clipboard.writeText(composedUrl)} style={{ marginLeft: 'auto', background: 'transparent', color: '#aaa', border: '1px solid #444', padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>{t('dbms.copy')}</button>
                     )}
                   </div>
                   {dbmsUrlEditMode ? (
                     <input type="text" value={dbmsUrlOverride} onChange={e => setDbmsUrlOverride(e.target.value)} disabled={!dbmsEnabled} style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 12 }} />
                   ) : (
-                    <code style={{ color: '#d4d4d4', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{composedUrl || '(드라이버 선택 필요)'}</code>
+                    <code style={{ color: '#d4d4d4', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{composedUrl || t('dbms.urlPlaceholder')}</code>
                   )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <button type="button" onClick={runTest} disabled={!dbmsEnabled || dbmsTesting || !selectedDriver} style={{ background: '#3a7d3a', color: '#fff', border: 0, padding: '5px 12px', borderRadius: 3, cursor: dbmsTesting ? 'wait' : 'pointer', fontSize: 12 }}>
-                    {dbmsTesting ? '...' : '🔌 테스트 연결'}
+                    {dbmsTesting ? '...' : t('dbms.testConnect')}
                   </button>
                   {dbmsTestResult && (
                     <span style={{ color: dbmsTestResult.startsWith('✅') ? '#5fb55f' : (dbmsTestResult.startsWith('테스트') ? '#bbb' : '#fcc'), fontSize: 12, fontFamily: 'monospace' }}>{dbmsTestResult}</span>

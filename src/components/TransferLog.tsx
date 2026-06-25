@@ -1,6 +1,7 @@
 // src/components/TransferLog.tsx
 // 파일 전송 트리 진행률 표시 컴포넌트
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ContextMenu, MenuItem } from './ContextMenu';
 
 const api = (window as any).api || {};
@@ -137,6 +138,7 @@ const shorten = (p: string, max = 40): string => {
 };
 
 export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string }> = ({ workspaceId }) => {
+  const { t } = useTranslation('transferLog');
   const [groups, setGroups] = useState<Record<string, TransferGroup>>({});
   const groupsRef = useRef<Record<string, TransferGroup>>({});
   const [deleteOps, setDeleteOps] = useState<Record<string, DeleteOp>>({});
@@ -224,7 +226,7 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
           };
           return { ...prev, [id]: g };
         });
-        log('info', `전송 시작: ${d.rootName} (${d.direction}, ${formatBytes(d.totalSize || 0)})`);
+        log('info', t('logTransferStart', { name: d.rootName, direction: d.direction, size: formatBytes(d.totalSize || 0) }));
       } catch {}
     }) || (() => {}));
 
@@ -450,8 +452,8 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
       try {
         const d = p.data ? JSON.parse(p.data) : {};
         const id = d.transferId;
-        const errStr = p.error || '알 수 없는 오류';
-        log('error', `전송 오류: ${d.filename || ''} - ${errStr}`);
+        const errStr = p.error || t('unknownError');
+        log('error', t('logTransferError', { name: d.filename || '', error: errStr }));
         if (!id) return;
         updateGroup(id, g => {
           const rel = d.rel || '';
@@ -600,13 +602,13 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
       || Object.values(deleteOpsRef.current).some(x => x.status === 'done' || x.status === 'error');
     const items: MenuItem[] = [];
     if (g) {
-      items.push({ label: '파일 탐색기에서 열기', onClick: () => showInExplorer(g), disabled: !hasLocalPath });
-      items.push({ label: '로컬 폴더 열기', onClick: () => openLocalFolder(g), disabled: !hasLocalPath });
+      items.push({ label: t('ctxShowInExplorer'), onClick: () => showInExplorer(g), disabled: !hasLocalPath });
+      items.push({ label: t('ctxOpenLocalFolder'), onClick: () => openLocalFolder(g), disabled: !hasLocalPath });
       items.push({ separator: true });
-      items.push({ label: isActive ? '전송 취소' : '제거', onClick: () => removeOne(g.id) });
+      items.push({ label: isActive ? t('ctxCancelTransfer') : t('ctxRemove'), onClick: () => removeOne(g.id) });
     }
-    items.push({ label: '모두 제거', onClick: removeAll, disabled: Object.keys(groupsRef.current).length === 0 });
-    items.push({ label: '완료된 작업 제거', onClick: clearDone, disabled: !hasDone });
+    items.push({ label: t('ctxRemoveAll'), onClick: removeAll, disabled: Object.keys(groupsRef.current).length === 0 });
+    items.push({ label: t('ctxRemoveCompleted'), onClick: clearDone, disabled: !hasDone });
     return items;
   };
 
@@ -690,14 +692,14 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
   const padBottom = Math.max(0, (rows.length - visEnd) * ROW_H);
 
   const statusText = (s: string) => ({
-    pending: '준비',
-    active: '진행 중',
-    preparing: '준비',
-    done: '완료',
-    error: '오류',
-    partial: '부분 완료',
-    skipped: '건너뜀',
-    cancelled: '취소됨',
+    pending: t('statusPending'),
+    active: t('statusActive'),
+    preparing: t('statusPending'),
+    done: t('statusDone'),
+    error: t('statusError'),
+    partial: t('statusPartial'),
+    skipped: t('statusSkipped'),
+    cancelled: t('statusCancelled'),
   } as any)[s] || s;
 
   const directionArrow = (g: TransferGroup) => {
@@ -713,26 +715,26 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
   return (
     <div className="tl-root">
       <div className="tl-tabs">
-        <button className={`tl-tab ${tab === 'transfer' ? 'active' : ''}`} onClick={() => setTab('transfer')}>전송</button>
-        <button className={`tl-tab ${tab === 'log' ? 'active' : ''}`} onClick={() => setTab('log')}>로그</button>
+        <button className={`tl-tab ${tab === 'transfer' ? 'active' : ''}`} onClick={() => setTab('transfer')}>{t('tabTransfer')}</button>
+        <button className={`tl-tab ${tab === 'log' ? 'active' : ''}`} onClick={() => setTab('log')}>{t('tabLog')}</button>
         <div className="tl-tab-spacer" />
         {tab === 'transfer' && groupList.some(g => g.status === 'done' || g.status === 'error') && (
-          <button className="tl-clear-btn" onClick={clearDone} title="완료/오류 항목 지우기">완료 정리</button>
+          <button className="tl-clear-btn" onClick={clearDone} title={t('clearDoneTitle')}>{t('clearDone')}</button>
         )}
       </div>
       {tab === 'transfer' && (
         <div className="tl-table">
           <div className="tl-header tl-row">
-            <div className="tl-col tl-col-name">이름</div>
-            <div className="tl-col tl-col-status">상태</div>
-            <div className="tl-col tl-col-progress">진행률</div>
-            <div className="tl-col tl-col-size">크기</div>
-            <div className="tl-col tl-col-local">로컬 경로</div>
+            <div className="tl-col tl-col-name">{t('colName')}</div>
+            <div className="tl-col tl-col-status">{t('colStatus')}</div>
+            <div className="tl-col tl-col-progress">{t('colProgress')}</div>
+            <div className="tl-col tl-col-size">{t('colSize')}</div>
+            <div className="tl-col tl-col-local">{t('colLocalPath')}</div>
             <div className="tl-col tl-col-dir">{'<->'}</div>
-            <div className="tl-col tl-col-remote">원격 경로</div>
-            <div className="tl-col tl-col-speed">속도</div>
-            <div className="tl-col tl-col-eta">남은 시간</div>
-            <div className="tl-col tl-col-elapsed">경과 시간</div>
+            <div className="tl-col tl-col-remote">{t('colRemotePath')}</div>
+            <div className="tl-col tl-col-speed">{t('colSpeed')}</div>
+            <div className="tl-col tl-col-eta">{t('colEta')}</div>
+            <div className="tl-col tl-col-elapsed">{t('colElapsed')}</div>
           </div>
           <div className="tl-body" ref={bodyRef} onScroll={handleBodyScroll}
             onContextMenu={e => {
@@ -745,7 +747,7 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
             {/* 가상 스크롤 래퍼 — 전체 높이를 유지하고 뷰포트 내 행만 렌더링 */}
             <div style={{ height: totalVHeight + deleteOpsHeight, position: 'relative' }}>
             <div style={{ paddingTop: padTop, paddingBottom: padBottom }}>
-            {rows.length === 0 && Object.keys(deleteOps).length === 0 && <div className="tl-empty">전송 대기 중..</div>}
+            {rows.length === 0 && Object.keys(deleteOps).length === 0 && <div className="tl-empty">{t('waiting')}</div>}
             {/* 삭제 진행 행 */}
             {Object.values(deleteOps).sort((a, b) => a.startTime - b.startTime).map(op => {
               const now = Date.now();
@@ -762,13 +764,13 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
                       <span className="tl-delete-current" title={op.currentName}> — {op.currentName}</span>
                     )}
                   </div>
-                  <div className="tl-col tl-col-status">{op.status === 'active' ? '삭제 중' : op.status === 'done' ? '완료' : '오류'}</div>
+                  <div className="tl-col tl-col-status">{op.status === 'active' ? t('deleting') : op.status === 'done' ? t('statusDone') : t('statusError')}</div>
                   <div className="tl-col tl-col-progress">
                     <div className="tl-bar"><div className="tl-bar-fill tl-bar-delete" style={{ width: pct + '%' }} /></div>
                     <span className="tl-bar-pct">{pct}%</span>
                   </div>
                   <div className="tl-col tl-col-size">
-                    {op.totalCount > 0 ? `${op.doneCount}/${op.totalCount}개` : op.doneCount > 0 ? `${op.doneCount}개` : '—'}
+                    {op.totalCount > 0 ? t('countOfTotal', { done: op.doneCount, total: op.totalCount }) : op.doneCount > 0 ? t('count', { done: op.doneCount }) : '—'}
                   </div>
                   <div className="tl-col tl-col-local" title={op.path}>{shorten(op.path)}</div>
                   <div className="tl-col tl-col-dir"><span className="tl-arrow">🗑</span></div>
@@ -894,7 +896,7 @@ export const TransferLog: React.FC<{ onClear?: () => void; workspaceId?: string 
       )}
       {tab === 'log' && (
         <div className="tl-log">
-          {logs.length === 0 && <div className="tl-empty">로그 없음</div>}
+          {logs.length === 0 && <div className="tl-empty">{t('noLogs')}</div>}
           {logs.map((l, i) => (
             <div key={i} className={`tl-log-line ${l.level}`}>
               <span className="tl-log-time">{new Date(l.at).toLocaleTimeString()}</span>

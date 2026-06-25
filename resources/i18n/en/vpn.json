@@ -33,5 +33,7 @@
   "confirmDeleteConfig": "Delete?\n{{path}}",
   "confirmClearCreds": "Delete saved ID/password?",
   "importFailed": "Import failed: {{reason}}",
-  "connectFailed": "Connection failed: {{reason}}"
+  "connectFailed": "Connection failed: {{reason}}",
+  "deleteTitle": "Delete",
+  "clearCredsTitle": "Clear credentials"
 }

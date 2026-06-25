@@ -9,6 +9,7 @@
 //  - remove (user-defined only — removing a user override restores the built-in).
 
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type Dialect = 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite' | 'generic';
 
@@ -46,6 +47,7 @@ const PropertyEditor: React.FC<{
   map: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
 }> = ({ title, map, onChange }) => {
+  const { t: tr } = useTranslation('sqlTool');
   const entries = Object.entries(map);
   const setKey = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -60,9 +62,9 @@ const PropertyEditor: React.FC<{
         <span style={{ color: '#bbb', fontSize: 11 }}>{title}</span>
         <button onClick={() => onChange({ ...map, '': '' })}
           style={{ marginLeft: 'auto', background: '#3a7d3a', color: '#fff', border: 0, padding: '3px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11 }}
-        >+ 항목 추가</button>
+        >{tr('driverAddItem')}</button>
       </div>
-      {entries.length === 0 && <div style={{ color: '#888', fontSize: 11, padding: '6px 0' }}>(비어 있음)</div>}
+      {entries.length === 0 && <div style={{ color: '#888', fontSize: 11, padding: '6px 0' }}>{tr('driverEmpty')}</div>}
       <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'monospace', fontSize: 12 }}>
         {entries.length > 0 && (
           <thead><tr style={{ color: '#9cdcfe' }}>
@@ -103,14 +105,15 @@ const newDraft = (): JdbcDriverDef => ({
 });
 
 type TabId = 'settings' | 'libraries' | 'properties' | 'advanced';
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'settings',   label: 'Settings' },
-  { id: 'libraries',  label: 'Libraries' },
-  { id: 'properties', label: '기본 속성' },
-  { id: 'advanced',   label: 'Advanced parameters' },
-];
 
 export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
+  const { t: tr } = useTranslation('sqlTool');
+  const TABS: { id: TabId; label: string }[] = [
+    { id: 'settings',   label: 'Settings' },
+    { id: 'libraries',  label: 'Libraries' },
+    { id: 'properties', label: tr('driverTabBasicProps') },
+    { id: 'advanced',   label: 'Advanced parameters' },
+  ];
   const [drivers, setDrivers] = useState<JdbcDriverDef[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [draft, setDraft] = useState<JdbcDriverDef | null>(null);
@@ -168,24 +171,25 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
     if (!draft) return;
     const r = await apiAny.jdbcSaveDriver?.(draft);
     if (r?.success) { await reload(); setSelectedId(draft.id); }
-    else showErr('저장 실패', r?.error || '?');
+    else showErr(tr('driverSaveFailed'), r?.error || '?');
   };
 
   const handleRemove = async () => {
     if (!selectedOriginal) return;
     setConfirmModal({
-      title: '드라이버 제거',
-      message: `${selectedOriginal.name} (${selectedOriginal.id})\n\n빌트인 id 와 동일한 사용자 정의면 빌트인이 복원됩니다.\n계속할까요?`,
+      title: tr('driverRemoveTitle'),
+      message: tr('driverRemoveConfirm', { name: selectedOriginal.name, id: selectedOriginal.id }),
       onOk: async () => {
         const r = await apiAny.jdbcRemoveDriver?.(selectedOriginal.id);
         if (r?.success) { await reload(); }
-        else showErr('제거 실패', r?.error || '?');
+        else showErr(tr('driverRemoveFailed'), r?.error || '?');
       },
     });
   };
 
   const handleAdd = () => {
     const d = newDraft();
+    d.name = tr('driverNewName');
     setDrivers(prev => [...prev, d]);
     setSelectedId(d.id);
     setDraft(d);
@@ -197,29 +201,29 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
     // diag 은 main 이 다시 계산하므로 제외
     delete (base as any).diag;
     base.id = `user-${Date.now().toString(36)}`;
-    base.name = `${base.name} (복제)`;
+    base.name = tr('driverCopyName', { name: base.name });
     base.builtin = false;
     const r = await apiAny.jdbcSaveDriver?.(base);
     if (r?.success) { await reload(); setSelectedId(base.id); }
-    else showErr('복제 실패', r?.error || '?');
+    else showErr(tr('driverDuplicateFailed'), r?.error || '?');
   };
 
   const handleImportJar = async () => {
     const r = await apiAny.jdbcPickAndImportJar?.();
     if (!r || r.canceled) return;
-    if (!r.success) { showErr('JAR 가져오기 실패', r.error || '?'); return; }
+    if (!r.success) { showErr(tr('driverJarImportFailed'), r.error || '?'); return; }
     if (draft) setDraft({ ...draft, jars: [...draft.jars, ...(r.imported || [])] });
   };
   const handleAddFolder = async () => {
     const r = await apiAny.jdbcPickAndImportFolder?.();
     if (!r || r.canceled) return;
-    if (!r.success) { showErr('폴더 가져오기 실패', r.error || '?'); return; }
+    if (!r.success) { showErr(tr('driverFolderImportFailed'), r.error || '?'); return; }
     if (draft) setDraft({ ...draft, jars: [...draft.jars, ...(r.imported || [])] });
   };
   // DBeaver "Download/Update" — 드라이버의 모든 maven: 좌표 다운로드 (캐시된 건 스킵)
   const handleDownloadLibraries = async () => {
     if (!draft) return;
-    setTesting(true); setTestMsg('Maven 라이브러리 다운로드 중...');
+    setTesting(true); setTestMsg(tr('driverMavenDownloading'));
     try {
       const r = await apiAny.jdbcDownloadDriverLibraries?.(draft);
       if (!r?.success) { setTestMsg(`❌ ${r?.error || '?'}`); return; }
@@ -228,9 +232,9 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
       const downloaded = results.filter((x: any) => x.ok && !x.cached).length;
       const cached    = results.filter((x: any) => x.ok && x.cached).length;
       if (failed.length === 0) {
-        setTestMsg(`✅ Maven 라이브러리 OK — 신규 ${downloaded} / 캐시 ${cached}`);
+        setTestMsg(tr('driverMavenOk', { downloaded, cached }));
       } else {
-        setTestMsg(`⚠ 일부 실패 (${failed.length}): ${failed.map((f: any) => f.coord).join(', ')}`);
+        setTestMsg(tr('driverMavenPartialFail', { count: failed.length, coords: failed.map((f: any) => f.coord).join(', ') }));
       }
       await reload();
     } finally { setTesting(false); }
@@ -238,7 +242,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
   const handleDownloadArtifact = async () => {
     if (!artifactModal) return;
     const { group, artifact, version } = artifactModal;
-    if (!group || !artifact || !version) { showInfo('Maven Artifact', 'groupId / artifactId / version 모두 입력하세요.'); return; }
+    if (!group || !artifact || !version) { showInfo('Maven Artifact', tr('driverMavenAllRequired')); return; }
     setDownloading(true);
     try {
       const r = await apiAny.jdbcDownloadMavenArtifact?.({ groupId: group, artifactId: artifact, version });
@@ -246,33 +250,33 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
         if (draft) setDraft({ ...draft, jars: [...draft.jars, r.imported] });
         setArtifactModal(null);
       } else {
-        showErr('Maven 다운로드 실패', r?.error || '?');
+        showErr(tr('driverMavenDownloadFailed'), r?.error || '?');
       }
     } finally { setDownloading(false); }
   };
 
   const handleTestLoad = async () => {
     if (!draft) return;
-    setTesting(true); setTestMsg('테스트 중...');
+    setTesting(true); setTestMsg(tr('driverTesting'));
     try {
       // Save first if dirty — load uses the current driver definition.
       if (isDirty) {
         const sr = await apiAny.jdbcSaveDriver?.(draft);
-        if (!sr?.success) { setTestMsg(`❌ 저장 실패: ${sr?.error || '?'}`); return; }
+        if (!sr?.success) { setTestMsg(`❌ ${tr('driverSaveFailed')}: ${sr?.error || '?'}`); return; }
         await reload();
       }
       // 누락된 maven: 좌표 자동 다운로드 (DBeaver 와 동일) — slf4j 같은 transitive 의존성 누락 방지
       const hasMaven = draft.jars.some(j => /^maven:/.test(j));
       if (hasMaven) {
-        setTestMsg('Maven 라이브러리 확인 중...');
+        setTestMsg(tr('driverMavenChecking'));
         await apiAny.jdbcDownloadDriverLibraries?.(draft);
         await reload();
       }
       const r = await apiAny.jdbcLoadDriver?.(draft);
-      if (r?.success) setTestMsg(`✅ ${draft.className} 로드 OK`);
+      if (r?.success) setTestMsg(tr('driverLoadOk', { className: draft.className }));
       else setTestMsg(`❌ ${r?.error || '?'}`);
     } catch (e: any) {
-      setTestMsg(`❌ 예외: ${e?.message || e}`);
+      setTestMsg(`❌ ${tr('driverException')}: ${e?.message || e}`);
     } finally { setTesting(false); }
   };
 
@@ -302,11 +306,11 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
         }}
       >
         <div style={{ padding: '10px 14px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 600 }}>🗂 JDBC 드라이버 관리자</span>
+          <span style={{ fontWeight: 600 }}>🗂 {tr('driverManagerTitle')}</span>
           <span style={{ color: '#888', fontSize: 11 }}>({drivers.length})</span>
           <button
             onClick={onClose}
-            title="닫기"
+            title={tr('driverClose')}
             style={{ marginLeft: 'auto', background: 'transparent', color: '#aaa', border: 0, fontSize: 20, cursor: 'pointer', lineHeight: 1 }}
           >×</button>
         </div>
@@ -337,7 +341,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                         </span>
                       )}
                     </div>
-                    <div style={{ color: '#888', fontSize: 11, marginTop: 2, marginLeft: 14 }}>{d.dialect} · {d.className || '(클래스 없음)'}</div>
+                    <div style={{ color: '#888', fontSize: 11, marginTop: 2, marginLeft: 14 }}>{d.dialect} · {d.className || tr('driverNoClass')}</div>
                   </div>
                 );
               })}
@@ -345,29 +349,29 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
             <div style={{ padding: 8, borderTop: '1px solid #333', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button
                 onClick={handleAdd}
-                title="신규 사용자 드라이버 추가"
+                title={tr('driverAddTitle')}
                 style={{ flex: 1, background: '#0e639c', color: '#fff', border: 0, padding: '4px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-              >+ 추가</button>
+              >{tr('driverAdd')}</button>
               {!!selectedOriginal && (
                 <button
                   onClick={handleDuplicate}
-                  title={`"${selectedOriginal.name}" 을(를) 복제 — 같은 설정으로 신규 사용자 드라이버 생성`}
+                  title={tr('driverDuplicateTitle', { name: selectedOriginal.name })}
                   style={{ background: '#3a5a7d', color: '#fff', border: 0, padding: '4px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-                >⎘ 복제</button>
+                >{tr('driverDuplicate')}</button>
               )}
               {!!selectedOriginal && (
                 <button
                   onClick={handleRemove}
-                  title="제거 (빌트인 id 와 동일한 사용자 정의면 빌트인 복원)"
+                  title={tr('driverRemoveBtnTitle')}
                   style={{ background: '#5a1d1d', color: '#fff', border: 0, padding: '4px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-                >- 제거</button>
+                >{tr('driverRemove')}</button>
               )}
             </div>
           </div>
 
           {/* Right: detail with tabs (DBeaver Edit Driver 와 동일 구조) */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            {!draft && <div style={{ padding: 14, color: '#888' }}>드라이버를 선택하거나 추가하세요.</div>}
+            {!draft && <div style={{ padding: 14, color: '#888' }}>{tr('driverSelectOrAdd')}</div>}
             {draft && (<>
               {/* 탭 헤더 */}
               <div style={{ display: 'flex', borderBottom: '1px solid #333', background: '#252526' }}>
@@ -388,7 +392,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
               <div style={{ flex: 1, overflow: 'auto', padding: 14, minWidth: 0 }}>
                 {tab === 'settings' && (
                   <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 8, alignItems: 'center' }}>
-                    <label style={{ color: '#bbb', fontSize: 12 }}>이름</label>
+                    <label style={{ color: '#bbb', fontSize: 12 }}>{tr('driverName')}</label>
                     <input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} style={inputStyle} />
                     <label style={{ color: '#bbb', fontSize: 12 }}>Dialect</label>
                     <select value={draft.dialect} onChange={e => setDraft({ ...draft, dialect: e.target.value as Dialect })} style={inputStyle}>
@@ -400,11 +404,11 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                       <option value="sqlite">sqlite</option>
                       <option value="generic">generic</option>
                     </select>
-                    <label style={{ color: '#bbb', fontSize: 12 }}>Driver 클래스</label>
-                    <input value={draft.className} onChange={e => setDraft({ ...draft, className: e.target.value })} placeholder="예: org.postgresql.Driver" style={inputStyle} />
-                    <label style={{ color: '#bbb', fontSize: 12 }}>URL 템플릿</label>
+                    <label style={{ color: '#bbb', fontSize: 12 }}>{tr('driverClass')}</label>
+                    <input value={draft.className} onChange={e => setDraft({ ...draft, className: e.target.value })} placeholder={tr('driverClassPlaceholder')} style={inputStyle} />
+                    <label style={{ color: '#bbb', fontSize: 12 }}>{tr('driverUrlTemplate')}</label>
                     <input value={draft.urlTemplate} onChange={e => setDraft({ ...draft, urlTemplate: e.target.value })} placeholder="jdbc:scheme://{host}:{port}/{database}" style={inputStyle} />
-                    <label style={{ color: '#bbb', fontSize: 12 }}>기본 포트</label>
+                    <label style={{ color: '#bbb', fontSize: 12 }}>{tr('driverDefaultPort')}</label>
                     <input type="number" value={draft.defaultPort} onChange={e => setDraft({ ...draft, defaultPort: parseInt(e.target.value || '0', 10) || 0 })} style={{ ...inputStyle, width: 100 }} />
                     {draft.note && (
                       <>
@@ -443,7 +447,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                       {/* 좌측: 라이브러리 트리 */}
                       <div style={{ flex: 1, minWidth: 0, background: '#1e1e1e', border: '1px solid #333', borderRadius: 3, padding: 6, minHeight: 220, maxHeight: 360, overflowY: 'auto' }}>
                         {draft.jars.length === 0 && (
-                          <div style={{ color: '#888', fontSize: 11, padding: '6px 0' }}>JAR 항목이 없습니다.</div>
+                          <div style={{ color: '#888', fontSize: 11, padding: '6px 0' }}>{tr('driverNoJars')}</div>
                         )}
                         {draft.jars.map((j, idx) => {
                           const meta = parseJar(j);
@@ -476,7 +480,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                                   <span style={{ width: 12 }} />
                                 )}
                                 {/* 상태 + 종류 아이콘 */}
-                                <span style={{ color: exists ? '#5fb55f' : '#e07050', width: 12, fontSize: 11 }} title={exists ? '존재함' : 'JAR 누락'}>{exists ? '✓' : '⚠'}</span>
+                                <span style={{ color: exists ? '#5fb55f' : '#e07050', width: 12, fontSize: 11 }} title={exists ? tr('driverJarExists') : tr('driverJarMissing')}>{exists ? '✓' : '⚠'}</span>
                                 <span style={{ width: 14, color: isMaven ? '#d97757' : (isLicense ? '#9cdcfe' : '#bbb'), fontWeight: 700, textAlign: 'center', fontSize: 12 }}
                                   title={isMaven ? 'Maven artifact' : (isLicense ? 'License/Text' : 'Local JAR')}>
                                   {isMaven ? '/' : (isLicense ? 'T' : '▢')}
@@ -528,7 +532,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                           <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #333', fontSize: 11, fontFamily: 'monospace', color: '#888' }}>
                             <div style={{ marginBottom: 4, color: '#9cdcfe' }}>Classpath (resolved):</div>
                             {(draft.diag.existing || []).map((p, i) => (<div key={i} style={{ color: '#5fb55f' }}>✓ {p}</div>))}
-                            {(draft.diag.missing  || []).map((p, i) => (<div key={i} style={{ color: '#e07050' }}>⚠ {p} (없음)</div>))}
+                            {(draft.diag.missing  || []).map((p, i) => (<div key={i} style={{ color: '#e07050' }}>⚠ {p} {tr('driverNotFoundSuffix')}</div>))}
                           </div>
                         )}
                       </div>
@@ -541,7 +545,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                         <button onClick={() => { if (!hasSel) return; setDraft({ ...draft, jars: draft.jars.filter((_, i) => i !== sel) }); setSelectedJarIdx(-1); }} disabled={!hasSel} style={{ background: hasSel ? '#5a1d1d' : '#333', color: hasSel ? '#fff' : '#666', border: 0, padding: '5px 10px', borderRadius: 3, cursor: hasSel ? 'pointer' : 'not-allowed', fontSize: 12 }}>Delete</button>
                         <div style={{ height: 8 }} />
                         <button onClick={handleDownloadLibraries} disabled={testing} style={{ background: '#0e639c', color: '#fff', border: 0, padding: '5px 10px', borderRadius: 3, cursor: testing ? 'wait' : 'pointer', fontSize: 12 }}>Download/Update</button>
-                        <button onClick={() => draft && setDraft({ ...draft, jars: [...draft.jars, '${userJdbc}/'] })} style={{ background: '#444', color: '#ddd', border: 0, padding: '5px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>+ 빈 항목</button>
+                        <button onClick={() => draft && setDraft({ ...draft, jars: [...draft.jars, '${userJdbc}/'] })} style={{ background: '#444', color: '#ddd', border: 0, padding: '5px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>{tr('driverEmptyEntry')}</button>
                         <div style={{ height: 8 }} />
                         <button
                           onClick={async () => {
@@ -549,9 +553,9 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                             // 사용자 오버라이드 제거 → 빌트인 정의 복원 (DBeaver "Reset to Defaults")
                             const r = await apiAny.jdbcRemoveDriver?.(draft.id);
                             if (r?.success) { await reload(); setSelectedId(draft.id); }
-                            else showErr('초기화 실패', r?.error || '?');
+                            else showErr(tr('driverResetFailed'), r?.error || '?');
                           }}
-                          title="빌트인 기본값(여러 maven 좌표 + bundled jar) 으로 되돌리기 — 사용자 변경 사항 폐기"
+                          title={tr('driverResetTitle')}
                           style={{ background: '#5a3d1d', color: '#fff', border: 0, padding: '5px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
                         >Reset to Defaults</button>
                       </div>
@@ -560,14 +564,14 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
                 })()}
                 {tab === 'properties' && (
                   <PropertyEditor
-                    title="기본 속성 — DriverManager.getConnection() 호출 시 전달되는 JDBC properties"
+                    title={tr('driverPropsEditorTitle')}
                     map={draft.properties || {}}
                     onChange={m => setDraft({ ...draft, properties: m })}
                   />
                 )}
                 {tab === 'advanced' && (
                   <PropertyEditor
-                    title="Advanced parameters — 드라이버 메타 정보 / 벤더 플래그"
+                    title={tr('driverAdvancedEditorTitle')}
                     map={draft.meta || {}}
                     onChange={m => setDraft({ ...draft, meta: m })}
                   />
@@ -577,12 +581,12 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
               <div style={{ padding: '8px 14px', borderTop: '1px solid #333', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button onClick={handleSave} disabled={!isDirty}
                   style={{ background: isDirty ? '#0e639c' : '#444', color: '#fff', border: 0, padding: '6px 14px', borderRadius: 3, cursor: isDirty ? 'pointer' : 'not-allowed', fontSize: 12 }}
-                >💾 저장</button>
+                >💾 {tr('driverSave')}</button>
                 <button onClick={handleTestLoad} disabled={testing}
                   style={{ background: '#3a7d3a', color: '#fff', border: 0, padding: '6px 14px', borderRadius: 3, cursor: testing ? 'wait' : 'pointer', fontSize: 12 }}
-                >🧪 테스트 로드</button>
+                >🧪 {tr('driverTestLoad')}</button>
                 {testMsg && (
-                  <span style={{ color: testMsg.startsWith('✅') ? '#5fb55f' : (testMsg.startsWith('테스트') ? '#bbb' : '#fcc'), fontSize: 12, fontFamily: 'monospace' }}>
+                  <span style={{ color: testMsg.startsWith('✅') ? '#5fb55f' : ((testMsg.startsWith('❌') || testMsg.startsWith('⚠')) ? '#fcc' : '#bbb'), fontSize: 12, fontFamily: 'monospace' }}>
                     {testMsg}
                   </span>
                 )}
@@ -598,41 +602,41 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
           <button
             onClick={() => {
               setConfirmModal({
-                title: '사이드카 재시작',
-                message: '사이드카 JVM 을 재시작합니다.\n진행 중인 모든 JDBC 연결이 끊깁니다.\n계속할까요?',
+                title: tr('driverSidecarRestartTitle'),
+                message: tr('driverSidecarRestartConfirm'),
                 onOk: async () => {
                   const r: any = await apiAny.jdbcRestartSidecar?.();
                   if (r?.success) {
-                    showOk('사이드카 재시작 OK', `버전: ${r.result?.version}\nJava: ${r.result?.javaVersion}`);
+                    showOk(tr('driverSidecarRestartOk'), tr('driverSidecarRestartInfo', { version: r.result?.version, javaVersion: r.result?.javaVersion }));
                     await reload();
                   } else {
-                    showErr('사이드카 재시작 실패', r?.error || '?');
+                    showErr(tr('driverSidecarRestartFailed'), r?.error || '?');
                   }
                 },
               });
             }}
-            title="JVM 프로세스 종료 후 새 JAR 로 재spawn — 빌드 업데이트 적용 / 드라이버 캐시 클리어용"
+            title={tr('driverSidecarRestartBtnTitle')}
             style={{ background: '#5a3d1d', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-          >🔄 사이드카 재시작</button>
+          >🔄 {tr('driverSidecarRestart')}</button>
           <button
             onClick={onClose}
             style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-          >닫기</button>
+          >{tr('driverClose')}</button>
         </div>
       </div>
       {/* Maven artifact 입력 모달 */}
       {artifactModal && (
         <div onClick={() => !downloading && setArtifactModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 6000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#252526', color: '#d4d4d4', borderRadius: 6, padding: 20, width: 460, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>📦 Maven Artifact 추가</div>
-            <div style={{ color: '#888', fontSize: 11, marginBottom: 12 }}>Maven Central(repo1.maven.org) 에서 JAR 다운로드 → 사용자 드라이버 폴더로 복사</div>
+            <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>📦 {tr('driverMavenArtifactAdd')}</div>
+            <div style={{ color: '#888', fontSize: 11, marginBottom: 12 }}>{tr('driverMavenArtifactDesc')}</div>
             <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, alignItems: 'center' }}>
               <label style={{ fontSize: 12, color: '#bbb' }}>Group ID</label>
-              <input autoFocus value={artifactModal.group} onChange={e => setArtifactModal({ ...artifactModal, group: e.target.value })} placeholder="예: com.microsoft.sqlserver" style={inputStyle} />
+              <input autoFocus value={artifactModal.group} onChange={e => setArtifactModal({ ...artifactModal, group: e.target.value })} placeholder={tr('driverGroupIdPlaceholder')} style={inputStyle} />
               <label style={{ fontSize: 12, color: '#bbb' }}>Artifact ID</label>
-              <input value={artifactModal.artifact} onChange={e => setArtifactModal({ ...artifactModal, artifact: e.target.value })} placeholder="예: mssql-jdbc" style={inputStyle} />
+              <input value={artifactModal.artifact} onChange={e => setArtifactModal({ ...artifactModal, artifact: e.target.value })} placeholder={tr('driverArtifactIdPlaceholder')} style={inputStyle} />
               <label style={{ fontSize: 12, color: '#bbb' }}>Version</label>
-              <input value={artifactModal.version} onChange={e => setArtifactModal({ ...artifactModal, version: e.target.value })} placeholder="예: 12.6.1.jre11" style={inputStyle} />
+              <input value={artifactModal.version} onChange={e => setArtifactModal({ ...artifactModal, version: e.target.value })} placeholder={tr('driverVersionPlaceholder')} style={inputStyle} />
             </div>
             {(artifactModal.group && artifactModal.artifact && artifactModal.version) && (
               <div style={{ marginTop: 10, padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 3, fontSize: 10, color: '#888', fontFamily: 'monospace', wordBreak: 'break-all' }}>
@@ -642,10 +646,10 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button onClick={() => setArtifactModal(null)} disabled={downloading}
                 style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: downloading ? 'not-allowed' : 'pointer', fontSize: 12 }}
-              >취소</button>
+              >{tr('driverCancel')}</button>
               <button onClick={handleDownloadArtifact} disabled={downloading || !artifactModal.group || !artifactModal.artifact || !artifactModal.version}
                 style={{ background: downloading ? '#555' : '#0e639c', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: downloading ? 'wait' : 'pointer', fontSize: 12 }}
-              >{downloading ? '다운로드 중...' : '⬇ 다운로드'}</button>
+              >{downloading ? tr('driverDownloading') : tr('driverDownload')}</button>
             </div>
           </div>
         </div>
@@ -661,7 +665,7 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
               <button autoFocus onClick={() => setInfoModal(null)}
                 style={{ background: '#0e639c', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-              >확인</button>
+              >{tr('driverOk')}</button>
             </div>
           </div>
         </div>
@@ -675,10 +679,10 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button autoFocus onClick={() => setConfirmModal(null)}
                 style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-              >취소</button>
+              >{tr('driverCancel')}</button>
               <button onClick={() => { const ok = confirmModal.onOk; setConfirmModal(null); ok(); }}
                 style={{ background: '#c0392b', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}
-              >확인</button>
+              >{tr('driverOk')}</button>
             </div>
           </div>
         </div>

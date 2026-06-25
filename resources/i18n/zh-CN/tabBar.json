@@ -13,7 +13,6 @@
   "scrollNext": "下一个",
   "renameContext": "重命名",
   "closeContext": "关闭",
-  "i18nWorkspace": "🌐 本地化工作区",
   "fileTransferTab": "📁 文件传输",
   "workspaceN": "工作区 {{n}}"
 }

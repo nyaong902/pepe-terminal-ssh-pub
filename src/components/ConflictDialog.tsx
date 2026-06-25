@@ -1,6 +1,7 @@
 // src/components/ConflictDialog.tsx
 // 파일 충돌 — 덮어쓰기/건너뛰기/이어쓰기/이름 바꾸기 선택 다이얼로그
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const api = (window as any).api || {};
 
@@ -48,6 +49,7 @@ type Props = {
 };
 
 export const ConflictDialog: React.FC<Props> = ({ info, onResolved }) => {
+  const { t } = useTranslation('fileExplorer');
   const [action, setAction] = useState<'overwrite' | 'skip' | 'resume' | 'rename'>('overwrite');
   const [applyAll, setApplyAll] = useState(false);
   const [newName, setNewName] = useState(info.name);
@@ -59,10 +61,10 @@ export const ConflictDialog: React.FC<Props> = ({ info, onResolved }) => {
     setNewName(info.name);
   }, [info.requestId]);
 
-  const titleText = info.srcIsDir ? '폴더가 존재합니다' :
-    info.direction === 'upload' ? '업로드 할 파일이 존재합니다' :
-    info.direction === 'download' ? '다운로드 할 파일이 존재합니다' :
-    '파일이 존재합니다';
+  const titleText = info.srcIsDir ? t('conflictFolderExists') :
+    info.direction === 'upload' ? t('conflictUploadExists') :
+    info.direction === 'download' ? t('conflictDownloadExists') :
+    t('conflictFileExists');
 
   const resolve = (cancel?: boolean) => {
     const decision = cancel ? { cancel: true } : { action, applyAll, newName: action === 'rename' ? newName : undefined };
@@ -83,19 +85,19 @@ export const ConflictDialog: React.FC<Props> = ({ info, onResolved }) => {
       <div className="cf-dialog" onKeyDown={onKeyDown} tabIndex={-1}>
         <div className="cf-titlebar">
           <span className="cf-title">{titleText}</span>
-          <button className="cf-close" onClick={() => resolve(true)} title="취소">✕</button>
+          <button className="cf-close" onClick={() => resolve(true)} title={t('cancel')}>✕</button>
         </div>
         <div className="cf-body">
           <div className="cf-row cf-row-msg">
             <span className="cf-warn-ico">⚠</span>
-            <span>이 폴더에 이미 아래 이름의 개체가 있습니다.<br/>수행할 작업을 선택하십시오.</span>
+            <span dangerouslySetInnerHTML={{ __html: t('conflictPrompt') }} />
           </div>
           <div className="cf-row">
-            <span className="cf-label">이름(N):</span>
+            <span className="cf-label">{t('conflictNameLabel')}</span>
             <span className="cf-value">{info.name}</span>
           </div>
           <div className="cf-row">
-            <span className="cf-label">대상:</span>
+            <span className="cf-label">{t('conflictTargetLabel')}</span>
             <div className="cf-target">
               <span className="cf-icon">{info.dstIsDir ? '📁' : '📄'}</span>
               <div>
@@ -106,7 +108,7 @@ export const ConflictDialog: React.FC<Props> = ({ info, onResolved }) => {
             </div>
           </div>
           <div className="cf-row">
-            <span className="cf-label">원본:</span>
+            <span className="cf-label">{t('conflictSourceLabel')}</span>
             <div className="cf-target">
               <span className="cf-icon">{info.srcIsDir ? '📁' : '📄'}</span>
               <div>
@@ -117,28 +119,28 @@ export const ConflictDialog: React.FC<Props> = ({ info, onResolved }) => {
             </div>
           </div>
           <div className="cf-row cf-row-action">
-            <span className="cf-label">동작(C):</span>
+            <span className="cf-label">{t('conflictActionLabel')}</span>
             <select className="cf-select" value={action} onChange={e => setAction(e.target.value as any)}>
-              <option value="overwrite">덮어쓰기</option>
-              <option value="skip">건너뛰기</option>
-              {showResume && <option value="resume">계속 업로드</option>}
-              <option value="rename">이름 바꾸기</option>
+              <option value="overwrite">{t('conflictOverwrite')}</option>
+              <option value="skip">{t('conflictSkip')}</option>
+              {showResume && <option value="resume">{t('conflictResume')}</option>}
+              <option value="rename">{t('conflictRename')}</option>
             </select>
             <label className="cf-apply-all">
               <input type="checkbox" checked={applyAll} onChange={e => setApplyAll(e.target.checked)} />
-              모두 적용(A)
+              {t('conflictApplyAll')}
             </label>
           </div>
           {action === 'rename' && (
             <div className="cf-row cf-row-rename">
-              <span className="cf-label">새 이름:</span>
+              <span className="cf-label">{t('conflictNewName')}</span>
               <input className="cf-input" value={newName} onChange={e => setNewName(e.target.value)} autoFocus />
             </div>
           )}
         </div>
         <div className="cf-actions">
-          <button className="cf-btn cf-btn-primary" onClick={() => resolve(false)}>확인</button>
-          <button className="cf-btn" onClick={() => resolve(true)}>취소</button>
+          <button className="cf-btn cf-btn-primary" onClick={() => resolve(false)}>{t('confirm')}</button>
+          <button className="cf-btn" onClick={() => resolve(true)}>{t('cancel')}</button>
         </div>
       </div>
     </div>

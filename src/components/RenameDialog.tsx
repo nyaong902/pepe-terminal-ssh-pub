@@ -2,6 +2,7 @@
 // 파일/폴더 이름 변경 다이얼로그 — portal 로 렌더
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 type Props = {
   initialName: string;
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export const RenameDialog: React.FC<Props> = ({ initialName, isDir, onConfirm, onCancel }) => {
+  const { t } = useTranslation('fileExplorer');
   const [value, setValue] = useState(initialName);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -43,9 +45,9 @@ export const RenameDialog: React.FC<Props> = ({ initialName, isDir, onConfirm, o
   return createPortal(
     <div className="rn-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="rn-dialog" onMouseDown={e => e.stopPropagation()}>
-        <div className="rn-title">이름 바꾸기</div>
+        <div className="rn-title">{t('renameTitle')}</div>
         <div className="rn-body">
-          <label className="rn-label">새 이름</label>
+          <label className="rn-label">{t('renameNewLabel')}</label>
           <input
             ref={inputRef}
             className="rn-input"
@@ -61,8 +63,8 @@ export const RenameDialog: React.FC<Props> = ({ initialName, isDir, onConfirm, o
           />
         </div>
         <div className="rn-actions">
-          <button className="rn-btn rn-btn-primary" onClick={submit}>확인</button>
-          <button className="rn-btn" onClick={onCancel}>취소</button>
+          <button className="rn-btn rn-btn-primary" onClick={submit}>{t('confirm')}</button>
+          <button className="rn-btn" onClick={onCancel}>{t('cancel')}</button>
         </div>
       </div>
     </div>,

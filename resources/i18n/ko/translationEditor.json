@@ -43,5 +43,7 @@
   "alreadyAdded": "이미 추가된 언어: {{code}}",
   "langPickerHint": "행 클릭 → 코드가 \"새 언어 추가\" 입력칸에 채워집니다",
   "close": "닫기",
-  "dirtyChanged": "변경됨"
+  "dirtyChanged": "변경됨",
+  "removeLangTitle": "언어 제거",
+  "aiParseFailDetail": "(raw={{len}}자, 콘솔에 원본 출력)"
 }

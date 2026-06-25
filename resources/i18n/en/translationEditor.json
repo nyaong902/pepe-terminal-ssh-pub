@@ -43,5 +43,7 @@
   "alreadyAdded": "Already added: {{code}}",
   "langPickerHint": "Click a row → code fills the \"Add language\" field",
   "close": "Close",
-  "dirtyChanged": "Changed"
+  "dirtyChanged": "Changed",
+  "removeLangTitle": "Remove language",
+  "aiParseFailDetail": "(raw={{len}} chars, original printed to console)"
 }

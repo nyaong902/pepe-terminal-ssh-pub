@@ -19,6 +19,8 @@
   "view": {
     "title": "View",
     "theme": "🎨 Theme",
+    "terminalTheme": "🎨 Terminal theme",
+    "windowTheme": "🪟 Window theme",
     "fontSizeUp": "🔠 Font size +",
     "fontSizeDown": "🔡 Font size -",
     "wheelUp": "Ctrl+Wheel up",
@@ -65,6 +67,7 @@
     "i18nWs": "🌍 Translation Editor",
     "remoteShare": "📱 PePe Remote Share"
   },
+  "hamburgerTooltip": "Menu",
   "help": {
     "title": "Help",
     "manual": "📖 Manual...",

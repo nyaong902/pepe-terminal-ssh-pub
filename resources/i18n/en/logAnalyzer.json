@@ -28,7 +28,8 @@
     "level": "Level",
     "file": "File",
     "line": "Line",
-    "function": "Function"
+    "function": "Function",
+    "tag": "Tag"
   },
   "clearFilters": "✕ Clear {{count}} filters",
   "clearFiltersTitle": "Clear all filters",
@@ -57,5 +58,28 @@
     "function": "Function",
     "message": "Message",
     "raw": "Raw"
-  }
+  },
+  "aiPromptDefault": "Find error/anomaly patterns in this log and summarize the causes and solutions.",
+  "watchStartFailed": "Failed to start watch",
+  "watchStartTitle": "Live watch: existing data is used only to build filter options. Only newly appended lines are shown according to filters.",
+  "watchStart": "⏱ Start live",
+  "watchStopTitle": "Stop live watch",
+  "watchStop": "⏹ Stop live",
+  "aiBarLabel": "🤖 AI analysis",
+  "aiPromptInputPlaceholder": "Enter analysis request (press Enter to send)",
+  "aiMaxLinesTitle": "Attach up to N (filtered) log rows as context",
+  "aiMaxLabel": "Max",
+  "aiRowsSuffix": " rows",
+  "aiNewConversationTitle": "Checked: start a new conversation / Unchecked: continue in current conversation",
+  "aiNewConversation": "New conversation",
+  "aiSendTitle": "Send up to {{max}} of the {{filtered}} filtered rows to the AI chat",
+  "aiSendButton": "🤖 Request analysis ▾",
+  "aiAnalyzeAttached": "Please analyze the attached log file `{{fileName}}`.",
+  "aiPromptSource": "- Source: {{path}}",
+  "aiPromptLineCount": "- Lines: {{count}} (most recent of {{total}} filtered rows)",
+  "aiPromptActiveFilters": "- Active filters: {{filters}}",
+  "watchStatsLine": "⏱ Received chunk={{chunks}}, bytes={{bytes}}, parsed entries={{entries}}",
+  "watchStatsLast": " · last={{sec}}s ago",
+  "watchStatsNoData": " · (no data received yet — new lines must be appended to the file to appear)",
+  "analyzeWith": "Analyze with {{agent}}"
 }

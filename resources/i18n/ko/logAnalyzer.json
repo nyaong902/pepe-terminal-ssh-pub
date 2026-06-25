@@ -28,7 +28,8 @@
     "level": "Level",
     "file": "File",
     "line": "Line",
-    "function": "Function"
+    "function": "Function",
+    "tag": "태그"
   },
   "clearFilters": "✕ 필터 {{count}} 해제",
   "clearFiltersTitle": "모든 필터 해제",
@@ -57,5 +58,28 @@
     "function": "Function",
     "message": "Message",
     "raw": "Raw"
-  }
+  },
+  "aiPromptDefault": "이 로그에서 에러/이상 패턴을 찾아 원인과 해결책을 한국어로 요약해주세요.",
+  "watchStartFailed": "watch 시작 실패",
+  "watchStartTitle": "실시간 감시: 기존 데이터는 옵션 생성용으로만 사용. 새로 추가되는 라인만 필터에 맞춰 표시됨.",
+  "watchStart": "⏱ 실시간 시작",
+  "watchStopTitle": "실시간 감시 중지",
+  "watchStop": "⏹ 실시간 중지",
+  "aiBarLabel": "🤖 AI 분석",
+  "aiPromptInputPlaceholder": "분석 요청 문구 입력 (Enter 로 전송)",
+  "aiMaxLinesTitle": "최대 N개의 (필터된) 로그 행을 컨텍스트로 첨부",
+  "aiMaxLabel": "최대",
+  "aiRowsSuffix": "행",
+  "aiNewConversationTitle": "체크: 새 대화로 시작 / 해제: 현재 대화창에 이어서",
+  "aiNewConversation": "새 대화",
+  "aiSendTitle": "현재 필터된 {{filtered}}행 중 최대 {{max}}행을 AI 채팅창에 전달",
+  "aiSendButton": "🤖 분석 요청 ▾",
+  "aiAnalyzeAttached": "첨부된 로그 파일 `{{fileName}}` 을 분석해줘.",
+  "aiPromptSource": "- 소스: {{path}}",
+  "aiPromptLineCount": "- 라인 수: {{count}} (전체 필터 결과 {{total}}행 중 최근)",
+  "aiPromptActiveFilters": "- 활성 필터: {{filters}}",
+  "watchStatsLine": "⏱ 수신 chunk={{chunks}}, bytes={{bytes}}, 파싱 항목={{entries}}",
+  "watchStatsLast": " · 마지막={{sec}}초 전",
+  "watchStatsNoData": " · (아직 데이터 수신 없음 — 파일에 새 라인이 append 되어야 표시됨)",
+  "analyzeWith": "{{agent}} 로 분석"
 }

@@ -1,5 +1,6 @@
 // src/components/MenuBar.tsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { formatKeyComboForOS } from '../utils/keybindings';
 
 type MenuItemDef = {
@@ -23,6 +24,7 @@ type Props = {
 export type { MenuDef, MenuItemDef };
 
 export const MenuBar: React.FC<Props> = ({ menus }) => {
+  const { t: tMenu } = useTranslation('menu');
   const [isOpen, setIsOpen] = useState(false);
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const [subOpen, setSubOpen] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export const MenuBar: React.FC<Props> = ({ menus }) => {
 
   return (
     <div className="hamburger-menu">
-      <button className="hamburger-btn" onClick={() => { setIsOpen(p => !p); setOpenIdx(null); setSubOpen(null); }} title="메뉴">
+      <button className="hamburger-btn" onClick={() => { setIsOpen(p => !p); setOpenIdx(null); setSubOpen(null); }} title={tMenu('hamburgerTooltip')}>
         <span className="hamburger-icon">&#9776;</span>
       </button>
       {isOpen && (

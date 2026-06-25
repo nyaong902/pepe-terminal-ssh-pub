@@ -14,5 +14,6 @@
   "scrollPrev": "이전",
   "scrollNext": "다음",
   "renameContext": "이름 변경",
-  "closeContext": "닫기"
+  "closeContext": "닫기",
+  "openInNewWindow": "새 창으로 열기"
 }

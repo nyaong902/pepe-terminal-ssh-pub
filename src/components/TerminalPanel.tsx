@@ -2031,7 +2031,7 @@ function ensureSSHSetup(termId: string) {
                         quickConnectPending.delete(termId);
                         try {
                           term.write(`\r\n\x1b[90m${tt('output.connectionCancelled')}\x1b[0m\r\n`);
-                          term.write('\x1b[33m▶ 다시 시도하려면: 터미널 클릭 또는 미니탭 우클릭 → 재연결\x1b[0m\r\n');
+                          term.write(`\x1b[33m${tt('output.retryHint')}\x1b[0m\r\n`);
                         } catch {}
                         // 터미널 영역 클릭 1회 → 자격증명 모달 재오픈
                         setTimeout(() => {
@@ -2487,7 +2487,7 @@ export function startInitialConnectWatchdog(termId: string, sessionId: string, c
       clearInitialConnectWatchdog(termId);
       return;
     }
-    fireInitialReconnect(termId, '10초 응답 없음');
+    fireInitialReconnect(termId, tt('output.reasonNoResponse'));
   }, INITIAL_CONNECT_TIMEOUT_MS);
   initialConnectWatchdog.set(termId, { timer, sessionId, cols, rows });
 }
@@ -2501,7 +2501,7 @@ export function clearInitialConnectWatchdog(termId: string) {
 // 초기 재연결 시도 — watchdog 가 있으면 발동. 반환값은 재시도 가능했는지 여부.
 export function tryInitialReconnect(termId: string): boolean {
   if (!initialConnectWatchdog.has(termId)) return false;
-  fireInitialReconnect(termId, '에러');
+  fireInitialReconnect(termId, tt('output.reasonError'));
   return true;
 }
 
@@ -3789,7 +3789,7 @@ export const TerminalPanel: React.FC<Props> = ({
               }
             } },
             { label: t('menu.duplicateSession'), onClick: () => { onDuplicateSession?.(nodeId, miniCtx.termId); } },
-            ...(onDetachSession ? [{ label: '새 창으로 열기', onClick: () => { onDetachSession(nodeId, miniCtx.termId); } }] : []),
+            ...(onDetachSession ? [{ label: t('menu.openInNewWindow'), onClick: () => { onDetachSession(nodeId, miniCtx.termId); } }] : []),
             { label: t('menu.reconnectSession'), onClick: async () => {
               const tid = miniCtx.termId;
               const info = termSessionMap.get(tid);

@@ -20,7 +20,7 @@ type VpnState = {
 type Config = { name: string; path: string };
 
 const STATUS_COLOR: Record<VpnState['status'], string> = {
-  disconnected: '#888',
+  disconnected: 'var(--win-text-dim, #888)',
   starting: '#d8b556',
   connecting: '#d8b556',
   auth: '#d8b556',
@@ -149,7 +149,7 @@ export const VpnWorkspace: React.FC = () => {
   }, [refreshConfigs]);
 
   const removeConfig = useCallback(async (p: string) => {
-    if (!await notifyConfirm(t('deleteTitle') || '삭제', t('confirmDeleteConfig', { path: p }))) return;
+    if (!await notifyConfirm(t('deleteTitle'), t('confirmDeleteConfig', { path: p }))) return;
     await api.vpnRemoveConfig?.(p);
     await api.vpnClearCreds?.(p); // 저장된 자격증명도 삭제
     const remaining: Config[] = await api.vpnListConfigs?.() || [];
@@ -183,7 +183,7 @@ export const VpnWorkspace: React.FC = () => {
 
   const clearSavedCreds = useCallback(async () => {
     if (!selectedConfig) return;
-    if (!await notifyConfirm(t('clearCredsTitle') || '자격증명 삭제', t('confirmClearCreds'))) return;
+    if (!await notifyConfirm(t('clearCredsTitle'), t('confirmClearCreds'))) return;
     await api.vpnClearCreds?.(selectedConfig);
     setHasSavedCreds(false);
     setUsername(''); setPassword('');
@@ -224,9 +224,9 @@ export const VpnWorkspace: React.FC = () => {
   }, [logs.length]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#1a1a1a' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-surface, #1a1a1a)' }}>
       {/* 헤더 — 가용성 + 상태 */}
-      <div style={{ padding: '12px 16px', background: '#222', borderBottom: '1px solid #333' }}>
+      <div style={{ padding: '12px 16px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
           <span style={{
             width: 12, height: 12, borderRadius: '50%',
@@ -236,14 +236,14 @@ export const VpnWorkspace: React.FC = () => {
           <span style={{ fontSize: 16, fontWeight: 600, color: STATUS_COLOR[state.status] }}>
             {t(`status.${state.status}`)}
           </span>
-          {state.configName && <span style={{ fontSize: 12, color: '#888' }}>· {state.configName}</span>}
+          {state.configName && <span style={{ fontSize: 12, color: 'var(--win-text-dim, #888)' }}>· {state.configName}</span>}
           {state.assignedIp && <span style={{ fontSize: 12, color: '#7fcf6e' }}>· IP: {state.assignedIp}</span>}
-          {isConnected && <span style={{ fontSize: 12, color: '#888' }}>· {formatDuration(state.connectedSince)}</span>}
+          {isConnected && <span style={{ fontSize: 12, color: 'var(--win-text-dim, #888)' }}>· {formatDuration(state.connectedSince)}</span>}
         </div>
         {avail && !avail.ok && (
           <div style={{ padding: 8, background: '#3a1a1a', border: '1px solid #5a2a2a', borderRadius: 4, color: '#e36b6b', fontSize: 12 }}>
             {t('binaryNotFound', { reason: avail.reason })}
-            <div style={{ color: '#aaa', fontSize: 11, marginTop: 4 }}>
+            <div style={{ color: 'var(--win-text-dim, #aaa)', fontSize: 11, marginTop: 4 }}>
               {t('binaryHint')}
             </div>
           </div>
@@ -254,7 +254,7 @@ export const VpnWorkspace: React.FC = () => {
           </div>
         )}
         {isConnected && (
-          <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#aaa', marginTop: 6 }}>
+          <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--win-text-dim, #aaa)', marginTop: 6 }}>
             <span>{t('bytesIn', { val: formatBytes(state.bytesIn) })}</span>
             <span>{t('bytesOut', { val: formatBytes(state.bytesOut) })}</span>
           </div>
@@ -264,9 +264,9 @@ export const VpnWorkspace: React.FC = () => {
       {/* 본문 — 좌: 설정 목록, 우: 로그 */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {/* 좌측 — 설정 목록 */}
-        <div style={{ width: 320, display: 'flex', flexDirection: 'column', borderRight: '1px solid #333', background: '#161616' }}>
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 12, color: '#bbb', flex: 1 }}>{t('configList', { n: configs.length })}</span>
+        <div style={{ width: 320, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--win-border, #333)', background: '#161616' }}>
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', flex: 1 }}>{t('configList', { n: configs.length })}</span>
             <button onClick={importConfig} style={{ fontSize: 11, padding: '3px 8px' }}>{t('importConfig')}</button>
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -282,7 +282,7 @@ export const VpnWorkspace: React.FC = () => {
                   style={{
                     padding: '6px 10px', fontSize: 12, cursor: 'pointer',
                     background: isSel ? '#2b4e74' : 'transparent',
-                    color: isSel ? '#fff' : '#ccc',
+                    color: isSel ? '#fff' : 'var(--win-text, #ccc)',
                     display: 'flex', alignItems: 'center', gap: 6,
                     borderLeft: '3px solid ' + (isSel ? '#7fbeea' : 'transparent'),
                   }}>
@@ -294,7 +294,7 @@ export const VpnWorkspace: React.FC = () => {
           </div>
 
           {/* 연결 컨트롤 — 상태별로 표시 변경 */}
-          <div style={{ padding: 10, borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ padding: 10, borderTop: '1px solid var(--win-border, #333)', display: 'flex', flexDirection: 'column', gap: 6 }}>
             {canConnect ? (
               <>
                 <button
@@ -329,9 +329,9 @@ export const VpnWorkspace: React.FC = () => {
 
         {/* 우측 — 로그 */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 12, color: '#bbb', flex: 1 }}>{t('logHeader', { n: logs.length })}</span>
-            <label style={{ fontSize: 11, color: '#aaa', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', flex: 1 }}>{t('logHeader', { n: logs.length })}</span>
+            <label style={{ fontSize: 11, color: 'var(--win-text-dim, #aaa)', display: 'flex', alignItems: 'center', gap: 4 }}>
               <input type="checkbox" defaultChecked={true} onChange={e => { autoScrollRef.current = e.target.checked; }} />
               {t('autoScroll')}
             </label>
@@ -340,7 +340,7 @@ export const VpnWorkspace: React.FC = () => {
           <div ref={setLogWrapRef} style={{ flex: 1, minHeight: 0, background: '#0c0c0c' }}>
             <VList ref={logListRef} height={logHeight} width="100%" itemCount={logs.length} itemSize={18} overscanCount={15}>
               {({ index, style }: ListChildComponentProps) => (
-                <div style={{ ...style, fontFamily: 'monospace', fontSize: 11, color: '#aaa', padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={logs[index]}>
+                <div style={{ ...style, fontFamily: 'monospace', fontSize: 11, color: 'var(--win-text-dim, #aaa)', padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={logs[index]}>
                   {logs[index]}
                 </div>
               )}
@@ -355,7 +355,7 @@ export const VpnWorkspace: React.FC = () => {
           <div className="session-editor" onClick={e => e.stopPropagation()} style={{ width: 360, display: 'flex', flexDirection: 'column' }}>
             <h3>{t('authTitle')}</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
-              <label style={{ fontSize: 12, color: '#bbb' }}>{t('username')}</label>
+              <label style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('username')}</label>
               {/* key 로 강제 재마운트 — 매 모달 open 마다 새 input → autoFocus + callback ref 가 확실히 발동 */}
               <input
                 key={`u-${authOpenCounter}`}
@@ -366,14 +366,14 @@ export const VpnWorkspace: React.FC = () => {
                 style={{ fontSize: 13, padding: '6px 8px', width: '100%', boxSizing: 'border-box' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
-              <label style={{ fontSize: 12, color: '#bbb' }}>{t('password')}</label>
+              <label style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('password')}</label>
               <input
                 key={`p-${authOpenCounter}`}
                 ref={authPassRef} type="password" value={password} onChange={e => setPassword(e.target.value)}
                 onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') connect(true); }}
                 style={{ fontSize: 13, padding: '6px 8px', width: '100%', boxSizing: 'border-box' }} />
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12, color: '#bbb', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12, color: 'var(--win-text-dim, #bbb)', cursor: 'pointer' }}>
               <input type="checkbox" checked={rememberCreds} onChange={e => setRememberCreds(e.target.checked)} />
               {t('rememberCreds')}
             </label>

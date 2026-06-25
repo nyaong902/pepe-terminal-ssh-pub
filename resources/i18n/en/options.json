@@ -16,7 +16,29 @@
     "heading": "Paste",
     "multiLineNote": "When pasting multiple lines:",
     "dialog": "Open multi-line paste dialog",
-    "direct": "Paste directly into terminal"
+    "direct": "Paste directly into terminal",
+    "accumulateTooltip": "While the window is open, pasting multiple lines again appends after existing content. Turn off to replace with new content.",
+    "accumulate": "Accumulate content in multi-line paste window (off = replace)"
+  },
+  "mouse": {
+    "heading": "Mouse",
+    "rightButton": "Right button",
+    "middleButton": "Middle button",
+    "none": "Do nothing",
+    "menu": "Open popup menu",
+    "paste": "Paste clipboard contents",
+    "properties": "Open properties dialog",
+    "enter": "Send carriage return",
+    "pasteSelection": "Paste selected text"
+  },
+  "messenger": {
+    "tab": "Messenger",
+    "heading": "Mini Messenger",
+    "desc": "Detailed settings such as display name, presence hiding, and popups can be changed in the Messenger workspace (💬) settings. Here only data reset is provided.",
+    "confirmDeleteConversations": "Delete all messenger conversations?",
+    "deleteConversations": "Delete all conversations",
+    "confirmDeleteUsers": "Delete all discovered users and conversations?",
+    "deleteUsers": "Delete all users"
   },
   "aiAgent": {
     "heading": "AI Agent",

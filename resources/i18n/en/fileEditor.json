@@ -8,5 +8,11 @@
   "unknownError": "Unknown error",
   "analyzeWithClaude": "Analyze with Claude",
   "saving": "Saving...",
-  "saveBtn": "Save (Ctrl+S)"
+  "saveBtn": "Save (Ctrl+S)",
+  "encodingTitle": "File encoding (reloads on change)",
+  "newConversation": "New conversation",
+  "newConversationTitle": "Checked: start a new conversation / Unchecked: continue in the current conversation",
+  "aiAnalyze": "Request AI Analysis",
+  "analyzeWithAgent": "Analyze with {{agent}}",
+  "analyzePrompt": "Analyze the attached file `{{name}}`.\n- Path: {{path}}"
 }

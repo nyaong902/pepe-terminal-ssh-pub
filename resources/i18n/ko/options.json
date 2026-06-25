@@ -16,7 +16,29 @@
     "heading": "붙여넣기",
     "multiLineNote": "여러 줄을 붙여넣는 경우:",
     "dialog": "여러 줄 붙여넣기 대화 상자 열기",
-    "direct": "터미널에 바로 붙여넣기"
+    "direct": "터미널에 바로 붙여넣기",
+    "accumulateTooltip": "창이 떠 있을 때 다시 여러 줄을 붙여넣으면 기존 내용 뒤에 이어붙입니다. 끄면 새 내용으로 교체됩니다.",
+    "accumulate": "여러 줄 붙여넣기 창에 내용 누적 (끄면 교체)"
+  },
+  "mouse": {
+    "heading": "마우스",
+    "rightButton": "오른쪽 단추",
+    "middleButton": "가운데 단추",
+    "none": "아무것도 하지 않습니다",
+    "menu": "팝업 메뉴를 엽니다",
+    "paste": "클립보드의 내용을 붙여 넣습니다",
+    "properties": "등록 정보 대화 상자를 엽니다",
+    "enter": "캐리지 리턴을 보냅니다",
+    "pasteSelection": "선택된 텍스트를 붙여 넣습니다"
+  },
+  "messenger": {
+    "tab": "메신저",
+    "heading": "미니 메신저",
+    "desc": "표시 이름·접속 숨기기·팝업 등 세부 설정은 메신저 워크스페이스(💬)의 설정에서 변경할 수 있습니다. 여기서는 데이터 초기화만 제공합니다.",
+    "confirmDeleteConversations": "모든 메신저 대화내역을 삭제할까요?",
+    "deleteConversations": "전체 대화 삭제",
+    "confirmDeleteUsers": "발견된 모든 사용자와 대화내역을 삭제할까요?",
+    "deleteUsers": "전체 사용자 삭제"
   },
   "aiAgent": {
     "heading": "AI Agent",

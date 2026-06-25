@@ -451,15 +451,14 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
     if (!allowAutoLoad) {
       return (
         <div className="remote-file-loading" style={{ padding: 14, fontSize: 12, color: '#aac', lineHeight: 1.6 }}>
-          <div style={{ marginBottom: 8 }}>📁 파일트리는 자동으로 열리지 않습니다.</div>
-          <div style={{ marginBottom: 12, color: '#888', fontSize: 11 }}>
-            세션의 <b>PWD 자동추적</b> 또는 <b>초기 경로</b> 가 설정되어 있으면 자동 연결됩니다.
-            <br/>그렇지 않으면 아래 버튼으로 SFTP 연결을 시작하세요.
-          </div>
+          <div style={{ marginBottom: 8 }}>{t('treeNoAutoOpenTitle')}</div>
+          <div style={{ marginBottom: 12, color: '#888', fontSize: 11 }}
+            dangerouslySetInnerHTML={{ __html: t('treeNoAutoOpenDesc') }}
+          />
           <button
             onClick={() => setUserLoaded(true)}
             style={{ padding: '6px 12px', fontSize: 12, background: '#2b4e74', color: '#fff', border: '1px solid #3a6593', borderRadius: 3, cursor: 'pointer' }}
-          >🔌 파일트리 연결</button>
+          >{t('treeConnect')}</button>
         </div>
       );
     }
@@ -494,17 +493,17 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
     try {
       const r = await (window as any).api?.sftpQuickShare?.(termId, items);
       if (!r?.success) {
-        notifyError('Quick Share 실패', r?.error || '알 수 없는 오류');
+        notifyError(t('quickShareFail'), r?.error || t('unknownError'));
         return;
       }
       const count = r.ok || items.length;
       if (r.method === 'folder') {
-        notifyOk('Quick Share 준비 완료', `공유 UI를 직접 열지 못해 임시 폴더를 열었습니다.\n${r.localDir || ''}`);
+        notifyOk(t('quickShareReady'), t('quickShareFolderMsg', { dir: r.localDir || '' }));
       } else {
-        notifyOk('Quick Share 준비 완료', `${count}개 항목을 공유로 보냈습니다.`);
+        notifyOk(t('quickShareReady'), t('quickShareOkMsg', { count }));
       }
     } catch (err: any) {
-      notifyError('Quick Share 실패', String(err?.message || err));
+      notifyError(t('quickShareFail'), String(err?.message || err));
     }
   };
 
@@ -611,7 +610,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
                 const items = [...selectedPaths].map(p => ({ path: p, isDir: false }));
                 setCtxMenu(null);
                 await quickShareItems(items);
-              }}>Quick Share로 보내기</div>
+              }}>{t('quickShareSend')}</div>
               <div className="remote-file-ctx-item" onClick={async () => {
                 const items = [...selectedPaths].map(p => ({ path: p, isDir: false }));
                 setCtxMenu(null);
@@ -623,7 +622,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
               <div className="remote-file-ctx-item danger" onClick={async () => {
                 const paths = [...selectedPaths];
                 setCtxMenu(null);
-                if (!await notifyConfirm(t('deleteMultiConfirmTitle') || '삭제 확인', t('deleteMultiConfirm', { count: paths.length, names: paths.slice(0, 10).join('\n') + (paths.length > 10 ? `\n... (+${paths.length - 10})` : '') }))) return;
+                if (!await notifyConfirm(t('deleteMultiConfirmTitle'), t('deleteMultiConfirm', { count: paths.length, names: paths.slice(0, 10).join('\n') + (paths.length > 10 ? `\n... (+${paths.length - 10})` : '') }))) return;
                 let ok = 0, fail = 0;
                 for (const p of paths) {
                   try {
@@ -659,7 +658,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             const node = ctxMenu.node;
             setCtxMenu(null);
             await quickShareItems([{ path: node.path, isDir: node.isDir }]);
-          }}>Quick Share로 보내기{ctxMenu.node.isDir ? t('downloadRecursive') : ''}</div>
+          }}>{t('quickShareSend')}{ctxMenu.node.isDir ? t('downloadRecursive') : ''}</div>
           <div className="remote-file-ctx-item" onClick={async () => {
             const node = ctxMenu.node;
             setCtxMenu(null);
@@ -715,7 +714,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             const node = ctxMenu.node;
             setCtxMenu(null);
             const kind = node.isDir ? t('kindFolder') : t('kindFile');
-            if (!await notifyConfirm(t('deleteMultiConfirmTitle') || '삭제 확인', t('deleteConfirmRecursive', { kind, path: node.path }))) return;
+            if (!await notifyConfirm(t('deleteMultiConfirmTitle'), t('deleteConfirmRecursive', { kind, path: node.path }))) return;
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const r = await (window as any).api?.feDelete?.(mode, node.path, termId);

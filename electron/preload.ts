@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('api', {
   // UI Prefs (config.json 에 저장 — sessionData 멀티인스턴스 분리와 무관하게 영속)
   getUIPrefs: () => ipcRenderer.invoke('ui-prefs:get'),
   setUIPrefs: (prefs: Record<string, any>) => ipcRenderer.invoke('ui-prefs:set', prefs),
+  // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
+  setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
+  onWindowTheme: (cb: (id: string) => void) => {
+    const handler = (_e: any, id: string) => cb(id);
+    ipcRenderer.on('window-theme:changed', handler);
+    return () => ipcRenderer.removeListener('window-theme:changed', handler);
+  },
 
   // PePe Messenger
   messengerStart: (prefs?: any) => ipcRenderer.invoke('messenger:start', prefs),
@@ -31,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   messengerDeleteConversation: (peerId: string) => ipcRenderer.invoke('messenger:delete-conversation', { peerId }),
   messengerDeletePeer: (peerId: string) => ipcRenderer.invoke('messenger:delete-peer', { peerId }),
   messengerClearAll: () => ipcRenderer.invoke('messenger:clear-all'),
+  messengerClearPeers: () => ipcRenderer.invoke('messenger:clear-peers'),
   onMessengerEvent: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('messenger:event', handler);

@@ -102,7 +102,7 @@ function parseLog(text: string): LogEntry[] {
 }
 
 const LEVEL_COLOR: Record<string, string> = {
-  DEB1: '#666', DEB2: '#777', DEB3: '#888',
+  DEB1: '#666', DEB2: '#777', DEB3: 'var(--win-text-dim, #888)',
   INFO: '#7fbeea', MIN: '#d8b556', MAJ: '#e8965a',
   WARN: '#e8965a', ERR: '#e36b6b', FATAL: '#ff4f4f',
 };
@@ -165,8 +165,8 @@ const MultiSelectDropdown: React.FC<{
         title={t('filterTooltip', { label, state: selected.size === 0 ? t('noFilter') : t('selectedCount', { count: selected.size }) })}
         style={{
           width, fontSize: 11, padding: '3px 6px', textAlign: 'left',
-          background: selected.size > 0 ? '#2b4e74' : '#222',
-          border: '1px solid #444', color: selected.size > 0 ? '#fff' : '#bbb',
+          background: selected.size > 0 ? '#2b4e74' : 'var(--win-surface, #222)',
+          border: '1px solid var(--win-border, #444)', color: selected.size > 0 ? '#fff' : 'var(--win-text-dim, #bbb)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
           whiteSpace: 'nowrap', overflow: 'hidden',
         }}>
@@ -177,11 +177,11 @@ const MultiSelectDropdown: React.FC<{
         <div ref={ref}
           style={{
             position: 'fixed', left: pos.left, top: pos.top, width: popupWidth,
-            background: '#1c1c1c', border: '1px solid #444', borderRadius: 4,
+            background: '#1c1c1c', border: '1px solid var(--win-border, #444)', borderRadius: 4,
             boxShadow: '0 4px 16px rgba(0,0,0,0.5)', zIndex: 9999,
             display: 'flex', flexDirection: 'column', maxHeight: 400,
           }}>
-          <div style={{ padding: '6px 8px', borderBottom: '1px solid #333', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
               autoFocus
               type="text"
@@ -192,10 +192,10 @@ const MultiSelectDropdown: React.FC<{
               style={{ flex: 1, fontSize: 11, padding: '2px 4px' }}
             />
           </div>
-          <div style={{ padding: '4px 8px', display: 'flex', gap: 6, borderBottom: '1px solid #2a2a2a', fontSize: 11 }}>
+          <div style={{ padding: '4px 8px', display: 'flex', gap: 6, borderBottom: '1px solid var(--win-surface-2, #2a2a2a)', fontSize: 11 }}>
             <button onClick={() => onChange(new Set(options.map(o => o.value)))} style={{ fontSize: 10, padding: '1px 6px' }}>{t('all')}</button>
             <button onClick={() => onChange(new Set())} style={{ fontSize: 10, padding: '1px 6px' }}>{t('deselect')}</button>
-            <span style={{ marginLeft: 'auto', color: '#888' }}>
+            <span style={{ marginLeft: 'auto', color: 'var(--win-text-dim, #888)' }}>
               {someSelected ? `${selected.size}/${options.length}` : (allSelected ? t('allSelected') : t('none'))}
             </span>
           </div>
@@ -215,7 +215,7 @@ const MultiSelectDropdown: React.FC<{
                     if (isSel) next.delete(opt.value); else next.add(opt.value);
                     onChange(next);
                   }} />
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: opt.color || '#ccc' }} title={opt.value}>{opt.value}</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: opt.color || 'var(--win-text, #ccc)' }} title={opt.value}>{opt.value}</span>
                   <span style={{ color: '#666', fontSize: 10 }}>{opt.count}</span>
                 </label>
               );
@@ -263,7 +263,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
   const [watchStats, setWatchStats] = useState<{ bytes: number; chunks: number; entries: number; lastAt: number; lastChunk?: string }>({ bytes: 0, chunks: 0, entries: 0, lastAt: 0 });
   const [sourceLabel, setSourceLabel] = useState<string>('');
   // AI 분석 프롬프트
-  const [aiPrompt, setAiPrompt] = useState<string>('이 로그에서 에러/이상 패턴을 찾아 원인과 해결책을 한국어로 요약해주세요.');
+  const [aiPrompt, setAiPrompt] = useState<string>(t('aiPromptDefault'));
   const [aiMaxLines, setAiMaxLines] = useState<number>(500);
 
   // 필터들 — 비어있으면 해당 필드 무시
@@ -372,7 +372,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
       const wid = 'lw-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
       watchIdRef.current = wid;
       const wr: any = await (api as any).logWatchStart?.(wid, srcMode, srcPath, srcMode === 'remote' ? srcTermId : undefined);
-      if (!wr?.success) throw new Error(wr?.error || 'watch 시작 실패');
+      if (!wr?.success) throw new Error(wr?.error || t('watchStartFailed'));
       setWatching(true);
       setSourceLabel(t('sourceLabel', { icon: srcMode === 'local' ? '🖥️' : '🟢', path: srcPath, count: parsed.length }) + ' · ⏱ watch');
     } catch (err: any) {
@@ -570,10 +570,10 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
     const promptLines: string[] = [];
     promptLines.push(aiPrompt.trim());
     promptLines.push('');
-    promptLines.push('첨부된 로그 파일 `' + fileName + '` 을 분석해줘.');
-    promptLines.push('- 소스: ' + srcPath);
-    promptLines.push('- 라인 수: ' + slice.length + ' (전체 필터 결과 ' + filtered.length + '행 중 최근)');
-    if (activeFilters.length > 0) promptLines.push('- 활성 필터: ' + activeFilters.join(' / '));
+    promptLines.push(t('aiAnalyzeAttached', { fileName }));
+    promptLines.push(t('aiPromptSource', { path: srcPath }));
+    promptLines.push(t('aiPromptLineCount', { count: slice.length, total: filtered.length }));
+    if (activeFilters.length > 0) promptLines.push(t('aiPromptActiveFilters', { filters: activeFilters.join(' / ') }));
     const promptText = promptLines.join(NL);
     try {
       window.dispatchEvent(new CustomEvent('claude-prefill', {
@@ -653,9 +653,9 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
   };
 
   return (
-    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#1a1a1a' }}>
+    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', background: 'var(--win-surface, #1a1a1a)' }}>
       {/* 헤더 — 소스 + 로드 */}
-      <div style={{ padding: '8px 10px', background: '#222', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ padding: '8px 10px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
           <select value={srcMode === 'remote' ? srcTermId : 'local'}
             onChange={e => {
@@ -698,12 +698,12 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
             {loading ? t('loading') : t('load')}
           </button>
           {!watching ? (
-            <button onClick={startWatch} disabled={loading} title="실시간 감시: 기존 데이터는 옵션 생성용으로만 사용. 새로 추가되는 라인만 필터에 맞춰 표시됨." style={{ padding: '4px 12px', background: '#2b4e74', color: '#fff', border: '1px solid #3a6593', borderRadius: 3 }}>
-              ⏱ 실시간 시작
+            <button onClick={startWatch} disabled={loading} title={t('watchStartTitle')} style={{ padding: '4px 12px', background: '#2b4e74', color: '#fff', border: '1px solid #3a6593', borderRadius: 3 }}>
+              {t('watchStart')}
             </button>
           ) : (
-            <button onClick={stopWatch} title="실시간 감시 중지" style={{ padding: '4px 12px', background: '#74402b', color: '#fff', border: '1px solid #934e3a', borderRadius: 3 }}>
-              ⏹ 실시간 중지
+            <button onClick={stopWatch} title={t('watchStopTitle')} style={{ padding: '4px 12px', background: '#74402b', color: '#fff', border: '1px solid #934e3a', borderRadius: 3 }}>
+              {t('watchStop')}
             </button>
           )}
           <button onClick={exportCsv} disabled={loading || entries.length === 0} title={t('exportCsvTooltip')} style={{ padding: '4px 12px' }}>
@@ -712,27 +712,27 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
         </div>
         {/* AI 분석 바 — 필터 적용된 행을 컨텍스트로 채팅창에 전달 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-          <span style={{ fontSize: 12, color: '#bbb', flexShrink: 0 }}>🤖 AI 분석</span>
+          <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', flexShrink: 0 }}>{t('aiBarLabel')}</span>
           <input
             type="text"
             value={aiPrompt}
             onChange={e => setAiPrompt(e.target.value)}
             onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') sendToAi(); }}
-            placeholder="분석 요청 문구 입력 (Enter 로 전송)"
-            style={{ flex: 1, minWidth: 200, fontSize: 12, padding: '3px 6px', background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 3 }}
+            placeholder={t('aiPromptInputPlaceholder')}
+            style={{ flex: 1, minWidth: 200, fontSize: 12, padding: '3px 6px', background: 'var(--win-surface, #1a1a1a)', color: 'var(--win-text, #eee)', border: '1px solid var(--win-border, #333)', borderRadius: 3 }}
           />
-          <label style={{ fontSize: 11, color: '#888', display: 'flex', alignItems: 'center', gap: 4 }} title="최대 N개의 (필터된) 로그 행을 컨텍스트로 첨부">
-            최대
+          <label style={{ fontSize: 11, color: 'var(--win-text-dim, #888)', display: 'flex', alignItems: 'center', gap: 4 }} title={t('aiMaxLinesTitle')}>
+            {t('aiMaxLabel')}
             <input
               type="number"
               value={aiMaxLines}
               onChange={e => setAiMaxLines(Math.max(10, Math.min(5000, Number(e.target.value) || 500)))}
-              style={{ width: 60, fontSize: 11, padding: '2px 4px', background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 3 }}
-            />행
+              style={{ width: 60, fontSize: 11, padding: '2px 4px', background: 'var(--win-surface, #1a1a1a)', color: 'var(--win-text, #eee)', border: '1px solid var(--win-border, #333)', borderRadius: 3 }}
+            />{t('aiRowsSuffix')}
           </label>
-          <label style={{ fontSize: 11, color: '#aac', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, cursor: 'pointer' }} title="체크: 새 대화로 시작 / 해제: 현재 대화창에 이어서">
+          <label style={{ fontSize: 11, color: '#aac', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, cursor: 'pointer' }} title={t('aiNewConversationTitle')}>
             <input type="checkbox" checked={aiNewConversation} onChange={e => setAiNewConversation(e.target.checked)} style={{ margin: 0 }} />
-            새 대화
+            {t('aiNewConversation')}
           </label>
           <button
             onClick={e => {
@@ -743,18 +743,18 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
               setAiAgentMenu({ x: r.right, y: r.bottom });
             }}
             disabled={filtered.length === 0 || !aiPrompt.trim()}
-            title={`현재 필터된 ${filtered.length}행 중 최대 ${aiMaxLines}행을 AI 채팅창에 전달`}
+            title={t('aiSendTitle', { filtered: filtered.length, max: aiMaxLines })}
             style={{ padding: '4px 12px', fontSize: 12, background: '#2b4e74', color: '#fff', border: '1px solid #3a6593', borderRadius: 3 }}
           >
-            🤖 분석 요청 ▾
+            {t('aiSendButton')}
           </button>
         </div>
-        {sourceLabel && !loading && <div style={{ fontSize: 11, color: '#888' }}>{sourceLabel}</div>}
+        {sourceLabel && !loading && <div style={{ fontSize: 11, color: 'var(--win-text-dim, #888)' }}>{sourceLabel}</div>}
         {watching && (
           <div style={{ fontSize: 11, color: '#aac', background: '#1a2a3a', padding: '3px 8px', borderRadius: 3, border: '1px solid #2a3a5a' }}>
-            ⏱ 수신 chunk={watchStats.chunks}, bytes={watchStats.bytes.toLocaleString()}, 파싱 항목={watchStats.entries}
-            {watchStats.lastAt > 0 && ' · 마지막=' + Math.round((Date.now() - watchStats.lastAt) / 1000) + '초 전'}
-            {watchStats.chunks === 0 && ' · (아직 데이터 수신 없음 — 파일에 새 라인이 append 되어야 표시됨)'}
+            {t('watchStatsLine', { chunks: watchStats.chunks, bytes: watchStats.bytes.toLocaleString(), entries: watchStats.entries })}
+            {watchStats.lastAt > 0 && t('watchStatsLast', { sec: Math.round((Date.now() - watchStats.lastAt) / 1000) })}
+            {watchStats.chunks === 0 && t('watchStatsNoData')}
           </div>
         )}
         {loadErr && <div style={{ color: '#e36b6b', fontSize: 12 }}>{loadErr}</div>}
@@ -768,18 +768,18 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
             style={{ flex: 1, minWidth: 200, fontSize: 12, padding: '3px 6px' }} />
           <MultiSelectDropdown label={t('filterLabels.level')} options={levelOptions} selected={levelFilter} onChange={setLevelFilter} width={120} popupWidth={220} />
           <MultiSelectDropdown label={t('filterLabels.file')} options={fileOptions} selected={fileFilter} onChange={setFileFilter} width={150} popupWidth={300} />
-          <MultiSelectDropdown label={t('filterLabels.tag', { defaultValue: '태그' })} options={tagOptions} selected={tagFilter} onChange={setTagFilter} width={140} popupWidth={260} />
+          <MultiSelectDropdown label={t('filterLabels.tag')} options={tagOptions} selected={tagFilter} onChange={setTagFilter} width={140} popupWidth={260} />
           <MultiSelectDropdown label={t('filterLabels.function')} options={fnOptions} selected={fnFilter} onChange={setFnFilter} width={170} popupWidth={320} />
           {totalActiveFilters > 0 && (
             <button onClick={clearAllFilters} style={{ fontSize: 11, padding: '3px 8px', color: '#d8b556' }} title={t('clearFiltersTitle')}>
               {t('clearFilters', { count: totalActiveFilters })}
             </button>
           )}
-          <label style={{ fontSize: 11, color: '#bbb', display: 'flex', alignItems: 'center', gap: 3 }}>
+          <label style={{ fontSize: 11, color: 'var(--win-text-dim, #bbb)', display: 'flex', alignItems: 'center', gap: 3 }}>
             <input type="checkbox" checked={hideUnparsed} onChange={e => setHideUnparsed(e.target.checked)} />
             {t('hideUnparsed')}
           </label>
-          <span style={{ fontSize: 11, color: '#888' }}>
+          <span style={{ fontSize: 11, color: 'var(--win-text-dim, #888)' }}>
             {filtered.length.toLocaleString()} / {entries.length.toLocaleString()}
           </span>
         </div>
@@ -789,7 +789,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
       <div ref={setSplitWrapRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* 테이블 — 픽셀 높이 (split * (100-bottomPct)/100) */}
       <div style={{ height: tableHeight, flexShrink: 0, position: 'relative', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', padding: '0 8px', background: '#1c1c1c', borderBottom: '1px solid #333', fontSize: 11, color: '#888', height: 24, boxSizing: 'border-box', alignItems: 'center' }}>
+        <div style={{ display: 'flex', padding: '0 8px', background: '#1c1c1c', borderBottom: '1px solid var(--win-border, #333)', fontSize: 11, color: 'var(--win-text-dim, #888)', height: 24, boxSizing: 'border-box', alignItems: 'center' }}>
           {/* 컬럼 헤더 + 우측 리사이저 (마지막 message 제외) */}
           {([
             ['idx', t('columns.idx')], ['time', t('columns.time')], ['level', t('columns.level')], ['file', t('columns.file')], ['line', t('columns.line')], ['fn', t('columns.function')],
@@ -799,7 +799,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
               <div onMouseDown={e => onColResizeStart(key, e)}
                 style={{ width: 6, height: '100%', cursor: 'col-resize', position: 'absolute', right: -3, top: 0, zIndex: 2 }}
                 title={t('resizeColumn')} />
-              <div style={{ width: 1, height: 14, background: '#444', position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }} />
+              <div style={{ width: 1, height: 14, background: 'var(--win-border, #444)', position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)' }} />
             </div>
           ))}
           <div style={{ flex: 1, paddingLeft: 6 }}>{t('columns.message')}</div>
@@ -820,18 +820,18 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
             const e = filtered[index];
             if (!e) return null;
             const sel = index === selectedIdx;
-            const bg = sel ? '#2b4e74' : (e.level ? (LEVEL_BG[e.level] || (index % 2 ? '#181818' : '#1a1a1a')) : (index % 2 ? '#181818' : '#1a1a1a'));
-            const cellSep: React.CSSProperties = { borderRight: '1px solid #2a2a2a', paddingRight: 6, paddingLeft: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box' };
+            const bg = sel ? '#2b4e74' : (e.level ? (LEVEL_BG[e.level] || (index % 2 ? '#181818' : 'var(--win-surface, #1a1a1a)')) : (index % 2 ? '#181818' : 'var(--win-surface, #1a1a1a)'));
+            const cellSep: React.CSSProperties = { borderRight: '1px solid var(--win-surface-2, #2a2a2a)', paddingRight: 6, paddingLeft: 0, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box' };
             return (
-              <div style={{ ...style, display: 'flex', padding: '0 8px', fontSize: 11, fontFamily: 'monospace', background: bg, color: sel ? '#fff' : '#ccc', cursor: 'pointer', boxSizing: 'border-box', alignItems: 'center' }}
+              <div style={{ ...style, display: 'flex', padding: '0 8px', fontSize: 11, fontFamily: 'monospace', background: bg, color: sel ? '#fff' : 'var(--win-text, #ccc)', cursor: 'pointer', boxSizing: 'border-box', alignItems: 'center' }}
                    onClick={() => setSelectedIdx(index)}>
                 <div style={{ ...cellSep, width: colW.idx, color: '#666' }}>{e.idx + 1}</div>
                 <div style={{ ...cellSep, width: colW.time, paddingLeft: 6, color: '#9ab' }}>{e.time || '-'}</div>
-                <div style={{ ...cellSep, width: colW.level, paddingLeft: 6, color: e.level ? LEVEL_COLOR[e.level] || '#aaa' : '#666', fontWeight: e.level === 'MIN' || e.level === 'WARN' || e.level === 'ERR' ? 600 : 400 }}>{e.level || ''}</div>
-                <div style={{ ...cellSep, width: colW.file, paddingLeft: 6, color: '#999' }} title={e.file || ''}>{e.file || ''}</div>
+                <div style={{ ...cellSep, width: colW.level, paddingLeft: 6, color: e.level ? LEVEL_COLOR[e.level] || 'var(--win-text-dim, #aaa)' : '#666', fontWeight: e.level === 'MIN' || e.level === 'WARN' || e.level === 'ERR' ? 600 : 400 }}>{e.level || ''}</div>
+                <div style={{ ...cellSep, width: colW.file, paddingLeft: 6, color: 'var(--win-text-dim, #999)' }} title={e.file || ''}>{e.file || ''}</div>
                 <div style={{ ...cellSep, width: colW.line, paddingLeft: 6, color: '#9ab' }}>{e.line || ''}</div>
                 <div style={{ ...cellSep, width: colW.fn, paddingLeft: 6, color: '#7fbeea' }} title={e.fn || ''}>{e.fn || ''}</div>
-                <div style={{ flex: 1, paddingLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: e.parsed ? '#ccc' : '#666' }} title={e.msg || e.raw}>
+                <div style={{ flex: 1, paddingLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: e.parsed ? 'var(--win-text, #ccc)' : '#666' }} title={e.msg || e.raw}>
                   {e.msg || e.raw}
                   {e.parsed && e.raw.includes('\n') && (
                     <span style={{ color: '#d8b556', marginLeft: 6, fontSize: 10 }}>{t('extraLines', { count: e.raw.split('\n').length - 1 })}</span>
@@ -843,33 +843,33 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
         </VList>
       </div>
 
-      <div onMouseDown={onResizeStart} style={{ height: RESIZER_H, cursor: 'row-resize', background: '#333', flexShrink: 0 }} />
+      <div onMouseDown={onResizeStart} style={{ height: RESIZER_H, cursor: 'row-resize', background: 'var(--win-border, #333)', flexShrink: 0 }} />
 
       {/* 상세 패널 — 픽셀 높이 (split * bottomPct/100). 테이블과 합쳐 split 높이를 정확히 채움 */}
-      <div style={{ height: detailH, flexShrink: 0, background: '#1e1e1e', borderTop: '1px solid #333', overflow: 'auto', padding: 8, fontSize: 11, fontFamily: 'monospace', boxSizing: 'border-box' }}>
+      <div style={{ height: detailH, flexShrink: 0, background: 'var(--win-surface, #1e1e1e)', borderTop: '1px solid var(--win-border, #333)', overflow: 'auto', padding: 8, fontSize: 11, fontFamily: 'monospace', boxSizing: 'border-box' }}>
         {!selectedEntry ? (
           <div style={{ color: '#666', textAlign: 'center', padding: 16 }}>{t('selectLineHint')}</div>
         ) : (
           <div>
-            <div style={{ color: '#888', marginBottom: 6, fontSize: 10 }}>{t('lineNum', { num: selectedEntry.idx + 1 })}</div>
+            <div style={{ color: 'var(--win-text-dim, #888)', marginBottom: 6, fontSize: 10 }}>{t('lineNum', { num: selectedEntry.idx + 1 })}</div>
             {selectedEntry.parsed ? (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <tbody>
-                  <tr><td style={{ color: '#888', width: 80, verticalAlign: 'top' }}>{t('field.date')}</td><td>{selectedEntry.date}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.time')}</td><td style={{ color: '#9ab' }}>{selectedEntry.time}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.tid')}</td><td>{selectedEntry.tid}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.level')}</td><td style={{ color: LEVEL_COLOR[selectedEntry.level || ''] || '#ccc' }}>{selectedEntry.level}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.file')}</td><td style={{ color: '#999' }}>{selectedEntry.file}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.line')}</td><td style={{ color: '#9ab' }}>{selectedEntry.line}</td></tr>
-                  {selectedEntry.fn && <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.function')}</td><td style={{ color: '#7fbeea' }}>{selectedEntry.fn}</td></tr>}
-                  <tr><td style={{ color: '#888', verticalAlign: 'top' }}>{t('field.message')}</td><td style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{selectedEntry.msg}</td></tr>
-                  <tr><td style={{ color: '#888', verticalAlign: 'top', paddingTop: 6 }}>{t('field.raw')}</td><td style={{ color: '#666', whiteSpace: 'pre-wrap', wordBreak: 'break-all', paddingTop: 6 }}>{selectedEntry.raw}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', width: 80, verticalAlign: 'top' }}>{t('field.date')}</td><td>{selectedEntry.date}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.time')}</td><td style={{ color: '#9ab' }}>{selectedEntry.time}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.tid')}</td><td>{selectedEntry.tid}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.level')}</td><td style={{ color: LEVEL_COLOR[selectedEntry.level || ''] || 'var(--win-text, #ccc)' }}>{selectedEntry.level}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.file')}</td><td style={{ color: 'var(--win-text-dim, #999)' }}>{selectedEntry.file}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.line')}</td><td style={{ color: '#9ab' }}>{selectedEntry.line}</td></tr>
+                  {selectedEntry.fn && <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.function')}</td><td style={{ color: '#7fbeea' }}>{selectedEntry.fn}</td></tr>}
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top' }}>{t('field.message')}</td><td style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{selectedEntry.msg}</td></tr>
+                  <tr><td style={{ color: 'var(--win-text-dim, #888)', verticalAlign: 'top', paddingTop: 6 }}>{t('field.raw')}</td><td style={{ color: '#666', whiteSpace: 'pre-wrap', wordBreak: 'break-all', paddingTop: 6 }}>{selectedEntry.raw}</td></tr>
                 </tbody>
               </table>
             ) : (
               <div>
                 <div style={{ color: '#d8b556', marginBottom: 4 }}>{t('unparsedHeading')}</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#aaa' }}>{selectedEntry.raw}</pre>
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--win-text-dim, #aaa)' }}>{selectedEntry.raw}</pre>
               </div>
             )}
           </div>
@@ -894,7 +894,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
           style={{
             position: 'fixed', left: aiAgentMenu.x, top: aiAgentMenu.y,
             transform: 'translateX(-100%)', marginTop: 4,
-            background: '#1a1a2e', border: '1px solid #3a3a5a', borderRadius: 6,
+            background: 'var(--win-surface, #1a1a2e)', border: '1px solid #3a3a5a', borderRadius: 6,
             boxShadow: '0 6px 20px rgba(0,0,0,0.5)', zIndex: 99999,
             minWidth: 160, padding: 4, display: 'flex', flexDirection: 'column', gap: 2,
           }}
@@ -911,7 +911,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
               key={a.id}
               onClick={() => { setAiAgentMenu(null); sendToAi(a.id); }}
               style={{
-                background: 'transparent', color: '#ddd', border: 0,
+                background: 'transparent', color: 'var(--win-text, #ddd)', border: 0,
                 padding: '6px 10px', textAlign: 'left', cursor: 'pointer',
                 borderRadius: 4, fontSize: 12, display: 'flex', alignItems: 'center', gap: 8,
               }}
@@ -919,7 +919,7 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <a.Icon />
-              <span>{a.label} 로 분석</span>
+              <span>{t('analyzeWith', { agent: a.label })}</span>
             </button>
           ))}
         </div>,

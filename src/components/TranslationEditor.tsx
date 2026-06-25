@@ -118,7 +118,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
   }, [newLangCode, refreshLangs]);
 
   const removeLanguage = useCallback(async (lang: string) => {
-    if (!await notifyConfirm(t('removeLangTitle') || '언어 제거', t('removeLangConfirm', { lang }))) return;
+    if (!await notifyConfirm(t('removeLangTitle'), t('removeLangConfirm', { lang }))) return;
     const r = await api.i18nRemoveLanguage?.(lang);
     if (r?.ok) {
       await refreshLangs();
@@ -224,7 +224,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
         }
         if (!parsed || typeof parsed !== 'object') {
           console.warn('[i18n auto-translate] parse fail. Raw response:\n', collected);
-          finish(false, t('aiParseFail') + ` (raw=${collected.length}자, 콘솔에 원본 출력)`);
+          finish(false, t('aiParseFail') + ` ${t('aiParseFailDetail', { len: collected.length })}`);
           return;
         }
         const cleaned: Record<string, string> = {};
@@ -274,11 +274,11 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', background: '#1a1a1a' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--win-surface, #1a1a1a)' }}>
       {/* 헤더 — namespace 선택 + 언어 추가 + 저장 + UI 언어 */}
-      <div style={{ padding: '8px 12px', background: '#222', borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ padding: '8px 12px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: '#bbb' }}>{t('nsLabel')}</span>
+          <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('nsLabel')}</span>
           <select value={currentNs} onChange={e => setCurrentNs(e.target.value)} style={{ fontSize: 12 }}>
             {namespaces.map(ns => <option key={ns} value={ns}>{ns === 'claudeChat' ? 'AI Chat' : ns}</option>)}
           </select>
@@ -293,12 +293,12 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: '#bbb' }}>{t('currentUiLang')}</span>
+          <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('currentUiLang')}</span>
           <select value={activeLang} onChange={e => applyLang(e.target.value)} style={{ fontSize: 12 }}>
             {languages.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
           <span style={{ width: 24 }} />
-          <span style={{ fontSize: 12, color: '#bbb' }}>{t('addNewLang')}</span>
+          <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('addNewLang')}</span>
           <input type="text" value={newLangCode} onChange={e => setNewLangCode(e.target.value)}
             onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') addLanguage(); }}
             placeholder="ja, zh-CN, fr ..."
@@ -315,14 +315,14 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
         <table style={{ borderCollapse: 'separate', borderSpacing: 0, fontSize: 11, tableLayout: 'fixed', width: (languages.length + 1) * 240 }}>
           <thead>
             <tr>
-              <th style={{ padding: '6px 8px', borderRight: '1px solid #333', borderBottom: '1px solid #333', textAlign: 'left', color: '#888', minWidth: 240, width: 240, position: 'sticky', left: 0, top: 0, zIndex: 5, background: '#1c1c1c' }}>Key</th>
+              <th style={{ padding: '6px 8px', borderRight: '1px solid var(--win-border, #333)', borderBottom: '1px solid var(--win-border, #333)', textAlign: 'left', color: 'var(--win-text-dim, #888)', minWidth: 240, width: 240, position: 'sticky', left: 0, top: 0, zIndex: 5, background: '#1c1c1c' }}>Key</th>
               {languages.map(lang => {
                 const isEn = lang === 'en';
                 const stickyStyle: React.CSSProperties = isEn
                   ? { position: 'sticky', left: 240, top: 0, zIndex: 5, background: '#1c1c1c' }
                   : { position: 'sticky', top: 0, zIndex: 4, background: '#1c1c1c' };
                 return (
-                <th key={lang} style={{ padding: '6px 8px', borderRight: '1px solid #333', borderBottom: '1px solid #333', textAlign: 'left', color: '#bbb', minWidth: 240, width: 240, ...stickyStyle }}>
+                <th key={lang} style={{ padding: '6px 8px', borderRight: '1px solid var(--win-border, #333)', borderBottom: '1px solid var(--win-border, #333)', textAlign: 'left', color: 'var(--win-text-dim, #bbb)', minWidth: 240, width: 240, ...stickyStyle }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span>{lang}{dirty[lang] && <span style={{ color: '#d8b556', marginLeft: 4 }}>●</span>}</span>
@@ -346,7 +346,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
                           onClick={() => autoTranslate(lang, 'empty')}
                           disabled={translatingLang === lang || noEmpty}
                           title={noEmpty ? t('noEmptyCells') : t('aiEmptyTitle', { base: baseLang })}
-                          style={{ fontSize: 10, padding: '1px 5px', flex: 1, background: noEmpty ? '#2a2a2a' : '#2a4a6a', color: noEmpty ? '#666' : '#cde', border: `1px solid ${noEmpty ? '#333' : '#3a5a7a'}` }}>
+                          style={{ fontSize: 10, padding: '1px 5px', flex: 1, background: noEmpty ? 'var(--win-surface-2, #2a2a2a)' : '#2a4a6a', color: noEmpty ? '#666' : '#cde', border: `1px solid ${noEmpty ? 'var(--win-border, #333)' : '#3a5a7a'}` }}>
                           {translatingLang === lang ? '...' : `${t('aiEmptyBtn', { base: baseLang, target: lang })}${noEmpty ? '' : ` (${emptyCount})`}`}
                         </button>
                         <button
@@ -370,7 +370,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
               <tr><td colSpan={languages.length + 1} style={{ padding: 16, color: '#666', textAlign: 'center' }}>{t('noKeys')}</td></tr>
             ) : allKeys.map(key => (
               <tr key={key}>
-                <td style={{ padding: '3px 8px', borderRight: '1px solid #2a2a2a', borderBottom: '1px solid #2a2a2a', color: '#9ab', verticalAlign: 'top', fontFamily: 'monospace', position: 'sticky', left: 0, zIndex: 3, background: '#161616', minWidth: 240, width: 240 }}>{key}</td>
+                <td style={{ padding: '3px 8px', borderRight: '1px solid var(--win-surface-2, #2a2a2a)', borderBottom: '1px solid var(--win-surface-2, #2a2a2a)', color: '#9ab', verticalAlign: 'top', fontFamily: 'monospace', position: 'sticky', left: 0, zIndex: 3, background: '#161616', minWidth: 240, width: 240 }}>{key}</td>
                 {languages.map(lang => {
                   const v = table[lang]?.[key] || '';
                   const isEn = lang === 'en';
@@ -378,7 +378,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
                     ? { position: 'sticky', left: 240, zIndex: 3, background: '#161616' }
                     : {};
                   return (
-                    <td key={lang} style={{ padding: '0', borderRight: '1px solid #2a2a2a', borderBottom: '1px solid #2a2a2a', minWidth: 240, width: 240, ...cellSticky }}>
+                    <td key={lang} style={{ padding: '0', borderRight: '1px solid var(--win-surface-2, #2a2a2a)', borderBottom: '1px solid var(--win-surface-2, #2a2a2a)', minWidth: 240, width: 240, ...cellSticky }}>
                       <textarea
                         value={v}
                         onChange={e => onCellChange(lang, key, e.target.value)}
@@ -387,7 +387,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
                         style={{
                           width: '100%', minHeight: 22, padding: '3px 6px',
                           background: v ? 'transparent' : 'rgba(127,190,234,0.05)',
-                          color: '#ccc', fontSize: 11, border: 'none', resize: 'vertical', fontFamily: 'inherit',
+                          color: 'var(--win-text, #ccc)', fontSize: 11, border: 'none', resize: 'vertical', fontFamily: 'inherit',
                           boxSizing: 'border-box', outline: 'none',
                         }}
                         placeholder={t('emptyPlaceholder')}
@@ -408,9 +408,9 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ background: '#222', border: '1px solid #444', borderRadius: 6, padding: 12, width: 520, maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 8 }}
+            style={{ background: 'var(--win-surface, #222)', border: '1px solid var(--win-border, #444)', borderRadius: 6, padding: 12, width: 520, maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 8 }}
           >
-            <div style={{ fontSize: 13, color: '#ddd', fontWeight: 'bold' }}>{t('langPickerTitle')}</div>
+            <div style={{ fontSize: 13, color: 'var(--win-text, #ddd)', fontWeight: 'bold' }}>{t('langPickerTitle')}</div>
             <input
               autoFocus
               type="text"
@@ -418,16 +418,16 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
               onChange={e => setLangPickerQ(e.target.value)}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setShowLangPicker(false); }}
               placeholder={t('langPickerPlaceholder')}
-              style={{ fontSize: 13, padding: '6px 10px', background: '#1a1a1a', color: '#ddd', border: '1px solid #444', borderRadius: 4 }}
+              style={{ fontSize: 13, padding: '6px 10px', background: 'var(--win-surface, #1a1a1a)', color: 'var(--win-text, #ddd)', border: '1px solid var(--win-border, #444)', borderRadius: 4 }}
             />
-            <div style={{ flex: 1, overflow: 'auto', border: '1px solid #333', borderRadius: 4 }}>
+            <div style={{ flex: 1, overflow: 'auto', border: '1px solid var(--win-border, #333)', borderRadius: 4 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
-                  <tr style={{ background: '#1a1a1a', position: 'sticky', top: 0 }}>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', color: '#888', borderBottom: '1px solid #333', width: 80 }}>{t('code')}</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', color: '#888', borderBottom: '1px solid #333' }}>English name</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', color: '#888', borderBottom: '1px solid #333' }}>Native name</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', color: '#888', borderBottom: '1px solid #333' }}>Region</th>
+                  <tr style={{ background: 'var(--win-surface, #1a1a1a)', position: 'sticky', top: 0 }}>
+                    <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--win-text-dim, #888)', borderBottom: '1px solid var(--win-border, #333)', width: 80 }}>{t('code')}</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--win-text-dim, #888)', borderBottom: '1px solid var(--win-border, #333)' }}>English name</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--win-text-dim, #888)', borderBottom: '1px solid var(--win-border, #333)' }}>Native name</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'left', color: 'var(--win-text-dim, #888)', borderBottom: '1px solid var(--win-border, #333)' }}>Region</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -450,9 +450,9 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
                         onMouseLeave={e => { if (!already) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                       >
                         <td style={{ padding: '5px 8px', color: '#7fc', fontFamily: 'monospace' }}>{lang.code}{already && <span style={{ color: '#7fcf6e', marginLeft: 4 }}>✓</span>}</td>
-                        <td style={{ padding: '5px 8px', color: '#ddd' }}>{lang.englishName}</td>
-                        <td style={{ padding: '5px 8px', color: '#bbb' }}>{lang.nativeName}</td>
-                        <td style={{ padding: '5px 8px', color: '#888' }}>{lang.region || ''}</td>
+                        <td style={{ padding: '5px 8px', color: 'var(--win-text, #ddd)' }}>{lang.englishName}</td>
+                        <td style={{ padding: '5px 8px', color: 'var(--win-text-dim, #bbb)' }}>{lang.nativeName}</td>
+                        <td style={{ padding: '5px 8px', color: 'var(--win-text-dim, #888)' }}>{lang.region || ''}</td>
                       </tr>
                     );
                   })}
@@ -460,7 +460,7 @@ export const TranslationEditor: React.FC<{ aiAgent?: AgentType }> = ({ aiAgent =
               </table>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-              <span style={{ flex: 1, fontSize: 11, color: '#888', alignSelf: 'center' }}>{t('langPickerHint')}</span>
+              <span style={{ flex: 1, fontSize: 11, color: 'var(--win-text-dim, #888)', alignSelf: 'center' }}>{t('langPickerHint')}</span>
               <button onClick={() => setShowLangPicker(false)} style={{ padding: '4px 12px', fontSize: 12 }}>{t('close')}</button>
             </div>
           </div>
