@@ -8,5 +8,11 @@
   "unknownError": "Erreur inconnue",
   "analyzeWithClaude": "Analyser avec Claude",
   "saving": "Enregistrement...",
-  "saveBtn": "Enregistrer (Ctrl+S)"
+  "saveBtn": "Enregistrer (Ctrl+S)",
+  "encodingTitle": "Encodage du fichier (recharge à la modification)",
+  "newConversation": "Nouvelle conversation",
+  "newConversationTitle": "Coché : démarrer une nouvelle conversation / Décoché : continuer dans la conversation actuelle",
+  "aiAnalyze": "Demander une analyse IA",
+  "analyzeWithAgent": "Analyser avec {{agent}}",
+  "analyzePrompt": "Analysez le fichier joint `{{name}}`.\n- Chemin : {{path}}"
 }

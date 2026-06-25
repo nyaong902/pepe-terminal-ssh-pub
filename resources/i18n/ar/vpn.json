@@ -33,5 +33,7 @@
   "confirmDeleteConfig": "حذف؟\n{{path}}",
   "confirmClearCreds": "حذف المعرف/كلمة المرور المحفوظة؟",
   "importFailed": "فشل الاستيراد: {{reason}}",
-  "connectFailed": "فشل الاتصال: {{reason}}"
+  "connectFailed": "فشل الاتصال: {{reason}}",
+  "deleteTitle": "حذف",
+  "clearCredsTitle": "مسح بيانات الاعتماد"
 }

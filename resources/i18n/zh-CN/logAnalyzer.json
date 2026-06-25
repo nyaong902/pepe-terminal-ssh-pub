@@ -28,7 +28,8 @@
     "level": "级别",
     "file": "文件",
     "line": "行号",
-    "function": "函数"
+    "function": "函数",
+    "tag": "标签"
   },
   "clearFilters": "✕ 清除 {{count}} 个筛选",
   "clearFiltersTitle": "清除所有筛选",
@@ -57,5 +58,28 @@
     "function": "函数",
     "message": "消息",
     "raw": "原始"
-  }
+  },
+  "aiPromptDefault": "查找此日志中的错误/异常模式，并总结原因和解决方案。",
+  "watchStartFailed": "启动监视失败",
+  "watchStartTitle": "实时监视：现有数据仅用于构建筛选选项。仅按筛选条件显示新追加的行。",
+  "watchStart": "⏱ 开始实时",
+  "watchStopTitle": "停止实时监视",
+  "watchStop": "⏹ 停止实时",
+  "aiBarLabel": "🤖 AI 分析",
+  "aiPromptInputPlaceholder": "输入分析请求（按 Enter 发送）",
+  "aiMaxLinesTitle": "最多附加 N 行（已筛选）日志作为上下文",
+  "aiMaxLabel": "上限",
+  "aiRowsSuffix": " 行",
+  "aiNewConversationTitle": "勾选：开始新对话 / 取消勾选：在当前对话中继续",
+  "aiNewConversation": "新对话",
+  "aiSendTitle": "将 {{filtered}} 个已筛选行中的最多 {{max}} 行发送至 AI 聊天",
+  "aiSendButton": "🤖 请求分析 ▾",
+  "aiAnalyzeAttached": "请分析附加的日志文件 `{{fileName}}`。",
+  "aiPromptSource": "- 来源：{{path}}",
+  "aiPromptLineCount": "- 行数：{{count}}（{{total}} 个已筛选行中的最新行）",
+  "aiPromptActiveFilters": "- 活动筛选条件：{{filters}}",
+  "watchStatsLine": "⏱ 已接收 chunk={{chunks}}，字节={{bytes}}，已解析条目={{entries}}",
+  "watchStatsLast": " · {{sec}} 秒前",
+  "watchStatsNoData": " · （尚未接收到数据 — 必须向文件追加新行才会显示）",
+  "analyzeWith": "使用 {{agent}} 分析"
 }

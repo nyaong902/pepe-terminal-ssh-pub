@@ -33,5 +33,7 @@
   "confirmDeleteConfig": "Supprimer ?\n{{path}}",
   "confirmClearCreds": "Supprimer l'ID/mot de passe enregistrés ?",
   "importFailed": "Échec de l'import : {{reason}}",
-  "connectFailed": "Échec de la connexion : {{reason}}"
+  "connectFailed": "Échec de la connexion : {{reason}}",
+  "deleteTitle": "Supprimer",
+  "clearCredsTitle": "Effacer les identifiants"
 }

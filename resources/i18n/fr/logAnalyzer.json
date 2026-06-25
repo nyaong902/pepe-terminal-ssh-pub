@@ -28,7 +28,8 @@
     "level": "Niveau",
     "file": "Fichier",
     "line": "Ligne",
-    "function": "Fonction"
+    "function": "Fonction",
+    "tag": "Étiquette"
   },
   "clearFilters": "✕ Effacer {{count}} filtres",
   "clearFiltersTitle": "Effacer tous les filtres",
@@ -57,5 +58,28 @@
     "function": "Fonction",
     "message": "Message",
     "raw": "Brut"
-  }
+  },
+  "aiPromptDefault": "Recherchez les schémas d'erreur/anomalie dans ce journal et résumez les causes et solutions.",
+  "watchStartFailed": "Échec du démarrage de la surveillance",
+  "watchStartTitle": "Surveillance en direct : les données existantes servent uniquement à construire les options de filtre. Seules les nouvelles lignes ajoutées s'affichent selon les filtres.",
+  "watchStart": "⏱ Démarrer le direct",
+  "watchStopTitle": "Arrêter la surveillance en direct",
+  "watchStop": "⏹ Arrêter le direct",
+  "aiBarLabel": "🤖 Analyse IA",
+  "aiPromptInputPlaceholder": "Saisissez votre demande d'analyse (Entrée pour envoyer)",
+  "aiMaxLinesTitle": "Joindre jusqu'à N lignes de journal (filtrées) comme contexte",
+  "aiMaxLabel": "Max",
+  "aiRowsSuffix": " lignes",
+  "aiNewConversationTitle": "Coché : démarrer une nouvelle conversation / Décoché : continuer la conversation actuelle",
+  "aiNewConversation": "Nouvelle conversation",
+  "aiSendTitle": "Envoyer jusqu'à {{max}} des {{filtered}} lignes filtrées au chat IA",
+  "aiSendButton": "🤖 Demander l'analyse ▾",
+  "aiAnalyzeAttached": "Veuillez analyser le fichier journal joint `{{fileName}}`.",
+  "aiPromptSource": "- Source : {{path}}",
+  "aiPromptLineCount": "- Lignes : {{count}} (les plus récentes sur {{total}} lignes filtrées)",
+  "aiPromptActiveFilters": "- Filtres actifs : {{filters}}",
+  "watchStatsLine": "⏱ Reçu fragment={{chunks}}, octets={{bytes}}, entrées analysées={{entries}}",
+  "watchStatsLast": " · dernier={{sec}}s",
+  "watchStatsNoData": " · (aucune donnée reçue pour l'instant — de nouvelles lignes doivent être ajoutées au fichier pour apparaître)",
+  "analyzeWith": "Analyser avec {{agent}}"
 }

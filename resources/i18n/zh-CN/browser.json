@@ -8,5 +8,22 @@
   "zoomOut": "缩小 (Ctrl+-)",
   "zoomReset": "100% (Ctrl+0)",
   "zoomIn": "放大 (Ctrl+=)",
-  "devTools": "开发者工具"
+  "devTools": "开发者工具",
+  "directConnect": "直接连接",
+  "proxyApplying": "正在应用代理...",
+  "test": "测试",
+  "testTooltip": "通过所选 SSH 会话测试当前 URL 的可达性",
+  "proxySelectTooltip": "通过所选 SSH 会话转发浏览器流量",
+  "testSelectSessionFirst": "请先选择要测试的 SSH 会话。",
+  "testUrlEmpty": "要测试的 URL 为空。",
+  "testUrlInvalid": "URL 格式无效。",
+  "testHttpOnly": "仅支持测试 http/https URL。",
+  "proxyOpenFailed": "失败：无法打开 SSH 转发代理。{{reason}}",
+  "proxyForwardingBlocked": "转发可能被阻止。",
+  "browserLoadFailed": "失败：浏览器加载失败 - {{msg}}",
+  "browserLoadFailedUrl": "失败：浏览器加载失败 {{msg}}{{url}}",
+  "testFailed": "失败：{{reason}}",
+  "unknownError": "未知错误",
+  "remoteExec": "（远程执行）",
+  "testSuccess": "成功{{via}}：{{detail}}"
 }

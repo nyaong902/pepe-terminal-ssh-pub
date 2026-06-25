@@ -16,7 +16,9 @@
     "heading": "Coller",
     "multiLineNote": "Lors du collage de plusieurs lignes :",
     "dialog": "Ouvrir la boîte de dialogue de collage multiligne",
-    "direct": "Coller directement dans le terminal"
+    "direct": "Coller directement dans le terminal",
+    "accumulateTooltip": "Lorsque la fenêtre est ouverte, coller plusieurs lignes les ajoute à la suite du contenu existant. Désactivez pour remplacer par le nouveau contenu.",
+    "accumulate": "Accumuler le contenu dans la fenêtre de collage multiligne (désactivé = remplacer)"
   },
   "aiAgent": {
     "heading": "Agent IA",
@@ -69,5 +71,25 @@
   "actions": {
     "cancel": "Annuler",
     "save": "Enregistrer"
+  },
+  "mouse": {
+    "heading": "Souris",
+    "rightButton": "Bouton droit",
+    "middleButton": "Bouton du milieu",
+    "none": "Ne rien faire",
+    "menu": "Ouvrir le menu contextuel",
+    "paste": "Coller le contenu du presse-papiers",
+    "properties": "Ouvrir la boîte de dialogue des propriétés",
+    "enter": "Envoyer un retour chariot",
+    "pasteSelection": "Coller le texte sélectionné"
+  },
+  "messenger": {
+    "tab": "Messagerie",
+    "heading": "Mini messagerie",
+    "desc": "Les paramètres détaillés tels que le nom d'affichage, le masquage de présence et les pop-ups peuvent être modifiés dans les paramètres de l'espace de travail Messagerie (💬). Seule la réinitialisation des données est proposée ici.",
+    "confirmDeleteConversations": "Supprimer toutes les conversations de la messagerie ?",
+    "deleteConversations": "Supprimer toutes les conversations",
+    "confirmDeleteUsers": "Supprimer tous les utilisateurs découverts et les conversations ?",
+    "deleteUsers": "Supprimer tous les utilisateurs"
   }
 }

@@ -78,13 +78,25 @@
     "expect": "期望",
     "send": "发送",
     "globalDefault": "(全局默认)",
-    "rootFolder": "(根目录)"
+    "rootFolder": "(根目录)",
+    "showFileTree": "显示文件树",
+    "autoTrackFileTree": "自动跟踪文件树",
+    "logPath": "日志位置",
+    "codePath": "代码位置",
+    "jdbcDriver": "JDBC 驱动",
+    "dbmsHost": "主机",
+    "dbmsPort": "端口",
+    "dbmsDatabase": "数据库",
+    "dbmsUser": "用户",
+    "dbmsPassword": "密码",
+    "sshTunnel": "SSH 隧道",
+    "directInput": "直接输入"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / 域名",
     "jumpTargetHost": "例如 I-MPM01 (留空 = 直连)",
     "jumpTargetUser": "例如 root",
-    "jumpTargetPassword": "留空 = 使用上一台主机的 ~/.ssh/id_rsa",
+    "jumpTargetPassword": "留空 = 使用主 ~/.ssh/id_rsa",
     "browserUrl": "例如 https://172.16.214.148",
     "initialPath": "例如 /home/user/project (留空 = 主目录)"
   },
@@ -124,5 +136,37 @@
   "errors": {
     "hostUserRequired": "主机和用户名为必填项",
     "invalidHost": "请输入有效的 IPv4/IPv6 或主机名。"
+  },
+  "keys": {
+    "category": "按键序列",
+    "deleteLegend": "Delete 键序列",
+    "backspaceLegend": "Backspace 键序列"
+  },
+  "advanced": {
+    "logPathTooltip": "在 LogAnalyzer 中选择此会话时自动填充日志文件路径",
+    "logPathPlaceholder": "例如 /var/log/myapp/app.log",
+    "codePathTooltip": "在文件比较工作区中选择此会话时自动填充基础目录",
+    "codePathPlaceholder": "例如 /home/user/project/src"
+  },
+  "filetree": {
+    "disabledHint": "仅在启用“显示文件树”时可用",
+    "autoTrackTooltip": "终端中 cd 时自动刷新文件树路径"
+  },
+  "dbms": {
+    "driverLoading": "（加载中…）",
+    "directInput": "直接输入",
+    "copy": "复制",
+    "urlPlaceholder": "（请选择驱动）",
+    "testConnect": "🔌 测试连接",
+    "useSshTunnelJump": "从跳转链的最终 SSH 主机连接 JDBC",
+    "useSshTunnelNormal": "通过 SSH 会话进行端口转发，然后本地连接 JDBC",
+    "noDriver": "❌ 未选择驱动",
+    "driverJarMissing": "❌ 缺少驱动 JAR — 请在驱动管理器中添加 JAR",
+    "testing": "测试中…",
+    "sshIpcMissing": "❌ 未注册 SSH 隧道 IPC — 请重启 Electron 主进程",
+    "sshOpening": "正在打开 SSH 隧道…",
+    "sshFailed": "❌ SSH 隧道失败：{{error}} — 请先为同一会话连接终端",
+    "sshTunnelOk": "SSH 隧道正常（{{remoteHost}}:{{remotePort}} → 本地={{localPort}}）— 正在测试 JDBC…",
+    "exception": "❌ 异常：{{error}}"
   }
 }

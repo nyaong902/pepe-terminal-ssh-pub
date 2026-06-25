@@ -38,7 +38,8 @@
     "newWorkspace": "+ نقل إلى مساحة عمل جديدة",
     "changeScrollback": "تغيير حجم سجل التمرير...",
     "clearScrollbackBuffer": "مسح ذاكرة سجل التمرير",
-    "fontDots": "الخط..."
+    "fontDots": "الخط...",
+    "openInNewWindow": "فتح في نافذة جديدة"
   },
   "float": "تعويم",
   "unfloat": "إلغاء التعويم",
@@ -76,7 +77,11 @@
     "tryingSSH": "▶ جارٍ محاولة اتصال SSH...",
     "recordEnd": "● تم إيقاف التسجيل — {{path}}",
     "recordBegin": "● بدأ التسجيل — {{path}}",
-    "recordFailed": "✕ فشل بدء التسجيل: {{reason}}"
+    "recordFailed": "✕ فشل بدء التسجيل: {{reason}}",
+    "reconnectIn30s": "إعادة الاتصال خلال 30 ثانية. اضغط أي مفتاح للإلغاء.",
+    "retryHint": "▶ لإعادة المحاولة: انقر على الطرفية أو انقر بزر الفأرة الأيمن على علامة التبويب المصغّرة ← إعادة الاتصال",
+    "reasonNoResponse": "لا توجد استجابة لمدة 10 ثوانٍ",
+    "reasonError": "خطأ"
   },
   "ui": {
     "newSession": "جلسة جديدة",

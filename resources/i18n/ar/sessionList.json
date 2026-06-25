@@ -34,5 +34,16 @@
   "ctxMoveToFolder": "📂 نقل إلى مجلد...",
   "pinTooltip": "تثبيت (إبقاء مفتوحًا)",
   "unpinTooltip": "إلغاء التثبيت (إخفاء تلقائي)",
-  "newFolderDefault": "مجلد جديد"
+  "newFolderDefault": "مجلد جديد",
+  "ctxOpenMini": "🔌 فتح في تبويب مصغّر",
+  "ctxOpenVSplit": "▥ فتح في تقسيم يمين/يسار",
+  "ctxOpenHSplit": "▤ فتح في تقسيم أعلى/أسفل",
+  "ctxOpenTile": "▦ فتح في تقسيم مبلّط",
+  "deleteTitle": "حذف",
+  "scopeName": "الاسم",
+  "scopeBasic": "معلومات الاتصال",
+  "scopeAll": "معلومات الإعدادات",
+  "searchScopeTitle": "نطاق البحث",
+  "searchPlaceholder": "بحث {{scope}}",
+  "searchClear": "مسح البحث"
 }

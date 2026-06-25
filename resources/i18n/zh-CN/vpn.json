@@ -33,5 +33,7 @@
   "confirmDeleteConfig": "是否删除？\n{{path}}",
   "confirmClearCreds": "是否删除已保存的账号/密码？",
   "importFailed": "导入失败：{{reason}}",
-  "connectFailed": "连接失败：{{reason}}"
+  "connectFailed": "连接失败：{{reason}}",
+  "deleteTitle": "删除",
+  "clearCredsTitle": "清除凭据"
 }

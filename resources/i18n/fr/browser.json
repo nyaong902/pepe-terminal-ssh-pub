@@ -8,5 +8,22 @@
   "zoomOut": "Zoom arrière (Ctrl+-)",
   "zoomReset": "100% (Ctrl+0)",
   "zoomIn": "Zoom avant (Ctrl+=)",
-  "devTools": "DevTools"
+  "devTools": "DevTools",
+  "directConnect": "Connexion directe",
+  "proxyApplying": "Application du proxy...",
+  "test": "Tester",
+  "testTooltip": "Tester l'accessibilité de l'URL actuelle via la session SSH sélectionnée",
+  "proxySelectTooltip": "Acheminer le trafic du navigateur via la session SSH sélectionnée",
+  "testSelectSessionFirst": "Veuillez d'abord sélectionner une session SSH à tester.",
+  "testUrlEmpty": "L'URL à tester est vide.",
+  "testUrlInvalid": "Le format de l'URL est invalide.",
+  "testHttpOnly": "Seules les URL http/https peuvent être testées.",
+  "proxyOpenFailed": "Échec : impossible d'ouvrir le proxy de transfert SSH. {{reason}}",
+  "proxyForwardingBlocked": "Le transfert est peut-être bloqué.",
+  "browserLoadFailed": "Échec : échec du chargement du navigateur - {{msg}}",
+  "browserLoadFailedUrl": "Échec : échec du chargement du navigateur {{msg}}{{url}}",
+  "testFailed": "Échec : {{reason}}",
+  "unknownError": "Erreur inconnue",
+  "remoteExec": " (exéc. distante)",
+  "testSuccess": "Succès{{via}} : {{detail}}"
 }

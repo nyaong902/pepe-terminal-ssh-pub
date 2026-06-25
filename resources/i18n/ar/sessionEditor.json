@@ -78,13 +78,25 @@
     "expect": "توقّع",
     "send": "إرسال",
     "globalDefault": "(الافتراضي العام)",
-    "rootFolder": "(الجذر)"
+    "rootFolder": "(الجذر)",
+    "showFileTree": "إظهار شجرة الملفات",
+    "autoTrackFileTree": "تتبع تلقائي لشجرة الملفات",
+    "logPath": "موقع السجل",
+    "codePath": "موقع الكود",
+    "jdbcDriver": "برنامج تشغيل JDBC",
+    "dbmsHost": "المضيف",
+    "dbmsPort": "المنفذ",
+    "dbmsDatabase": "قاعدة البيانات",
+    "dbmsUser": "المستخدم",
+    "dbmsPassword": "كلمة المرور",
+    "sshTunnel": "نفق SSH",
+    "directInput": "إدخال مباشر"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / نطاق",
     "jumpTargetHost": "مثال: I-MPM01 (فارغ = اتصال مباشر)",
     "jumpTargetUser": "مثال: root",
-    "jumpTargetPassword": "فارغ = استخدم ~/.ssh/id_rsa للمضيف السابق",
+    "jumpTargetPassword": "فارغ = استخدم ~/.ssh/id_rsa الأساسي",
     "browserUrl": "مثال: https://172.16.214.148",
     "initialPath": "مثال: /home/user/project (فارغ = المجلد الرئيسي)"
   },
@@ -124,5 +136,37 @@
   "errors": {
     "hostUserRequired": "المضيف واسم المستخدم مطلوبان",
     "invalidHost": "أدخل IPv4/IPv6 أو اسم مضيف صالحًا."
+  },
+  "keys": {
+    "category": "تسلسلات المفاتيح",
+    "deleteLegend": "تسلسل مفتاح Delete",
+    "backspaceLegend": "تسلسل مفتاح Backspace"
+  },
+  "advanced": {
+    "logPathTooltip": "يُملأ مسار ملف السجل تلقائيًا عند تحديد هذه الجلسة في LogAnalyzer",
+    "logPathPlaceholder": "مثال: /var/log/myapp/app.log",
+    "codePathTooltip": "يُملأ الدليل الأساسي تلقائيًا عند تحديد هذه الجلسة في مساحة عمل مقارنة الملفات",
+    "codePathPlaceholder": "مثال: /home/user/project/src"
+  },
+  "filetree": {
+    "disabledHint": "متاح فقط عند تمكين إظهار شجرة الملفات",
+    "autoTrackTooltip": "تحديث مسار شجرة الملفات تلقائيًا عند تنفيذ cd في الطرفية"
+  },
+  "dbms": {
+    "driverLoading": "(جارٍ التحميل...)",
+    "directInput": "إدخال مباشر",
+    "copy": "نسخ",
+    "urlPlaceholder": "(اختر برنامج تشغيل)",
+    "testConnect": "🔌 اختبار الاتصال",
+    "useSshTunnelJump": "الاتصال بـ JDBC من مضيف SSH الأخير في سلسلة القفز",
+    "useSshTunnelNormal": "إعادة توجيه المنفذ عبر جلسة SSH، ثم الاتصال بـ JDBC محليًا",
+    "noDriver": "❌ لم يتم اختيار برنامج تشغيل",
+    "driverJarMissing": "❌ ملف JAR لبرنامج التشغيل مفقود — أضف JAR في مدير برامج التشغيل",
+    "testing": "جارٍ الاختبار...",
+    "sshIpcMissing": "❌ IPC لنفق SSH غير مسجّل — أعد تشغيل Electron main",
+    "sshOpening": "جارٍ فتح نفق SSH...",
+    "sshFailed": "❌ فشل نفق SSH: {{error}} — قم بتوصيل طرفية لنفس الجلسة أولاً",
+    "sshTunnelOk": "نفق SSH جاهز ({{remoteHost}}:{{remotePort}} ← محلي={{localPort}}) — جارٍ اختبار JDBC...",
+    "exception": "❌ استثناء: {{error}}"
   }
 }

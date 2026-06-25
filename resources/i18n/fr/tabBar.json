@@ -14,5 +14,7 @@
   "closeContext": "Fermer",
   "workspace": "Espace de travail",
   "fileTransferTab": "📁 Transfert de fichiers",
-  "workspaceN": "Espace de travail {{n}}"
+  "workspaceN": "Espace de travail {{n}}",
+  "i18nWorkspace": "🌐 Espace de localisation",
+  "openInNewWindow": "Ouvrir dans une nouvelle fenêtre"
 }

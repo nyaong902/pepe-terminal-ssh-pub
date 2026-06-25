@@ -43,5 +43,10 @@
   "alreadyAdded": "Déjà ajoutée : {{code}}",
   "langPickerHint": "Cliquez sur une ligne → le code remplit le champ « Ajouter une langue »",
   "close": "Fermer",
-  "dirtyChanged": "Modifié"
+  "dirtyChanged": "Modifié",
+  "aiEmptyBtnWithAgent": "✨ {{agent}} · IA ({{base}}→{{target}}) vide",
+  "aiAllBtnWithAgent": "Tout · {{agent}}",
+  "currentAiService": "Service IA actuel : {{agent}}",
+  "removeLangTitle": "Supprimer la langue",
+  "aiParseFailDetail": "(raw={{len}} caractères, original affiché dans la console)"
 }

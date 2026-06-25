@@ -1,0 +1,295 @@
+{
+  "common": {
+    "cancel": "إلغاء",
+    "close": "إغلاق",
+    "connect": "اتصال",
+    "connecting": "جارٍ الاتصال...",
+    "unknownError": "خطأ غير معروف",
+    "unknown": "غير معروف"
+  },
+  "manual": {
+    "loadFail": "فشل تحميل الدليل",
+    "title": "📖 دليل PePe Terminal(SSH)"
+  },
+  "connect": {
+    "fail": "فشل الاتصال",
+    "failDetail": "{{name}}: {{error}}"
+  },
+  "messenger": {
+    "defaultPeerName": "المراسلة",
+    "filePrefix": "ملف: {{name}}",
+    "attachedFile": "ملف مرفق"
+  },
+  "x11": {
+    "settingChanged": "تم تغيير إعدادات X11. للتطبيق، أعد الاتصال يدويًا بـ {{count}} جلسة نشطة. (انقر بزر الفأرة الأيمن على التبويب المصغّر ← إعادة الاتصال بالجلسة)"
+  },
+  "broadcast": {
+    "textLabel": "نص",
+    "enterText": "أدخل النص",
+    "noTargets": "لا توجد جلسات مستهدفة",
+    "sentToast": "{{label}} ← أُرسل إلى {{count}} جلسة",
+    "close": "إغلاق",
+    "labelTooltip": "بث نص",
+    "scopeTooltip": "الهدف",
+    "scopeVisible": "التبويبات المرئية ({{count}})",
+    "scopeCurrent": "الجلسة الحالية ({{count}})",
+    "scopeConnected": "الجلسات المتصلة ({{count}})",
+    "inputPlaceholder": "نص للإرسال (Enter للإرسال، Ctrl+C/^C، Ctrl+D/^D)",
+    "historyTooltip": "سجل الإرسال",
+    "appendNewlineTooltip": "إضافة سطر جديد (Enter) في النهاية",
+    "sendTooltip": "إرسال النص (Enter)",
+    "send": "إرسال",
+    "fileTransferTooltip": "رفع ملفات/مجلدات بالجملة إلى جلسات متعددة",
+    "fileTransfer": "📤 نقل الملفات",
+    "arrowUpTooltip": "إرسال السهم لأعلى (الأمر السابق)",
+    "arrowDownTooltip": "إرسال السهم لأسفل (الأمر التالي)",
+    "sigintTooltip": "إرسال Ctrl+C (SIGINT)",
+    "eofTooltip": "إرسال Ctrl+D (EOF)"
+  },
+  "ai": {
+    "serviceRequiredTitle": "خدمة الذكاء الاصطناعي مطلوبة",
+    "serviceRequiredDesc": "تنظيم قائمة الجلسات تلقائيًا متاح فقط عند اتصال خدمة ذكاء اصطناعي واحدة على الأقل. يُرجى الاتصال بـ Claude أو Gemini أو Codex أولاً.",
+    "organizingToast": "جارٍ تنظيم قائمة الجلسات بالذكاء الاصطناعي ({{agent}})...",
+    "parseFail": "فشل تحليل استجابة الذكاء الاصطناعي كـ JSON: {{error}}",
+    "invalidFormat": "تنسيق استجابة الذكاء الاصطناعي غير صالح.",
+    "noApplicableSessions": "لا توجد جلسات قابلة للتطبيق في استجابة الذكاء الاصطناعي.",
+    "saveFail": "فشل حفظ قائمة الجلسات",
+    "organizeDoneTitle": "تم تنظيم قائمة الجلسات",
+    "organizeDoneDesc": "نظّم الذكاء الاصطناعي ({{agent}}) {{sessions}} جلسة و{{folders}} مجلد.",
+    "organizeFailTitle": "فشل التنظيم التلقائي"
+  },
+  "sessionWipe": {
+    "backupToast": "تم حفظ نسخة احتياطية للجلسات. جارٍ حذف القائمة بالكامل الآن.",
+    "deleteFail": "فشل حذف الجلسات",
+    "emptiedTitle": "تم تفريغ قائمة الجلسات",
+    "emptiedBackupDesc": "تم حذف قائمة الجلسات بعد النسخ الاحتياطي.",
+    "emptiedDesc": "تم حذف قائمة الجلسات.",
+    "emptyFailTitle": "فشل تفريغ قائمة الجلسات",
+    "dialogTitle": "تفريغ قائمة الجلسات",
+    "dialogDesc": "يؤدي هذا إلى حذف قائمة الجلسات بالكامل. يُرجى اختيار ما إذا كنت تريد النسخ الاحتياطي أولاً.",
+    "cancel": "إلغاء",
+    "backup": "نسخ احتياطي",
+    "delete": "حذف"
+  },
+  "claudeAttach": {
+    "mountPreparing": "جارٍ تحضير تحميل WebDAV...",
+    "mountFail": "فشل التحميل: {{error}}",
+    "pathConvertFail": "فشل تحويل المسار: {{error}}",
+    "attached": "مرفق (وصول مباشر عبر WebDAV)",
+    "attachFail": "فشل الإرفاق: {{error}}"
+  },
+  "tabs": {
+    "browser": "🌐 المتصفح",
+    "compare": "🔍 مقارنة الملفات",
+    "logAnalyzer": "📈 محلل السجلات",
+    "vpn": "🔒 VPN",
+    "i18nEditor": "🌍 محرر الترجمة",
+    "fileTransfer": "📁 نقل الملفات"
+  },
+  "term": {
+    "connectCancelled": "✕ تم إلغاء الاتصال.",
+    "retryHint": "▶ لإعادة المحاولة: انقر على الطرفية أو انقر بزر الفأرة الأيمن على التبويب المصغّر ← إعادة الاتصال"
+  },
+  "fileTransfer": {
+    "connectFail": "فشل اتصال نقل الملفات",
+    "connectFailDetail": "{{name}}\n\n{{msg}}",
+    "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nتحقق من سجل [sftp-connect] في وحدة تحكم DevTools.",
+    "connectException": "استثناء اتصال نقل الملفات"
+  },
+  "sessionMenu": {
+    "wipe": "تفريغ الجلسات",
+    "autoOrganize": "تنظيم قائمة الجلسات تلقائيًا"
+  },
+  "workspace": {
+    "cannotConnectTitle": "تعذّر اتصال مساحة العمل",
+    "cannotConnectTab": "'{{title}}' هي مساحة عمل لا يمكنها إضافة جلسات طرفية.\n\nسيتم الفتح في مساحة عمل جديدة.",
+    "cannotConnectActive": "مساحة العمل الحالية '{{title}}' لا يمكنها إضافة جلسات طرفية.\n\nسيتم الفتح في مساحة عمل جديدة."
+  },
+  "titlebar": {
+    "restore": "استعادة",
+    "maximize": "تكبير"
+  },
+  "toolbar": {
+    "dragHint": "اسحب لنقل الاتصال السريع يمينًا/يسارًا أو إلى الأعلى",
+    "fileTransferTooltip": "نقل الملفات",
+    "resetSplitTooltip": "موازنة نسب اللوحات (إعادة تعيين جميع نسب التقسيم في مساحة العمل الحالية)",
+    "quickConnectShow": "إظهار شريط الاتصال السريع",
+    "quickConnectHide": "إخفاء شريط الاتصال السريع",
+    "broadcastShow": "إظهار شريط البث",
+    "broadcastHide": "إخفاء شريط البث",
+    "terminalPin": "تثبيت لوحة الطرفية",
+    "terminalUnpin": "إلغاء تثبيت لوحة الطرفية (تصغير إلى تبويب عمودي)",
+    "xStart": "بدء خادم X (DISPLAY=:0)",
+    "xStop": "إيقاف خادم X",
+    "xStatus": "حالة خادم X",
+    "options": "الخيارات",
+    "dragTargetTop": "الأعلى",
+    "dragTargetQcLeft": "يسار الاتصال السريع",
+    "dragTargetQcRight": "يمين الاتصال السريع",
+    "dragHintPrefix": "← {{target}}"
+  },
+  "xServer": {
+    "startTitle": "بدء خادم X",
+    "startOk": "✅ DISPLAY=:0  PID={{pid}}",
+    "startNoBundle": "⚠️ لم يُستخدم خادم X المُضمّن/الخارجي\n\n{{logs}}",
+    "startFail": "فشل بدء خادم X",
+    "stopTitle": "إيقاف خادم X",
+    "stopOk": "✅ تم الإيقاف.",
+    "stopFail": "فشل إيقاف خادم X",
+    "statusTitle": "حالة خادم X",
+    "statusNone": "⚫ لا يوجد خادم X قيد التشغيل.",
+    "statusFail": "فشل الاستعلام عن حالة خادم X",
+    "statusRunning": "🟢 قيد التشغيل"
+  },
+  "fileTree": {
+    "triggerTooltip": "نقر=تبديل / تمرير 2.5 ث=فتح تلقائي",
+    "triggerLabel": "📁 شجرة الملفات",
+    "unpinTooltip": "إلغاء التثبيت (إخفاء تلقائي)",
+    "pinTooltip": "تثبيت",
+    "resizeTooltip": "سحب=تغيير العرض، نقر مزدوج=افتراضي (240)",
+    "resizeTooltip2": "اسحب لتغيير العرض (نقر مزدوج: افتراضي 240)"
+  },
+  "errorBoundary": {
+    "browser": "المتصفح",
+    "compare": "مقارنة الملفات",
+    "logAnalyzer": "محلل السجلات",
+    "i18nEditor": "محرر الترجمة"
+  },
+  "panel": {
+    "openTerminalTooltip": "فتح الطرفية",
+    "pinTerminalTooltip": "تثبيت لوحة الطرفية"
+  },
+  "options": {
+    "messengerTab": "المراسلة",
+    "pasteAccumulateTooltip": "أثناء فتح النافذة، يؤدي لصق أسطر متعددة مجددًا إلى الإضافة بعد المحتوى الموجود. أوقفه للاستبدال بمحتوى جديد.",
+    "pasteAccumulate": "تجميع المحتوى في نافذة اللصق متعدد الأسطر (إيقاف = استبدال)",
+    "mouse": "الفأرة",
+    "rightButton": "الزر الأيمن",
+    "middleButton": "الزر الأوسط",
+    "mouseNone": "عدم فعل شيء",
+    "mouseMenu": "فتح القائمة المنبثقة",
+    "mousePaste": "لصق محتويات الحافظة",
+    "mouseProperties": "فتح مربع حوار الخصائص",
+    "mouseEnter": "إرسال إرجاع السطر",
+    "mousePasteSelection": "لصق النص المحدد",
+    "miniMessenger": "المراسلة المصغّرة",
+    "miniMessengerDesc": "يمكن تغيير الإعدادات التفصيلية مثل اسم العرض وإخفاء الحضور والنوافذ المنبثقة في إعدادات مساحة عمل المراسلة (💬). هنا يتوفر إعادة تعيين البيانات فقط.",
+    "confirmDeleteConversations": "حذف جميع محادثات المراسلة؟",
+    "deleteConversations": "حذف جميع المحادثات",
+    "confirmDeleteUsers": "حذف جميع المستخدمين المكتشفين والمحادثات؟",
+    "deleteUsers": "حذف جميع المستخدمين"
+  },
+  "claudeChat": {
+    "triggerTooltip": "نقر=تبديل / تمرير 2.5 ث=فتح تلقائي",
+    "resizeTooltip": "اسحب لتغيير العرض (نقر مزدوج: افتراضي)"
+  },
+  "splitPicker": {
+    "titleRow": "اختر جلسة (تقسيم أفقي (يسار/يمين))",
+    "titleCol": "اختر جلسة (تقسيم عمودي (أعلى/أسفل))",
+    "cancel": "إلغاء"
+  },
+  "infoModal": {
+    "closeTooltip": "إغلاق (Esc)"
+  },
+  "update": {
+    "title": "🔄 تحديث",
+    "titleChecking": "🔄 جارٍ التحقق من التحديثات",
+    "titleAvailable": "🎉 إصدار جديد متاح",
+    "titleDownloading": "⬇ جارٍ تنزيل التحديث",
+    "titleDownloaded": "✅ التحديث جاهز",
+    "titleNotAvailable": "✔ محدّث",
+    "titleUnsupported": "التحديث التلقائي غير مدعوم",
+    "titleError": "⚠ خطأ في التحديث",
+    "check": "🔄 التحقق من التحديثات",
+    "closeTooltip": "إغلاق (Esc)",
+    "checkingMsg": "جارٍ التحقق من التحديثات…",
+    "availableMsg": "الإصدار الجديد <1>v{{ver}}</1> متاح. التنزيل الآن؟",
+    "downloadingMsg": "جارٍ تنزيل v{{ver}}… {{pct}}%",
+    "downloadedMsg": "اكتمل تنزيل v{{ver}}.",
+    "downloadedMsg2": "إعادة التشغيل الآن للتثبيت؟ (احفظ عملك قبل المتابعة)",
+    "notAvailableMsg": "أنت على أحدث إصدار.{{suffix}}",
+    "unsupportedMsg": "التحديث التلقائي غير متاح في هذه النسخة (وضع التطوير أو المحمولة).",
+    "unsupportedMsg2": "يعمل فقط في نسخة المثبّت.",
+    "errorMsg": "حدث خطأ أثناء التحديث.",
+    "later": "لاحقًا",
+    "downloadNow": "تنزيل الآن",
+    "restartNow": "إعادة التشغيل والتثبيت الآن",
+    "background": "تشغيل في الخلفية",
+    "ok": "موافق",
+    "availableMsgPlain": "الإصدار الجديد v{{ver}} متوفر. هل تريد التنزيل الآن؟"
+  },
+  "remotePicker": {
+    "title": "🌐 اختر ملفًا بعيدًا",
+    "sourceSession": "الجلسة المصدر (القائمة الكاملة؛ اختيار جلسة غير متصلة يُشغّل اتصال SFTP في الخلفية)",
+    "quickConnect": "اتصال سريع",
+    "quickConnectSuffix": " (اتصال سريع)",
+    "selectSession": "(اختر جلسة)",
+    "groupConnected": "🟢 متصل",
+    "groupDisconnected": "⚪ غير متصل",
+    "connecting": "جارٍ الاتصال...",
+    "path": "المسار",
+    "parentTooltip": "المجلد الأصل",
+    "refreshTooltip": "تحديث",
+    "selectSessionHint": "اختر جلسة",
+    "loading": "جارٍ التحميل...",
+    "emptyOrError": "(فارغ أو خطأ في المسار)",
+    "legend": "🟢 الجلسات المتصلة / ⚪ غير متصلة (تتصل تلقائيًا عند الاختيار). نقر: اختيار / نقر مزدوج: دخول المجلد. تم اختيار {{count}}",
+    "close": "إغلاق",
+    "addSelected": "إضافة المحدد ({{count}})"
+  },
+  "cred": {
+    "title": "🔒 أدخل بيانات الاعتماد",
+    "connectTo": "الاتصال بـ {{host}}",
+    "hide": "إخفاء",
+    "show": "إظهار",
+    "cancel": "إلغاء",
+    "connecting": "جارٍ الاتصال...",
+    "connect": "اتصال"
+  },
+  "bcastXfer": {
+    "title": "📤 نقل ملفات بالجملة",
+    "targetSession": "الجلسة المستهدفة",
+    "scopeVisible": "جميع الجلسات المرئية",
+    "scopeCurrent": "الجلسة الحالية",
+    "scopeConnected": "جميع الجلسات المتصلة",
+    "count": "{{count}}",
+    "remotePath": "المسار البعيد (إذا كان فارغًا، يُستخدم المسار الحالي لكل جلسة)",
+    "remotePathPlaceholder": "مثال: /tmp (اختياري)",
+    "uploadFiles": "ملفات/مجلدات للرفع",
+    "addLocalFile": "+ ملف محلي",
+    "addLocalFolder": "+ مجلد محلي",
+    "addRemoteFile": "+ ملف بعيد (خادم آخر)",
+    "removeAll": "إزالة الكل",
+    "emptyHint": "أضف ملفات أو مجلدات",
+    "remoteSourcePrefix": "بعيد({{label}}):",
+    "localSourcePrefix": "محلي:",
+    "close": "إغلاق",
+    "noTargets": "لا توجد جلسات مستهدفة",
+    "startLog": "▶ بدء النقل: {{targets}} جلسة × {{files}} عنصر",
+    "skipSameSession": "↷ {{label}}: {{filename}} (نفس جلسة المصدر، تم التخطي)",
+    "doneLog": "● تم: {{ok}} نجح، {{err}} فشل",
+    "doneToast": "اكتمل نقل الملفات (نجاح {{ok}}/{{total}})",
+    "sending": "جارٍ الإرسال...",
+    "send": "إرسال"
+  },
+  "askPwd": {
+    "credTitle": "أدخل بيانات الاعتماد",
+    "pwdTitle": "أدخل كلمة المرور",
+    "cancelTooltip": "إلغاء",
+    "connectTo": "الاتصال بـ <1>{{host}}</1>",
+    "needCred": "بيانات الاعتماد مطلوبة للاتصال.",
+    "hide": "إخفاء",
+    "show": "إظهار",
+    "cancel": "إلغاء",
+    "connect": "اتصال",
+    "waiting": "{{count}} في الانتظار — يمكن الإدخال في تبويبات جلسات أخرى",
+    "connectToPlain": "الاتصال بـ {{host}}"
+  },
+  "savePwd": {
+    "title": "حفظ كلمة المرور لهذه الجلسة؟",
+    "desc": "من الاتصال التالي، ستتصل مباشرة دون إدخال كلمة المرور.",
+    "dontSave": "عدم الحفظ",
+    "savedToast": "تم حفظ كلمة المرور للجلسة.",
+    "save": "حفظ"
+  }
+}

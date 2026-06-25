@@ -14,5 +14,7 @@
   "renameContext": "重命名",
   "closeContext": "关闭",
   "fileTransferTab": "📁 文件传输",
-  "workspaceN": "工作区 {{n}}"
+  "workspaceN": "工作区 {{n}}",
+  "i18nWorkspace": "🌐 本地化工作区",
+  "openInNewWindow": "在新窗口中打开"
 }

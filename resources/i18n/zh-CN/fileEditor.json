@@ -8,5 +8,11 @@
   "unknownError": "未知错误",
   "analyzeWithClaude": "使用 Claude 分析",
   "saving": "保存中...",
-  "saveBtn": "保存 (Ctrl+S)"
+  "saveBtn": "保存 (Ctrl+S)",
+  "encodingTitle": "文件编码（更改后重新加载）",
+  "newConversation": "新建对话",
+  "newConversationTitle": "选中：开始新对话 / 取消选中：在当前对话中继续",
+  "aiAnalyze": "请求 AI 分析",
+  "analyzeWithAgent": "使用 {{agent}} 分析",
+  "analyzePrompt": "分析附加的文件 `{{name}}`。\n- 路径：{{path}}"
 }

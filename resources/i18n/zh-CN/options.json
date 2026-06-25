@@ -16,7 +16,9 @@
     "heading": "粘贴",
     "multiLineNote": "粘贴多行时：",
     "dialog": "打开多行粘贴对话框",
-    "direct": "直接粘贴到终端"
+    "direct": "直接粘贴到终端",
+    "accumulateTooltip": "窗口打开时，再次粘贴多行内容会追加到现有内容之后。关闭则替换为新内容。",
+    "accumulate": "在多行粘贴窗口中累积内容（关闭 = 替换）"
   },
   "aiAgent": {
     "heading": "AI 代理",
@@ -69,5 +71,25 @@
   "actions": {
     "cancel": "取消",
     "save": "保存"
+  },
+  "mouse": {
+    "heading": "鼠标",
+    "rightButton": "右键",
+    "middleButton": "中键",
+    "none": "不执行操作",
+    "menu": "打开弹出菜单",
+    "paste": "粘贴剪贴板内容",
+    "properties": "打开属性对话框",
+    "enter": "发送回车",
+    "pasteSelection": "粘贴选中文本"
+  },
+  "messenger": {
+    "tab": "通讯",
+    "heading": "迷你通讯",
+    "desc": "显示名称、隐藏在线状态、弹窗等详细设置可在通讯工作区（💬）设置中更改。此处仅提供数据重置。",
+    "confirmDeleteConversations": "删除所有通讯会话？",
+    "deleteConversations": "删除所有会话",
+    "confirmDeleteUsers": "删除所有已发现的用户和会话？",
+    "deleteUsers": "删除所有用户"
   }
 }

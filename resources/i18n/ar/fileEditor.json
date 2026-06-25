@@ -8,5 +8,11 @@
   "unknownError": "خطأ غير معروف",
   "analyzeWithClaude": "تحليل باستخدام Claude",
   "saving": "جارٍ الحفظ...",
-  "saveBtn": "حفظ (Ctrl+S)"
+  "saveBtn": "حفظ (Ctrl+S)",
+  "encodingTitle": "ترميز الملف (يُعاد التحميل عند التغيير)",
+  "newConversation": "محادثة جديدة",
+  "newConversationTitle": "محدد: بدء محادثة جديدة / غير محدد: المتابعة في المحادثة الحالية",
+  "aiAnalyze": "طلب تحليل الذكاء الاصطناعي",
+  "analyzeWithAgent": "التحليل باستخدام {{agent}}",
+  "analyzePrompt": "حلّل الملف المرفق `{{name}}`.\n- المسار: {{path}}"
 }

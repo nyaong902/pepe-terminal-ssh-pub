@@ -38,7 +38,8 @@
     "newWorkspace": "+ Déplacer vers un nouvel espace de travail",
     "changeScrollback": "Modifier la taille du défilement...",
     "clearScrollbackBuffer": "Effacer le tampon de défilement",
-    "fontDots": "Police..."
+    "fontDots": "Police...",
+    "openInNewWindow": "Ouvrir dans une nouvelle fenêtre"
   },
   "float": "Flottant",
   "unfloat": "Ancrer",
@@ -76,7 +77,11 @@
     "tryingSSH": "▶ Tentative de connexion SSH...",
     "recordEnd": "● Enregistrement arrêté — {{path}}",
     "recordBegin": "● Enregistrement démarré — {{path}}",
-    "recordFailed": "✕ Échec du démarrage de l'enregistrement : {{reason}}"
+    "recordFailed": "✕ Échec du démarrage de l'enregistrement : {{reason}}",
+    "reconnectIn30s": "Reconnexion dans 30 s. Appuyez sur une touche pour annuler.",
+    "retryHint": "▶ Pour réessayer : cliquez sur le terminal ou faites un clic droit sur le mini-onglet → Reconnecter",
+    "reasonNoResponse": "Aucune réponse pendant 10 s",
+    "reasonError": "Erreur"
   },
   "ui": {
     "newSession": "Nouvelle session",

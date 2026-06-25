@@ -34,5 +34,16 @@
   "ctxMoveToFolder": "📂 Déplacer vers dossier...",
   "pinTooltip": "Épingler (garder ouvert)",
   "unpinTooltip": "Détacher (masquer auto)",
-  "newFolderDefault": "Nouveau dossier"
+  "newFolderDefault": "Nouveau dossier",
+  "ctxOpenMini": "🔌 Ouvrir en mini-onglet",
+  "ctxOpenVSplit": "▥ Ouvrir en division gauche/droite",
+  "ctxOpenHSplit": "▤ Ouvrir en division haut/bas",
+  "ctxOpenTile": "▦ Ouvrir en division mosaïque",
+  "deleteTitle": "Supprimer",
+  "scopeName": "Nom",
+  "scopeBasic": "Infos de connexion",
+  "scopeAll": "Infos de paramètres",
+  "searchScopeTitle": "Portée de recherche",
+  "searchPlaceholder": "Rechercher {{scope}}",
+  "searchClear": "Effacer la recherche"
 }

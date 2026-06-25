@@ -28,7 +28,8 @@
     "level": "المستوى",
     "file": "الملف",
     "line": "السطر",
-    "function": "الدالة"
+    "function": "الدالة",
+    "tag": "وسم"
   },
   "clearFilters": "✕ مسح {{count}} مرشحات",
   "clearFiltersTitle": "مسح كل المرشحات",
@@ -57,5 +58,28 @@
     "function": "الدالة",
     "message": "الرسالة",
     "raw": "خام"
-  }
+  },
+  "aiPromptDefault": "ابحث عن أنماط الأخطاء/الحالات الشاذة في هذا السجل ولخّص الأسباب والحلول.",
+  "watchStartFailed": "فشل بدء المراقبة",
+  "watchStartTitle": "المراقبة المباشرة: تُستخدم البيانات الحالية فقط لإنشاء خيارات التصفية. تُعرض الأسطر المضافة حديثًا فقط وفقًا لعوامل التصفية.",
+  "watchStart": "⏱ بدء المباشر",
+  "watchStopTitle": "إيقاف المراقبة المباشرة",
+  "watchStop": "⏹ إيقاف المباشر",
+  "aiBarLabel": "🤖 تحليل الذكاء الاصطناعي",
+  "aiPromptInputPlaceholder": "أدخل طلب التحليل (اضغط Enter للإرسال)",
+  "aiMaxLinesTitle": "إرفاق ما يصل إلى N من صفوف السجل (المُصفّاة) كسياق",
+  "aiMaxLabel": "الحد الأقصى",
+  "aiRowsSuffix": " صفوف",
+  "aiNewConversationTitle": "محدد: بدء محادثة جديدة / غير محدد: المتابعة في المحادثة الحالية",
+  "aiNewConversation": "محادثة جديدة",
+  "aiSendTitle": "إرسال ما يصل إلى {{max}} من الصفوف المُصفّاة البالغ عددها {{filtered}} إلى دردشة الذكاء الاصطناعي",
+  "aiSendButton": "🤖 طلب التحليل ▾",
+  "aiAnalyzeAttached": "يُرجى تحليل ملف السجل المرفق `{{fileName}}`.",
+  "aiPromptSource": "- المصدر: {{path}}",
+  "aiPromptLineCount": "- الأسطر: {{count}} (الأحدث من إجمالي {{total}} صف مُصفّى)",
+  "aiPromptActiveFilters": "- عوامل التصفية النشطة: {{filters}}",
+  "watchStatsLine": "⏱ المُستلَم chunk={{chunks}}، bytes={{bytes}}، الإدخالات المُحلَّلة={{entries}}",
+  "watchStatsLast": " · آخر تحديث={{sec}} ثانية مضت",
+  "watchStatsNoData": " · (لم يتم استلام أي بيانات بعد — يجب إضافة أسطر جديدة إلى الملف لتظهر)",
+  "analyzeWith": "التحليل باستخدام {{agent}}"
 }

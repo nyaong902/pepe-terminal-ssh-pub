@@ -8,5 +8,22 @@
   "zoomOut": "تصغير (Ctrl+-)",
   "zoomReset": "100% (Ctrl+0)",
   "zoomIn": "تكبير (Ctrl+=)",
-  "devTools": "أدوات المطور"
+  "devTools": "أدوات المطور",
+  "directConnect": "اتصال مباشر",
+  "proxyApplying": "جارٍ تطبيق الوكيل...",
+  "test": "اختبار",
+  "testTooltip": "اختبار إمكانية الوصول إلى الرابط الحالي عبر جلسة SSH المحددة",
+  "proxySelectTooltip": "توجيه حركة المتصفح عبر جلسة SSH المحددة",
+  "testSelectSessionFirst": "يرجى تحديد جلسة SSH للاختبار أولاً.",
+  "testUrlEmpty": "الرابط المراد اختباره فارغ.",
+  "testUrlInvalid": "تنسيق الرابط غير صالح.",
+  "testHttpOnly": "يمكن اختبار روابط http/https فقط.",
+  "proxyOpenFailed": "فشل: تعذّر فتح وكيل إعادة توجيه SSH. {{reason}}",
+  "proxyForwardingBlocked": "قد تكون إعادة التوجيه محظورة.",
+  "browserLoadFailed": "فشل: فشل تحميل المتصفح - {{msg}}",
+  "browserLoadFailedUrl": "فشل: فشل تحميل المتصفح {{msg}}{{url}}",
+  "testFailed": "فشل: {{reason}}",
+  "unknownError": "خطأ غير معروف",
+  "remoteExec": " (تنفيذ عن بُعد)",
+  "testSuccess": "نجح{{via}}: {{detail}}"
 }

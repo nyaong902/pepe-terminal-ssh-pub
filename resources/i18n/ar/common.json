@@ -33,5 +33,7 @@
   "about": "حول",
   "exit": "خروج",
   "language": "اللغة",
-  "languageEditor": "مساحة عمل اللغة"
+  "languageEditor": "مساحة عمل اللغة",
+  "componentError": "⚠ خطأ في المكوّن — {{label}}",
+  "retry": "إعادة المحاولة"
 }

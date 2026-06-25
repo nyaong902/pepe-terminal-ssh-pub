@@ -1,0 +1,295 @@
+{
+  "common": {
+    "cancel": "Annuler",
+    "close": "Fermer",
+    "connect": "Connecter",
+    "connecting": "Connexion...",
+    "unknownError": "Erreur inconnue",
+    "unknown": "Inconnu"
+  },
+  "manual": {
+    "loadFail": "Échec du chargement du manuel",
+    "title": "📖 Manuel PePe Terminal (SSH)"
+  },
+  "connect": {
+    "fail": "Échec de la connexion",
+    "failDetail": "{{name}} : {{error}}"
+  },
+  "messenger": {
+    "defaultPeerName": "Messagerie",
+    "filePrefix": "Fichier : {{name}}",
+    "attachedFile": "Fichier joint"
+  },
+  "x11": {
+    "settingChanged": "Paramètres X11 modifiés. Pour appliquer, reconnectez manuellement {{count}} session(s) active(s). (Clic droit sur le mini-onglet → Reconnecter la session)"
+  },
+  "broadcast": {
+    "textLabel": "Texte",
+    "enterText": "Saisir le texte",
+    "noTargets": "Aucune session cible",
+    "sentToast": "{{label}} → envoyé à {{count}} session(s)",
+    "close": "Fermer",
+    "labelTooltip": "Texte de diffusion",
+    "scopeTooltip": "Cible",
+    "scopeVisible": "Onglets visibles ({{count}})",
+    "scopeCurrent": "Session actuelle ({{count}})",
+    "scopeConnected": "Sessions connectées ({{count}})",
+    "inputPlaceholder": "Texte à envoyer (Entrée pour envoyer, Ctrl+C/^C, Ctrl+D/^D)",
+    "historyTooltip": "Historique d'envoi",
+    "appendNewlineTooltip": "Ajouter un saut de ligne (Entrée) à la fin",
+    "sendTooltip": "Envoyer le texte (Entrée)",
+    "send": "Envoyer",
+    "fileTransferTooltip": "Envoyer des fichiers/dossiers en masse vers plusieurs sessions",
+    "fileTransfer": "📤 Transfert de fichiers",
+    "arrowUpTooltip": "Envoyer flèche Haut (commande précédente)",
+    "arrowDownTooltip": "Envoyer flèche Bas (commande suivante)",
+    "sigintTooltip": "Envoyer Ctrl+C (SIGINT)",
+    "eofTooltip": "Envoyer Ctrl+D (EOF)"
+  },
+  "ai": {
+    "serviceRequiredTitle": "Service IA requis",
+    "serviceRequiredDesc": "L'organisation automatique de la liste des sessions n'est disponible que lorsqu'au moins un service IA est connecté. Veuillez d'abord connecter Claude, Gemini ou Codex.",
+    "organizingToast": "Organisation de la liste des sessions avec l'IA ({{agent}})...",
+    "parseFail": "Échec de l'analyse de la réponse IA en JSON : {{error}}",
+    "invalidFormat": "Le format de la réponse IA est invalide.",
+    "noApplicableSessions": "Aucune session applicable dans la réponse IA.",
+    "saveFail": "Échec de l'enregistrement de la liste des sessions",
+    "organizeDoneTitle": "Liste des sessions organisée",
+    "organizeDoneDesc": "L'IA ({{agent}}) a organisé {{sessions}} session(s) et {{folders}} dossier(s).",
+    "organizeFailTitle": "Échec de l'organisation automatique"
+  },
+  "sessionWipe": {
+    "backupToast": "Sauvegarde des sessions enregistrée. Suppression de toute la liste en cours.",
+    "deleteFail": "Échec de la suppression des sessions",
+    "emptiedTitle": "Liste des sessions vidée",
+    "emptiedBackupDesc": "Liste des sessions supprimée après sauvegarde.",
+    "emptiedDesc": "Liste des sessions supprimée.",
+    "emptyFailTitle": "Échec du vidage de la liste des sessions",
+    "dialogTitle": "Vider la liste des sessions",
+    "dialogDesc": "Cela supprime toute la liste des sessions. Veuillez choisir de sauvegarder d'abord ou non.",
+    "cancel": "Annuler",
+    "backup": "Sauvegarder",
+    "delete": "Supprimer"
+  },
+  "claudeAttach": {
+    "mountPreparing": "Préparation du montage WebDAV...",
+    "mountFail": "Échec du montage : {{error}}",
+    "pathConvertFail": "Échec de la conversion du chemin : {{error}}",
+    "attached": "Attaché (accès direct WebDAV)",
+    "attachFail": "Échec de l'attachement : {{error}}"
+  },
+  "tabs": {
+    "browser": "🌐 Navigateur",
+    "compare": "🔍 Comparaison de fichiers",
+    "logAnalyzer": "📈 Analyseur de journaux",
+    "vpn": "🔒 VPN",
+    "i18nEditor": "🌍 Éditeur de traduction",
+    "fileTransfer": "📁 Transfert de fichiers"
+  },
+  "term": {
+    "connectCancelled": "✕ Connexion annulée.",
+    "retryHint": "▶ Pour réessayer : cliquez sur le terminal ou clic droit sur le mini-onglet → Reconnecter"
+  },
+  "fileTransfer": {
+    "connectFail": "Échec de la connexion de transfert de fichiers",
+    "connectFailDetail": "{{name}}\n\n{{msg}}",
+    "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nVérifiez le journal [sftp-connect] dans la console DevTools.",
+    "connectException": "Exception de connexion de transfert de fichiers"
+  },
+  "sessionMenu": {
+    "wipe": "Vider les sessions",
+    "autoOrganize": "Organiser automatiquement la liste des sessions"
+  },
+  "workspace": {
+    "cannotConnectTitle": "L'espace de travail ne peut pas se connecter",
+    "cannotConnectTab": "'{{title}}' est un espace de travail qui ne peut pas ajouter de sessions de terminal.\n\nOuverture dans un nouvel espace de travail.",
+    "cannotConnectActive": "L'espace de travail actuel '{{title}}' ne peut pas ajouter de sessions de terminal.\n\nOuverture dans un nouvel espace de travail."
+  },
+  "titlebar": {
+    "restore": "Restaurer",
+    "maximize": "Agrandir"
+  },
+  "toolbar": {
+    "dragHint": "Faites glisser pour déplacer la connexion rapide à gauche/droite ou en haut",
+    "fileTransferTooltip": "Transfert de fichiers",
+    "resetSplitTooltip": "Égaliser les proportions des panneaux (réinitialiser toutes les proportions de division de l'espace de travail actuel)",
+    "quickConnectShow": "Afficher la barre de connexion rapide",
+    "quickConnectHide": "Masquer la barre de connexion rapide",
+    "broadcastShow": "Afficher la barre de diffusion",
+    "broadcastHide": "Masquer la barre de diffusion",
+    "terminalPin": "Épingler le panneau du terminal",
+    "terminalUnpin": "Désépingler le panneau du terminal (réduire en onglet vertical)",
+    "xStart": "Démarrer le serveur X (DISPLAY=:0)",
+    "xStop": "Arrêter le serveur X",
+    "xStatus": "État du serveur X",
+    "options": "Options",
+    "dragTargetTop": "Haut",
+    "dragTargetQcLeft": "À gauche de la connexion rapide",
+    "dragTargetQcRight": "À droite de la connexion rapide",
+    "dragHintPrefix": "→ {{target}}"
+  },
+  "xServer": {
+    "startTitle": "Démarrer le serveur X",
+    "startOk": "✅ DISPLAY=:0  PID={{pid}}",
+    "startNoBundle": "⚠️ Serveur X intégré/externe non utilisé\n\n{{logs}}",
+    "startFail": "Échec du démarrage du serveur X",
+    "stopTitle": "Arrêter le serveur X",
+    "stopOk": "✅ Arrêté.",
+    "stopFail": "Échec de l'arrêt du serveur X",
+    "statusTitle": "État du serveur X",
+    "statusNone": "⚫ Aucun serveur X en cours d'exécution.",
+    "statusFail": "Échec de la requête de l'état du serveur X",
+    "statusRunning": "🟢 En cours d'exécution"
+  },
+  "fileTree": {
+    "triggerTooltip": "Clic = basculer / survol 2,5 s = ouverture auto",
+    "triggerLabel": "📁 Arborescence de fichiers",
+    "unpinTooltip": "Désépingler (masquage auto)",
+    "pinTooltip": "Épingler",
+    "resizeTooltip": "Glisser = redimensionner la largeur, double-clic = défaut (240)",
+    "resizeTooltip2": "Glisser pour redimensionner la largeur (double-clic : défaut 240)"
+  },
+  "errorBoundary": {
+    "browser": "Navigateur",
+    "compare": "Comparaison de fichiers",
+    "logAnalyzer": "Analyseur de journaux",
+    "i18nEditor": "Éditeur de traduction"
+  },
+  "panel": {
+    "openTerminalTooltip": "Ouvrir le terminal",
+    "pinTerminalTooltip": "Épingler le panneau du terminal"
+  },
+  "options": {
+    "messengerTab": "Messagerie",
+    "pasteAccumulateTooltip": "Tant que la fenêtre est ouverte, coller à nouveau plusieurs lignes ajoute après le contenu existant. Désactivez pour remplacer par le nouveau contenu.",
+    "pasteAccumulate": "Accumuler le contenu dans la fenêtre de collage multiligne (désactivé = remplacer)",
+    "mouse": "Souris",
+    "rightButton": "Bouton droit",
+    "middleButton": "Bouton du milieu",
+    "mouseNone": "Ne rien faire",
+    "mouseMenu": "Ouvrir le menu contextuel",
+    "mousePaste": "Coller le contenu du presse-papiers",
+    "mouseProperties": "Ouvrir la boîte de dialogue des propriétés",
+    "mouseEnter": "Envoyer un retour chariot",
+    "mousePasteSelection": "Coller le texte sélectionné",
+    "miniMessenger": "Mini Messagerie",
+    "miniMessengerDesc": "Les paramètres détaillés tels que le nom affiché, le masquage de présence et les popups peuvent être modifiés dans les paramètres de l'espace de travail Messagerie (💬). Ici, seule la réinitialisation des données est proposée.",
+    "confirmDeleteConversations": "Supprimer toutes les conversations de la messagerie ?",
+    "deleteConversations": "Supprimer toutes les conversations",
+    "confirmDeleteUsers": "Supprimer tous les utilisateurs découverts et les conversations ?",
+    "deleteUsers": "Supprimer tous les utilisateurs"
+  },
+  "claudeChat": {
+    "triggerTooltip": "Clic = basculer / survol 2,5 s = ouverture auto",
+    "resizeTooltip": "Glisser pour redimensionner la largeur (double-clic : défaut)"
+  },
+  "splitPicker": {
+    "titleRow": "Sélectionner une session (division horizontale (gauche/droite))",
+    "titleCol": "Sélectionner une session (division verticale (haut/bas))",
+    "cancel": "Annuler"
+  },
+  "infoModal": {
+    "closeTooltip": "Fermer (Échap)"
+  },
+  "update": {
+    "title": "🔄 Mise à jour",
+    "titleChecking": "🔄 Recherche de mises à jour",
+    "titleAvailable": "🎉 Nouvelle version disponible",
+    "titleDownloading": "⬇ Téléchargement de la mise à jour",
+    "titleDownloaded": "✅ Mise à jour prête",
+    "titleNotAvailable": "✔ À jour",
+    "titleUnsupported": "Mise à jour automatique non prise en charge",
+    "titleError": "⚠ Erreur de mise à jour",
+    "check": "🔄 Rechercher des mises à jour",
+    "closeTooltip": "Fermer (Échap)",
+    "checkingMsg": "Recherche de mises à jour…",
+    "availableMsg": "La nouvelle version <1>v{{ver}}</1> est disponible. Télécharger maintenant ?",
+    "downloadingMsg": "Téléchargement de v{{ver}}… {{pct}} %",
+    "downloadedMsg": "Téléchargement de v{{ver}} terminé.",
+    "downloadedMsg2": "Redémarrer maintenant pour installer ? (Enregistrez votre travail avant de continuer)",
+    "notAvailableMsg": "Vous utilisez la dernière version.{{suffix}}",
+    "unsupportedMsg": "La mise à jour automatique n'est pas disponible dans cette version (mode dev ou portable).",
+    "unsupportedMsg2": "Elle ne fonctionne que dans la version d'installation.",
+    "errorMsg": "Une erreur s'est produite lors de la mise à jour.",
+    "later": "Plus tard",
+    "downloadNow": "Télécharger maintenant",
+    "restartNow": "Redémarrer et installer maintenant",
+    "background": "Exécuter en arrière-plan",
+    "ok": "OK",
+    "availableMsgPlain": "La nouvelle version v{{ver}} est disponible. Télécharger maintenant ?"
+  },
+  "remotePicker": {
+    "title": "🌐 Sélectionner un fichier distant",
+    "sourceSession": "Session source (liste complète ; sélectionner une session déconnectée déclenche une connexion SFTP en arrière-plan)",
+    "quickConnect": "Connexion rapide",
+    "quickConnectSuffix": " (Connexion rapide)",
+    "selectSession": "(Sélectionner une session)",
+    "groupConnected": "🟢 Connectées",
+    "groupDisconnected": "⚪ Déconnectées",
+    "connecting": "Connexion...",
+    "path": "Chemin",
+    "parentTooltip": "Dossier parent",
+    "refreshTooltip": "Actualiser",
+    "selectSessionHint": "Sélectionnez une session",
+    "loading": "Chargement...",
+    "emptyOrError": "(Vide ou erreur de chemin)",
+    "legend": "🟢 Sessions connectées / ⚪ Déconnectées (connexion auto à la sélection). Clic : sélectionner / Double-clic : entrer dans le dossier. {{count}} sélectionné(s)",
+    "close": "Fermer",
+    "addSelected": "Ajouter la sélection ({{count}})"
+  },
+  "cred": {
+    "title": "🔒 Saisir les identifiants",
+    "connectTo": "Se connecter à {{host}}",
+    "hide": "Masquer",
+    "show": "Afficher",
+    "cancel": "Annuler",
+    "connecting": "Connexion...",
+    "connect": "Connecter"
+  },
+  "bcastXfer": {
+    "title": "📤 Transfert de fichiers en masse",
+    "targetSession": "Session cible",
+    "scopeVisible": "Toutes les sessions visibles",
+    "scopeCurrent": "Session actuelle",
+    "scopeConnected": "Toutes les sessions connectées",
+    "count": "{{count}}",
+    "remotePath": "Chemin distant (si vide, utilise le chemin actuel de chaque session)",
+    "remotePathPlaceholder": "ex. : /tmp (facultatif)",
+    "uploadFiles": "Fichiers/dossiers à envoyer",
+    "addLocalFile": "+ Fichier local",
+    "addLocalFolder": "+ Dossier local",
+    "addRemoteFile": "+ Fichier distant (autre serveur)",
+    "removeAll": "Tout retirer",
+    "emptyHint": "Ajouter des fichiers ou des dossiers",
+    "remoteSourcePrefix": "Distant({{label}}) :",
+    "localSourcePrefix": "Local :",
+    "close": "Fermer",
+    "noTargets": "Aucune session cible",
+    "startLog": "▶ Début du transfert : {{targets}} session(s) × {{files}} élément(s)",
+    "skipSameSession": "↷ {{label}} : {{filename}} (même session que la source, ignoré)",
+    "doneLog": "● Terminé : {{ok}} réussi(s), {{err}} échoué(s)",
+    "doneToast": "Transfert de fichiers terminé (réussite {{ok}}/{{total}})",
+    "sending": "Envoi...",
+    "send": "Envoyer"
+  },
+  "askPwd": {
+    "credTitle": "Saisir les identifiants",
+    "pwdTitle": "Saisir le mot de passe",
+    "cancelTooltip": "Annuler",
+    "connectTo": "Se connecter à <1>{{host}}</1>",
+    "needCred": "Des identifiants sont requis pour se connecter.",
+    "hide": "Masquer",
+    "show": "Afficher",
+    "cancel": "Annuler",
+    "connect": "Connecter",
+    "waiting": "{{count}} en attente — saisie possible dans d'autres onglets de session",
+    "connectToPlain": "Se connecter à {{host}}"
+  },
+  "savePwd": {
+    "title": "Enregistrer le mot de passe pour cette session ?",
+    "desc": "Dès la prochaine connexion, vous vous connecterez directement sans saisir le mot de passe.",
+    "dontSave": "Ne pas enregistrer",
+    "savedToast": "Mot de passe enregistré dans la session.",
+    "save": "Enregistrer"
+  }
+}

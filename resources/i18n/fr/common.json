@@ -33,5 +33,7 @@
   "about": "À propos",
   "exit": "Quitter",
   "language": "Langue",
-  "languageEditor": "Espace de travail linguistique"
+  "languageEditor": "Espace de travail linguistique",
+  "componentError": "⚠ Erreur du composant — {{label}}",
+  "retry": "Réessayer"
 }

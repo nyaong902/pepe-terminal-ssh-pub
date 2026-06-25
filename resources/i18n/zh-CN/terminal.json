@@ -38,7 +38,8 @@
     "newWorkspace": "+ 移动到新工作区",
     "changeScrollback": "更改回滚大小...",
     "clearScrollbackBuffer": "清除回滚缓冲区",
-    "fontDots": "字体..."
+    "fontDots": "字体...",
+    "openInNewWindow": "在新窗口中打开"
   },
   "float": "浮动",
   "unfloat": "取消浮动",
@@ -76,7 +77,11 @@
     "tryingSSH": "▶ 正在尝试 SSH 连接...",
     "recordEnd": "● 录制已停止 — {{path}}",
     "recordBegin": "● 录制已开始 — {{path}}",
-    "recordFailed": "✕ 录制启动失败:{{reason}}"
+    "recordFailed": "✕ 录制启动失败:{{reason}}",
+    "reconnectIn30s": "30 秒后重新连接。按任意键取消。",
+    "retryHint": "▶ 重试方法：点击终端，或右键点击迷你标签页 → 重新连接",
+    "reasonNoResponse": "10 秒无响应",
+    "reasonError": "错误"
   },
   "ui": {
     "newSession": "新建会话",

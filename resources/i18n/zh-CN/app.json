@@ -1,0 +1,295 @@
+{
+  "common": {
+    "cancel": "取消",
+    "close": "关闭",
+    "connect": "连接",
+    "connecting": "正在连接…",
+    "unknownError": "未知错误",
+    "unknown": "未知"
+  },
+  "manual": {
+    "loadFail": "手册加载失败",
+    "title": "📖 PePe Terminal(SSH) 手册"
+  },
+  "connect": {
+    "fail": "连接失败",
+    "failDetail": "{{name}}：{{error}}"
+  },
+  "messenger": {
+    "defaultPeerName": "消息",
+    "filePrefix": "文件：{{name}}",
+    "attachedFile": "附件文件"
+  },
+  "x11": {
+    "settingChanged": "X11 设置已更改。如需应用，请手动重新连接 {{count}} 个活动会话。（右键点击迷你标签页 → 重新连接会话）"
+  },
+  "broadcast": {
+    "textLabel": "文本",
+    "enterText": "请输入文本",
+    "noTargets": "无目标会话",
+    "sentToast": "{{label}} → 已发送至 {{count}} 个会话",
+    "close": "关闭",
+    "labelTooltip": "广播文本",
+    "scopeTooltip": "目标",
+    "scopeVisible": "可见标签页（{{count}}）",
+    "scopeCurrent": "当前会话（{{count}}）",
+    "scopeConnected": "已连接会话（{{count}}）",
+    "inputPlaceholder": "要发送的文本（回车发送，Ctrl+C/^C，Ctrl+D/^D）",
+    "historyTooltip": "发送历史",
+    "appendNewlineTooltip": "在末尾追加换行符（回车）",
+    "sendTooltip": "发送文本（回车）",
+    "send": "发送",
+    "fileTransferTooltip": "批量上传文件/文件夹到多个会话",
+    "fileTransfer": "📤 文件传输",
+    "arrowUpTooltip": "发送上方向键（上一条命令）",
+    "arrowDownTooltip": "发送下方向键（下一条命令）",
+    "sigintTooltip": "发送 Ctrl+C（SIGINT）",
+    "eofTooltip": "发送 Ctrl+D（EOF）"
+  },
+  "ai": {
+    "serviceRequiredTitle": "需要 AI 服务",
+    "serviceRequiredDesc": "仅在至少连接一个 AI 服务时才能自动整理会话列表。请先连接 Claude、Gemini 或 Codex。",
+    "organizingToast": "正在使用 AI（{{agent}}）整理会话列表…",
+    "parseFail": "无法将 AI 响应解析为 JSON：{{error}}",
+    "invalidFormat": "AI 响应格式无效。",
+    "noApplicableSessions": "AI 响应中无可应用的会话。",
+    "saveFail": "保存会话列表失败",
+    "organizeDoneTitle": "会话列表已整理",
+    "organizeDoneDesc": "AI（{{agent}}）整理了 {{sessions}} 个会话和 {{folders}} 个文件夹。",
+    "organizeFailTitle": "自动整理失败"
+  },
+  "sessionWipe": {
+    "backupToast": "会话备份已保存。现在将删除整个列表。",
+    "deleteFail": "删除会话失败",
+    "emptiedTitle": "会话列表已清空",
+    "emptiedBackupDesc": "已在备份后删除会话列表。",
+    "emptiedDesc": "已删除会话列表。",
+    "emptyFailTitle": "清空会话列表失败",
+    "dialogTitle": "清空会话列表",
+    "dialogDesc": "此操作将删除整个会话列表。请选择是否先备份。",
+    "cancel": "取消",
+    "backup": "备份",
+    "delete": "删除"
+  },
+  "claudeAttach": {
+    "mountPreparing": "正在准备 WebDAV 挂载…",
+    "mountFail": "挂载失败：{{error}}",
+    "pathConvertFail": "路径转换失败：{{error}}",
+    "attached": "已附加（WebDAV 实时访问）",
+    "attachFail": "附加失败：{{error}}"
+  },
+  "tabs": {
+    "browser": "🌐 浏览器",
+    "compare": "🔍 文件比较",
+    "logAnalyzer": "📈 日志分析",
+    "vpn": "🔒 VPN",
+    "i18nEditor": "🌍 翻译编辑器",
+    "fileTransfer": "📁 文件传输"
+  },
+  "term": {
+    "connectCancelled": "✕ 连接已取消。",
+    "retryHint": "▶ 重试：点击终端或右键点击迷你标签页 → 重新连接"
+  },
+  "fileTransfer": {
+    "connectFail": "文件传输连接失败",
+    "connectFailDetail": "{{name}}\n\n{{msg}}",
+    "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\n请查看 DevTools 控制台中的 [sftp-connect] 日志。",
+    "connectException": "文件传输连接异常"
+  },
+  "sessionMenu": {
+    "wipe": "清空会话",
+    "autoOrganize": "自动整理会话列表"
+  },
+  "workspace": {
+    "cannotConnectTitle": "工作区无法连接",
+    "cannotConnectTab": "“{{title}}”是无法添加终端会话的工作区。\n\n将在新工作区中打开。",
+    "cannotConnectActive": "当前工作区“{{title}}”无法添加终端会话。\n\n将在新工作区中打开。"
+  },
+  "titlebar": {
+    "restore": "还原",
+    "maximize": "最大化"
+  },
+  "toolbar": {
+    "dragHint": "拖动以左右移动快速连接或移至顶部",
+    "fileTransferTooltip": "文件传输",
+    "resetSplitTooltip": "均分面板比例（重置当前工作区所有分割比例）",
+    "quickConnectShow": "显示快速连接栏",
+    "quickConnectHide": "隐藏快速连接栏",
+    "broadcastShow": "显示广播栏",
+    "broadcastHide": "隐藏广播栏",
+    "terminalPin": "固定终端面板",
+    "terminalUnpin": "取消固定终端面板（最小化为竖向标签页）",
+    "xStart": "启动 X 服务器（DISPLAY=:0）",
+    "xStop": "停止 X 服务器",
+    "xStatus": "X 服务器状态",
+    "options": "选项",
+    "dragTargetTop": "顶部",
+    "dragTargetQcLeft": "快速连接左侧",
+    "dragTargetQcRight": "快速连接右侧",
+    "dragHintPrefix": "→ {{target}}"
+  },
+  "xServer": {
+    "startTitle": "启动 X 服务器",
+    "startOk": "✅ DISPLAY=:0  PID={{pid}}",
+    "startNoBundle": "⚠️ 未使用内置/外部 X 服务器\n\n{{logs}}",
+    "startFail": "启动 X 服务器失败",
+    "stopTitle": "停止 X 服务器",
+    "stopOk": "✅ 已停止。",
+    "stopFail": "停止 X 服务器失败",
+    "statusTitle": "X 服务器状态",
+    "statusNone": "⚫ 没有正在运行的 X 服务器。",
+    "statusFail": "查询 X 服务器状态失败",
+    "statusRunning": "🟢 运行中"
+  },
+  "fileTree": {
+    "triggerTooltip": "点击=切换 / 悬停 2.5 秒=自动打开",
+    "triggerLabel": "📁 文件树",
+    "unpinTooltip": "取消固定（自动隐藏）",
+    "pinTooltip": "固定",
+    "resizeTooltip": "拖动=调整宽度，双击=默认（240）",
+    "resizeTooltip2": "拖动以调整宽度（双击：默认 240）"
+  },
+  "errorBoundary": {
+    "browser": "浏览器",
+    "compare": "文件比较",
+    "logAnalyzer": "日志分析",
+    "i18nEditor": "翻译编辑器"
+  },
+  "panel": {
+    "openTerminalTooltip": "打开终端",
+    "pinTerminalTooltip": "固定终端面板"
+  },
+  "options": {
+    "messengerTab": "消息",
+    "pasteAccumulateTooltip": "窗口打开期间，再次粘贴多行内容会追加到现有内容之后。关闭则替换为新内容。",
+    "pasteAccumulate": "多行粘贴窗口中累积内容（关闭=替换）",
+    "mouse": "鼠标",
+    "rightButton": "右键",
+    "middleButton": "中键",
+    "mouseNone": "不执行任何操作",
+    "mouseMenu": "打开弹出菜单",
+    "mousePaste": "粘贴剪贴板内容",
+    "mouseProperties": "打开属性对话框",
+    "mouseEnter": "发送回车符",
+    "mousePasteSelection": "粘贴选中文本",
+    "miniMessenger": "迷你消息",
+    "miniMessengerDesc": "显示名称、隐藏在线状态、弹窗等详细设置可在消息工作区（💬）设置中更改。此处仅提供数据重置。",
+    "confirmDeleteConversations": "删除所有消息会话？",
+    "deleteConversations": "删除所有会话",
+    "confirmDeleteUsers": "删除所有已发现的用户和会话？",
+    "deleteUsers": "删除所有用户"
+  },
+  "claudeChat": {
+    "triggerTooltip": "点击=切换 / 悬停 2.5 秒=自动打开",
+    "resizeTooltip": "拖动以调整宽度（双击：默认）"
+  },
+  "splitPicker": {
+    "titleRow": "选择会话（水平分割（左/右））",
+    "titleCol": "选择会话（垂直分割（上/下））",
+    "cancel": "取消"
+  },
+  "infoModal": {
+    "closeTooltip": "关闭（Esc）"
+  },
+  "update": {
+    "title": "🔄 更新",
+    "titleChecking": "🔄 正在检查更新",
+    "titleAvailable": "🎉 有新版本可用",
+    "titleDownloading": "⬇ 正在下载更新",
+    "titleDownloaded": "✅ 更新已就绪",
+    "titleNotAvailable": "✔ 已是最新",
+    "titleUnsupported": "不支持自动更新",
+    "titleError": "⚠ 更新错误",
+    "check": "🔄 检查更新",
+    "closeTooltip": "关闭（Esc）",
+    "checkingMsg": "正在检查更新…",
+    "availableMsg": "新版本 <1>v{{ver}}</1> 已可用。现在下载？",
+    "downloadingMsg": "正在下载 v{{ver}}… {{pct}}%",
+    "downloadedMsg": "v{{ver}} 下载完成。",
+    "downloadedMsg2": "现在重启以安装？（继续前请先保存工作）",
+    "notAvailableMsg": "您已使用最新版本。{{suffix}}",
+    "unsupportedMsg": "此版本不支持自动更新（开发模式或便携版）。",
+    "unsupportedMsg2": "仅在安装版中可用。",
+    "errorMsg": "更新过程中发生错误。",
+    "later": "稍后",
+    "downloadNow": "立即下载",
+    "restartNow": "立即重启并安装",
+    "background": "后台运行",
+    "ok": "确定",
+    "availableMsgPlain": "有新版本 v{{ver}} 可用。立即下载？"
+  },
+  "remotePicker": {
+    "title": "🌐 选择远程文件",
+    "sourceSession": "源会话（完整列表；选择已断开的会话将触发后台 SFTP 连接）",
+    "quickConnect": "快速连接",
+    "quickConnectSuffix": "（快速连接）",
+    "selectSession": "（选择会话）",
+    "groupConnected": "🟢 已连接",
+    "groupDisconnected": "⚪ 已断开",
+    "connecting": "正在连接…",
+    "path": "路径",
+    "parentTooltip": "上级文件夹",
+    "refreshTooltip": "刷新",
+    "selectSessionHint": "请选择会话",
+    "loading": "正在加载…",
+    "emptyOrError": "（为空或路径错误）",
+    "legend": "🟢 已连接会话 / ⚪ 已断开（选择时自动连接）。点击：选择 / 双击：进入文件夹。已选 {{count}} 个",
+    "close": "关闭",
+    "addSelected": "添加所选（{{count}}）"
+  },
+  "cred": {
+    "title": "🔒 输入凭据",
+    "connectTo": "连接到 {{host}}",
+    "hide": "隐藏",
+    "show": "显示",
+    "cancel": "取消",
+    "connecting": "正在连接…",
+    "connect": "连接"
+  },
+  "bcastXfer": {
+    "title": "📤 批量文件传输",
+    "targetSession": "目标会话",
+    "scopeVisible": "所有可见会话",
+    "scopeCurrent": "当前会话",
+    "scopeConnected": "所有已连接会话",
+    "count": "{{count}}",
+    "remotePath": "远程路径（若为空，则使用各会话的当前路径）",
+    "remotePathPlaceholder": "例如：/tmp（可选）",
+    "uploadFiles": "要上传的文件/文件夹",
+    "addLocalFile": "+ 本地文件",
+    "addLocalFolder": "+ 本地文件夹",
+    "addRemoteFile": "+ 远程文件（其他服务器）",
+    "removeAll": "全部移除",
+    "emptyHint": "添加文件或文件夹",
+    "remoteSourcePrefix": "远程（{{label}}）：",
+    "localSourcePrefix": "本地：",
+    "close": "关闭",
+    "noTargets": "无目标会话",
+    "startLog": "▶ 开始传输：{{targets}} 个会话 × {{files}} 个项目",
+    "skipSameSession": "↷ {{label}}：{{filename}}（与源会话相同，已跳过）",
+    "doneLog": "● 完成：成功 {{ok}} 个，失败 {{err}} 个",
+    "doneToast": "文件传输完成（成功 {{ok}}/{{total}}）",
+    "sending": "正在发送…",
+    "send": "发送"
+  },
+  "askPwd": {
+    "credTitle": "输入凭据",
+    "pwdTitle": "输入密码",
+    "cancelTooltip": "取消",
+    "connectTo": "连接到 <1>{{host}}</1>",
+    "needCred": "连接需要凭据。",
+    "hide": "隐藏",
+    "show": "显示",
+    "cancel": "取消",
+    "connect": "连接",
+    "waiting": "{{count}} 个等待中 — 可在其他会话标签页中输入",
+    "connectToPlain": "连接到 {{host}}"
+  },
+  "savePwd": {
+    "title": "将密码保存到此会话？",
+    "desc": "从下次连接起，将无需输入密码直接连接。",
+    "dontSave": "不保存",
+    "savedToast": "密码已保存到会话。",
+    "save": "保存"
+  }
+}

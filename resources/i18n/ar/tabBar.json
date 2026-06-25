@@ -14,5 +14,7 @@
   "renameContext": "إعادة تسمية",
   "closeContext": "إغلاق",
   "fileTransferTab": "📁 نقل الملفات",
-  "workspaceN": "مساحة العمل {{n}}"
+  "workspaceN": "مساحة العمل {{n}}",
+  "i18nWorkspace": "🌐 مساحة عمل الترجمة",
+  "openInNewWindow": "فتح في نافذة جديدة"
 }

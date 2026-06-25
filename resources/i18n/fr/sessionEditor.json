@@ -78,13 +78,25 @@
     "expect": "Attendu",
     "send": "Envoyer",
     "globalDefault": "(Défaut global)",
-    "rootFolder": "(Racine)"
+    "rootFolder": "(Racine)",
+    "showFileTree": "Afficher l'arborescence",
+    "autoTrackFileTree": "Suivi auto de l'arborescence",
+    "logPath": "Emplacement du journal",
+    "codePath": "Emplacement du code",
+    "jdbcDriver": "Pilote JDBC",
+    "dbmsHost": "Hôte",
+    "dbmsPort": "Port",
+    "dbmsDatabase": "Base de données",
+    "dbmsUser": "Utilisateur",
+    "dbmsPassword": "Mot de passe",
+    "sshTunnel": "Tunnel SSH",
+    "directInput": "Saisie directe"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / domaine",
     "jumpTargetHost": "ex. I-MPM01 (vide = connexion directe)",
     "jumpTargetUser": "ex. root",
-    "jumpTargetPassword": "Vide = utiliser ~/.ssh/id_rsa de l'hôte précédent",
+    "jumpTargetPassword": "Vide = utiliser ~/.ssh/id_rsa principal",
     "browserUrl": "ex. https://172.16.214.148",
     "initialPath": "ex. /home/user/project (vide = dossier home)"
   },
@@ -124,5 +136,37 @@
   "errors": {
     "hostUserRequired": "L'hôte et le nom d'utilisateur sont requis",
     "invalidHost": "Saisissez une adresse IPv4/IPv6 ou un nom d'hôte valide."
+  },
+  "keys": {
+    "category": "Séquences de touches",
+    "deleteLegend": "Séquence touche Suppr",
+    "backspaceLegend": "Séquence touche Retour arrière"
+  },
+  "advanced": {
+    "logPathTooltip": "Chemin du fichier journal rempli automatiquement quand cette session est sélectionnée dans LogAnalyzer",
+    "logPathPlaceholder": "ex. /var/log/myapp/app.log",
+    "codePathTooltip": "Répertoire de base rempli automatiquement quand cette session est sélectionnée dans l'espace de comparaison de fichiers",
+    "codePathPlaceholder": "ex. /home/user/project/src"
+  },
+  "filetree": {
+    "disabledHint": "Disponible uniquement quand l'affichage de l'arborescence est activé",
+    "autoTrackTooltip": "Actualiser auto le chemin de l'arborescence lors d'un cd dans le terminal"
+  },
+  "dbms": {
+    "driverLoading": "(Chargement...)",
+    "directInput": "Saisie directe",
+    "copy": "Copier",
+    "urlPlaceholder": "(Sélectionnez un pilote)",
+    "testConnect": "🔌 Tester la connexion",
+    "useSshTunnelJump": "Connecter JDBC depuis l'hôte SSH final de la chaîne de rebond",
+    "useSshTunnelNormal": "Rediriger le port via la session SSH, puis connecter JDBC en local",
+    "noDriver": "❌ Aucun pilote sélectionné",
+    "driverJarMissing": "❌ JAR du pilote manquant — ajoutez le JAR dans le gestionnaire de pilotes",
+    "testing": "Test en cours...",
+    "sshIpcMissing": "❌ IPC du tunnel SSH non enregistré — redémarrez le processus principal Electron",
+    "sshOpening": "Ouverture du tunnel SSH...",
+    "sshFailed": "❌ Échec du tunnel SSH : {{error}} — connectez d'abord un terminal pour la même session",
+    "sshTunnelOk": "Tunnel SSH OK ({{remoteHost}}:{{remotePort}} → local={{localPort}}) — test JDBC...",
+    "exception": "❌ Exception : {{error}}"
   }
 }
