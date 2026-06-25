@@ -43,6 +43,8 @@ input, textarea, select,
 .monaco-editor, .monaco-editor *,
 .claude-chat-messages, .claude-chat-messages *,
 .claude-chat-msg-content, .claude-chat-msg-content *,
+.messenger-chat, .messenger-chat *,
+.messenger-messages, .messenger-messages *,
 .compare-diff, .compare-diff *,
 pre, code, .markdown-body, .markdown-body * {
   -webkit-user-select: text;
