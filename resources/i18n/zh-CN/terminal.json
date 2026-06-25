@@ -78,7 +78,6 @@
     "recordEnd": "● 录制已停止 — {{path}}",
     "recordBegin": "● 录制已开始 — {{path}}",
     "recordFailed": "✕ 录制启动失败:{{reason}}",
-    "reconnectIn30s": "30 秒后重新连接。按任意键取消。",
     "retryHint": "▶ 重试方法：点击终端，或右键点击迷你标签页 → 重新连接",
     "reasonNoResponse": "10 秒无响应",
     "reasonError": "错误"

@@ -44,9 +44,6 @@
   "langPickerHint": "انقر على صف ← يتم تعبئة الرمز في حقل \"إضافة لغة\"",
   "close": "إغلاق",
   "dirtyChanged": "تم التغيير",
-  "aiEmptyBtnWithAgent": "✨ {{agent}} · الذكاء الاصطناعي ({{base}}→{{target}}) فارغ",
-  "aiAllBtnWithAgent": "الكل · {{agent}}",
-  "currentAiService": "خدمة الذكاء الاصطناعي الحالية: {{agent}}",
   "removeLangTitle": "إزالة اللغة",
   "aiParseFailDetail": "(عدد الأحرف={{len}}، تم طباعة النص الأصلي في وحدة التحكم)"
 }

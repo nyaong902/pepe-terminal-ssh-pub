@@ -1,9 +1,6 @@
 {
   "common": {
-    "cancel": "إلغاء",
     "close": "إغلاق",
-    "connect": "اتصال",
-    "connecting": "جارٍ الاتصال...",
     "unknownError": "خطأ غير معروف",
     "unknown": "غير معروف"
   },
@@ -159,26 +156,6 @@
     "openTerminalTooltip": "فتح الطرفية",
     "pinTerminalTooltip": "تثبيت لوحة الطرفية"
   },
-  "options": {
-    "messengerTab": "المراسلة",
-    "pasteAccumulateTooltip": "أثناء فتح النافذة، يؤدي لصق أسطر متعددة مجددًا إلى الإضافة بعد المحتوى الموجود. أوقفه للاستبدال بمحتوى جديد.",
-    "pasteAccumulate": "تجميع المحتوى في نافذة اللصق متعدد الأسطر (إيقاف = استبدال)",
-    "mouse": "الفأرة",
-    "rightButton": "الزر الأيمن",
-    "middleButton": "الزر الأوسط",
-    "mouseNone": "عدم فعل شيء",
-    "mouseMenu": "فتح القائمة المنبثقة",
-    "mousePaste": "لصق محتويات الحافظة",
-    "mouseProperties": "فتح مربع حوار الخصائص",
-    "mouseEnter": "إرسال إرجاع السطر",
-    "mousePasteSelection": "لصق النص المحدد",
-    "miniMessenger": "المراسلة المصغّرة",
-    "miniMessengerDesc": "يمكن تغيير الإعدادات التفصيلية مثل اسم العرض وإخفاء الحضور والنوافذ المنبثقة في إعدادات مساحة عمل المراسلة (💬). هنا يتوفر إعادة تعيين البيانات فقط.",
-    "confirmDeleteConversations": "حذف جميع محادثات المراسلة؟",
-    "deleteConversations": "حذف جميع المحادثات",
-    "confirmDeleteUsers": "حذف جميع المستخدمين المكتشفين والمحادثات؟",
-    "deleteUsers": "حذف جميع المستخدمين"
-  },
   "claudeChat": {
     "triggerTooltip": "نقر=تبديل / تمرير 2.5 ث=فتح تلقائي",
     "resizeTooltip": "اسحب لتغيير العرض (نقر مزدوج: افتراضي)"
@@ -203,7 +180,6 @@
     "check": "🔄 التحقق من التحديثات",
     "closeTooltip": "إغلاق (Esc)",
     "checkingMsg": "جارٍ التحقق من التحديثات…",
-    "availableMsg": "الإصدار الجديد <1>v{{ver}}</1> متاح. التنزيل الآن؟",
     "downloadingMsg": "جارٍ تنزيل v{{ver}}… {{pct}}%",
     "downloadedMsg": "اكتمل تنزيل v{{ver}}.",
     "downloadedMsg2": "إعادة التشغيل الآن للتثبيت؟ (احفظ عملك قبل المتابعة)",
@@ -276,7 +252,6 @@
     "credTitle": "أدخل بيانات الاعتماد",
     "pwdTitle": "أدخل كلمة المرور",
     "cancelTooltip": "إلغاء",
-    "connectTo": "الاتصال بـ <1>{{host}}</1>",
     "needCred": "بيانات الاعتماد مطلوبة للاتصال.",
     "hide": "إخفاء",
     "show": "إظهار",

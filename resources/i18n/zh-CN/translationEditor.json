@@ -44,9 +44,6 @@
   "langPickerHint": "点击行 → 代码填入\"添加语言\"字段",
   "close": "关闭",
   "dirtyChanged": "已更改",
-  "aiEmptyBtnWithAgent": "✨ {{agent}} · AI ({{base}}→{{target}}) 空",
-  "aiAllBtnWithAgent": "全部 · {{agent}}",
-  "currentAiService": "当前 AI 服务：{{agent}}",
   "removeLangTitle": "移除语言",
   "aiParseFailDetail": "(raw={{len}} 个字符，原始内容已打印到控制台)"
 }

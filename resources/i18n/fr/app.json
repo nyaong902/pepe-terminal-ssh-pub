@@ -1,9 +1,6 @@
 {
   "common": {
-    "cancel": "Annuler",
     "close": "Fermer",
-    "connect": "Connecter",
-    "connecting": "Connexion...",
     "unknownError": "Erreur inconnue",
     "unknown": "Inconnu"
   },
@@ -159,26 +156,6 @@
     "openTerminalTooltip": "Ouvrir le terminal",
     "pinTerminalTooltip": "Épingler le panneau du terminal"
   },
-  "options": {
-    "messengerTab": "Messagerie",
-    "pasteAccumulateTooltip": "Tant que la fenêtre est ouverte, coller à nouveau plusieurs lignes ajoute après le contenu existant. Désactivez pour remplacer par le nouveau contenu.",
-    "pasteAccumulate": "Accumuler le contenu dans la fenêtre de collage multiligne (désactivé = remplacer)",
-    "mouse": "Souris",
-    "rightButton": "Bouton droit",
-    "middleButton": "Bouton du milieu",
-    "mouseNone": "Ne rien faire",
-    "mouseMenu": "Ouvrir le menu contextuel",
-    "mousePaste": "Coller le contenu du presse-papiers",
-    "mouseProperties": "Ouvrir la boîte de dialogue des propriétés",
-    "mouseEnter": "Envoyer un retour chariot",
-    "mousePasteSelection": "Coller le texte sélectionné",
-    "miniMessenger": "Mini Messagerie",
-    "miniMessengerDesc": "Les paramètres détaillés tels que le nom affiché, le masquage de présence et les popups peuvent être modifiés dans les paramètres de l'espace de travail Messagerie (💬). Ici, seule la réinitialisation des données est proposée.",
-    "confirmDeleteConversations": "Supprimer toutes les conversations de la messagerie ?",
-    "deleteConversations": "Supprimer toutes les conversations",
-    "confirmDeleteUsers": "Supprimer tous les utilisateurs découverts et les conversations ?",
-    "deleteUsers": "Supprimer tous les utilisateurs"
-  },
   "claudeChat": {
     "triggerTooltip": "Clic = basculer / survol 2,5 s = ouverture auto",
     "resizeTooltip": "Glisser pour redimensionner la largeur (double-clic : défaut)"
@@ -203,7 +180,6 @@
     "check": "🔄 Rechercher des mises à jour",
     "closeTooltip": "Fermer (Échap)",
     "checkingMsg": "Recherche de mises à jour…",
-    "availableMsg": "La nouvelle version <1>v{{ver}}</1> est disponible. Télécharger maintenant ?",
     "downloadingMsg": "Téléchargement de v{{ver}}… {{pct}} %",
     "downloadedMsg": "Téléchargement de v{{ver}} terminé.",
     "downloadedMsg2": "Redémarrer maintenant pour installer ? (Enregistrez votre travail avant de continuer)",
@@ -276,7 +252,6 @@
     "credTitle": "Saisir les identifiants",
     "pwdTitle": "Saisir le mot de passe",
     "cancelTooltip": "Annuler",
-    "connectTo": "Se connecter à <1>{{host}}</1>",
     "needCred": "Des identifiants sont requis pour se connecter.",
     "hide": "Masquer",
     "show": "Afficher",

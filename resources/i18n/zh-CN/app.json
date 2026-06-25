@@ -1,9 +1,6 @@
 {
   "common": {
-    "cancel": "取消",
     "close": "关闭",
-    "connect": "连接",
-    "connecting": "正在连接…",
     "unknownError": "未知错误",
     "unknown": "未知"
   },
@@ -159,26 +156,6 @@
     "openTerminalTooltip": "打开终端",
     "pinTerminalTooltip": "固定终端面板"
   },
-  "options": {
-    "messengerTab": "消息",
-    "pasteAccumulateTooltip": "窗口打开期间，再次粘贴多行内容会追加到现有内容之后。关闭则替换为新内容。",
-    "pasteAccumulate": "多行粘贴窗口中累积内容（关闭=替换）",
-    "mouse": "鼠标",
-    "rightButton": "右键",
-    "middleButton": "中键",
-    "mouseNone": "不执行任何操作",
-    "mouseMenu": "打开弹出菜单",
-    "mousePaste": "粘贴剪贴板内容",
-    "mouseProperties": "打开属性对话框",
-    "mouseEnter": "发送回车符",
-    "mousePasteSelection": "粘贴选中文本",
-    "miniMessenger": "迷你消息",
-    "miniMessengerDesc": "显示名称、隐藏在线状态、弹窗等详细设置可在消息工作区（💬）设置中更改。此处仅提供数据重置。",
-    "confirmDeleteConversations": "删除所有消息会话？",
-    "deleteConversations": "删除所有会话",
-    "confirmDeleteUsers": "删除所有已发现的用户和会话？",
-    "deleteUsers": "删除所有用户"
-  },
   "claudeChat": {
     "triggerTooltip": "点击=切换 / 悬停 2.5 秒=自动打开",
     "resizeTooltip": "拖动以调整宽度（双击：默认）"
@@ -203,7 +180,6 @@
     "check": "🔄 检查更新",
     "closeTooltip": "关闭（Esc）",
     "checkingMsg": "正在检查更新…",
-    "availableMsg": "新版本 <1>v{{ver}}</1> 已可用。现在下载？",
     "downloadingMsg": "正在下载 v{{ver}}… {{pct}}%",
     "downloadedMsg": "v{{ver}} 下载完成。",
     "downloadedMsg2": "现在重启以安装？（继续前请先保存工作）",
@@ -276,7 +252,6 @@
     "credTitle": "输入凭据",
     "pwdTitle": "输入密码",
     "cancelTooltip": "取消",
-    "connectTo": "连接到 <1>{{host}}</1>",
     "needCred": "连接需要凭据。",
     "hide": "隐藏",
     "show": "显示",
