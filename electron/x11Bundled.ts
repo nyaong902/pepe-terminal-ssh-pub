@@ -89,10 +89,30 @@ async function isPortInUse(port: number): Promise<boolean> {
   return !(await isPortBindable(port));
 }
 
-export async function startBundledX11(displayNum = 0, log?: (msg: string) => void): Promise<{ proc: ChildProcess | null; usedBundled: boolean }> {
-  const port = 6000 + displayNum;
+// 포트가 실제로 X11 프로토콜로 응답하는지 확인 — X11 connection setup 패킷에 응답하면 진짜 X 서버.
+// 다른 무관한 프로그램이 6000 포트를 잡고 있어도 우리 bundled X 서버는 사용 가능해야 함.
+async function isWorkingX11Server(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const sock = net.createConnection(port, '127.0.0.1');
+    let timer: any = null;
+    const done = (ok: boolean) => { if (timer) clearTimeout(timer); try { sock.destroy(); } catch {} resolve(ok); };
+    timer = setTimeout(() => done(false), 800);
+    sock.once('error', () => done(false));
+    sock.once('connect', () => {
+      // X11 connection setup request: byte-order (B/l=lsb), 0, major(11), 0, minor(0), 0, name len(0,0), data len(0,0), 0, 0
+      const req = Buffer.from([0x6c, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+      try { sock.write(req); } catch { return done(false); }
+      sock.once('data', (data: Buffer) => {
+        // X11 응답 첫 바이트: 1=Success, 0=Failed, 2=Authenticate. 0xff(SSH 등) 이면 X 서버 아님.
+        done(data.length > 0 && (data[0] === 1 || data[0] === 0 || data[0] === 2));
+      });
+    });
+  });
+}
+
+export async function startBundledX11(displayNum = 0, log?: (msg: string) => void): Promise<{ proc: ChildProcess | null; usedBundled: boolean; displayNum: number }> {
   if (_running.has(displayNum)) {
-    return { proc: _running.get(displayNum)!, usedBundled: true };
+    return { proc: _running.get(displayNum)!, usedBundled: true, displayNum };
   }
   // 좀비 VcXsrv 정리 — 이전 앱 인스턴스가 죽으면서 남긴 vcxsrv.exe 가 포트를 잡고 있을 수 있음
   try {
@@ -101,15 +121,32 @@ export async function startBundledX11(displayNum = 0, log?: (msg: string) => voi
     log?.(`이전 VcXsrv 프로세스 정리 완료`);
     await new Promise(r => setTimeout(r, 500));
   } catch {} // 죽일 프로세스 없으면 에러 — 무시
-  // 정리 후에도 포트 점유 중이면 외부 X 서버
+  // 포트 점유 검증 — X11 프로토콜로 응답하지 않으면 무관한 프로세스 → 다른 display 번호로 자동 이동.
+  let port = 6000 + displayNum;
   if (await isPortInUse(port)) {
-    log?.(`port ${port} 외부 X 서버 사용 중 — bundled 시작 안 함`);
-    return { proc: null, usedBundled: false };
+    const isReal = await isWorkingX11Server(port);
+    if (isReal) {
+      log?.(`port ${port} 진짜 X 서버 사용 중 — bundled 시작 안 함 (외부 X 서버 활용)`);
+      return { proc: null, usedBundled: false, displayNum };
+    }
+    log?.(`port ${port} 점유 중이나 X 서버 아님 — 빈 display 자동 탐색`);
+    let foundDisplay = -1;
+    for (let d = 1; d <= 32; d++) {
+      const p = 6000 + d;
+      if (await isPortBindable(p)) { foundDisplay = d; break; }
+    }
+    if (foundDisplay < 0) {
+      log?.(`사용 가능한 display 번호 없음 (:0~:32 모두 점유)`);
+      return { proc: null, usedBundled: false, displayNum };
+    }
+    log?.(`display :${foundDisplay} 로 변경 — port ${6000 + foundDisplay}`);
+    displayNum = foundDisplay;
+    port = 6000 + displayNum;
   }
   const exe = getBundledPath(log);
   if (!exe) {
     log?.(`번들/시스템 VcXsrv 미설치 — 내장 X 서버로 fallback`);
-    return { proc: null, usedBundled: false };
+    return { proc: null, usedBundled: false, displayNum };
   }
   log?.(`X 서버 실행: ${exe} :${displayNum}`);
   // VcXsrv 옵션:
@@ -154,13 +191,13 @@ export async function startBundledX11(displayNum = 0, log?: (msg: string) => voi
     if (proc.exitCode !== null) {
       log?.(`X 서버가 시작 직후 종료됨 (code=${proc.exitCode})`);
       _running.delete(displayNum);
-      return { proc: null, usedBundled: false };
+      return { proc: null, usedBundled: false, displayNum };
     }
     log?.(`X 서버 시작됨 (PID=${proc.pid}) — DISPLAY=:${displayNum}`);
-    return { proc, usedBundled: true };
+    return { proc, usedBundled: true, displayNum };
   } catch (err: any) {
     log?.(`X 서버 실행 실패: ${err.message}`);
-    return { proc: null, usedBundled: false };
+    return { proc: null, usedBundled: false, displayNum };
   }
 }
 

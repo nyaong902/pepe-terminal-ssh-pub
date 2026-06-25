@@ -1584,7 +1584,7 @@ ipcMain.on('search:result', (_e, payload) => {
 ipcMain.handle('x11:start', async (_e, displayNum: number = 0) => {
   const logs: string[] = [];
   const result = await startBundledX11(displayNum, (m) => logs.push(m));
-  return { usedBundled: result.usedBundled, pid: result.proc?.pid ?? null, logs };
+  return { usedBundled: result.usedBundled, pid: result.proc?.pid ?? null, displayNum: result.displayNum, logs };
 });
 ipcMain.handle('x11:stop', (_e, displayNum: number = 0) => {
   stopBundledX11(displayNum);
