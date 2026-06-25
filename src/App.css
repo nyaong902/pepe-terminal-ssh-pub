@@ -6882,11 +6882,104 @@ mark.claude-search-hit.current {
   text-align: center;
 }
 
+.remote-share-pin.fixed {
+  font-family: inherit;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
 .remote-share-intro {
   margin: 18px 0;
   padding: 17px;
   border-left: 3px solid #3fa7c2;
   background: rgba(45, 126, 151, 0.1);
+}
+
+.remote-share-tailscale {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 13px 15px;
+  border: 1px solid rgba(235, 168, 71, 0.3);
+  border-radius: 13px;
+  background: rgba(138, 82, 20, 0.14);
+}
+
+.remote-share-tailscale.connected {
+  border-color: rgba(86, 214, 155, 0.28);
+  background: rgba(34, 122, 83, 0.12);
+}
+
+.remote-share-tailscale.connected .remote-share-status-dot {
+  background: #56d69b;
+  box-shadow: 0 0 0 5px rgba(86, 214, 155, 0.13);
+}
+
+.remote-share-tailscale.warning .remote-share-status-dot {
+  background: #e4a348;
+  box-shadow: 0 0 0 5px rgba(228, 163, 72, 0.13);
+}
+
+.remote-share-tailscale div,
+.remote-share-pin-settings label span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.remote-share-tailscale small,
+.remote-share-pin-settings small {
+  color: #9cb5bf;
+  font-size: 11px;
+}
+
+.remote-share-pin-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.remote-share-pin-settings label {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.13);
+  cursor: pointer;
+}
+
+.remote-share-pin-settings label.selected {
+  border-color: #3b94b2;
+  background: rgba(43, 132, 160, 0.14);
+}
+
+.remote-share-pin-settings input[type="radio"] {
+  margin-top: 2px;
+  accent-color: #47acce;
+}
+
+.remote-share-fixed-pin {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #315567;
+  border-radius: 10px;
+  outline: none;
+  background: #07131a;
+  color: #dff7ff;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 18px;
+  letter-spacing: 7px;
+  text-align: center;
+}
+
+.remote-share-fixed-pin:focus {
+  border-color: #54b4d2;
+  box-shadow: 0 0 0 3px rgba(84, 180, 210, 0.12);
 }
 
 .remote-share-intro p {
