@@ -2016,7 +2016,9 @@ function App() {
 
   // ── 탭 분리/재부착(멀티 윈도우) ──────────────────────────────────────
   // 라이브 세션 재부착: 세션 매핑 등록 + 연결 상태 시딩 (이후 출력은 broadcast 로 수신, 재연결 방지)
-  const seedReattach = useCallback(async (tab: Tab) => {
+  // 다른 탭에서 끌어온 sibling 세션 스냅샷 — FileExplorer 가 비어보이지 않도록 보관.
+  const [carriedSiblingSessions, setCarriedSiblingSessions] = useState<{ termId: string; sessionId: string; sessionName: string; host: string }[]>([]);
+  const seedReattach = useCallback(async (tab: Tab, siblings?: { termId: string; sessionId: string; sessionName: string; host: string; quickSession?: any }[]) => {
     let connected: string[] = [];
     try { connected = (await (window as any).api?.getConnectedPanels?.()) || []; } catch {}
     const connSet = new Set(connected);
@@ -2025,6 +2027,15 @@ function App() {
         if (!s.termId) continue;
         registerTermSession(s.termId, s.sessionId || '', s.sessionName, (s as any).host || '');
         if (connSet.has(s.termId)) markTermConnected(s.termId);
+      }
+      // sibling 세션(다른 탭의 활성 SSH 등) 도 termRegistry 에 다시 등록 — FileExplorer 가 인식 가능.
+      if (Array.isArray(siblings)) {
+        for (const s of siblings) {
+          if (!s.termId) continue;
+          registerTermSession(s.termId, s.sessionId || '', s.sessionName, s.host || '', s.quickSession);
+          if (connSet.has(s.termId)) markTermConnected(s.termId);
+        }
+        setCarriedSiblingSessions(siblings.map(s => ({ termId: s.termId, sessionId: s.sessionId || '', sessionName: s.sessionName || '', host: s.host || '' })));
       }
     } catch {}
   }, []);
@@ -2036,7 +2047,7 @@ function App() {
       try {
         const init: any = await (window as any).api?.getDetachedInit?.();
         if (!init?.tab) return;
-        await seedReattach(init.tab);
+        await seedReattach(init.tab, init.siblingSessions);
         try { for (const [tid, s] of Object.entries(init.styles || {})) setPendingRestoreStyle(tid, s); } catch {}
         try { for (const [tid, b] of Object.entries(init.buffers || {})) setPendingRestoreBuffer(tid, b as string); } catch {}
         setTabs([init.tab]);
@@ -2051,7 +2062,7 @@ function App() {
   useEffect(() => {
     const off = (window as any).api?.onAdoptTab?.(async (payload: any) => {
       if (!payload?.tab) return;
-      await seedReattach(payload.tab);
+      await seedReattach(payload.tab, payload.siblingSessions);
       try { for (const [tid, s] of Object.entries(payload.styles || {})) setPendingRestoreStyle(tid, s); } catch {}
       try { for (const [tid, b] of Object.entries(payload.buffers || {})) setPendingRestoreBuffer(tid, b as string); } catch {}
       // 미니탭 → 드롭 지점 패널에 병합/분할 시도
@@ -2117,10 +2128,28 @@ function App() {
     return styles;
   };
 
+  // FileExplorer 탭 분리 시 — 같은 창의 다른 탭들로부터 계산되는 sessions 가 새 창에서 비어버리는
+  // 문제 방지용 스냅샷. detached 창에서 props 로 그대로 주입한다.
+  const collectSiblingSessions = (tab: Tab) => {
+    try {
+      return tabsRef.current
+        .filter(x => x.id !== tab.id && x.type !== 'fileExplorer')
+        .flatMap(x => collectAllSessions(x.layout))
+        .filter(s => s.sessionId || getTermSessionInfo(s.termId)?.quickSession)
+        .map(s => ({
+          termId: s.termId,
+          sessionId: s.sessionId || '',
+          sessionName: s.sessionName || getTermSessionInfo(s.termId)?.sessionName || '',
+          host: (s as any).host || getTermSessionInfo(s.termId)?.host || '',
+          quickSession: getTermSessionInfo(s.termId)?.quickSession || null,
+        }));
+    } catch { return []; }
+  };
   const serializeTab = (tab: Tab) => ({
     kind: 'workspace' as const,
     buffers: collectTabBuffers(tab),
     styles: collectTabStyles(tab),
+    siblingSessions: collectSiblingSessions(tab),
     tab: JSON.parse(JSON.stringify({
       id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
       sqlTool: tab.sqlTool, editor: tab.editor,
@@ -3839,11 +3868,17 @@ function App() {
         {tabs.filter(t => t.type === 'fileExplorer').map(t => (
           <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
             <FileExplorer
-              sessions={
-                tabs.filter(x => x.type !== 'fileExplorer')
+              sessions={(() => {
+                const live = tabs.filter(x => x.type !== 'fileExplorer')
                   .flatMap(x => collectAllSessions(x.layout))
-                  .filter(s => s.sessionId || getTermSessionInfo(s.termId)?.quickSession)
-              }
+                  .filter(s => s.sessionId || getTermSessionInfo(s.termId)?.quickSession);
+                // 분리 창으로 옮겨진 직후 같은 창에 다른 탭이 없을 때를 위한 fallback: 떼어내기 직전 스냅샷.
+                const liveTermIds = new Set(live.map((s: any) => s.termId));
+                const fromCarry = carriedSiblingSessions
+                  .filter(s => !liveTermIds.has(s.termId))
+                  .map(s => ({ termId: s.termId, sessionId: s.sessionId, sessionName: s.sessionName, host: s.host } as any));
+                return [...live, ...fromCarry];
+              })()}
               initialTermId={t.initialTermId}
               initialRemotePath={t.initialRemotePath}
               tabId={t.id}
