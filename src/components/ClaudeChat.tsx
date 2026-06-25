@@ -483,6 +483,26 @@ const CustomTabIcon = () => (
     <circle cx="7" cy="17.5" r="0.8" fill="#7aa2ff"/>
   </svg>
 );
+
+/** Antigravity CLI(agy) 탭 아이콘 — 토성/궤도 모양 */
+const AntigravityTabIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="12" cy="12" rx="10" ry="3.5" fill="none" stroke="#c4a5ff" strokeWidth="1.5" transform="rotate(-20 12 12)"/>
+    <circle cx="12" cy="12" r="4" fill="#c4a5ff"/>
+    <circle cx="12" cy="12" r="1.5" fill="#1a0d36"/>
+  </svg>
+);
+
+// Antigravity CLI(agy) 가 제공하는 모델 목록. 사용자 인터랙티브 메뉴 기준.
+// effort 는 별도 셀렉트로 노출 (--model 에는 base 만 전달).
+const ANTIGRAVITY_MODELS: { v: string; l: string; icon: string; ctx: number }[] = [
+  { v: 'gemini-3.5-flash', l: 'Gemini 3.5 Flash', icon: '⚡', ctx: 1_048_576 },
+  { v: 'gemini-3.1-pro', l: 'Gemini 3.1 Pro', icon: '✨', ctx: 1_048_576 },
+  { v: 'claude-sonnet-4.6', l: 'Claude Sonnet 4.6', icon: '🟦', ctx: 1_000_000 },
+  { v: 'claude-opus-4.6', l: 'Claude Opus 4.6', icon: '🟪', ctx: 200_000 },
+  { v: 'gpt-oss-120b', l: 'GPT-OSS 120B', icon: '🟢', ctx: 128_000 },
+];
+const antigravityCtxFor = (m: string) => ANTIGRAVITY_MODELS.find(x => x.v === m)?.ctx || 1_048_576;
 // ────────────────────────────────────────────────────────────────────────────
 
 type CodexApprovalPolicy = 'suggest' | 'auto-edit' | 'full-auto';
@@ -926,6 +946,7 @@ function baseName(p: any): string {
 // 도구별 동작 동사(아이콘 포함) — 접힌 라벨/그룹 요약에 공통 사용.
 const TOOL_VERB: Record<string, string> = {
   Read: '📖 읽기', ssh_read_file: '📖 읽기', ssh_read: '📖 읽기',
+  view_file: '📖 읽기', read_file: '📖 읽기', open_file: '📖 읽기',
   Write: '📝 쓰기', ssh_write_file: '📝 쓰기', ssh_write: '📝 쓰기',
   Edit: '✏️ 수정', MultiEdit: '✏️ 수정', NotebookEdit: '✏️ 수정',
   LS: '📂 목록',
@@ -944,10 +965,11 @@ function buildToolLabelShort(name: string, input: any): string {
   const firstTok = (s: any) => String(s || '').trim().split(/\s+/)[0] || '';
   switch (n) {
     case 'Read': case 'ssh_read_file': case 'ssh_read':
+    case 'view_file': case 'read_file': case 'open_file':
     case 'Write': case 'ssh_write_file': case 'ssh_write':
     case 'Edit': case 'MultiEdit': case 'NotebookEdit':
     case 'LS':
-      return `${verb} ${fp ? baseName(fp) : ''}`.trim();
+      return `${verb} ${fp ? baseName(fp) : (input?.AbsolutePath ? baseName(input.AbsolutePath) : '')}`.trim();
     case 'Glob': case 'ssh_glob':
       return `${verb} ${input?.pattern || ''}`.trim();
     case 'Grep': case 'ssh_grep':
@@ -1093,7 +1115,7 @@ const MarkdownMessage = React.memo(({ id, content, className }: MarkdownMessageP
   <div className={className} dangerouslySetInnerHTML={{ __html: renderMdCached(id, content) }} />
 ), (prev, next) => prev.id === next.id && prev.content === next.content && prev.className === next.className);
 
-type AgentType = 'claude' | 'gemini' | 'codex' | 'custom';
+type AgentType = 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -1109,7 +1131,7 @@ type ChatHistoryEntry = {
   pinned: boolean;
   updatedAt: number;
   // 이 대화를 처음 만든 에이전트 (공유 OFF 모드에서 이력 필터링용)
-  originAgent?: 'claude' | 'gemini' | 'codex' | 'custom';
+  originAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
   messages: Message[];
   pendingRequestId?: string | null; // 진행 중 send 의 requestId
   streaming?: boolean; // 진행 중인지
@@ -1145,8 +1167,8 @@ type Props = {
   defaultSshSession?: { termId: string; label: string } | null;
   pinned?: boolean;
   onTogglePin?: () => void;
-  aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom';
-  onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom') => void;
+  aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
+  onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity') => void;
 };
 
 let sessionCounter = 0;
@@ -1164,12 +1186,18 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     setCurrentAgent(aiAgent);
     {
       const m = saved?.model ?? defaultModelFor(aiAgent);
-      setModelRaw(aiAgent === 'gemini' && !isValidGeminiModel(m) ? defaultModelFor('gemini') : m);
+      const isAntigravityModel = ANTIGRAVITY_MODELS.some(x => x.v === m);
+      setModelRaw(
+        aiAgent === 'gemini' && !isValidGeminiModel(m) ? defaultModelFor('gemini')
+        : aiAgent === 'antigravity' && !isAntigravityModel ? defaultModelFor('antigravity')
+        : m,
+      );
     }
     setEffort(saved?.effort ?? 'medium');
     setPermissionMode(saved?.permissionMode ?? 'default');
     setPerToolApproval(saved?.perToolApproval ?? true);
     setGeminiYolo(saved?.geminiYolo ?? false);
+    setAntigravityYolo(saved?.antigravityYolo ?? false);
     setCodexApprovalPolicy(saved?.codexApprovalPolicy ?? 'suggest');
   }, [aiAgent]); // eslint-disable-line react-hooks/exhaustive-deps
   const { t: tt } = useTranslation('claudeChat');
@@ -1701,11 +1729,17 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   useEffect(() => { try { localStorage.setItem('claudeEffort', effort); } catch {} }, [effort]);
   // Gemini: --yolo 온/오프 (기본 false — 수동 승인)
   const [geminiYolo, setGeminiYolo] = useState<boolean>(false);
+  // Antigravity: --dangerously-skip-permissions 온/오프
+  const [antigravityYolo, setAntigravityYolo] = useState<boolean>(false);
+  // Antigravity: /usage TUI 파싱 결과 — Weekly/5-Hour Limit
+  type AgyUsageEntry = { remainingPct: number; refreshIn: string };
+  type AgyUsageGroup = { name: string; models: string; weekly: AgyUsageEntry | null; fiveHour: AgyUsageEntry | null };
+  const [antigravityUsage, setAntigravityUsage] = useState<{ account: string; groups: AgyUsageGroup[] } | null>(null);
   // Codex: approval policy
   const [codexApprovalPolicy, setCodexApprovalPolicy] = useState<CodexApprovalPolicy>('suggest');
   const [codexApprovalMenuOpen, setCodexApprovalMenuOpen] = useState(false);
   // 에이전트별 설정 메모리 (탭 전환 시 복원)
-  type AgentSettings = { model: string; effort: string; permissionMode: 'bypassPermissions' | 'acceptEdits' | 'plan' | 'default'; perToolApproval: boolean; geminiYolo: boolean; codexApprovalPolicy: CodexApprovalPolicy };
+  type AgentSettings = { model: string; effort: string; permissionMode: 'bypassPermissions' | 'acceptEdits' | 'plan' | 'default'; perToolApproval: boolean; geminiYolo: boolean; antigravityYolo: boolean; codexApprovalPolicy: CodexApprovalPolicy };
   const agentSettingsMemory = useRef<Partial<Record<AgentType, AgentSettings>>>({});
   // 동적 모델 목록 (Anthropic /v1/models)
   type AnthropicModel = { id: string; display_name: string; max_input_tokens?: number; capabilities?: any };
@@ -1739,7 +1773,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       if (!perToolApproval) setPerToolApproval(true);
     }
   }, [permissionMode]);
-  // gemini 탭 진입 시 요금제(tier) 조회 → 모델 가용성('지원안함') 갱신
+  // gemini 탭: cloudcode-pa 의 모델별 quota
   useEffect(() => {
     if (currentAgent !== 'gemini') return;
     let cancelled = false;
@@ -1749,6 +1783,20 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         if (!cancelled && r?.success) {
           setGeminiTier({ tierId: r.tierId, tierName: r.tierName, isPaid: !!r.isPaid });
           if (Array.isArray(r.quotaBuckets)) setGeminiQuota(r.quotaBuckets);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [currentAgent]);
+  // antigravity 탭: agy TUI 의 /usage 캡처/파싱 (gemini 의 cloudcode-pa 와 별개)
+  useEffect(() => {
+    if (currentAgent !== 'antigravity') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r: any = await (window as any).api?.antigravityProbeUsageTui?.();
+        if (!cancelled && r?.success && r.parsed) {
+          setAntigravityUsage({ account: r.parsed.account || '', groups: r.parsed.groups || [] });
         }
       } catch {}
     })();
@@ -1780,11 +1828,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     }
   }, [geminiTier, currentAgent, apiKeys.gemini]);
   // 모델 선택 — 에이전트별 기본 모델
-  const defaultModelFor = (a: AgentType) => a === 'gemini' ? 'gemini-2.5-flash' : a === 'codex' ? 'gpt-5.5' : 'opus';
+  const defaultModelFor = (a: AgentType) => a === 'gemini' ? 'gemini-2.5-flash' : a === 'codex' ? 'gpt-5.5' : a === 'antigravity' ? 'gemini-3.5-flash' : 'opus';
   const [model, setModelRaw] = useState<string>(defaultModelFor(aiAgent));
   const saveCurrentAgentSettings = () => {
     agentSettingsMemory.current[currentAgentRef.current] = {
-      model, effort, permissionMode, perToolApproval, geminiYolo, codexApprovalPolicy,
+      model, effort, permissionMode, perToolApproval, geminiYolo, antigravityYolo, codexApprovalPolicy,
     };
   };
   const setModel = (m: string) => { saveCurrentAgentSettings(); agentSettingsMemory.current[currentAgentRef.current]!.model = m; setModelRaw(m); };
@@ -1796,12 +1844,18 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     setCurrentAgent(a);
     {
       const m = saved?.model ?? defaultModelFor(a);
-      setModelRaw(a === 'gemini' && !isValidGeminiModel(m) ? defaultModelFor('gemini') : m);
+      const isAntigravityModel = ANTIGRAVITY_MODELS.some(x => x.v === m);
+      setModelRaw(
+        a === 'gemini' && !isValidGeminiModel(m) ? defaultModelFor('gemini')
+        : a === 'antigravity' && !isAntigravityModel ? defaultModelFor('antigravity')
+        : m,
+      );
     }
     setEffort(saved?.effort ?? 'medium');
     setPermissionMode(saved?.permissionMode ?? 'default');
     setPerToolApproval(saved?.perToolApproval ?? true);
     setGeminiYolo(saved?.geminiYolo ?? false);
+    setAntigravityYolo(saved?.antigravityYolo ?? false);
     setCodexApprovalPolicy(saved?.codexApprovalPolicy ?? 'suggest');
     onAgentChange?.(a);
   };
@@ -1981,6 +2035,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         ? await (window as any).api?.codexCheck?.()
         : currentAgent === 'custom'
         ? await (window as any).api?.customCheck?.()
+        : currentAgent === 'antigravity'
+        ? await (window as any).api?.antigravityCheck?.()
         : await (window as any).api?.claudeCheck?.();
       setInstalled(!!res?.installed);
       const v = res?.version || '';
@@ -2221,7 +2277,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             return [...prev, { role: 'assistant', content: texts, id: msgId, seq: nextSeq(), agent: streamAgent }];
           });
         } else if (thinkings.length > 0 && toolUses.length === 0) {
-          setActivity(tt('thinking'));
+          const thText = String(thinkings[thinkings.length - 1].thinking || '').trim();
+          const firstLine = thText.split('\n').find((l: string) => l.trim()) || '';
+          const summary = firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine;
+          setActivity(summary ? `${tt('thinking')} — ${summary}` : tt('thinking'));
         }
       } else if (msg.type === 'user' && msg.message?.content) {
         // tool_result 수신 → 타임라인 업데이트
@@ -3235,6 +3294,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           .map(m => ({ role: m.role, content: m.content }));
         const chatMessages = [...history, { role: 'user' as const, content: text }];
         await (window as any).api?.customSend?.(sessionId, chatMessages, requestId, sshTermId);
+      } else if (currentAgentRef.current === 'antigravity') {
+        // Antigravity CLI(agy) — 자체 OAuth, --print 모드로 prompt 전달
+        // sshTermId/sshSessions 전달 → agy 에 pepe_ssh MCP 동적 등록
+        await (window as any).api?.antigravitySend?.(sessionId, prompt, requestId, model, antigravityYolo, addDirs, sshTermId, sshSessions);
       } else if (currentAgentRef.current === 'codex') {
         // codex 는 비대화형(exec)이라 실행 중 승인이 불가 → claude 처럼 "계획 먼저 보여주고 승인" 2단계로 처리.
         // plan 모드(또는 default + 승인성 발화 아님)면 계획 단계로 전송.
@@ -3311,7 +3374,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       setStreaming(false);
       removeStreamingAgent(currentAgentRef.current);
     }
-  }, [sessionId, streaming, streamingAgents, mountEntries, activeMount, localFileAttachments, binaryAttachments, permissionMode, model, perToolApproval, messages, toolTimeline, geminiTier, geminiYolo, codexApprovalPolicy]);
+  }, [sessionId, streaming, streamingAgents, mountEntries, activeMount, localFileAttachments, binaryAttachments, permissionMode, model, perToolApproval, messages, toolTimeline, geminiTier, geminiYolo, antigravityYolo, codexApprovalPolicy]);
 
   // 외부에서 컨텍스트 전달되면 추가 (기존 첨부에 append, 중복 제거)
   useEffect(() => {
@@ -3366,6 +3429,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         (window as any).api?.geminiStop?.(sessionId, reqId || undefined);
       } else if (reqAgent === 'codex') {
         (window as any).api?.codexStop?.(sessionId, reqId || undefined);
+      } else if (reqAgent === 'custom') {
+        (window as any).api?.customStop?.(sessionId, reqId || undefined);
+      } else if (reqAgent === 'antigravity') {
+        (window as any).api?.antigravityStop?.(sessionId, reqId || undefined);
       } else {
         (window as any).api?.claudeStop?.(sessionId, reqId || undefined);
       }
@@ -3432,6 +3499,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           try {
             if (reqAgent === 'gemini') (window as any).api?.geminiStop?.(sessionId, reqId);
             else if (reqAgent === 'codex') (window as any).api?.codexStop?.(sessionId, reqId);
+            else if (reqAgent === 'custom') (window as any).api?.customStop?.(sessionId, reqId);
+            else if (reqAgent === 'antigravity') (window as any).api?.antigravityStop?.(sessionId, reqId);
             else (window as any).api?.claudeStop?.(sessionId, reqId);
           } catch {}
           requestToHistoryRef.current.delete(reqId);
@@ -3497,6 +3566,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             (window as any).api?.geminiStop?.(sessionId, reqId);
           } else if (reqAgent === 'codex') {
             (window as any).api?.codexStop?.(sessionId, reqId);
+          } else if (reqAgent === 'custom') {
+            (window as any).api?.customStop?.(sessionId, reqId);
+          } else if (reqAgent === 'antigravity') {
+            (window as any).api?.antigravityStop?.(sessionId, reqId);
           } else {
             (window as any).api?.claudeStop?.(sessionId, reqId);
           }
@@ -3610,6 +3683,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             (window as any).api?.geminiStop?.(sessionId, reqId);
           } else if (reqAgent === 'codex') {
             (window as any).api?.codexStop?.(sessionId, reqId);
+          } else if (reqAgent === 'custom') {
+            (window as any).api?.customStop?.(sessionId, reqId);
+          } else if (reqAgent === 'antigravity') {
+            (window as any).api?.antigravityStop?.(sessionId, reqId);
           } else {
             (window as any).api?.claudeStop?.(sessionId, reqId);
           }
@@ -4154,19 +4231,20 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               <button className={`claude-chat-agent-btn ${currentAgent === 'gemini' ? 'active' : ''}`} title="Gemini" onClick={() => switchAgent('gemini')}><GeminiTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'codex' ? 'active' : ''}`} title="Codex" onClick={() => switchAgent('codex')}><CodexTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`} title="Custom LLM (LM Studio / OpenAI 호환)" onClick={() => switchAgent('custom')}><CustomTabIcon /></button>
+              <button className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`} title="Antigravity CLI (agy)" onClick={() => switchAgent('antigravity')}><AntigravityTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
             {onClose && <button className="claude-chat-close" onClick={onClose}>×</button>}
           </div>
         </div>
-        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : currentAgent === 'custom' ? 'Custom LLM 로딩중...' : tt('loading')}</div>
+        <div className="claude-chat-loading">{currentAgent === 'gemini' ? tt('loadingGemini') : currentAgent === 'codex' ? tt('loadingCodex') : currentAgent === 'custom' ? 'Custom LLM 로딩중...' : currentAgent === 'antigravity' ? 'Antigravity 로딩중...' : tt('loading')}</div>
         {apiKeyModalJsx}
       </div>
     );
   }
   if (!installed) {
-    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? 'Custom LLM 설정이 비어있습니다. 우측 상단 🔑 버튼에서 Base URL과 Model 이름을 설정해주세요.' : tt('notInstalled');
+    const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? 'Custom LLM 설정이 비어있습니다. 우측 상단 🔑 버튼에서 Base URL과 Model 이름을 설정해주세요.' : currentAgent === 'antigravity' ? 'Antigravity CLI(agy.exe)가 설치돼 있지 않습니다.' : tt('notInstalled');
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4193,6 +4271,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 title="Custom LLM (LM Studio / OpenAI 호환)"
                 onClick={() => switchAgent('custom')}
               ><CustomTabIcon /></button>
+              <button
+                className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`}
+                title="Antigravity CLI (agy)"
+                onClick={() => switchAgent('antigravity')}
+              ><AntigravityTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
@@ -4219,6 +4302,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           ) : currentAgent === 'custom' ? (
             <>
               <p>OpenAI 호환 API 서버 주소(예: LM Studio, Ollama, OpenRouter)와 모델 이름을 우측 상단 🔑 버튼에서 설정하세요.</p>
+            </>
+          ) : currentAgent === 'antigravity' ? (
+            <>
+              <p><b>설치:</b> <code>irm https://antigravity.google/cli/install.ps1 | iex</code></p>
+              <p><b>로그인:</b> 터미널에서 <code>agy</code> 실행 → 브라우저에서 Google 계정 로그인</p>
+              <p style={{ fontSize: 11, color: '#aaa', marginTop: 6 }}>설치 후 PePe를 재시작하면 자동 인식됩니다.</p>
             </>
           ) : (
             <>
@@ -4254,9 +4343,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         </div>
         <div className="claude-chat-header-center">
           <div className="claude-chat-agent-switcher">
-            {(['claude', 'gemini', 'codex', 'custom'] as const).map(a => {
-              const Icon = a === 'claude' ? ClaudeTabIcon : a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : CustomTabIcon;
-              const label = a === 'claude' ? 'Claude Code' : a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : 'Custom LLM';
+            {(['claude', 'gemini', 'codex', 'custom', 'antigravity'] as const).map(a => {
+              const Icon = a === 'claude' ? ClaudeTabIcon : a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : a === 'antigravity' ? AntigravityTabIcon : CustomTabIcon;
+              const label = a === 'claude' ? 'Claude Code' : a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : a === 'antigravity' ? 'Antigravity' : 'Custom LLM';
               const v = agentVersions[a as 'claude' | 'gemini' | 'codex'];
               const tipText = v ? `${label} · ${v}` : label;
               const showTip = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -4401,6 +4490,53 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
               </>
             );
           })()}
+          {currentAgent === 'antigravity' && (() => {
+            const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+            const maxCtx = antigravityCtxFor(model);
+            const used = usage.lastTurnInput;
+            const ctxPct = Math.round((used / maxCtx) * 100);
+            return (
+              <>
+                <div className="claude-chat-usage-divider" />
+                <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
+                  <span className="claude-chat-usage-label">━ Antigravity 컨텍스트</span>
+                  <span className="claude-chat-usage-val">{fmt(used)} / {fmt(maxCtx)} ({ctxPct}%)</span>
+                </div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">캐시 적중</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnCacheRead)}</span></div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">새 입력</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnFreshInput)}</span></div>
+                <div className="claude-chat-usage-row"><span className="claude-chat-usage-label">출력</span><span className="claude-chat-usage-val">{fmt(usage.lastTurnOutput)}</span></div>
+              </>
+            );
+          })()}
+          {currentAgent === 'antigravity' && antigravityUsage && antigravityUsage.groups.length > 0 && (
+            <>
+              <div className="claude-chat-usage-divider" />
+              <div className="claude-chat-usage-row" style={{ color: '#9cc' }}>
+                <span className="claude-chat-usage-label">━ Antigravity /usage</span>
+                <span className="claude-chat-usage-val">{antigravityUsage.account}</span>
+              </div>
+              {antigravityUsage.groups.map((g, gi) => (
+                <React.Fragment key={gi}>
+                  <div className="claude-chat-usage-row" style={{ color: '#7af' }}>
+                    <span className="claude-chat-usage-label">{g.name}</span>
+                    <span className="claude-chat-usage-val" style={{ fontSize: 10, color: '#888' }}>{g.models}</span>
+                  </div>
+                  {g.weekly && (
+                    <div className="claude-chat-usage-row">
+                      <span className="claude-chat-usage-label">  Weekly</span>
+                      <span className="claude-chat-usage-val">{g.weekly.remainingPct}% 남음{g.weekly.refreshIn ? ' · ' + g.weekly.refreshIn : ''}</span>
+                    </div>
+                  )}
+                  {g.fiveHour && (
+                    <div className="claude-chat-usage-row">
+                      <span className="claude-chat-usage-label">  5-Hour</span>
+                      <span className="claude-chat-usage-val">{g.fiveHour.remainingPct}% 남음{g.fiveHour.refreshIn ? ' · ' + g.fiveHour.refreshIn : ''}</span>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
+            </>
+          )}
           {/* 컨텍스트 분해 — 마지막 turn 시점의 누적 컨텍스트 구성 (Claude) */}
           {currentAgent === 'claude' && (() => {
             // 사용자가 선택한 모델 기준으로 max 결정
@@ -4680,8 +4816,8 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             if (!seen.includes(ag)) seen.push(ag);
           }
           if (seen.length === 0) seen.push(h.originAgent || 'claude');
-          const iconFor = (a: string) => a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : a === 'custom' ? CustomTabIcon : ClaudeTabIcon;
-          const labelFor = (a: string) => a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : a === 'custom' ? 'Custom LLM' : 'Claude';
+          const iconFor = (a: string) => a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : a === 'custom' ? CustomTabIcon : a === 'antigravity' ? AntigravityTabIcon : ClaudeTabIcon;
+          const labelFor = (a: string) => a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : a === 'custom' ? 'Custom LLM' : a === 'antigravity' ? 'Antigravity' : 'Claude';
           const groupTitle = seen.length > 1 ? seen.map(labelFor).join(' → ') : labelFor(seen[0]);
           return (
           <div
@@ -4967,7 +5103,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                       ? <><CodexTabIcon /> Codex</>
                       : (g.m.agent || currentAgent) === 'custom'
                         ? <><CustomTabIcon /> Custom LLM</>
-                        : <><ClaudeTabIcon /> Claude</>
+                        : (g.m.agent || currentAgent) === 'antigravity'
+                          ? <><AntigravityTabIcon /> Antigravity</>
+                          : <><ClaudeTabIcon /> Claude</>
               }</div>
               {(streaming && g.m.role === 'assistant' && g.m.id === currentAsstIdRef.current) ? (
                 // 스트리밍 중에는 마크다운 재파싱 비용 회피 — 평문으로만 표시(메인스레드 점유↓ → 터미널 입력 지연 완화).
@@ -5442,6 +5580,23 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 onClick={() => setApiKeyModalOpen(true)}
               >🖥 {apiKeys.customModel || '모델 미설정'}</div>
             </>
+          ) : currentAgent === 'antigravity' ? (
+            <>
+              <select
+                className="claude-chat-perm-select"
+                value={ANTIGRAVITY_MODELS.some(m => m.v === model) ? model : ANTIGRAVITY_MODELS[0].v}
+                onChange={e => setModel(e.target.value)}
+                title="Antigravity 모델 선택"
+              >
+                {ANTIGRAVITY_MODELS.map(m => (
+                  <option key={m.v} value={m.v}>{m.icon} {m.l}</option>
+                ))}
+              </select>
+              <label className="claude-chat-tool-approval-label" title="--dangerously-skip-permissions: 모든 파일 읽기/쓰기/실행을 자동 승인">
+                <input type="checkbox" checked={antigravityYolo} onChange={e => setAntigravityYolo(e.target.checked)} />
+                자동 승인
+              </label>
+            </>
           ) : (
             <>
               <select
@@ -5581,6 +5736,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   <div className="claude-chat-usage-tooltip">
                     <div><b>Context</b> {fmt(usage.lastTurnInput)} / 1M ({ctxPct}%)</div>
                     {curUsed != null && <div>현재 모델 사용량 {curUsed}%</div>}
+                  </div>
+                );
+              }
+              if (currentAgent === 'antigravity') {
+                const maxCtx = antigravityCtxFor(model);
+                const ctxPct = Math.round((usage.lastTurnInput / maxCtx) * 100);
+                return (
+                  <div className="claude-chat-usage-tooltip">
+                    <div><b>Context</b> {fmt(usage.lastTurnInput)} / {fmt(maxCtx)} ({ctxPct}%)</div>
                   </div>
                 );
               }

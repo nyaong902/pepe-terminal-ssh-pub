@@ -4762,13 +4762,238 @@ const claudeProcesses: Map<string, any> = new Map();
 // ── Gemini CLI 연동 ──
 const geminiProcesses: Map<string, any> = new Map();
 
+// ── Antigravity CLI(agy) 연동 ──
+// Gemini CLI(gemini.cmd) 와 별개 — agy.exe 를 별도 에이전트로 노출.
+// Auth 는 agy 자체 OAuth(브라우저). 사용량은 transcript/usage 파일에서 파싱.
+const antigravityProcesses: Map<string, any> = new Map();
+
+function findAgyExePath(): string | null {
+  const candidates: string[] = [];
+  if (process.platform === 'win32') {
+    if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe'));
+    if (process.env.USERPROFILE) candidates.push(path.join(process.env.USERPROFILE, 'AppData', 'Local', 'agy', 'bin', 'agy.exe'));
+  }
+  for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }
+  try {
+    const { spawnSync } = require('child_process');
+    const augmentedPath = buildAugmentedPath();
+    const env = { ...process.env, PATH: augmentedPath, Path: augmentedPath };
+    const lookup = process.platform === 'win32'
+      ? spawnSync('where.exe', ['agy'], { shell: false, encoding: 'utf8', env, windowsHide: true })
+      : spawnSync('which', ['agy'], { shell: false, encoding: 'utf8', env });
+    const found = String(lookup.stdout || '').split(/\r?\n/).map((s: string) => s.trim()).find(Boolean);
+    if (lookup.status === 0 && found) return found;
+  } catch {}
+  return null;
+}
+
+/** agy 로그 파일에서 transcript.jsonl 경로 추출 (conversation id 가 만들어진 뒤에만 가능) */
+function getAgyTranscriptPath(logPath: string): string | null {
+  try {
+    if (!logPath || !fs.existsSync(logPath)) return null;
+    const logText = fs.readFileSync(logPath, 'utf8');
+    const m = Array.from(logText.matchAll(/(?:Created conversation|Print mode: conversation=)\s*([0-9a-f-]{36})/gi));
+    const cid = m.length ? m[m.length - 1][1] : null;
+    if (!cid) return null;
+    return path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain', cid,
+      '.system_generated', 'logs', 'transcript.jsonl');
+  } catch { return null; }
+}
+
+/**
+ * 모델이 ```mermaid 펜스를 빠뜨리고 raw flowchart 문법을 본문에 흘려보낸 경우 자동 감지/감싸기.
+ * - flowchart/graph/sequenceDiagram/stateDiagram/erDiagram/classDiagram/gantt/journey 로 시작하는 라인부터
+ *   다음 빈 줄 두 개 또는 일반 문장 라인 전까지를 ```mermaid 블록으로 감쌈.
+ * - 이미 코드펜스 안에 있는 부분은 건드리지 않음.
+ */
+function wrapBareMermaid(text: string): string {
+  if (!text) return text;
+  // 펜스 블록 영역 마킹
+  const fenceRanges: Array<[number, number]> = [];
+  const fenceRe = /```[\s\S]*?```/g;
+  let mfn: RegExpExecArray | null;
+  while ((mfn = fenceRe.exec(text)) !== null) fenceRanges.push([mfn.index, mfn.index + mfn[0].length]);
+  const inFence = (idx: number) => fenceRanges.some(([s, e]) => idx >= s && idx < e);
+  const lines = text.split('\n');
+  const offsets: number[] = []; { let off = 0; for (const ln of lines) { offsets.push(off); off += ln.length + 1; } }
+  const isMermaidStart = (ln: string) => /^\s*(flowchart\s+(TB|TD|BT|RL|LR)|graph\s+(TB|TD|BT|RL|LR)|sequenceDiagram|stateDiagram(?:-v2)?|erDiagram|classDiagram|gantt|journey|pie\s|gitGraph)\b/.test(ln);
+  const isMermaidBody = (ln: string) => {
+    if (!ln.trim()) return true;
+    if (/^\s*%%/.test(ln)) return true;
+    if (/-->|---|==>|<--|<-->/.test(ln)) return true;
+    if (/^\s*(subgraph|end|style|class|click|linkStyle|direction)\b/.test(ln)) return true;
+    if (/^\s*[A-Za-z_][A-Za-z0-9_]*\s*(\[|\(|\{|>)/.test(ln)) return true;
+    return false;
+  };
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    const lineStart = offsets[i];
+    if (!inFence(lineStart) && isMermaidStart(ln)) {
+      // 끝 찾기
+      let j = i + 1;
+      let blanks = 0;
+      while (j < lines.length) {
+        const lj = lines[j];
+        if (!lj.trim()) { blanks++; if (blanks >= 2) break; j++; continue; }
+        if (!isMermaidBody(lj)) break;
+        blanks = 0;
+        j++;
+      }
+      out.push('```mermaid');
+      for (let k = i; k < j; k++) out.push(lines[k].replace(/\s+$/, ''));
+      out.push('```');
+      i = j;
+      continue;
+    }
+    out.push(ln);
+    i++;
+  }
+  return out.join('\n');
+}
+
+/**
+ * (deprecated) agy 응답 잘림 자동 이어받기 — 파일 저장 방식으로 대체되어 미사용.
+ * 향후 필요 시 활성화. eslint 미사용 경고 회피용 export.
+ */
+// @ts-ignore
+async function runAgyContinuation(
+  conversationId: string,
+  agyPath: string,
+  env: any,
+  cwd: string,
+  sendStream: (msg: any) => void,
+  stoppedSet: Set<string>,
+  procKey: string,
+  procMap: Map<string, any>,
+): Promise<void> {
+  const { spawn } = require('child_process');
+  const path = require('path');
+  const fs = require('fs');
+  const os = require('os');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (stoppedSet.has(procKey)) return;
+    sendStream({ type: 'text', text: `\n\n---\n_🔁 이어받기 #${attempt}..._\n\n` });
+    const followPrompt = '이전 답변에서 `<truncated N bytes>` 로 잘린 부분(들)을 동일한 마크다운 포맷으로 정확히 복원해서 누락분만 출력해줘. 새로운 본문을 만들지 말고, 잘린 자리에서 끊긴 문장부터 이어서 작성. 다시 잘리지 않게 짧게 나눠도 됨.';
+    const logPath = path.join(os.tmpdir(), `pepe-agy-cont-${Date.now()}-${attempt}.log`);
+    const args = ['--conversation', conversationId, '--print', followPrompt, '--print-timeout', '5m', '--log-file', logPath];
+    const proc = spawn(agyPath, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env, cwd, windowsHide: true });
+    procMap.set(procKey, proc);
+    let truncAgain = false;
+    const streamStop = startAgyTranscriptStreaming(logPath, (ev: any) => {
+      try {
+        if (ev.source !== 'MODEL' || ev.type !== 'PLANNER_RESPONSE') return;
+        const toolCalls = Array.isArray(ev.tool_calls) ? ev.tool_calls : [];
+        if (toolCalls.length !== 0) return;
+        if (typeof ev.content !== 'string' || !ev.content.trim()) return;
+        let clean = ev.content
+          .replace(/^\s*If relevant,\s*proactively run terminal commands[^.]*\.\s*Don't ask for permission\.\s*/im, '')
+          .replace(/^\s*Created file file:\/\/[^\n]+\n?/gm, '')
+          .trim();
+        if (/<truncated \d+ bytes>/.test(clean)) truncAgain = true;
+        clean = clean.replace(
+          /(```[a-zA-Z0-9_-]*\n[\s\S]*?)\n<truncated (\d+) bytes>\n/g,
+          '$1\n```\n\n> ⏳ _$2 바이트 추가 잘림 — 다시 이어받는 중..._\n\n',
+        );
+        clean = clean.replace(/<truncated (\d+) bytes>/g, '\n\n> ⏳ _$1 바이트 잘림 — 다시 이어받는 중..._\n\n');
+        if (clean) sendStream({ type: 'text', text: clean });
+      } catch {}
+    }, () => stoppedSet.has(procKey));
+    await new Promise<void>(resolve => {
+      proc.on('close', () => { streamStop(); try { fs.unlinkSync(logPath); } catch {}; resolve(); });
+      proc.on('error', () => { streamStop(); resolve(); });
+    });
+    procMap.delete(procKey);
+    if (!truncAgain) {
+      sendStream({ type: 'text', text: '\n\n✅ _이어받기 완료._\n' });
+      return;
+    }
+  }
+  sendStream({ type: 'text', text: '\n\n⚠️ _3회 이어받기 후에도 잘림이 남아있어 중단합니다._\n' });
+}
+
+/**
+ * transcript.jsonl 을 실시간으로 폴링하면서 새 이벤트를 콜백에 전달.
+ * proc 가 종료될 때까지 250ms 간격으로 파일 크기 변화 감지 → 추가된 라인만 emit.
+ * 이벤트 종류: MODEL (텍스트), TOOL_USE / TOOL_RESULT (도구 호출/결과), THINKING (추론) 등.
+ */
+function startAgyTranscriptStreaming(
+  logPath: string,
+  onEvent: (event: any) => void,
+  stopSignal: () => boolean,
+): () => void {
+  let cancelled = false;
+  let lastSize = 0;
+  let leftover = '';
+  let transcriptPath: string | null = null;
+  const interval = setInterval(() => {
+    if (cancelled || stopSignal()) return;
+    try {
+      if (!transcriptPath) {
+        transcriptPath = getAgyTranscriptPath(logPath);
+        if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+      }
+      const stat = fs.statSync(transcriptPath);
+      if (stat.size <= lastSize) return;
+      const fd = fs.openSync(transcriptPath, 'r');
+      const buf = Buffer.alloc(stat.size - lastSize);
+      fs.readSync(fd, buf, 0, buf.length, lastSize);
+      fs.closeSync(fd);
+      lastSize = stat.size;
+      const chunk = leftover + buf.toString('utf8');
+      const lines = chunk.split(/\r?\n/);
+      leftover = lines.pop() || '';
+      for (const line of lines) {
+        const t = line.trim(); if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          onEvent(ev);
+        } catch { /* skip malformed line */ }
+      }
+    } catch { /* file may not exist yet or be locked */ }
+  }, 250);
+  return () => { cancelled = true; clearInterval(interval); };
+}
+
+/** agy --print 가 stdout 을 비웠을 때 transcript.jsonl 에서 모델 응답 추출 (fallback) */
+function readAgyTranscript(logPath: string): string | null {
+  try {
+    if (!logPath || !fs.existsSync(logPath)) return null;
+    const logText = fs.readFileSync(logPath, 'utf8');
+    const m = Array.from(logText.matchAll(/(?:Created conversation|Print mode: conversation=)\s*([0-9a-f-]{36})/gi));
+    const cid = m.length ? m[m.length - 1][1] : null;
+    if (!cid) return null;
+    const transcriptPath = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain', cid,
+      '.system_generated', 'logs', 'transcript.jsonl');
+    if (!fs.existsSync(transcriptPath)) return null;
+    let last = '';
+    for (const line of fs.readFileSync(transcriptPath, 'utf8').split(/\r?\n/)) {
+      const t = line.trim(); if (!t) continue;
+      try {
+        const e = JSON.parse(t);
+        if (e?.source === 'MODEL' && typeof e?.content === 'string' && e.content.trim()) last = e.content;
+      } catch {}
+    }
+    return last || null;
+  } catch (err) { console.log('[agy] transcript fallback error:', err); return null; }
+}
+async function waitAgyTranscript(logPath: string, timeoutMs = 3000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const t = readAgyTranscript(logPath); if (t) return t;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return readAgyTranscript(logPath);
+}
+
 // ── Codex CLI 연동 ──
 const codexProcesses: Map<string, any> = new Map();
 
 // AI 에이전트(claude/gemini/codex) 프로세스가 아직 살아있는지 — 렌더러 streaming 안전망용.
 // procKey = requestId || sessionId 로 저장되므로 둘 다로 조회.
 ipcMain.handle('agent:is-running', (_e, { sessionId, requestId }: { sessionId?: string; requestId?: string }) => {
-  const maps = [claudeProcesses, geminiProcesses, codexProcesses];
+  const maps = [claudeProcesses, geminiProcesses, codexProcesses, antigravityProcesses];
   const alive = (proc: any) => !!proc && proc.killed !== true && (proc.exitCode === null || proc.exitCode === undefined);
   for (const m of maps) {
     if (requestId && m.has(requestId) && alive(m.get(requestId))) return true;
@@ -6811,6 +7036,586 @@ ipcMain.handle('custom-llm:send', async (_e, { sessionId, messages, requestId, s
     }
   } finally {
     customLlmProcesses.delete(procKey);
+  }
+  return { success: true };
+});
+
+// ── Antigravity (agy.exe) IPC 핸들러 ──────────────────────────────────────────
+ipcMain.handle('antigravity:check', async () => {
+  try {
+    const { spawn } = require('child_process');
+    const agyPath = findAgyExePath();
+    if (!agyPath) return { installed: false, error: 'agy executable not found' };
+    const augmentedPath = buildAugmentedPath();
+    const env = { ...process.env, PATH: augmentedPath, Path: augmentedPath };
+    return await new Promise(resolve => {
+      const proc = spawn(agyPath, ['--version'], { shell: false, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      let stdout = ''; let stderr = '';
+      proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
+      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+      proc.on('error', (err: any) => resolve({ installed: false, error: String(err?.message || err) }));
+      proc.on('close', (code: number) => {
+        if (code === 0) resolve({ installed: true, version: stdout.trim() || 'agy', path: agyPath });
+        else resolve({ installed: false, error: stderr.trim() || `exit ${code}` });
+      });
+    });
+  } catch (err: any) { return { installed: false, error: String(err?.message || err) }; }
+});
+
+ipcMain.handle('antigravity:modelInfo', async () => {
+  try {
+    const agyPath = findAgyExePath();
+    if (!agyPath) return { success: false, error: 'agy 미설치' };
+    // agy 는 gemini-cli 와 동일한 ~/.gemini/oauth_creds.json + cloudcode-pa.googleapis.com 사용.
+    const fsm = require('fs'), pathm = require('path'), osm = require('os'), https = require('https');
+    const credPath = pathm.join(osm.homedir(), '.gemini', 'oauth_creds.json');
+    if (!fsm.existsSync(credPath)) return { success: false, error: 'no oauth creds (agy 로그인 필요)' };
+    let cred = JSON.parse(fsm.readFileSync(credPath, 'utf-8'));
+    // 토큰 만료 시 refresh_token 으로 갱신
+    if (cred.expiry_date && cred.expiry_date < Date.now() + 60_000 && cred.refresh_token) {
+      try {
+        const params = new URLSearchParams({
+          client_id: '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com',
+          client_secret: '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',
+          refresh_token: cred.refresh_token,
+          grant_type: 'refresh_token',
+        }).toString();
+        const refreshed: any = await new Promise(resolve => {
+          const req = https.request('https://oauth2.googleapis.com/token',
+            { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+            (res: any) => { let d = ''; res.on('data', (x: any) => d += x); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+          req.on('error', () => resolve(null));
+          req.write(params); req.end();
+        });
+        if (refreshed?.access_token) {
+          cred.access_token = refreshed.access_token;
+          if (refreshed.expires_in) cred.expiry_date = Date.now() + refreshed.expires_in * 1000;
+          if (refreshed.id_token) cred.id_token = refreshed.id_token;
+          try { fsm.writeFileSync(credPath, JSON.stringify(cred, null, 2), 'utf-8'); } catch {}
+        }
+      } catch (e) { console.error('[antigravity] token refresh failed:', e); }
+    }
+    const token = cred.access_token;
+    if (!token) return { success: false, error: 'no token' };
+    const codeAssistPost = (endpoint: string, bodyObj: any, pick: (j: any) => any): Promise<any> => new Promise(resolve => {
+      const body = JSON.stringify(bodyObj);
+      const req = https.request(`https://cloudcode-pa.googleapis.com/v1internal:${endpoint}`,
+        { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' } },
+        (res: any) => { let d = ''; res.on('data', (x: any) => d += x); res.on('end', () => { try { resolve(pick(JSON.parse(d))); } catch { resolve(null); } }); });
+      req.on('error', () => resolve(null));
+      req.write(body); req.end();
+    });
+    const ca: any = await codeAssistPost('loadCodeAssist',
+      { metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' } }, j => j);
+    const tier = ca?.currentTier;
+    if (!tier) return { success: false, error: 'tier query failed (access_token 만료일 수 있음 — agy 로 한번 명령 실행해 갱신 후 재시도)' };
+    const project = ca?.cloudaicompanionProject;
+    const quota = project
+      ? await codeAssistPost('retrieveUserQuota', { project }, j => j.buckets || null)
+      : null;
+    const quotaBuckets = Array.isArray(quota)
+      ? quota.filter((b: any) => b && b.modelId).map((b: any) => ({
+          modelId: b.modelId,
+          remainingFraction: typeof b.remainingFraction === 'number' ? b.remainingFraction : null,
+          resetTime: b.resetTime || null,
+        }))
+      : [];
+    return { success: true, tierId: tier.id, tierName: tier.name, isPaid: tier.id !== 'free-tier', quotaBuckets };
+  } catch (e: any) { return { success: false, error: String(e) }; }
+});
+
+// agy 인터랙티브 TUI 를 PTY 로 띄우고 /usage 명령 보내서 출력 캡처 → 파싱
+ipcMain.handle('antigravity:probeUsageTui', async () => {
+  return new Promise((resolve) => {
+    let proc: any = null;
+    let buf = '';
+    let resolved = false;
+    const finish = (result: any) => {
+      if (resolved) return;
+      resolved = true;
+      try { proc?.write?.('\x03'); } catch {}
+      try { proc?.write?.('/exit\r'); } catch {}
+      setTimeout(() => { try { proc?.kill?.(); } catch {} }, 300);
+      resolve(result);
+    };
+    const agyPath = findAgyExePath();
+    if (!agyPath) return resolve({ success: false, error: 'agy 미설치' });
+    try {
+      proc = pty.spawn(agyPath, [], {
+        name: 'xterm-256color', cols: 120, rows: 50,
+        cwd: process.env.USERPROFILE || process.env.HOME || process.cwd(),
+        env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' } as any,
+      });
+    } catch (e: any) {
+      return resolve({ success: false, error: 'PTY spawn 실패: ' + (e?.message || e) });
+    }
+    let usageStartLen = 0;
+    let usageSent = false;
+    const stripAnsi = (s: string) => s
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .replace(/\x1b\][^\x07]*\x07/g, '')
+      .replace(/\x1b[()][AB012]/g, '')
+      .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+    // raw text 에서 buckets 파싱: 그룹별 (Weekly Limit, Five Hour Limit) percentage / refresh-in
+    const parseUsage = (raw: string) => {
+      const lines = raw.split(/\r?\n/).map(l => l.trim());
+      const groups: any[] = [];
+      let current: any = null;
+      for (const ln of lines) {
+        const mGroup = ln.match(/^(GEMINI|CLAUDE.*GPT|ANTHROPIC|GOOGLE|OPENAI)[\w\s&]*MODELS?$/i);
+        if (mGroup) {
+          if (current) groups.push(current);
+          current = { name: ln, models: '', weekly: null, fiveHour: null };
+          continue;
+        }
+        const mModels = ln.match(/Models? within this group:\s*(.+)$/i);
+        if (mModels && current) { current.models = mModels[1].trim(); continue; }
+        const mPct = ln.match(/(\d+(?:\.\d+)?)%\s*remaining\s*[·•]\s*Refreshes in\s+([\d\w\s]+)/i);
+        if (mPct && current) {
+          const entry = { remainingPct: parseFloat(mPct[1]), refreshIn: mPct[2].trim() };
+          if (current.weekly == null) current.weekly = entry;
+          else if (current.fiveHour == null) current.fiveHour = entry;
+          continue;
+        }
+        const mAvail = ln.match(/Quota available/i);
+        if (mAvail && current) {
+          const entry = { remainingPct: 100, refreshIn: '' };
+          if (current.weekly == null) current.weekly = entry;
+          else if (current.fiveHour == null) current.fiveHour = entry;
+          continue;
+        }
+        const mEmail = ln.match(/Account:\s*(\S+@\S+)/i);
+        if (mEmail) (groups as any).account = mEmail[1];
+      }
+      if (current) groups.push(current);
+      return { account: (groups as any).account || '', groups };
+    };
+    const captureAndFinish = () => {
+      const stripped = stripAnsi(buf);
+      const parsed = parseUsage(stripped);
+      finish({ success: true, raw: stripped.slice(-6000), parsed });
+    };
+    proc.onData((d: string) => {
+      buf += d;
+      // TUI 가 로드되어 prompt 입력이 가능해진 시점 감지 — agy 에서는 "?" 또는 ">" 프롬프트가 나타남
+      if (!usageSent && /[?>│|]\s*$/m.test(stripAnsi(buf).slice(-50))) {
+        usageSent = true;
+        setTimeout(() => {
+          usageStartLen = buf.length;
+          try { proc.write('/usage\r'); } catch {}
+        }, 500);
+      }
+      // /usage 완성 마커 — Refreshes in 이 2번 이상 보이거나, "Five Hour" 가 보이면
+      const sub = stripAnsi(buf.slice(usageStartLen));
+      if (usageSent && (/Five Hour Limit/i.test(sub) || (sub.match(/Refreshes in/g) || []).length >= 2 || /Quota available/i.test(sub))) {
+        setTimeout(captureAndFinish, 800);
+      }
+    });
+    proc.onExit(() => {});
+    setTimeout(() => { if (!usageSent) { usageSent = true; usageStartLen = buf.length; try { proc.write('/usage\r'); } catch {} } }, 6000);
+    setTimeout(captureAndFinish, 15000);
+    setTimeout(() => finish({ success: false, error: 'timeout', raw: stripAnsi(buf).slice(-3000) }), 18000);
+  });
+});
+
+// 외부 cmd 창에서 agy 인터랙티브 + /quota 명령 실행 — 사용량 시각화 (agy TUI 직접 표시)
+ipcMain.handle('antigravity:openUsage', async () => {
+  try {
+    const agyPath = findAgyExePath();
+    if (!agyPath) return { success: false, error: 'agy 미설치' };
+    const { spawn } = require('child_process');
+    // start cmd /k "title PePe Antigravity Usage && <agyPath> -i /quota"
+    spawn('cmd.exe', ['/c', 'start', '"PePe Antigravity Usage"', 'cmd.exe', '/k', `"${agyPath}" -i "/quota"`], {
+      shell: false, detached: true, stdio: 'ignore', windowsHide: false,
+    }).unref();
+    return { success: true };
+  } catch (e: any) { return { success: false, error: String(e) }; }
+});
+
+ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }: { sessionId: string; prompt: string; requestId?: string; model?: string; yolo?: boolean; addDirs?: string[]; sshTermId?: string; sshSessions?: { id: string; label: string }[] }) => {
+  try {
+    const { spawn } = require('child_process');
+    const procKey = requestId || sessionId;
+    const sendStream = (message: Record<string, any>) =>
+      mainWindow?.webContents.send('claude:stream', { sessionId, requestId, message });
+
+    const prev = antigravityProcesses.get(procKey) || antigravityProcesses.get(sessionId);
+    if (prev) {
+      try {
+        if (process.platform === 'win32' && prev.pid) {
+          spawn('taskkill', ['/pid', String(prev.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        } else prev.kill?.('SIGKILL');
+      } catch {}
+      antigravityProcesses.delete(procKey);
+      antigravityProcesses.delete(sessionId);
+    }
+
+    const agyPath = findAgyExePath();
+    if (!agyPath) {
+      sendStream({ type: 'text', text: '⚠️ Antigravity CLI(agy.exe)가 설치돼 있지 않습니다.\nhttps://antigravity.google 에서 설치 후 `agy` 로 로그인하세요.' });
+      sendStream({ type: 'result', subtype: 'error' });
+      return { success: false, error: 'agy not found' };
+    }
+
+    // Windows CreateProcess 한계 ~32K. 시스템 프롬프트 + 여유분 고려해 28000 까지 허용.
+    // 초과 시 앞쪽 컨텍스트(과거 대화/첨부)부터 잘라내고 사용자의 최신 메시지는 보존.
+    let userPrompt = prompt;
+    if (userPrompt.length > 28000) {
+      const keep = 25000;
+      const dropped = userPrompt.length - keep;
+      const truncatedNote = `[이전 컨텍스트 ${dropped}자 생략됨 — 명령줄 길이 한계]\n\n`;
+      userPrompt = truncatedNote + userPrompt.slice(userPrompt.length - keep);
+      console.log('[antigravity:agy] prompt truncated:', dropped, '→ kept last', keep);
+    }
+
+    const augmentedPath = buildAugmentedPath();
+    const spawnEnv = {
+      ...process.env, PATH: augmentedPath, Path: augmentedPath,
+      PYTHONIOENCODING: 'utf-8',
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+    };
+    const cwd = process.env.USERPROFILE || process.env.HOME || os.homedir();
+    const sysPrefix = [
+      '[시스템 지시 — 반드시 준수]',
+      '1. 특별한 언어 요청이 없으면 항상 한국어로 응답하세요.',
+      '2. 소스/디렉터리 분석 요청 시:',
+      '   (a) ls 로 모든 파일 확인 후 *모든 소스 파일(.c/.cpp/.h/.hpp/.py/.js/.ts/.go/.java/.cs)을 빠짐없이* 읽으세요. 일부만 보고 결론 금지.',
+      '   (b) ⚠️ 분석 결과 전체는 **반드시 write_file 도구로 ./analysis_report.md 파일에 저장**하세요. 인라인 응답에 길게 쓰지 마세요(시스템이 중간을 잘라버립니다).',
+      '   (c) 보고서에는 mermaid 다이어그램 1개 이상 포함(```mermaid 코드블록).',
+      '   (d) 인라인 응답에는 한 줄로 "분석 보고서는 [analysis_report.md](file:///절대경로) 에 저장되었습니다." 만 작성.',
+      '',
+    ].join('\n') + '\n';
+    const fullPrompt = sysPrefix + userPrompt;
+    const agyLogPath = path.join(os.tmpdir(), `pepe-agy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`);
+    const args: string[] = ['--print', fullPrompt, '--print-timeout', '5m', '--log-file', agyLogPath];
+    if (model) args.push('--model', model);
+    if (yolo) args.push('--dangerously-skip-permissions');
+
+    // ── SSH MCP 연동 — sshTermId 가 있으면 agy 에 pepe_ssh MCP 동적 등록 ──
+    // agy 는 ~/.gemini/antigravity-cli/mcp_config.json 에서 MCP 서버 목록을 로드.
+    // 매 호출마다 갱신해서 현재 SSH 세션이 PEPE_TERM_ID 로 주입되게 함.
+    if (sshTermId) {
+      try {
+        await startMcpControl();
+        const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
+        try {
+          const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
+          if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
+        } catch (e) { console.error('[antigravity] MCP script extract failed:', e); }
+        const mcpCfg = {
+          mcpServers: {
+            pepe_ssh: {
+              command: process.execPath,
+              args: [mcpScriptPath],
+              env: {
+                PEPE_CTRL_PORT: String(mcpControlPort),
+                PEPE_CTRL_TOKEN: mcpControlToken,
+                PEPE_TERM_ID: sshTermId,
+                PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
+                PEPE_YOLO: yolo ? '1' : '0',
+                ELECTRON_RUN_AS_NODE: '1',
+              },
+            },
+          },
+        };
+        // 공식 docs(https://antigravity.google/docs/plugins): 플러그인 폴더 구조
+        //   ~/.gemini/config/plugins/<name>/plugin.json   ← 마커 {"name":"..."}
+        //   ~/.gemini/config/plugins/<name>/mcp_config.json ← MCP 서버 정의
+        // 동시에 글로벌 fallback ~/.gemini/config/mcp_config.json 에도 기록.
+        const pluginDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'pepe-ssh');
+        try { fs.mkdirSync(pluginDir, { recursive: true }); } catch {}
+        const pluginManifestPath = path.join(pluginDir, 'plugin.json');
+        const pluginMcpPath = path.join(pluginDir, 'mcp_config.json');
+        fs.writeFileSync(pluginManifestPath, JSON.stringify({ name: 'pepe-ssh' }, null, 2), 'utf-8');
+        fs.writeFileSync(pluginMcpPath, JSON.stringify(mcpCfg, null, 2), 'utf-8');
+        const globalCfgDir = path.join(os.homedir(), '.gemini', 'config');
+        try { fs.mkdirSync(globalCfgDir, { recursive: true }); } catch {}
+        const globalMcpPath = path.join(globalCfgDir, 'mcp_config.json');
+        fs.writeFileSync(globalMcpPath, JSON.stringify(mcpCfg, null, 2), 'utf-8');
+        console.log('[antigravity:agy] MCP(pepe_ssh) registered:', pluginMcpPath, '+', globalMcpPath, 'termId:', sshTermId);
+      } catch (e) {
+        console.error('[antigravity:agy] MCP setup failed:', e);
+      }
+    }
+
+    const validAddDirs = Array.isArray(addDirs)
+      ? addDirs.filter(d => {
+          if (!d) return false;
+          const dir = String(d);
+          if (process.platform === 'win32' && dir.startsWith('/')) return false;
+          try { return fs.existsSync(dir); } catch { return false; }
+        })
+      : [];
+    for (const d of validAddDirs) args.push('--add-dir', d);
+
+    console.log('[antigravity:agy] spawn', { procKey, command: agyPath, logPath: agyLogPath, promptLen: fullPrompt.length, model: model || '(default)', addDirs: validAddDirs.length, yolo: !!yolo });
+
+    const proc = spawn(agyPath, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnv, cwd, windowsHide: true });
+    antigravityProcesses.set(procKey, proc);
+
+    // 중간 과정 스트리밍 — transcript.jsonl 폴링해서 MODEL/SYSTEM 이벤트 실시간 emit.
+    // agy --print 는 최종 답변만 stdout 출력하므로 도구 호출/추론 진행을 보려면 transcript 필요.
+    //
+    // agy 실제 이벤트 형식 (확인됨):
+    //  - source=USER_EXPLICIT, type=USER_INPUT → 사용자 프롬프트 (이미 우리가 보낸 것이므로 skip)
+    //  - source=MODEL, type=PLANNER_RESPONSE → thinking + tool_calls 배열
+    //  - source=MODEL, type=GENERIC|RUN_COMMAND|VIEW_FILE → 도구 결과 (content 에 결과)
+    //  - source=MODEL, type=TEXT 또는 content 만 있고 type 없음 → 최종 모델 텍스트
+    //  - source=SYSTEM, type=ERROR_MESSAGE → 도구 호출 에러
+    //  - source=SYSTEM, type=CHECKPOINT → 컨텍스트 압축 마커 (skip)
+    // PLANNER 가 N 개 tool_calls 를 emit 하면 다음 N 개 step(MCP_TOOL/VIEW_FILE 등)이 그 결과.
+    // agy 는 step 순서가 뒤바뀌어 기록되므로(예: 6→5→7) PLANNER 가 늦게 와도 매핑되도록 버퍼링 필요.
+    const stepToToolUseId = new Map<number, string>();        // result_step → tool_use_id
+    const pendingResults: { step: number; content: string }[] = []; // 매핑 전 도착한 결과
+    const emittedStepIndices = new Set<number>();
+    // agy 가 토큰 카운트를 안 주므로 transcript 내용 길이로 추정 (≈ chars/3.5)
+    let outputCharCount = 0;
+    let toolCallCharCount = 0;
+    const flushPending = () => {
+      for (let i = pendingResults.length - 1; i >= 0; i--) {
+        const r = pendingResults[i];
+        const tuid = stepToToolUseId.get(r.step);
+        if (tuid) {
+          sendStream({ type: 'user', message: { content: [
+            { type: 'tool_result', tool_use_id: tuid, content: r.content },
+          ]}});
+          pendingResults.splice(i, 1);
+        }
+      }
+    };
+    const stopStreaming = startAgyTranscriptStreaming(
+      agyLogPath,
+      (ev) => {
+        try {
+          const step = typeof ev.step_index === 'number' ? ev.step_index : -1;
+          if (step >= 0 && emittedStepIndices.has(step)) return; // 이미 emit
+          if (step >= 0) emittedStepIndices.add(step);
+
+          const src = ev.source;
+          const typ = ev.type;
+          // USER_INPUT / CHECKPOINT / CONVERSATION_HISTORY 등은 skip
+          if (src === 'USER_EXPLICIT' || src === 'USER') return;
+          if (typ === 'CHECKPOINT' || typ === 'CONVERSATION_HISTORY') return;
+
+          // 1) 도구 호출 (PLANNER_RESPONSE 안의 tool_calls) + 최종 답변
+          if (src === 'MODEL' && typ === 'PLANNER_RESPONSE') {
+            const toolCalls = Array.isArray(ev.tool_calls) ? ev.tool_calls : [];
+            // (a) tool_calls 가 없고 content 가 있으면 → 최종 모델 답변
+            if (toolCalls.length === 0) {
+              if (typeof ev.content === 'string' && ev.content.trim()) {
+                // agy 시스템 프롬프트/노이즈 제거
+                let clean = ev.content
+                  .replace(/^\s*If relevant,\s*proactively run terminal commands[^.]*\.\s*Don't ask for permission\.\s*/im, '')
+                  .replace(/^\s*Created file file:\/\/[^\n]+\n?/gm, '')
+                  .replace(/^\s*Created At:[^\n]*\n?/gm, '')
+                  .replace(/^\s*Completed At:[^\n]*\n?/gm, '')
+                  .replace(/^\s*\$\s+[^\n]+\n?/gm, '')
+                  .trim();
+                // agy 가 생성한 보고서 md 파일을 inline 으로 펼침: [name.md](file:///path/to.md) → 본문 + 첨부 내용
+                const mdLinks = Array.from(clean.matchAll(/\[([^\]]+\.md)\]\(file:\/\/\/([^)\s]+)\)/g)) as RegExpMatchArray[];
+                const seenMd = new Set<string>();
+                for (const m of mdLinks) {
+                  try {
+                    const filePath = decodeURIComponent(m[2]).replace(/\//g, path.sep);
+                    if (seenMd.has(filePath)) continue;
+                    seenMd.add(filePath);
+                    if (fs.existsSync(filePath)) {
+                      let fc = fs.readFileSync(filePath, 'utf-8');
+                      // 모델이 ``` 펜스 빠뜨린 mermaid 블록 자동 감싸기 — flowchart/graph/sequenceDiagram 등으로 시작하는 연속 라인 검출
+                      fc = wrapBareMermaid(fc);
+                      clean += `\n\n---\n\n### 📄 ${m[1]}\n\n${fc.slice(0, 50000)}${fc.length > 50000 ? '\n\n... (이하 생략)' : ''}\n`;
+                      // 보고서 파일은 inline 표시 후 삭제 — 디스크 누적 방지
+                      try { fs.unlinkSync(filePath); } catch {}
+                    }
+                  } catch (e) { console.error('[agy] md inline failed:', e); }
+                }
+                // 인라인 본문 자체에도 동일 처리
+                clean = wrapBareMermaid(clean);
+                // truncation 안내문 (자동 이어받기는 비활성 — 파일 저장 방식으로 회피)
+                clean = clean.replace(
+                  /(```[a-zA-Z0-9_-]*\n[\s\S]*?)\n<truncated (\d+) bytes>\n/g,
+                  '$1\n```\n\n> ⚠️ _$2 바이트 잘림 (인라인 응답 크기 한계)._\n\n',
+                );
+                clean = clean.replace(/<truncated (\d+) bytes>/g, '\n\n> ⚠️ _$1 바이트 잘림._\n\n');
+                if (clean) { outputCharCount += clean.length; sendStream({ type: 'text', text: clean }); }
+              }
+              return;
+            }
+            // (b) tool_calls 있음 — thinking 은 별도 content 블록으로 (생각중 바에 표시됨)
+            if (typeof ev.thinking === 'string' && ev.thinking.trim()) {
+              const th = ev.thinking.trim().replace(/\*\*/g, '');
+              sendStream({ type: 'assistant', message: { id: `agy-think-${step}`, content: [
+                { type: 'thinking', thinking: th },
+              ]}});
+            }
+            for (let i = 0; i < toolCalls.length; i++) {
+              const tc = toolCalls[i];
+              let name = String(tc.name || 'tool');
+              const rawArgs: any = (tc.args && typeof tc.args === 'object') ? tc.args : {};
+              const cleanArgs: any = {};
+              for (const [k, v] of Object.entries(rawArgs)) {
+                if (typeof v === 'string') {
+                  try { cleanArgs[k] = JSON.parse(v); } catch { cleanArgs[k] = v; }
+                } else cleanArgs[k] = v;
+              }
+              // call_mcp_tool 래퍼 풀기 — 실제 MCP 도구명/인자로 표시
+              if (name === 'call_mcp_tool' && cleanArgs.ToolName) {
+                const server = String(cleanArgs.ServerName || '');
+                const tool = String(cleanArgs.ToolName || '');
+                name = server ? `${server}.${tool}` : tool;
+                let actualArgs: any = cleanArgs.Arguments;
+                if (typeof actualArgs === 'string') {
+                  try { actualArgs = JSON.parse(actualArgs); } catch {}
+                }
+                const display: any = { ...(typeof actualArgs === 'object' && actualArgs ? actualArgs : { args: actualArgs }) };
+                if (cleanArgs.toolSummary) display._summary = cleanArgs.toolSummary;
+                Object.assign(cleanArgs, {});
+                for (const k of Object.keys(cleanArgs)) delete cleanArgs[k];
+                Object.assign(cleanArgs, display);
+              }
+              const id = `agy-tool-${step}-${i}`;
+              // PLANNER step S 의 i 번째 tool 결과는 step (S+1+i) 에 옴
+              stepToToolUseId.set(step + 1 + i, id);
+              try { toolCallCharCount += JSON.stringify(cleanArgs).length; } catch {}
+              sendStream({ type: 'assistant', message: { id: `agy-asst-${step}-${i}`, content: [
+                { type: 'tool_use', id, name, input: cleanArgs },
+              ]}});
+            }
+            // 먼저 도착해서 대기 중이던 결과들 flush
+            flushPending();
+            return;
+          }
+
+          // 2) 도구 결과 — agy 의 모든 결과 타입
+          if (src === 'MODEL' && (typ === 'MCP_TOOL' || typ === 'RUN_COMMAND' || typ === 'VIEW_FILE' || typ === 'GENERIC' || typ === 'LIST_DIR' || typ === 'GREP_SEARCH')) {
+            let content = String(ev.content || '').replace(/\t/g, '');
+            // agy 는 큰 결과를 별도 파일에 저장하고 placeholder 만 남김 — 그 파일을 읽어 inline 으로 치환.
+            const savedMatch = content.match(/The output was large and was saved to:\s*file:\/\/\/([^\s\n]+)/i);
+            if (savedMatch) {
+              try {
+                const filePath = decodeURIComponent(savedMatch[1]).replace(/\//g, path.sep);
+                if (fs.existsSync(filePath)) {
+                  const fileContent = fs.readFileSync(filePath, 'utf-8');
+                  content = fileContent.slice(0, 30000);
+                  if (fileContent.length > 30000) content += '\n\n... (이하 ' + (fileContent.length - 30000) + ' 바이트 생략)';
+                }
+              } catch (e) { console.error('[agy] read saved tool output failed:', e); }
+            }
+            content = content.slice(0, 30000);
+            const tuid = stepToToolUseId.get(step);
+            toolCallCharCount += content.length;
+            if (tuid) {
+              sendStream({ type: 'user', message: { content: [
+                { type: 'tool_result', tool_use_id: tuid, content },
+              ]}});
+            } else {
+              // PLANNER 가 아직 안 옴 — 버퍼에 보관
+              pendingResults.push({ step, content });
+            }
+            return;
+          }
+
+          // 3) 에러
+          if (src === 'SYSTEM' && typ === 'ERROR_MESSAGE') {
+            const err = String(ev.error || ev.content || '').slice(0, 1000);
+            sendStream({ type: 'text', text: `\n⚠️ **에러**: ${err}\n\n` });
+            return;
+          }
+
+          // 4) (PLANNER_RESPONSE 외 MODEL content 는 위 분기에서 모두 처리되므로 leak 방지를 위해 무시)
+        } catch (e) { console.log('[agy] event handler error:', e); }
+      },
+      () => stoppedAgentProcs.has(procKey),
+    );
+
+    let stdoutHadContent = false;
+    let stderrText = '';
+    proc.stdout?.setEncoding?.('utf-8');
+    proc.stdout?.on('data', (data: string | Buffer) => {
+      if (stoppedAgentProcs.has(procKey)) return;
+      const text = Buffer.isBuffer(data) ? data.toString('utf8') : data;
+      if (text) {
+        stdoutHadContent = true;
+        // transcript live streaming 이 이미 같은 텍스트를 보냈을 가능성 — 중복 회피 위해 stdout 은 무시
+        // (대신 stdoutHadContent 플래그로 close 시 빈 응답 판정만)
+      }
+    });
+    proc.stderr?.on('data', (data: Buffer | string) => {
+      if (stoppedAgentProcs.has(procKey)) return;
+      const err = Buffer.isBuffer(data) ? data.toString('utf8') : data;
+      stderrText += err;
+      console.log('[antigravity:agy] stderr:', err.slice(0, 500));
+      if (/error|failed|unauthorized|permission|quota|invalid/i.test(err)) {
+        sendStream({ type: 'error', text: err });
+      }
+    });
+    proc.on('error', (err: any) => {
+      if (stoppedAgentProcs.has(procKey)) return;
+      console.log('[antigravity:agy] spawn error:', err);
+      antigravityProcesses.delete(procKey);
+      sendStream({ type: 'text', text: `⚠️ Antigravity CLI 실행 실패: ${err?.message || err}\n` });
+      sendStream({ type: 'result', subtype: 'error' });
+    });
+    proc.on('close', async (code: number) => {
+      console.log('[antigravity:agy] close, code:', code, 'hadContent:', stdoutHadContent, 'emittedSteps:', emittedStepIndices.size);
+      antigravityProcesses.delete(procKey);
+      stopStreaming();
+      if (stoppedAgentProcs.has(procKey)) { stoppedAgentProcs.delete(procKey); return; }
+      // transcript 가 live streaming 으로 이벤트를 emit 했으면 추가 fallback 불필요
+      if (emittedStepIndices.size === 0 && !stdoutHadContent) {
+        const transcriptText = await waitAgyTranscript(agyLogPath);
+        if (transcriptText) {
+          sendStream({ type: 'text', text: transcriptText });
+          sendStream({ type: 'result', subtype: 'success' });
+          try { fs.unlinkSync(agyLogPath); } catch {}
+          return;
+        }
+        const reason = stderrText.trim() ? `code=${code}, stderr=${stderrText.trim().slice(0, 500)}` : `code=${code}, stdout empty`;
+        sendStream({ type: 'text', text: `⚠️ Antigravity CLI 가 빈 응답으로 종료(${reason})\n진단 로그: ${agyLogPath}` });
+        sendStream({ type: 'result', subtype: 'error' });
+        return;
+      }
+      try { fs.unlinkSync(agyLogPath); } catch {}
+      // 토큰 추정치 emit (agy 가 토큰 카운트 안 줌) — chars/3.5 ≈ 토큰
+      try {
+        const inputChars = fullPrompt.length + toolCallCharCount;
+        const outputChars = outputCharCount;
+        const inTok = Math.ceil(inputChars / 3.5);
+        const outTok = Math.ceil(outputChars / 3.5);
+        sendStream({ type: 'assistant', message: { id: `agy-usage-${Date.now()}`, content: [], usage: {
+          input_tokens: inTok,
+          output_tokens: outTok,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        }, model } });
+      } catch {}
+      sendStream({ type: 'result', subtype: 'success' });
+    });
+    return { success: true };
+  } catch (err: any) {
+    console.error('[antigravity:send] error:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+ipcMain.handle('antigravity:stop', (_e, { sessionId, requestId }: { sessionId: string; requestId?: string }) => {
+  const { spawn } = require('child_process');
+  const procKey = requestId || sessionId;
+  markAgentStopped(procKey);
+  const proc = antigravityProcesses.get(procKey) || antigravityProcesses.get(sessionId);
+  if (proc) {
+    try {
+      if (process.platform === 'win32') {
+        const pid = proc.pid;
+        if (pid) spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      } else {
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch { try { proc.kill('SIGKILL'); } catch {} }
+      }
+    } catch {}
+    try { proc.kill('SIGKILL'); } catch {}
+    antigravityProcesses.delete(procKey);
+    antigravityProcesses.delete(sessionId);
   }
   return { success: true };
 });

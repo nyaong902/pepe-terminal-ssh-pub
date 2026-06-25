@@ -86,6 +86,22 @@ function callExec(termId, command, timeoutMs) {
   });
 }
 
+// 승인 요청 — 메인 프로세스가 사용자 UI 모달 띄움. allow/deny 응답 반환.
+function callApprove(toolName, toolInput) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const sock = await ensureCtrl();
+      const id = ++reqCounter;
+      pendingById.set(id, (msg) => {
+        if (msg.error) return reject(new Error(msg.error));
+        // main 핸들러: { id, result: 'allow'|'deny', reason }
+        resolve({ decision: String(msg.result || 'deny'), reason: msg.reason || '' });
+      });
+      sock.write(JSON.stringify({ id, token: CTRL_TOKEN, op: 'hook-approve', toolName, toolInput, sessionId: process.env.PEPE_TERM_ID || '' }) + '\n');
+    } catch (err) { reject(err); }
+  });
+}
+
 // ── MCP stdio JSON-RPC protocol ──
 // Claude Code 가 컨텍스트 전환/재연결 시 MCP 서버의 stdout 파이프를 닫으면
 // 다음 write 가 Windows 에서 EPIPE("nonexistent pipe") 를 던져 프로세스가 죽고,
@@ -124,7 +140,10 @@ const sessionHint = MULTI
   : '';
 const sessionProp = { session: { type: 'string', description: 'Which SSH session to target — its label or id. Omit to use the first/default session.' } };
 
-const TOOLS = [
+// PEPE_YOLO=1 이면 모든 도구, 아니면 읽기 전용만 노출 (자동 승인 OFF 시 변경성 작업 차단)
+const YOLO = String(process.env.PEPE_YOLO || '1') === '1';
+
+const ALL_TOOLS = [
   {
     name: 'ssh_exec',
     description: 'Execute a shell command on the remote SSH server and return stdout/stderr/exit code. Use for commands that must run on the remote Linux host (cleartool, git, make, grep, find, ls, sed, awk, etc.).' + sessionHint,
@@ -200,6 +219,10 @@ const TOOLS = [
   }] : []),
 ];
 
+// YOLO=0 면 변경성 도구는 호출 시마다 사용자 승인 받음 (도구 목록에는 노출)
+const WRITE_TOOLS = new Set(['ssh_exec', 'ssh_write_file']);
+const TOOLS = ALL_TOOLS;
+
 function handleMessage(msg) {
   const { id, method, params } = msg;
   log('rx', method, id);
@@ -238,6 +261,45 @@ function handleMessage(msg) {
       const text = SESSIONS.map((s, i) => `${i + 1}. ${s.label}${i === 0 ? ' (default)' : ''}`).join('\n') || '(none)';
       ok('Connected SSH sessions:\n' + text);
       return;
+    }
+
+    // YOLO=0 면 변경성 도구는 사용자 승인 받고 진행
+    if (!YOLO && WRITE_TOOLS.has(name)) {
+      callApprove(name, args)
+        .then((decision) => {
+          if (decision && decision.decision === 'allow') {
+            // 통과 — 아래 로직으로 떨어뜨려 처리하려면 재귀 필요. 간단히 직접 호출.
+            handleApproved();
+          } else {
+            const reason = (decision && decision.reason) || '사용자가 거부했습니다';
+            ok(`❌ ${name} 요청이 거부되었습니다: ${reason}`, true);
+          }
+        })
+        .catch((err) => ok(`❌ 승인 요청 실패: ${err && err.message || err}`, true));
+      return;
+      function handleApproved() {
+        if (name === 'ssh_exec') {
+          const command = String(args.command || '');
+          const timeoutMs = Number(args.timeout_ms) || 60000;
+          if (!command.trim()) { sendMsg({ jsonrpc: '2.0', id, error: { code: -32602, message: 'command is required' } }); return; }
+          callExec(termId, command, timeoutMs)
+            .then(result => {
+              const text = `$ ${command}\n\n[stdout]\n${result.stdout || '(empty)'}\n\n[stderr]\n${result.stderr || '(empty)'}\n\n[exit code] ${result.exitCode}`;
+              ok(text, result.exitCode !== 0 && result.exitCode !== null);
+            }).catch(fail);
+        } else if (name === 'ssh_write_file') {
+          const p = String(args.path || '');
+          if (!p.trim()) { sendMsg({ jsonrpc: '2.0', id, error: { code: -32602, message: 'path is required' } }); return; }
+          const content = String(args.content != null ? args.content : '');
+          const b64 = Buffer.from(content, 'utf-8').toString('base64');
+          const cmd = `base64 -d > ${shq(p)} <<'PEPE_B64_EOF'\n${b64}\nPEPE_B64_EOF`;
+          callExec(termId, cmd, 60000)
+            .then(result => {
+              if (result.exitCode !== 0 && result.exitCode !== null) { ok(`Failed to write ${p}:\n${result.stderr || '(no stderr)'}`, true); return; }
+              ok(`Wrote ${Buffer.byteLength(content, 'utf-8')} bytes to ${p}`);
+            }).catch(fail);
+        }
+      }
     }
 
     if (name === 'ssh_exec') {

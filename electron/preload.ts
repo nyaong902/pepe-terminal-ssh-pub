@@ -383,6 +383,14 @@ contextBridge.exposeInMainWorld('api', {
   customStop: (sessionId: string, requestId?: string) =>
     ipcRenderer.invoke('custom-llm:stop', { sessionId, requestId }),
   customListModels: (baseUrl?: string, apiKey?: string) => ipcRenderer.invoke('custom-llm:list-models', { baseUrl, apiKey }),
+  antigravityCheck: () => ipcRenderer.invoke('antigravity:check'),
+  antigravityModelInfo: () => ipcRenderer.invoke('antigravity:modelInfo'),
+  antigravityOpenUsage: () => ipcRenderer.invoke('antigravity:openUsage'),
+  antigravityProbeUsageTui: () => ipcRenderer.invoke('antigravity:probeUsageTui'),
+  antigravitySend: (sessionId: string, prompt: string, requestId?: string, model?: string, yolo?: boolean, addDirs?: string[], sshTermId?: string, sshSessions?: { id: string; label: string }[]) =>
+    ipcRenderer.invoke('antigravity:send', { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }),
+  antigravityStop: (sessionId: string, requestId?: string) =>
+    ipcRenderer.invoke('antigravity:stop', { sessionId, requestId }),
   claudeProbeUsage: () => ipcRenderer.invoke('claude:probe-usage'),
   claudeProbeUsageTui: () => ipcRenderer.invoke('claude:probe-usage-tui'),
   claudeFetchUsageApi: () => ipcRenderer.invoke('claude:fetch-usage-api'),

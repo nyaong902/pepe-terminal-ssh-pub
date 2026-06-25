@@ -779,7 +779,7 @@ function App() {
     }, ms));
   }, [claudeChatWidth, showClaudeChat]);
   const [claudeFileContext, setClaudeFileContext] = useState<{ fileName: string; remotePath: string; content: string }[] | null>(null);
-  const [aiAgent, setAiAgent] = useState<'claude' | 'gemini' | 'codex' | 'custom'>('claude');
+  const [aiAgent, setAiAgent] = useState<'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity'>('claude');
   // WebDAV 마운트 첨부 엔트리
   const [claudeMountEntries, setClaudeMountEntries] = useState<{ termId: string; remotePath: string; uncPath: string; isDir: boolean }[]>([]);
   // 연결 상태 변경 tick — 아래 영속화 effect 가 새 SSH 연결을 감지하도록 미리 선언.
@@ -1299,9 +1299,9 @@ function App() {
     return trimmed;
   };
 
-  const checkAiAvailability = useCallback(async (): Promise<'claude' | 'gemini' | 'codex' | 'custom' | null> => {
-    const order: ('claude' | 'gemini' | 'codex' | 'custom')[] = [];
-    for (const agent of [aiAgent as 'claude' | 'gemini' | 'codex' | 'custom', 'claude', 'gemini', 'codex'] as const) {
+  const checkAiAvailability = useCallback(async (): Promise<'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity' | null> => {
+    const order: ('claude' | 'gemini' | 'codex' | 'custom' | 'antigravity')[] = [];
+    for (const agent of [aiAgent as 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity', 'claude', 'gemini', 'codex'] as const) {
       if (!order.includes(agent)) order.push(agent);
     }
     for (const agent of order) {
