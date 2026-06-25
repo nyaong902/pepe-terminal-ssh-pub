@@ -603,7 +603,7 @@ ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs
 // ── LAN Mini Messenger ─────────────────────────────────────────────
 type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
 type MessengerMessage = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number };
-type MessengerPrefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean };
+type MessengerPrefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center' | 'edge'; popupHoldSec?: number };
 
 const MSG_DISCOVERY_PORT = 39455;
 // Presence: a peer is "online" while we've heard from it within this window.
@@ -989,6 +989,8 @@ ipcMain.handle('messenger:update-prefs', (_e, prefs: MessengerPrefs) => {
   saveUIPrefs({ messenger: messengerPrefs });
   messengerPruneMessages();
   if (!messengerPrefs.hidePresence) messengerBroadcast();
+  // prefs(특히 hidePresence) 변경을 모든 창/컴포넌트에 전파 — 상단 상태 표시 등 동기화.
+  messengerEmit({ type: 'state', state: messengerState() });
   return { success: true, state: messengerState() };
 });
 ipcMain.handle('messenger:scan-range', (_e, { prefix }: { prefix?: string }) => messengerScanRange(prefix));

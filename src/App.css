@@ -365,6 +365,12 @@ html, body {
   border-color: rgba(90, 190, 255, 0.5);
   box-shadow: 0 0 0 1px rgba(90, 190, 255, 0.14), 0 0 12px rgba(90, 190, 255, 0.28);
 }
+/* 나의 접속 숨기기 ON — 동작 LED 를 회색(꺼짐 느낌)으로, 펄스 정지 */
+.topbar-messenger-status.hidden-presence .claude-chat-view-status-dot {
+  background: #8a8a8a;
+  box-shadow: none;
+  animation: none;
+}
 
 .window-ctrl-btn {
   background: transparent;
@@ -7297,16 +7303,18 @@ mark.claude-search-hit.current {
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(104, 151, 201, 0.08) inset;
   padding: 12px;
   color: #e7f2ff;
-  animation: messengerPopupIn 160ms ease-out;
+  /* 토스트 — 하단에서 위로 슬라이드 */
+  animation: messengerToastIn 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
-.messenger-popup.edge {
-  right: 0;
-  bottom: 96px;
-  width: min(380px, calc(100vw - 16px));
-  border-right: none;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  animation: messengerEdgeIn 170ms ease-out;
+/* 가운데 — PePe 창 중앙에 슬라이드 없이 즉시 표시 */
+.messenger-popup.center {
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 48px));
+  animation: none;
 }
 .messenger-popup-head {
   display: flex;
@@ -7388,13 +7396,9 @@ mark.claude-search-hit.current {
   opacity: 0.48;
   cursor: not-allowed;
 }
-@keyframes messengerPopupIn {
-  from { transform: translateY(10px) scale(0.98); opacity: 0; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
-}
-@keyframes messengerEdgeIn {
-  from { transform: translateX(24px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+@keyframes messengerToastIn {
+  from { transform: translateY(120%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 .messenger-empty {
   color: #7891a6;

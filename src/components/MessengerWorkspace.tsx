@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
 type Msg = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number };
-type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'edge' };
+type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center'; popupHoldSec?: number };
 type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs };
 type RemoteEntry = { name: string; isDir: boolean; size?: number; mtime?: number };
 type ConnectedSession = { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number };
@@ -49,11 +50,11 @@ function canRevealFile(msg: Msg) {
   return msg.direction === 'in' || /^[A-Za-z]:[\\/]/.test(p) || /^\\\\/.test(p);
 }
 
-function scanLabel(payload: any) {
+function scanLabel(payload: any, t: (k: string, o?: any) => string) {
   const ranges = Array.isArray(payload?.prefixes) ? payload.prefixes.map((v: string) => `${v}.x.x`) : [];
   const directCount = Array.isArray(payload?.directHosts) ? payload.directHosts.length : 0;
-  if (directCount > 0) ranges.push(`Tailscale/overlay ${directCount}개`);
-  return ranges.length ? ranges.join(', ') : '할당 IP 대역';
+  if (directCount > 0) ranges.push(t('scanLabelOverlay', { count: directCount }));
+  return ranges.length ? ranges.join(', ') : t('scanLabelFallback');
 }
 
 export const MessengerWorkspace: React.FC<{
@@ -62,6 +63,7 @@ export const MessengerWorkspace: React.FC<{
   initialState?: { selectedPeerId?: string; text?: string; settingsExpanded?: boolean } | null;
   onStateChange?: (state: { selectedPeerId: string; text: string; settingsExpanded: boolean }) => void;
 }> = ({ connectedSessions = [], visible = true, initialState, onStateChange }) => {
+  const { t } = useTranslation('messenger');
   const [state, setState] = useState<State>(emptyState);
   const [selectedPeerId, setSelectedPeerId] = useState(() => {
     if (initialState?.selectedPeerId) return initialState.selectedPeerId;
@@ -117,9 +119,9 @@ export const MessengerWorkspace: React.FC<{
         setSelectedPeerId((cur) => cur || p.state.peers?.[0]?.id || '');
       }
       if (p?.type === 'scan-progress') {
-        setScanText(`${scanLabel(p)} 검색 중... ${p.sent}/${p.total}`);
+        setScanText(t('scanProgress', { label: scanLabel(p, t), sent: p.sent, total: p.total }));
       } else if (p?.type === 'scan-complete') {
-        setScanText(`${scanLabel(p)} 검색 완료 (${p.sent}개 확인)`);
+        setScanText(t('scanComplete', { label: scanLabel(p, t), count: p.sent }));
         setTimeout(() => setScanText(''), 5000);
       }
     });
@@ -195,7 +197,8 @@ export const MessengerWorkspace: React.FC<{
   const retainDays = Number(state.prefs.retainDays) || 30;
   const hidePresence = !!state.prefs.hidePresence;
   const popupNotify = state.prefs.popupNotify !== false;
-  const popupStyle = state.prefs.popupStyle || 'toast';
+  const popupStyle: 'toast' | 'center' = ((state.prefs.popupStyle as string) === 'center' || (state.prefs.popupStyle as string) === 'edge') ? 'center' : 'toast';
+  const popupHoldSec = Number.isFinite(Number(state.prefs.popupHoldSec)) ? Math.max(0, Number(state.prefs.popupHoldSec)) : 5;
   const selectedOnline = !!selectedPeer?.online;
   const canSend = !!selectedPeerId && selectedOnline && !hidePresence;
 
@@ -288,7 +291,7 @@ export const MessengerWorkspace: React.FC<{
     setRemoteError('');
     if (!sessionId) return;
     const sess = remoteSessions.find(s => s.id === sessionId);
-    if (!sess) { setRemoteError('세션을 찾을 수 없습니다.'); return; }
+    if (!sess) { setRemoteError(t('sessionNotFound')); return; }
 
     setRemoteConnecting(true);
     try {
@@ -304,14 +307,14 @@ export const MessengerWorkspace: React.FC<{
       const auth = sess.auth;
       const hasCredential = auth?.type === 'key' || (auth?.type === 'password' && auth?.password);
       if (!sess.username || !hasCredential) {
-        setRemoteError('이 세션은 저장된 자격증명이 없어 자동 연결할 수 없습니다. 먼저 터미널로 연결한 뒤 사용해 주세요.');
+        setRemoteError(t('noCredentials'));
         return;
       }
       const connId = `msg-sftp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const jumps = buildJumpChain(sess);
       const res = await (window as any).api?.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, auth, undefined, jumps.length ? jumps : undefined);
       if (!res?.success) {
-        setRemoteError(`연결 실패: ${res?.error || 'unknown'}`);
+        setRemoteError(t('connectFail', { error: res?.error || 'unknown' }));
         return;
       }
       remoteTempConns.current.add(connId);
@@ -332,7 +335,7 @@ export const MessengerWorkspace: React.FC<{
     try {
       const res = await (window as any).api?.messengerSendRemoteFiles?.(selectedPeerId, remoteConnId, [...remoteSelected]);
       if (!res?.success) {
-        setRemoteError(`전송 실패: ${res?.error || 'unknown'}`);
+        setRemoteError(t('sendFail', { error: res?.error || 'unknown' }));
         return;
       }
       closeRemotePicker();
@@ -348,7 +351,7 @@ export const MessengerWorkspace: React.FC<{
 
   const deletePeer = async (peerId: string) => {
     const peer = state.peers.find(p => p.id === peerId);
-    if (!confirm(`${peer?.name || '선택한 사용자'}를 목록에서 삭제할까요?\n대화내역도 함께 삭제됩니다.`)) return;
+    if (!confirm(t('deletePeerConfirm', { name: peer?.name || t('selectedUserFallback') }))) return;
     const res = await (window as any).api?.messengerDeletePeer?.(peerId);
     if (res?.success) {
       setMenu(null);
@@ -362,13 +365,13 @@ export const MessengerWorkspace: React.FC<{
   };
 
   const clearAll = async () => {
-    if (!confirm('모든 메신저 대화내역을 삭제할까요?')) return;
+    if (!confirm(t('clearAllConfirm'))) return;
     await (window as any).api?.messengerClearAll?.();
   };
   const scanAssignedRanges = async () => {
-    setScanText('할당 IP B 클래스 대역 검색 시작...');
+    setScanText(t('scanStart'));
     const res = await (window as any).api?.messengerScanRange?.();
-    if (!res?.success) setScanText(res?.error === 'presence hidden' ? '나의 접속 숨기기 상태에서는 검색할 수 없습니다.' : `검색 시작 실패: ${res?.error || 'unknown'}`);
+    if (!res?.success) setScanText(res?.error === 'presence hidden' ? t('scanHiddenError') : t('scanFail', { error: res?.error || 'unknown' }));
   };
 
   return (
@@ -377,19 +380,19 @@ export const MessengerWorkspace: React.FC<{
         <div className="messenger-brand">
           <div>
             <div className="messenger-title">PePe Messenger</div>
-            <div className="messenger-sub">같은 네트워크 PePe 사용자</div>
+            <div className="messenger-sub">{t('sub')}</div>
           </div>
-          <span className={`messenger-dot ${hidePresence ? 'hidden' : ''}`} title={hidePresence ? 'presence hidden' : 'discovery active'} />
+          <span className={`messenger-dot ${hidePresence ? 'hidden' : ''}`} title={hidePresence ? t('dotHidden') : t('dotActive')} />
         </div>
 
         <div className="messenger-settings">
           <label>
-            <span>내 이름</span>
+            <span>{t('myName')}</span>
             <input
               ref={nameInputRef}
               data-messenger-name="1"
               defaultValue={storedName}
-              placeholder={fallbackName || '표시 이름'}
+              placeholder={fallbackName || t('displayNamePlaceholder')}
               onBlur={() => {
                 const val = nameInputRef.current?.value ?? '';
                 if (val !== storedName) updatePrefs({ displayName: val });
@@ -403,45 +406,49 @@ export const MessengerWorkspace: React.FC<{
             onClick={() => setSettingsExpanded(v => !v)}
             aria-expanded={settingsExpanded}
           >
-            {settingsExpanded ? '설정 접기' : '설정 펼치기'}
+            {settingsExpanded ? t('settingsCollapse') : t('settingsExpand')}
           </button>
           {settingsExpanded && (
             <div className="messenger-settings-more">
               <label className="messenger-check">
                 <input type="checkbox" checked={retainEnabled} onChange={e => updatePrefs({ retainEnabled: e.target.checked })} />
-                <span>지난 대화 자동 삭제</span>
+                <span>{t('autoDelete')}</span>
               </label>
               <label className="messenger-check">
                 <input type="checkbox" checked={hidePresence} onChange={e => updatePrefs({ hidePresence: e.target.checked })} />
-                <span>나의 접속 숨기기</span>
+                <span>{t('hidePresence')}</span>
               </label>
               <label className="messenger-check">
                 <input type="checkbox" checked={popupNotify} onChange={e => updatePrefs({ popupNotify: e.target.checked })} />
-                <span>팝업 알림</span>
+                <span>{t('popupNotify')}</span>
               </label>
               <label>
-                <span>팝업 스타일</span>
-                <select value={popupStyle} onChange={e => updatePrefs({ popupStyle: e.target.value === 'edge' ? 'edge' : 'toast' })}>
-                  <option value="toast">토스트</option>
-                  <option value="edge">가장자리 슬라이드</option>
+                <span>{t('popupStyle')}</span>
+                <select value={popupStyle} onChange={e => updatePrefs({ popupStyle: e.target.value === 'center' ? 'center' : 'toast' })}>
+                  <option value="toast">{t('styleToast')}</option>
+                  <option value="center">{t('styleCenter')}</option>
                 </select>
               </label>
               <label>
-                <span>저장 기간(일)</span>
+                <span>{t('popupHold')}</span>
+                <input type="number" min={0} max={3600} value={popupHoldSec} onChange={e => updatePrefs({ popupHoldSec: Math.max(0, Number(e.target.value) || 0) })} />
+              </label>
+              <label>
+                <span>{t('retainDays')}</span>
                 <input type="number" min={1} max={3650} disabled={!retainEnabled} value={retainDays} onChange={e => updatePrefs({ retainDays: Number(e.target.value) || 30 })} />
               </label>
-              <button className="messenger-danger" onClick={clearAll}>대화내역 모두 초기화</button>
+              <button className="messenger-danger" onClick={clearAll}>{t('clearAll')}</button>
               <div className="messenger-scan compact">
-                <button onClick={scanAssignedRanges} disabled={hidePresence}>리스트 업데이트</button>
-                <small>{scanText || (hidePresence ? '숨김 상태에서는 사용자 검색과 응답을 하지 않습니다.' : '네트워크 카드에 할당된 IPv4의 B 클래스 대역을 직접 찾습니다.')}</small>
+                <button onClick={scanAssignedRanges} disabled={hidePresence}>{t('scanButton')}</button>
+                <small>{scanText || (hidePresence ? t('scanHintHidden') : t('scanHintNormal'))}</small>
               </div>
             </div>
           )}
-          {saving && <div className="messenger-saving">저장 중...</div>}
+          {saving && <div className="messenger-saving">{t('saving')}</div>}
         </div>
 
         <div className="messenger-peers">
-          {state.peers.length === 0 && <div className="messenger-empty">발견된 사용자가 없습니다. 같은 네트워크에서 PePe 메신저 워크스페이스를 열면 표시됩니다.</div>}
+          {state.peers.length === 0 && <div className="messenger-empty">{t('noPeers')}</div>}
           {state.peers.map(peer => {
             const readTs = readMarks[peer.id] || 0;
             const unread = state.messages.filter(m => m.peerId === peer.id && m.direction === 'in' && m.ts > readTs).length;
@@ -455,7 +462,7 @@ export const MessengerWorkspace: React.FC<{
                 <span className="messenger-avatar">{peer.name.slice(0, 1).toUpperCase()}</span>
                 <span className="messenger-peer-main">
                   <b>{peer.name}</b>
-                  <small>{peer.online ? `${peer.host}:${peer.port}` : `오프라인 · 마지막 발견 ${fmtTime(peer.lastSeen)}`}</small>
+                  <small>{peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtTime(peer.lastSeen) })}</small>
                 </span>
                 {unread > 0 && <span className="messenger-count">{unread}</span>}
               </button>
@@ -470,29 +477,29 @@ export const MessengerWorkspace: React.FC<{
             <>
               <div>
                 <h2>{selectedPeer.name}</h2>
-                <p>{selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : '오프라인'} · 마지막 발견 {fmtTime(selectedPeer.lastSeen)}</p>
+                <p>{selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : t('offline')} · {t('lastSeen', { time: fmtTime(selectedPeer.lastSeen) })}</p>
               </div>
-              <button onClick={() => deleteConversation(selectedPeer.id)}>이 대화 삭제</button>
+              <button onClick={() => deleteConversation(selectedPeer.id)}>{t('deleteConversation')}</button>
             </>
           ) : (
             <div>
-              <h2>대화 상대를 선택하세요</h2>
-              <p>왼쪽에 같은 네트워크 PePe 사용자가 표시됩니다.</p>
+              <h2>{t('selectPeer')}</h2>
+              <p>{t('selectPeerHint')}</p>
             </div>
           )}
         </header>
 
         <section className="messenger-messages" ref={msgListRef}>
-          {messages.length === 0 && <div className="messenger-empty large">아직 대화가 없습니다.</div>}
+          {messages.length === 0 && <div className="messenger-empty large">{t('noMessages')}</div>}
           {messages.map(m => (
             <div key={m.id} className={`messenger-bubble ${m.direction}`}>
               {m.kind === 'file' ? (
                 <div>
-                  <b>파일</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
+                  <b>{t('fileLabel')}</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
                   {m.filePath && (
                     <>
                       <div className="messenger-file-path">{m.filePath}</div>
-                      {canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>위치 열기</button>}
+                      {canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('revealFile')}</button>}
                     </>
                   )}
                 </div>
@@ -505,8 +512,8 @@ export const MessengerWorkspace: React.FC<{
         </section>
 
         <footer className="messenger-compose">
-          <button disabled={!canSend} onClick={sendFiles}>로컬 파일</button>
-          <button disabled={!canSend} onClick={() => setRemoteOpen(true)}>원격 파일</button>
+          <button disabled={!canSend} onClick={sendFiles}>{t('localFile')}</button>
+          <button disabled={!canSend} onClick={() => setRemoteOpen(true)}>{t('remoteFile')}</button>
           <textarea
             value={text}
             disabled={!canSend}
@@ -517,15 +524,15 @@ export const MessengerWorkspace: React.FC<{
                 void send();
               }
             }}
-            placeholder={selectedPeer ? (hidePresence ? '나의 접속 숨기기 상태에서는 전송할 수 없습니다' : (selectedOnline ? '메시지 입력 (Enter 전송, Shift+Enter 줄바꿈)' : '오프라인 사용자에게는 전송할 수 없습니다')) : '대화 상대를 선택하세요'}
+            placeholder={selectedPeer ? (hidePresence ? t('composeHidden') : (selectedOnline ? t('composePlaceholder') : t('composeOffline'))) : t('selectPeer')}
           />
-          <button disabled={!canSend || !text.trim()} onClick={send}>전송</button>
+          <button disabled={!canSend || !text.trim()} onClick={send}>{t('send')}</button>
         </footer>
       </main>
 
       {menu && (
         <div className="messenger-context" style={{ left: menu.x, top: menu.y }} onClick={e => e.stopPropagation()}>
-          <button className="danger" onClick={() => deletePeer(menu.peerId)}>사용자 삭제</button>
+          <button className="danger" onClick={() => deletePeer(menu.peerId)}>{t('deletePeerMenu')}</button>
         </div>
       )}
 
@@ -534,14 +541,14 @@ export const MessengerWorkspace: React.FC<{
           <div className="messenger-remote-modal" onClick={e => e.stopPropagation()}>
             <header>
               <div>
-                <h3>🌐 원격 파일 선택</h3>
-                <p>{selectedPeer?.name || '사용자'}에게 서버 파일을 바로 보냅니다.</p>
+                <h3>🌐 {t('remoteTitle')}</h3>
+                <p>{t('remoteSubtitle', { name: selectedPeer?.name || t('userFallback') })}</p>
               </div>
-              <button onClick={closeRemotePicker}>닫기</button>
+              <button onClick={closeRemotePicker}>{t('close')}</button>
             </header>
 
             <div className="messenger-remote-connect">
-              <label className="messenger-remote-label">소스 세션 (연결된 세션은 🟢, 미연결 세션 선택 시 백그라운드 SFTP 연결)</label>
+              <label className="messenger-remote-label">{t('remoteSourceLabel')}</label>
               {(() => {
                 const connected = remoteSessions.filter(s => connectedSessionMap.has(s.id));
                 const disconnected = remoteSessions.filter(s => !connectedSessionMap.has(s.id));
@@ -557,26 +564,26 @@ export const MessengerWorkspace: React.FC<{
                 };
                 return (
                   <select value={remoteSessionId} onChange={e => void selectRemoteSession(e.target.value)}>
-                    <option value="">(세션 선택)</option>
-                    {connected.length > 0 && <optgroup label="🟢 연결됨">{[...connected].sort(sortFn).map(renderOption)}</optgroup>}
-                    {disconnected.length > 0 && <optgroup label="⚪ 연결 안됨">{[...disconnected].sort(sortFn).map(renderOption)}</optgroup>}
-                    {remoteSessions.length === 0 && <option value="" disabled>저장된 세션 없음</option>}
+                    <option value="">{t('remoteSelectSession')}</option>
+                    {connected.length > 0 && <optgroup label={t('remoteConnected')}>{[...connected].sort(sortFn).map(renderOption)}</optgroup>}
+                    {disconnected.length > 0 && <optgroup label={t('remoteDisconnected')}>{[...disconnected].sort(sortFn).map(renderOption)}</optgroup>}
+                    {remoteSessions.length === 0 && <option value="" disabled>{t('remoteNoSessions')}</option>}
                   </select>
                 );
               })()}
-              {remoteConnecting && <div className="messenger-remote-connecting">연결 중...</div>}
+              {remoteConnecting && <div className="messenger-remote-connecting">{t('connecting')}</div>}
             </div>
 
             <div className="messenger-remote-path">
-              <button disabled={!remoteConnId || remotePath === '/'} onClick={() => loadRemoteDir(remoteConnId, parentRemotePath(remotePath))} title="상위 폴더">▲</button>
+              <button disabled={!remoteConnId || remotePath === '/'} onClick={() => loadRemoteDir(remoteConnId, parentRemotePath(remotePath))} title={t('parentFolder')}>▲</button>
               <input value={remotePath} disabled={!remoteConnId} onChange={e => setRemotePath(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && remoteConnId) void loadRemoteDir(remoteConnId, remotePath); }} />
-              <button disabled={!remoteConnId} onClick={() => loadRemoteDir(remoteConnId, remotePath)} title="이동/새로고침">⟳</button>
+              <button disabled={!remoteConnId} onClick={() => loadRemoteDir(remoteConnId, remotePath)} title={t('reloadDir')}>⟳</button>
             </div>
 
             {remoteError && <div className="messenger-remote-error">{remoteError}</div>}
             <div className="messenger-remote-list">
-              {!remoteConnId && <div className="messenger-empty">{remoteConnecting ? '연결 중...' : '세션을 선택하세요'}</div>}
-              {remoteConnId && remoteFiles.length === 0 && <div className="messenger-empty">{remoteLoading ? '불러오는 중...' : '(비어있음 또는 경로 에러)'}</div>}
+              {!remoteConnId && <div className="messenger-empty">{remoteConnecting ? t('connecting') : t('selectSession')}</div>}
+              {remoteConnId && remoteFiles.length === 0 && <div className="messenger-empty">{remoteLoading ? t('loading') : t('emptyOrError')}</div>}
               {remoteConnId && remoteFiles.map(file => {
                 const full = joinRemotePath(remotePath, file.name);
                 const checked = remoteSelected.has(full);
@@ -597,15 +604,15 @@ export const MessengerWorkspace: React.FC<{
                   >
                     <span>{file.isDir ? '📁' : '📄'}</span>
                     <b>{file.name}</b>
-                    <small>{file.isDir ? '폴더' : `${(((file.size || 0) / 1024)).toFixed(1)}KB`}</small>
+                    <small>{file.isDir ? t('folder') : `${(((file.size || 0) / 1024)).toFixed(1)}KB`}</small>
                   </button>
                 );
               })}
             </div>
 
             <footer>
-              <span>🟢 연결됨 / ⚪ 미연결(자동 연결). 더블클릭: 폴더 진입. {remoteSelected.size}개 선택됨</span>
-              <button className="primary" onClick={sendRemoteFiles} disabled={!canSend || remoteLoading || remoteConnecting || remoteSelected.size === 0}>{remoteSelected.size}개 전송</button>
+              <span>{t('remoteFooter', { count: remoteSelected.size })}</span>
+              <button className="primary" onClick={sendRemoteFiles} disabled={!canSend || remoteLoading || remoteConnecting || remoteSelected.size === 0}>{t('remoteSendCount', { count: remoteSelected.size })}</button>
             </footer>
           </div>
         </div>

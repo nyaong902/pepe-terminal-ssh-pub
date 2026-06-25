@@ -91,6 +91,7 @@ function App() {
   const { t: tOpt } = useTranslation('options');
   const { t: tMenu } = useTranslation('menu');
   const { t: tKb } = useTranslation('keybindings');
+  const { t: tMsg } = useTranslation('messenger');
   const [tabs, setTabs] = useState<Tab[]>(() => {
     // 분리 창은 빈 상태로 시작 — 마운트 후 main 에서 받은 탭 페이로드로 채운다(기본 워크스페이스/자동 셸 생성 방지).
     if (IS_DETACHED_WINDOW) return [];
@@ -334,6 +335,7 @@ function App() {
         retainDays: Number(prefs?.messenger?.retainDays) || 30,
         hidePresence: !!prefs?.messenger?.hidePresence,
       });
+      setMessengerHidden(!!prefs?.messenger?.hidePresence);
       setShellPrefsLoaded(true);
       // 초기 탭의 세션명/경로/cwd를 업데이트
       setTabs(prev => prev.map((t, i) => {
@@ -771,11 +773,16 @@ function App() {
     peerName: string;
     text: string;
     ts: number;
-    style: 'toast' | 'edge';
+    style: 'toast' | 'center';
+    holdSec: number;
   } | null>(null);
+  // 팝업을 클릭/포커스했는지 — true 면 유지시간과 무관하게 계속 표시.
+  const [messengerPopupEngaged, setMessengerPopupEngaged] = useState(false);
+  const messengerPopupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [messengerReplyText, setMessengerReplyText] = useState('');
   const [messengerAttention, setMessengerAttention] = useState(false);
   const [messengerUnreadCount, setMessengerUnreadCount] = useState(0);
+  const [messengerHidden, setMessengerHidden] = useState(false);
   // 외부 워크스페이스의 prefill 요청 시 채팅창 자동 열기
   useEffect(() => {
     const onPrefill = () => setShowClaudeChat(true);
@@ -799,6 +806,8 @@ function App() {
   }, [claudeChatView]);
   useEffect(() => {
     const onMessengerEvent = (p: any) => {
+      // 모든 이벤트에서 prefs(나의 접속 숨기기) 동기화 — 상단 상태 표시 LED/문구 반영.
+      if (p?.state?.prefs) setMessengerHidden(!!p.state.prefs.hidePresence);
       if (p?.type !== 'message' || p?.message?.direction !== 'in') return;
       setMessengerAttention(true);
       const peerId = String(p.message.peerId || '');
@@ -806,15 +815,20 @@ function App() {
       const text = p.message.kind === 'file'
         ? `파일: ${p.message.fileName || '첨부 파일'}`
         : String(p.message.text || '');
-      const popupStyle: 'toast' | 'edge' = p.state?.prefs?.popupStyle === 'edge' ? 'edge' : 'toast';
       const messengerVisible = showClaudeChat && claudeChatView === 'messenger' && (claudeChatPinned || claudeChatVisible);
       if (messengerVisible) return;
       setMessengerUnreadCount(c => c + 1);
       (async () => {
         const prefs = await (window as any).api?.getUIPrefs?.().catch(() => ({}));
-        const popupEnabled = prefs?.messenger?.popupNotify !== false;
+        const m = prefs?.messenger || {};
+        const popupEnabled = m.popupNotify !== false;
         if (!popupEnabled) return;
-        setMessengerPopup({ peerId, peerName, text, ts: Number(p.message.ts) || Date.now(), style: popupStyle });
+        const rawStyle = m.popupStyle;
+        const popupStyle: 'toast' | 'center' = (rawStyle === 'center' || rawStyle === 'edge') ? 'center' : 'toast';
+        const holdRaw = Number(m.popupHoldSec);
+        const holdSec = Number.isFinite(holdRaw) && holdRaw >= 0 ? holdRaw : 5;
+        setMessengerPopupEngaged(false);
+        setMessengerPopup({ peerId, peerName, text, ts: Number(p.message.ts) || Date.now(), style: popupStyle, holdSec });
         setMessengerReplyText('');
       })();
     };
@@ -853,7 +867,20 @@ function App() {
   const dismissMessengerPopup = () => {
     setMessengerPopup(null);
     setMessengerReplyText('');
+    setMessengerPopupEngaged(false);
   };
+  // 팝업 자동 닫힘 — 유지시간(초) 경과 시. 0 이면 무한 유지. 클릭/포커스(engaged) 시 타이머 해제.
+  useEffect(() => {
+    if (messengerPopupTimerRef.current) { clearTimeout(messengerPopupTimerRef.current); messengerPopupTimerRef.current = null; }
+    if (!messengerPopup) return;
+    if (messengerPopupEngaged) return;
+    if (!messengerPopup.holdSec || messengerPopup.holdSec <= 0) return;
+    messengerPopupTimerRef.current = setTimeout(() => {
+      setMessengerPopup(null);
+      setMessengerReplyText('');
+    }, messengerPopup.holdSec * 1000);
+    return () => { if (messengerPopupTimerRef.current) { clearTimeout(messengerPopupTimerRef.current); messengerPopupTimerRef.current = null; } };
+  }, [messengerPopup, messengerPopupEngaged]);
   const sendMessengerPopupReply = async () => {
     if (!messengerPopup || !messengerReplyText.trim()) return;
     const body = messengerReplyText.trim();
@@ -861,7 +888,7 @@ function App() {
     if (res?.success) {
       dismissMessengerPopup();
     } else {
-      try { notifyError('메신저 답장 실패', String(res?.error || 'unknown')); } catch {}
+      try { notifyError(tMsg('replyFail'), String(res?.error || 'unknown')); } catch {}
     }
   };
   // 사이드바 너비 드래그 중인지 — 드래그 중엔 매 픽셀 refit 을 건너뛰어 버벅임 방지 (종료 시 1회만 refit)
@@ -3741,13 +3768,17 @@ function App() {
           />
           <div className="window-controls-right">
             <div
-              className={`topbar-messenger-status${messengerUnreadCount > 0 ? ' attention' : ''}`}
-              title={messengerUnreadCount > 0 ? `읽지않은 메시지 ${messengerUnreadCount} 개 — 클릭하여 열기` : '메신저 백그라운드 실행 중 — 클릭하여 열기'}
+              className={`topbar-messenger-status${messengerUnreadCount > 0 ? ' attention' : ''}${messengerHidden ? ' hidden-presence' : ''}`}
+              title={messengerUnreadCount > 0
+                ? tMsg('statusUnreadTitle', { count: messengerUnreadCount })
+                : (messengerHidden ? tMsg('statusHiddenTitle') : tMsg('statusActiveTitle'))}
               onClick={() => openClaudeChatView('messenger')}
             >
               <span className="claude-chat-view-status-dot" />
               <span className="topbar-messenger-status-text">
-                {messengerUnreadCount > 0 ? `읽지않은 메시지 ${messengerUnreadCount} 개` : '메신저 백그라운드 실행 중'}
+                {messengerUnreadCount > 0
+                  ? tMsg('statusUnread', { count: messengerUnreadCount })
+                  : (messengerHidden ? tMsg('statusHidden') : tMsg('statusActive'))}
               </span>
             </div>
             <select
@@ -3830,7 +3861,7 @@ function App() {
           <button className={`tool-btn ${showQuickConnect ? 'active' : ''}`} title={showQuickConnect ? '빠른 연결 바 숨기기' : '빠른 연결 바 표시'} onClick={() => setShowQuickConnect(v => !v)}>⚡</button>
           <button
             className={`tool-btn ${showClaudeChat && claudeChatView === 'ai' ? 'active' : ''}`}
-            title={showClaudeChat && claudeChatView === 'ai' ? 'AI chat 숨기기' : 'AI chat 표시'}
+            title={showClaudeChat && claudeChatView === 'ai' ? tMsg('aiChatHide') : tMsg('aiChatShow')}
             onClick={() => {
               if (showClaudeChat && claudeChatView === 'ai') setShowClaudeChat(false);
               else openClaudeChatView('ai');
@@ -3838,7 +3869,7 @@ function App() {
           >🤖</button>
           <button
             className={`tool-btn ${showClaudeChat && claudeChatView === 'messenger' ? 'active' : ''}${messengerAttention || messengerPopup ? ' messenger-alert' : ''}`}
-            title={showClaudeChat && claudeChatView === 'messenger' ? '메신저 숨기기' : (messengerAttention || messengerPopup ? '새 메신저 메시지' : '메신저 표시')}
+            title={showClaudeChat && claudeChatView === 'messenger' ? tMsg('messengerHide') : (messengerAttention || messengerPopup ? tMsg('newMessage') : tMsg('messengerShow'))}
             onClick={() => {
               if (showClaudeChat && claudeChatView === 'messenger') setShowClaudeChat(false);
               else openClaudeChatView('messenger');
@@ -5086,7 +5117,7 @@ function App() {
             {!claudeChatPinned && (
               <div className="claude-chat-sidebar-trigger">
                 <div className="claude-chat-sidebar-trigger-top" onClick={onClickTrigger} onMouseEnter={onEnterTriggerHover} onMouseLeave={onLeaveTriggerHover} style={{ cursor: 'pointer' }} title="클릭=토글 / 2.5초 오버=자동 열림">
-                  <span className="claude-chat-sidebar-trigger-text">🤖 AI Chat · 💬 메신저</span>
+                  <span className="claude-chat-sidebar-trigger-text">{tMsg('triggerText')}</span>
                 </div>
                 <div className="claude-chat-sidebar-trigger-bottom" />
               </div>
@@ -5170,7 +5201,11 @@ function App() {
         </div>
       )}
       {messengerPopup && (
-        <div className={`messenger-popup ${messengerPopup.style}`}>
+        <div
+          className={`messenger-popup ${messengerPopup.style}${messengerPopupEngaged ? ' engaged' : ''}`}
+          onMouseDown={() => setMessengerPopupEngaged(true)}
+          onFocusCapture={() => setMessengerPopupEngaged(true)}
+        >
           <div className="messenger-popup-head">
             <div>
               <div className="messenger-popup-title">💬 {messengerPopup.peerName}</div>
@@ -5178,12 +5213,12 @@ function App() {
             </div>
             <button className="messenger-popup-close" onClick={dismissMessengerPopup}>×</button>
           </div>
-          <div className="messenger-popup-body">{messengerPopup.text || '(빈 메시지)'}</div>
+          <div className="messenger-popup-body">{messengerPopup.text || tMsg('popupEmpty')}</div>
           <textarea
             className="messenger-popup-reply"
             value={messengerReplyText}
             onChange={e => setMessengerReplyText(e.target.value)}
-            placeholder="간단한 답장"
+            placeholder={tMsg('replyPlaceholder')}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -5192,8 +5227,8 @@ function App() {
             }}
           />
           <div className="messenger-popup-actions">
-            <button className="messenger-popup-open" onClick={() => openClaudeChatView('messenger')}>열기</button>
-            <button className="messenger-popup-send" onClick={() => { void sendMessengerPopupReply(); }} disabled={!messengerReplyText.trim()}>보내기</button>
+            <button className="messenger-popup-open" onClick={() => openClaudeChatView('messenger')}>{tMsg('open')}</button>
+            <button className="messenger-popup-send" onClick={() => { void sendMessengerPopupReply(); }} disabled={!messengerReplyText.trim()}>{tMsg('sendReply')}</button>
           </div>
         </div>
       )}
