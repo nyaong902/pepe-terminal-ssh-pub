@@ -2994,7 +2994,7 @@ function App() {
         { label: tMenu('tools.vpnWs'), action: addVpnTab },
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
-        { label: 'PePe 원격 공유', action: () => setShowRemoteShare(true) },
+        { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
         { separator: true, label: '' },
         { label: showToolbar ? tMenu('tools.toolbarHide') : tMenu('tools.toolbarShow'), action: () => setShowToolbar(v => !v) },
         { label: showQuickConnect ? tMenu('tools.quickConnectHide') : tMenu('tools.quickConnectShow'), action: () => setShowQuickConnect(v => !v) },

@@ -1,0 +1,63 @@
+{
+  "badge": "仅限 TAILSCALE",
+  "title": "PePe 远程共享",
+  "status": {
+    "running": "正在共享",
+    "stopped": "共享已关闭",
+    "clients": "已连接 {{count}} 个浏览器",
+    "stoppedHelp": "当前无法从远程查看 PePe 屏幕。"
+  },
+  "address": "浏览器访问地址",
+  "copy": "复制",
+  "copied": "已复制",
+  "close": "关闭",
+  "runningHelp": "请在同一 Tailscale 网络中的电脑或手机浏览器打开此地址并输入 PIN。",
+  "start": "开始远程共享",
+  "starting": "正在启动共享服务器...",
+  "stop": "停止远程共享",
+  "tailscale": {
+    "installRequired": "需要安装 Tailscale",
+    "connected": "Tailscale 已连接",
+    "connectionRequired": "需要连接 Tailscale",
+    "installHelp": "请先安装 Tailscale 并登录。",
+    "connectionHelp": "请启动 Tailscale 并检查网络连接。"
+  },
+  "intro": {
+    "title": "仅共享 PePe 窗口。",
+    "body": "Windows 桌面和其他应用不会显示。连接的浏览器可以控制 PePe 内的点击、滚动和键盘输入。"
+  },
+  "pin": {
+    "random": "随机 PIN",
+    "randomHelp": "每次开始共享时生成新 PIN",
+    "fixed": "固定 PIN",
+    "fixedHelp": "始终使用相同的六位 PIN",
+    "oneTime": "一次性 PIN",
+    "fixedActive": "正在使用固定 PIN",
+    "placeholder": "六位数字"
+  },
+  "client": {
+    "loginHelp": "请输入 PePe 中显示的六位 PIN。",
+    "connect": "连接",
+    "endedTitle": "远程共享已结束",
+    "endedHelp": "请在 PePe 中重新开始共享后再连接。",
+    "reload": "返回连接页面",
+    "directControl": "触摸或点击屏幕进行控制",
+    "virtualMouse": "虚拟鼠标",
+    "fitScreen": "适合屏幕",
+    "collapse": "收起",
+    "scrollUp": "滚动 ▲",
+    "keyboard": "键盘",
+    "scrollDown": "滚动 ▼",
+    "leftClick": "左键",
+    "doubleClick": "双击",
+    "rightClick": "右键",
+    "touchpadHint": "单指移动光标\n轻触点击",
+    "pinRequired": "请输入六位 PIN。",
+    "invalidPin": "PIN 不正确或共享已结束。"
+  },
+  "errors": {
+    "tailscaleNotInstalled": "未安装 Tailscale。请安装并登录后重试。",
+    "tailscaleDisconnected": "Tailscale 已安装但未连接。请启动并连接网络。",
+    "invalidFixedPin": "固定 PIN 必须为六位数字。"
+  }
+}

@@ -3,6 +3,7 @@
 // 동일 상대경로의 파일 쌍에 대해 size 기반 상태(same/changed/left-only/right-only) 산출.
 // 행 클릭 시 하단 Monaco DiffEditor 에서 양쪽 파일 내용 비교.
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
@@ -117,7 +118,26 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions }) => {
   const [wsMode, setWsMode] = useState<WhitespaceMode>('significant');
   const [showEol, setShowEol] = useState(false);
   const [collapseUnchanged, setCollapseUnchanged] = useState(true);
+  const wsMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [wsMenuPos, setWsMenuPos] = useState({ top: 0, left: 0 });
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!wsMenuOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('.compare-options-menu') || target.closest('.compare-options-button')) return;
+      setWsMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWsMenuOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [wsMenuOpen]);
   // 비교 모드: dir=디렉토리 vs 디렉토리, file=파일 vs 파일
   const [compareMode, setCompareMode] = useState<'dir' | 'file'>('dir');
   // 양쪽 소스 + 경로 — 디렉토리 모드 / 파일 모드 별도 관리
@@ -929,42 +949,53 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions }) => {
                 {t('hideSame')}
               </label>
               {/* 비교 옵션 — Araxis Merge 스타일 */}
-              <div style={{ position: 'relative' }}>
-                <button
-                  onClick={() => setWsMenuOpen(v => !v)}
-                  title="비교 옵션 (Whitespace / Line endings / Collapse)"
-                  style={{ padding: '4px 10px', fontSize: 12, background: wsMode !== 'significant' || showEol || !collapseUnchanged ? '#2b4e74' : undefined }}
-                >⚙ 옵션</button>
-                {wsMenuOpen && (
-                  <div
-                    onMouseLeave={() => setWsMenuOpen(false)}
-                    style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 100, background: '#222', border: '1px solid #444', borderRadius: 4, padding: 8, minWidth: 260, fontSize: 12, color: '#ccc', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' }}
-                  >
-                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4, textTransform: 'uppercase' }}>Whitespace</div>
-                    {([
-                      ['significant', 'All significant'],
-                      ['ignoreLeading', 'Ignore leading'],
-                      ['ignoreTrailing', 'Ignore trailing'],
-                      ['ignoreConsecutive', 'Ignore consecutive'],
-                      ['ignoreAll', 'Ignore all'],
-                    ] as [WhitespaceMode, string][]).map(([k, label]) => (
-                      <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', cursor: 'pointer', borderRadius: 3, background: wsMode === k ? '#2b4e74' : undefined }}>
-                        <input type="radio" name="ws" checked={wsMode === k} onChange={() => setWsMode(k)} />
-                        {label}
-                      </label>
-                    ))}
-                    <div style={{ height: 1, background: '#333', margin: '6px 0' }} />
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={showEol} onChange={e => setShowEol(e.target.checked)} />
-                      Show line endings
+              <button
+                ref={wsMenuButtonRef}
+                className={`compare-options-button ${wsMode !== 'significant' || showEol || !collapseUnchanged ? 'active' : ''}`}
+                onClick={() => {
+                  const rect = wsMenuButtonRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    const menuWidth = 300;
+                    setWsMenuPos({
+                      top: Math.max(8, Math.min(window.innerHeight - 330, rect.bottom + 6)),
+                      left: Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.left)),
+                    });
+                  }
+                  setWsMenuOpen(v => !v);
+                }}
+                title={t('options.title')}
+              >
+                <span aria-hidden="true">⚙</span>
+                <span>{t('options.button')}</span>
+              </button>
+              {wsMenuOpen && createPortal(
+                <div className="compare-options-menu" style={{ top: wsMenuPos.top, left: wsMenuPos.left }}>
+                  <div className="compare-options-menu-title">{t('options.title')}</div>
+                  <div className="compare-options-section-title">{t('options.whitespace')}</div>
+                  {([
+                    ['significant', t('options.significant')],
+                    ['ignoreLeading', t('options.ignoreLeading')],
+                    ['ignoreTrailing', t('options.ignoreTrailing')],
+                    ['ignoreConsecutive', t('options.ignoreConsecutive')],
+                    ['ignoreAll', t('options.ignoreAll')],
+                  ] as [WhitespaceMode, string][]).map(([k, label]) => (
+                    <label key={k} className={`compare-options-row ${wsMode === k ? 'selected' : ''}`}>
+                      <input type="radio" name="ws" checked={wsMode === k} onChange={() => setWsMode(k)} />
+                      <span>{label}</span>
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={collapseUnchanged} onChange={e => setCollapseUnchanged(e.target.checked)} />
-                      Collapse unchanged regions
-                    </label>
-                  </div>
-                )}
-              </div>
+                  ))}
+                  <div className="compare-options-divider" />
+                  <label className="compare-options-row">
+                    <input type="checkbox" checked={showEol} onChange={e => setShowEol(e.target.checked)} />
+                    <span>{t('options.showEol')}</span>
+                  </label>
+                  <label className="compare-options-row">
+                    <input type="checkbox" checked={collapseUnchanged} onChange={e => setCollapseUnchanged(e.target.checked)} />
+                    <span>{t('options.collapseUnchanged')}</span>
+                  </label>
+                </div>,
+                document.body,
+              )}
               <label style={{ fontSize: 12, color: '#bbb', display: 'flex', alignItems: 'center', gap: 4 }} title={t('hideUnpairedTitle')}>
                 <input type="checkbox" checked={hideUnpaired} onChange={e => setHideUnpaired(e.target.checked)} />
                 {t('hideUnpaired')}

@@ -4,6 +4,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { getCurrentLang } from './i18n';
+import { loadNamespace } from './i18nStore';
 
 export type RemoteShareState = {
   running: boolean;
@@ -93,13 +95,31 @@ function makePin(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function remoteShareText(key: string): string {
+  const lang = getCurrentLang();
+  const current = loadNamespace(lang, 'remoteShare');
+  const fallback = lang === 'en' ? current : loadNamespace('en', 'remoteShare');
+  return current[key] || fallback[key] || key;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function htmlPage(): string {
+  const text = (key: string) => JSON.stringify(remoteShareText(key));
+  const html = (key: string) => escapeHtml(remoteShareText(key));
   return `<!doctype html>
-<html lang="ko">
+<html lang="${escapeHtml(getCurrentLang())}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <title>PePe Remote Share</title>
+  <title>${html('title')}</title>
   <style>
     :root { color-scheme: dark; font-family: "Malgun Gothic", sans-serif; background:#071018; color:#e9f3f7; }
     * { box-sizing:border-box; }
@@ -130,7 +150,7 @@ function htmlPage(): string {
     #zoomReset,#mouseClose { width:auto; height:28px; margin:0; padding:0 10px; background:#243b47; font-size:12px; }
     #mouseGrid { display:grid; grid-template-columns:minmax(140px,1fr) 78px; gap:8px; }
     #touchpad { height:145px; border:1px solid #395867; border-radius:12px; background:linear-gradient(145deg,#152b36,#0b1921); touch-action:none; position:relative; overflow:hidden; }
-    #touchpad::after { content:"손가락으로 커서 이동\\A탭하여 클릭"; white-space:pre; position:absolute; inset:0; display:grid; place-items:center; color:#7895a1; text-align:center; font-size:12px; pointer-events:none; }
+    #touchpad::after { content:attr(data-hint); white-space:pre; position:absolute; inset:0; display:grid; place-items:center; color:#7895a1; text-align:center; font-size:12px; pointer-events:none; }
     #mouseSide { display:grid; grid-template-rows:1fr 1fr 1fr; gap:6px; }
     .mouseBtn { height:auto; min-height:0; margin:0; padding:0 5px; border:1px solid #3d6171; background:#18313e; font-size:12px; }
     #mouseButtons { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:8px; }
@@ -152,21 +172,21 @@ function htmlPage(): string {
 </head>
 <body>
   <main id="login">
-    <h1>PePe 원격 공유</h1>
-    <p>PePe 화면에 표시된 6자리 PIN을 입력하세요.</p>
+    <h1>${html('title')}</h1>
+    <p>${html('client.loginHelp')}</p>
     <input id="pin" inputmode="numeric" maxlength="6" autocomplete="one-time-code" autofocus>
-    <button id="connect">연결</button>
+    <button id="connect">${html('client.connect')}</button>
     <div id="error"></div>
   </main>
   <main id="ended">
-    <h2>원격 공유가 종료되었습니다</h2>
-    <p>PePe에서 공유를 다시 시작한 뒤 재접속해 주세요.</p>
-    <button id="reload">접속 화면으로 돌아가기</button>
+    <h2>${html('client.endedTitle')}</h2>
+    <p>${html('client.endedHelp')}</p>
+    <button id="reload">${html('client.reload')}</button>
   </main>
   <main id="viewer">
     <div id="screenViewport">
       <div id="screenStage">
-        <img id="screen" alt="PePe 화면">
+        <img id="screen" alt="${html('title')}">
         <div id="remoteCursor" aria-hidden="true">
           <svg viewBox="0 0 28 34">
             <path d="M3 2.5v25.2l6.5-6.2 4.5 10.1 5-2.3-4.4-9.8h9.2L3 2.5Z" fill="#fff" stroke="#111" stroke-width="2.2" stroke-linejoin="round"/>
@@ -174,35 +194,39 @@ function htmlPage(): string {
         </div>
       </div>
     </div>
-    <div id="bar"><span>PePe Remote</span><span>화면을 터치하거나 클릭해 제어</span></div>
-    <button id="mouseToggle">가상 마우스</button>
+    <div id="bar"><span>PePe Remote</span><span>${html('client.directControl')}</span></div>
+    <button id="mouseToggle">${html('client.virtualMouse')}</button>
     <section id="virtualMouse">
       <div id="mouseHead">
-        <strong>가상 마우스</strong>
+        <strong>${html('client.virtualMouse')}</strong>
         <div id="mouseHeadActions">
           <span id="zoomLabel">100%</span>
-          <button id="zoomReset">화면 맞춤</button>
-          <button id="mouseClose">접기</button>
+          <button id="zoomReset">${html('client.fitScreen')}</button>
+          <button id="mouseClose">${html('client.collapse')}</button>
         </div>
       </div>
       <div id="mouseGrid">
-        <div id="touchpad"></div>
+        <div id="touchpad" data-hint="${html('client.touchpadHint')}"></div>
         <div id="mouseSide">
-          <button class="mouseBtn" id="scrollUp">스크롤 ▲</button>
-          <button class="mouseBtn" id="keyboardBtn">키보드</button>
-          <button class="mouseBtn" id="scrollDown">스크롤 ▼</button>
+          <button class="mouseBtn" id="scrollUp">${html('client.scrollUp')}</button>
+          <button class="mouseBtn" id="keyboardBtn">${html('client.keyboard')}</button>
+          <button class="mouseBtn" id="scrollDown">${html('client.scrollDown')}</button>
         </div>
       </div>
       <div id="mouseButtons">
-        <button class="mouseBtn" id="leftClick">좌클릭</button>
-        <button class="mouseBtn" id="doubleClick">더블클릭</button>
-        <button class="mouseBtn" id="rightClick">우클릭</button>
+        <button class="mouseBtn" id="leftClick">${html('client.leftClick')}</button>
+        <button class="mouseBtn" id="doubleClick">${html('client.doubleClick')}</button>
+        <button class="mouseBtn" id="rightClick">${html('client.rightClick')}</button>
       </div>
     </section>
     <textarea id="keyboard" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
   </main>
 <script>
 (() => {
+  const messages = {
+    pinRequired: ${text('client.pinRequired')},
+    invalidPin: ${text('client.invalidPin')}
+  };
   const login = document.querySelector('#login');
   const ended = document.querySelector('#ended');
   const viewer = document.querySelector('#viewer');
@@ -372,9 +396,9 @@ function htmlPage(): string {
 
   async function connect() {
     pin = pinInput.value.trim();
-    if (!/^\\d{6}$/.test(pin)) { error.textContent = '6자리 PIN을 입력하세요.'; return; }
+    if (!/^\\d{6}$/.test(pin)) { error.textContent = messages.pinRequired; return; }
     const res = await fetch('/status', { headers: { 'x-pepe-pin': pin }, cache: 'no-store' }).catch(() => null);
-    if (!res || !res.ok) { error.textContent = 'PIN이 올바르지 않거나 공유가 종료되었습니다.'; pin = ''; return; }
+    if (!res || !res.ok) { error.textContent = messages.invalidPin; pin = ''; return; }
     login.style.display = 'none';
     viewer.style.display = 'block';
     screen.src = '/stream?pin=' + encodeURIComponent(pin) + '&t=' + Date.now();
@@ -552,14 +576,14 @@ export class RemoteShareServer {
     if (this.server) return this.state();
     const tailscale = getTailscaleStatus();
     if (!tailscale.installed) {
-      return this.state('Tailscale이 설치되어 있지 않습니다. Tailscale을 설치하고 로그인한 뒤 다시 시도하세요.');
+      return this.state(remoteShareText('errors.tailscaleNotInstalled'));
     }
     if (!tailscale.connected || !tailscale.address) {
-      return this.state('Tailscale이 설치되어 있지만 연결되어 있지 않습니다. Tailscale을 실행하고 네트워크에 연결해 주세요.');
+      return this.state(remoteShareText('errors.tailscaleDisconnected'));
     }
     const fixedPin = String(options.fixedPin || '').trim();
     if (options.pinMode === 'fixed' && !/^\d{6}$/.test(fixedPin)) {
-      return this.state('고정 PIN은 숫자 6자리로 입력해 주세요.');
+      return this.state(remoteShareText('errors.invalidFixedPin'));
     }
 
     this.pinMode = options.pinMode === 'fixed' ? 'fixed' : 'random';

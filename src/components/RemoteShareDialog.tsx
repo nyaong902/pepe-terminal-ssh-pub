@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type ShareState = {
   running: boolean;
@@ -36,6 +37,7 @@ const EMPTY_STATE: ShareState = {
 };
 
 export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation('remoteShare');
   const [state, setState] = useState<ShareState>(EMPTY_STATE);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -96,35 +98,35 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
       <section className="remote-share-dialog" onMouseDown={e => e.stopPropagation()}>
         <header>
           <div>
-            <span className="remote-share-kicker">TAILSCALE ONLY</span>
-            <h2>PePe 원격 공유</h2>
+            <span className="remote-share-kicker">{t('badge')}</span>
+            <h2>{t('title')}</h2>
           </div>
-          <button className="remote-share-close" onClick={onClose} aria-label="닫기">×</button>
+          <button className="remote-share-close" onClick={onClose} aria-label={t('close')}>×</button>
         </header>
 
         <div className={`remote-share-status ${state.running ? 'running' : ''}`}>
           <span className="remote-share-status-dot" />
           <div>
-            <strong>{state.running ? '공유 중' : '공유 꺼짐'}</strong>
-            <small>{state.running ? `접속 브라우저 ${state.clients}대` : '외부에서 PePe 화면을 볼 수 없습니다.'}</small>
+            <strong>{state.running ? t('status.running') : t('status.stopped')}</strong>
+            <small>{state.running ? t('status.clients', { count: state.clients }) : t('status.stoppedHelp')}</small>
           </div>
         </div>
 
         {state.running ? (
           <>
             <div className="remote-share-card">
-              <label>브라우저 접속 주소</label>
+              <label>{t('address')}</label>
               <button className="remote-share-address" onClick={copyAddress}>
                 <span>{state.address}</span>
-                <em>{copied ? '복사됨' : '복사'}</em>
+                <em>{copied ? t('copied') : t('copy')}</em>
               </button>
-              <label>{state.pinMode === 'fixed' ? '고정 PIN' : '일회용 PIN'}</label>
+              <label>{state.pinMode === 'fixed' ? t('pin.fixed') : t('pin.oneTime')}</label>
               <div className={`remote-share-pin ${state.pinMode === 'fixed' ? 'fixed' : ''}`}>
-                {state.pinMode === 'fixed' ? '고정 PIN 사용 중' : state.pin}
+                {state.pinMode === 'fixed' ? t('pin.fixedActive') : state.pin}
               </div>
             </div>
-            <p className="remote-share-note">같은 Tailscale 네트워크의 PC나 휴대폰 브라우저에서 주소를 열고 PIN을 입력하세요.</p>
-            <button className="remote-share-primary stop" disabled={busy} onClick={stop}>원격 공유 중지</button>
+            <p className="remote-share-note">{t('runningHelp')}</p>
+            <button className="remote-share-primary stop" disabled={busy} onClick={stop}>{t('stop')}</button>
           </>
         ) : (
           <>
@@ -133,32 +135,32 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
               <div>
                 <strong>
                   {!state.tailscale.installed
-                    ? 'Tailscale 설치 필요'
+                    ? t('tailscale.installRequired')
                     : state.tailscale.connected
-                      ? 'Tailscale 연결됨'
-                      : 'Tailscale 연결 필요'}
+                      ? t('tailscale.connected')
+                      : t('tailscale.connectionRequired')}
                 </strong>
                 <small>
                   {!state.tailscale.installed
-                    ? '먼저 Tailscale을 설치하고 로그인해 주세요.'
+                    ? t('tailscale.installHelp')
                     : state.tailscale.connected
                       ? state.tailscale.address
-                      : 'Tailscale을 실행하고 네트워크 연결 상태를 확인해 주세요.'}
+                      : t('tailscale.connectionHelp')}
                 </small>
               </div>
             </div>
             <div className="remote-share-intro">
-              <strong>PePe 창만 공유합니다.</strong>
-              <p>Windows 바탕화면이나 다른 프로그램은 보이지 않습니다. 연결된 브라우저에서는 PePe 내부 클릭, 스크롤, 키보드 입력을 제어할 수 있습니다.</p>
+              <strong>{t('intro.title')}</strong>
+              <p>{t('intro.body')}</p>
             </div>
             <div className="remote-share-pin-settings">
               <label className={pinMode === 'random' ? 'selected' : ''}>
                 <input type="radio" name="remote-pin-mode" checked={pinMode === 'random'} onChange={() => setPinMode('random')} />
-                <span><strong>랜덤 PIN</strong><small>공유를 시작할 때마다 새 PIN 생성</small></span>
+                <span><strong>{t('pin.random')}</strong><small>{t('pin.randomHelp')}</small></span>
               </label>
               <label className={pinMode === 'fixed' ? 'selected' : ''}>
                 <input type="radio" name="remote-pin-mode" checked={pinMode === 'fixed'} onChange={() => setPinMode('fixed')} />
-                <span><strong>고정 PIN</strong><small>항상 같은 6자리 PIN 사용</small></span>
+                <span><strong>{t('pin.fixed')}</strong><small>{t('pin.fixedHelp')}</small></span>
               </label>
               {pinMode === 'fixed' && (
                 <input
@@ -167,7 +169,7 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
                   inputMode="numeric"
                   autoComplete="off"
                   maxLength={6}
-                  placeholder="숫자 6자리"
+                  placeholder={t('pin.placeholder')}
                   value={fixedPin}
                   onChange={e => setFixedPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 />
@@ -179,7 +181,7 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
               disabled={busy || !state.tailscale.connected || (pinMode === 'fixed' && !/^\d{6}$/.test(fixedPin))}
               onClick={start}
             >
-              {busy ? '공유 서버 여는 중...' : '원격 공유 시작'}
+              {busy ? t('starting') : t('start')}
             </button>
           </>
         )}

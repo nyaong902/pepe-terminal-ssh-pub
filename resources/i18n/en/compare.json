@@ -57,5 +57,17 @@
   "sourceReadFail": "Source read failed: {{error}}",
   "targetReadFail": "Target read failed: {{error}}",
   "sourceErrorPrefix": "Source: {{error}}",
-  "targetErrorPrefix": "Target: {{error}}"
+  "targetErrorPrefix": "Target: {{error}}",
+  "options": {
+    "button": "Options",
+    "title": "Compare options",
+    "whitespace": "Whitespace",
+    "significant": "All whitespace significant",
+    "ignoreLeading": "Ignore leading whitespace",
+    "ignoreTrailing": "Ignore trailing whitespace",
+    "ignoreConsecutive": "Ignore consecutive whitespace",
+    "ignoreAll": "Ignore all whitespace",
+    "showEol": "Show line endings",
+    "collapseUnchanged": "Collapse unchanged regions"
+  }
 }

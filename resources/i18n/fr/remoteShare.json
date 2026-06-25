@@ -1,0 +1,63 @@
+{
+  "badge": "TAILSCALE UNIQUEMENT",
+  "title": "Partage distant PePe",
+  "status": {
+    "running": "Partage actif",
+    "stopped": "Partage désactivé",
+    "clients": "{{count}} navigateur connecté",
+    "stoppedHelp": "L'écran PePe n'est pas accessible à distance."
+  },
+  "address": "Adresse du navigateur",
+  "copy": "Copier",
+  "copied": "Copié",
+  "close": "Fermer",
+  "runningHelp": "Ouvrez cette adresse sur un PC ou téléphone du même réseau Tailscale et saisissez le PIN.",
+  "start": "Démarrer le partage distant",
+  "starting": "Démarrage du serveur...",
+  "stop": "Arrêter le partage distant",
+  "tailscale": {
+    "installRequired": "Installation de Tailscale requise",
+    "connected": "Tailscale connecté",
+    "connectionRequired": "Connexion Tailscale requise",
+    "installHelp": "Installez Tailscale et connectez-vous d'abord.",
+    "connectionHelp": "Démarrez Tailscale et vérifiez la connexion réseau."
+  },
+  "intro": {
+    "title": "Seule la fenêtre PePe est partagée.",
+    "body": "Le bureau Windows et les autres applications restent masqués. Le navigateur peut contrôler les clics, le défilement et le clavier dans PePe."
+  },
+  "pin": {
+    "random": "PIN aléatoire",
+    "randomHelp": "Créer un nouveau PIN à chaque partage",
+    "fixed": "PIN fixe",
+    "fixedHelp": "Toujours utiliser le même PIN à six chiffres",
+    "oneTime": "PIN temporaire",
+    "fixedActive": "PIN fixe actif",
+    "placeholder": "Six chiffres"
+  },
+  "client": {
+    "loginHelp": "Saisissez le PIN à six chiffres affiché dans PePe.",
+    "connect": "Connexion",
+    "endedTitle": "Le partage distant est terminé",
+    "endedHelp": "Redémarrez le partage dans PePe puis reconnectez-vous.",
+    "reload": "Retour à la connexion",
+    "directControl": "Touchez ou cliquez pour contrôler",
+    "virtualMouse": "Souris virtuelle",
+    "fitScreen": "Ajuster",
+    "collapse": "Réduire",
+    "scrollUp": "Défiler ▲",
+    "keyboard": "Clavier",
+    "scrollDown": "Défiler ▼",
+    "leftClick": "Clic gauche",
+    "doubleClick": "Double-clic",
+    "rightClick": "Clic droit",
+    "touchpadHint": "Déplacez le curseur avec un doigt\nTouchez pour cliquer",
+    "pinRequired": "Saisissez un PIN à six chiffres.",
+    "invalidPin": "Le PIN est incorrect ou le partage est terminé."
+  },
+  "errors": {
+    "tailscaleNotInstalled": "Tailscale n'est pas installé. Installez-le et connectez-vous avant de réessayer.",
+    "tailscaleDisconnected": "Tailscale est installé mais déconnecté. Démarrez-le et connectez-vous au réseau.",
+    "invalidFixedPin": "Le PIN fixe doit comporter six chiffres."
+  }
+}

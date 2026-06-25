@@ -57,5 +57,17 @@
   "sourceReadFail": "فشل قراءة المصدر: {{error}}",
   "targetReadFail": "فشل قراءة الهدف: {{error}}",
   "sourceErrorPrefix": "المصدر: {{error}}",
-  "targetErrorPrefix": "الهدف: {{error}}"
+  "targetErrorPrefix": "الهدف: {{error}}",
+  "options": {
+    "button": "الخيارات",
+    "title": "خيارات المقارنة",
+    "whitespace": "المسافات",
+    "significant": "اعتبار جميع المسافات",
+    "ignoreLeading": "تجاهل المسافات في البداية",
+    "ignoreTrailing": "تجاهل المسافات في النهاية",
+    "ignoreConsecutive": "تجاهل المسافات المتتالية",
+    "ignoreAll": "تجاهل جميع المسافات",
+    "showEol": "إظهار نهايات الأسطر",
+    "collapseUnchanged": "طي المناطق غير المتغيرة"
+  }
 }

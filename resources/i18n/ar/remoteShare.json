@@ -1,0 +1,63 @@
+{
+  "badge": "TAILSCALE فقط",
+  "title": "مشاركة PePe عن بُعد",
+  "status": {
+    "running": "المشاركة قيد التشغيل",
+    "stopped": "المشاركة متوقفة",
+    "clients": "{{count}} متصفح متصل",
+    "stoppedHelp": "شاشة PePe غير متاحة عن بُعد."
+  },
+  "address": "عنوان المتصفح",
+  "copy": "نسخ",
+  "copied": "تم النسخ",
+  "close": "إغلاق",
+  "runningHelp": "افتح العنوان من كمبيوتر أو هاتف على شبكة Tailscale نفسها وأدخل رمز PIN.",
+  "start": "بدء المشاركة عن بُعد",
+  "starting": "جارٍ تشغيل خادم المشاركة...",
+  "stop": "إيقاف المشاركة عن بُعد",
+  "tailscale": {
+    "installRequired": "يلزم تثبيت Tailscale",
+    "connected": "Tailscale متصل",
+    "connectionRequired": "يلزم اتصال Tailscale",
+    "installHelp": "ثبّت Tailscale وسجّل الدخول أولاً.",
+    "connectionHelp": "شغّل Tailscale وتحقق من اتصال الشبكة."
+  },
+  "intro": {
+    "title": "تتم مشاركة نافذة PePe فقط.",
+    "body": "يبقى سطح مكتب Windows والتطبيقات الأخرى مخفية. يمكن للمتصفح التحكم بالنقر والتمرير وإدخال لوحة المفاتيح داخل PePe."
+  },
+  "pin": {
+    "random": "PIN عشوائي",
+    "randomHelp": "إنشاء PIN جديد عند كل بدء للمشاركة",
+    "fixed": "PIN ثابت",
+    "fixedHelp": "استخدام رمز ثابت من ستة أرقام",
+    "oneTime": "PIN لمرة واحدة",
+    "fixedActive": "PIN الثابت قيد الاستخدام",
+    "placeholder": "ستة أرقام"
+  },
+  "client": {
+    "loginHelp": "أدخل رمز PIN المكوّن من ستة أرقام الظاهر في PePe.",
+    "connect": "اتصال",
+    "endedTitle": "انتهت المشاركة عن بُعد",
+    "endedHelp": "أعد تشغيل المشاركة في PePe ثم اتصل مجددًا.",
+    "reload": "العودة إلى شاشة الاتصال",
+    "directControl": "المس الشاشة أو انقر للتحكم",
+    "virtualMouse": "فأرة افتراضية",
+    "fitScreen": "ملاءمة الشاشة",
+    "collapse": "طي",
+    "scrollUp": "تمرير ▲",
+    "keyboard": "لوحة المفاتيح",
+    "scrollDown": "تمرير ▼",
+    "leftClick": "نقر أيسر",
+    "doubleClick": "نقر مزدوج",
+    "rightClick": "نقر أيمن",
+    "touchpadHint": "حرّك المؤشر بإصبع واحد\nالمس للنقر",
+    "pinRequired": "أدخل رمز PIN من ستة أرقام.",
+    "invalidPin": "رمز PIN غير صحيح أو انتهت المشاركة."
+  },
+  "errors": {
+    "tailscaleNotInstalled": "Tailscale غير مثبت. ثبّته وسجّل الدخول قبل المحاولة مرة أخرى.",
+    "tailscaleDisconnected": "Tailscale مثبت لكنه غير متصل. شغّله واتصل بالشبكة.",
+    "invalidFixedPin": "يجب أن يتكون رمز PIN الثابت من ستة أرقام."
+  }
+}

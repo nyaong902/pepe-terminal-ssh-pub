@@ -62,7 +62,8 @@
     "compareWs": "🔍 مقارنة الملفات",
     "logAnalyzerWs": "📈 محلل السجلات",
     "vpnWs": "🔒 VPN",
-    "i18nWs": "🌍 محرر الترجمة"
+    "i18nWs": "🌍 محرر الترجمة",
+    "remoteShare": "📱 مشاركة PePe عن بُعد"
   },
   "help": {
     "title": "مساعدة",

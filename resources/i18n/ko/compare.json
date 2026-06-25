@@ -57,5 +57,17 @@
   "sourceReadFail": "소스 읽기 실패: {{error}}",
   "targetReadFail": "타겟 읽기 실패: {{error}}",
   "sourceErrorPrefix": "소스: {{error}}",
-  "targetErrorPrefix": "타겟: {{error}}"
+  "targetErrorPrefix": "타겟: {{error}}",
+  "options": {
+    "button": "옵션",
+    "title": "비교 옵션",
+    "whitespace": "공백 처리",
+    "significant": "모든 공백 비교",
+    "ignoreLeading": "앞쪽 공백 무시",
+    "ignoreTrailing": "뒤쪽 공백 무시",
+    "ignoreConsecutive": "연속 공백 무시",
+    "ignoreAll": "모든 공백 무시",
+    "showEol": "줄 끝 문자 표시",
+    "collapseUnchanged": "변경 없는 영역 접기"
+  }
 }
