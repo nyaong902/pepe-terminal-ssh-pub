@@ -41,6 +41,8 @@ type Props = {
     rows?: DiffRow[]; selectedRel?: string | null;
     leftContent?: string; rightContent?: string; leftOriginal?: string; rightOriginal?: string;
     leftEol?: string; rightEol?: string; leftEnc?: string; rightEnc?: string;
+    compareMode?: 'dir' | 'file';
+    leftDirSrc?: any; rightDirSrc?: any; leftFileSrc?: any; rightFileSrc?: any;
   } | null;
   onStateChange?: (state: any) => void;
 };
@@ -111,19 +113,6 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   // 선택된 파일의 양쪽 절대경로 (저장용)
   const [leftFilePath, setLeftFilePath] = useState<string>(initialState?.leftPath || '');
   const [rightFilePath, setRightFilePath] = useState<string>(initialState?.rightPath || '');
-  // 부모에 상태 보고 — 작업 데이터(rows/content/선택) 전부 포함해야 새 창에서 그대로 복원됨.
-  useEffect(() => {
-    if (!onStateChange) return;
-    try {
-      onStateChange({
-        leftPath: leftFilePath, rightPath: rightFilePath, filterText, hideSame, hideUnpaired,
-        rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
-        leftEol, rightEol, leftEnc, rightEnc,
-      });
-    } catch {}
-  }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired,
-      rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
-      leftEol, rightEol, leftEnc, rightEnc, onStateChange]);
   // 상단 경로 input 의 편집 중 값 — Enter 누르기 전까지는 실제 경로와 분리되어 있음
   const [leftPathDraft, setLeftPathDraft] = useState<string>('');
   const [rightPathDraft, setRightPathDraft] = useState<string>('');
@@ -158,12 +147,27 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     };
   }, [wsMenuOpen]);
   // 비교 모드: dir=디렉토리 vs 디렉토리, file=파일 vs 파일
-  const [compareMode, setCompareMode] = useState<'dir' | 'file'>('dir');
+  const [compareMode, setCompareMode] = useState<'dir' | 'file'>(initialState?.compareMode || 'dir');
   // 양쪽 소스 + 경로 — 디렉토리 모드 / 파일 모드 별도 관리
-  const [leftDirSrc,   setLeftDirSrc]  = useState<Source>({ mode: 'local', label: t('local'), basePath: '' });
-  const [rightDirSrc,  setRightDirSrc] = useState<Source>({ mode: 'local', label: t('local'), basePath: '' });
-  const [leftFileSrc,  setLeftFileSrc] = useState<Source>({ mode: 'local', label: t('local'), basePath: '' });
-  const [rightFileSrc, setRightFileSrc]= useState<Source>({ mode: 'local', label: t('local'), basePath: '' });
+  const [leftDirSrc,   setLeftDirSrc]  = useState<Source>(initialState?.leftDirSrc  || { mode: 'local', label: t('local'), basePath: '' });
+  const [rightDirSrc,  setRightDirSrc] = useState<Source>(initialState?.rightDirSrc || { mode: 'local', label: t('local'), basePath: '' });
+  const [leftFileSrc,  setLeftFileSrc] = useState<Source>(initialState?.leftFileSrc || { mode: 'local', label: t('local'), basePath: '' });
+  const [rightFileSrc, setRightFileSrc]= useState<Source>(initialState?.rightFileSrc|| { mode: 'local', label: t('local'), basePath: '' });
+  // 부모에 상태 보고 — 분리/복원 시 새 창에서 그대로 이어 작업.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try {
+      onStateChange({
+        leftPath: leftFilePath, rightPath: rightFilePath, filterText, hideSame, hideUnpaired,
+        rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
+        leftEol, rightEol, leftEnc, rightEnc,
+        compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc,
+      });
+    } catch {}
+  }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired,
+      rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
+      leftEol, rightEol, leftEnc, rightEnc,
+      compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc, onStateChange]);
   // 현재 모드에 따른 활성 소스 (읽기 전용 — 쓰기는 updateSrc 사용)
   const leftSrc  = compareMode === 'dir' ? leftDirSrc  : leftFileSrc;
   const rightSrc = compareMode === 'dir' ? rightDirSrc : rightFileSrc;
