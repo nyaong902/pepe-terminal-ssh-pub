@@ -61,11 +61,12 @@
   ; ─────────────────────────────────────────
   ; 메신저(LAN 자동 탐색) 방화벽 규칙 등록
   ;  - 탐색은 UDP 브로드캐스트(39455)+유니캐스트 hello, 메시지는 TCP(임의 포트)
-  ;  - Windows Defender 방화벽이 인바운드 UDP/TCP 를 막으면 서로 장치를 못 찾음
-  ;  - 실행파일 기준 인바운드 허용 규칙으로 포트에 의존하지 않게 처리(사설/도메인 프로필만)
+  ;  - Windows Defender 방화벽이 UDP/TCP 를 막으면 서로 장치를 못 찾음
+  ;  - 실행파일 기준 인바운드/아웃바운드 허용 규칙으로 포트에 의존하지 않게 처리(사설/도메인 프로필만)
+  ;  - 인바운드와 아웃바운드 규칙은 같은 이름을 사용 → delete rule name=... 한 번에 정리됨
   ; ─────────────────────────────────────────
   DetailPrint "▶ 메신저 방화벽 규칙 등록..."
-  ; 재설치/업그레이드 시 중복 방지 — 기존 동일 이름 규칙 먼저 삭제
+  ; 재설치/업그레이드 시 중복 방지 — 기존 동일 이름 규칙(인바운드/아웃바운드 모두) 먼저 삭제
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="PePe Terminal Messenger"'
   Pop $0
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="PePe Terminal Messenger ICMP"'
@@ -76,10 +77,20 @@
   ${If} $0 == 0
     DetailPrint "  ✓ 메신저 인바운드 허용 규칙 등록 완료"
   ${Else}
-    DetailPrint "  ⚠ 방화벽 규칙 등록 실패(code=$0) — 메신저 첫 실행 시 Windows 허용 창에서 수동 허용 가능"
+    DetailPrint "  ⚠ 인바운드 규칙 등록 실패(code=$0) — 메신저 첫 실행 시 Windows 허용 창에서 수동 허용 가능"
   ${EndIf}
-  ; 보조: ICMPv4 echo(ping) 인바운드 허용 — 수동 ping 진단용(탐색 자체에는 불필요)
+  ; 앱 실행파일의 아웃바운드 트래픽(모든 프로토콜) 허용 → UDP 브로드캐스트/유니캐스트 송신 + TCP 연결
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="PePe Terminal Messenger" dir=out action=allow program="$INSTDIR\${APP_EXECUTABLE_FILENAME}" enable=yes profile=private,domain'
+  Pop $0
+  ${If} $0 == 0
+    DetailPrint "  ✓ 메신저 아웃바운드 허용 규칙 등록 완료"
+  ${Else}
+    DetailPrint "  ⚠ 아웃바운드 규칙 등록 실패(code=$0)"
+  ${EndIf}
+  ; 보조: ICMPv4 echo(ping) 인바운드/아웃바운드 허용 — 수동 ping 진단용(탐색 자체에는 불필요)
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="PePe Terminal Messenger ICMP" dir=in action=allow protocol=icmpv4:8,any enable=yes profile=private,domain'
+  Pop $0
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="PePe Terminal Messenger ICMP" dir=out action=allow protocol=icmpv4:8,any enable=yes profile=private,domain'
   Pop $0
 
   DetailPrint "─────────────────────────────────────────"
