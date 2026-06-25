@@ -1,8 +1,12 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+// ⚠ CSS 임포트 순서 중요: xterm.css → index.css → App.css 순서로 들어가야 우리 커스텀 스타일이
+// 라이브러리 기본 스타일을 덮어쓴다. dev 모드에선 동적 import 로 자연스럽게 그 순서지만, 빌드는
+// 의존성 정적 분석 결과 xterm.css 가 가장 마지막에 들어가 커스텀이 덮이는 문제 발생 → main 에서 강제.
+import 'xterm/css/xterm.css'
+import './index.css'
 import App from './App'
 import SessionEditorPopout from './SessionEditorPopout'
-import './index.css'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
 
 const params = new URLSearchParams(window.location.search);
