@@ -484,12 +484,23 @@ const CustomTabIcon = () => (
   </svg>
 );
 
-/** Antigravity CLI(agy) 탭 아이콘 — 토성/궤도 모양 */
+/** Antigravity CLI(agy) 탭 아이콘 — 공식 로고(주황/파랑 'A') */
 const AntigravityTabIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="12" cy="12" rx="10" ry="3.5" fill="none" stroke="#c4a5ff" strokeWidth="1.5" transform="rotate(-20 12 12)"/>
-    <circle cx="12" cy="12" r="4" fill="#c4a5ff"/>
-    <circle cx="12" cy="12" r="1.5" fill="#1a0d36"/>
+    <defs>
+      <linearGradient id="agyOrange" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#ffb37a" />
+        <stop offset="100%" stopColor="#ff8a4c" />
+      </linearGradient>
+      <linearGradient id="agyBlue" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#7aa7ff" />
+        <stop offset="100%" stopColor="#4f7fe6" />
+      </linearGradient>
+    </defs>
+    {/* 왼쪽 절반 (주황) */}
+    <path d="M12 2 L4 21 L8 21 L12 11 Z" fill="url(#agyOrange)" />
+    {/* 오른쪽 절반 (파랑) */}
+    <path d="M12 2 L20 21 L16 21 L12 11 Z" fill="url(#agyBlue)" />
   </svg>
 );
 
@@ -1262,7 +1273,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       const text: string = String(d.text || '');
       const attachments: { name: string; content: string }[] = Array.isArray(d.attachments) ? d.attachments : [];
       const newConv = !!d.newConversation;
-      const reqAgent = (d.agent === 'gemini' || d.agent === 'codex' || d.agent === 'claude') ? d.agent : null;
+      const reqAgent = (d.agent === 'gemini' || d.agent === 'codex' || d.agent === 'claude' || d.agent === 'antigravity' || d.agent === 'custom') ? d.agent : null;
       if (!text && attachments.length === 0) return;
       // 새 대화 모드일 때 — 에이전트 전환이 일으키는 "최근 대화 자동 선택" 이 clear() 를 덮어쓰지 않도록
       // 플래그 먼저 세팅 (auto-select effect 가 이 플래그 보면 자동 로드 skip).
@@ -4229,9 +4240,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             <div className="claude-chat-agent-switcher">
               <button className={`claude-chat-agent-btn ${currentAgent === 'claude' ? 'active' : ''}`} title="Claude Code" onClick={() => switchAgent('claude')}><ClaudeTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'gemini' ? 'active' : ''}`} title="Gemini" onClick={() => switchAgent('gemini')}><GeminiTabIcon /></button>
+              <button className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`} title="Antigravity CLI (agy)" onClick={() => switchAgent('antigravity')}><AntigravityTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'codex' ? 'active' : ''}`} title="Codex" onClick={() => switchAgent('codex')}><CodexTabIcon /></button>
               <button className={`claude-chat-agent-btn ${currentAgent === 'custom' ? 'active' : ''}`} title="Custom LLM (LM Studio / OpenAI 호환)" onClick={() => switchAgent('custom')}><CustomTabIcon /></button>
-              <button className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`} title="Antigravity CLI (agy)" onClick={() => switchAgent('antigravity')}><AntigravityTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
@@ -4262,6 +4273,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 onClick={() => switchAgent('gemini')}
               ><GeminiTabIcon /></button>
               <button
+                className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`}
+                title="Antigravity CLI (agy)"
+                onClick={() => switchAgent('antigravity')}
+              ><AntigravityTabIcon /></button>
+              <button
                 className={`claude-chat-agent-btn ${currentAgent === 'codex' ? 'active' : ''}`}
                 title="Codex"
                 onClick={() => switchAgent('codex')}
@@ -4271,11 +4287,6 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                 title="Custom LLM (LM Studio / OpenAI 호환)"
                 onClick={() => switchAgent('custom')}
               ><CustomTabIcon /></button>
-              <button
-                className={`claude-chat-agent-btn ${currentAgent === 'antigravity' ? 'active' : ''}`}
-                title="Antigravity CLI (agy)"
-                onClick={() => switchAgent('antigravity')}
-              ><AntigravityTabIcon /></button>
             </div>
           </div>
           <div className="claude-chat-header-actions">
@@ -4343,7 +4354,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         </div>
         <div className="claude-chat-header-center">
           <div className="claude-chat-agent-switcher">
-            {(['claude', 'gemini', 'codex', 'custom', 'antigravity'] as const).map(a => {
+            {(['claude', 'gemini', 'antigravity', 'codex', 'custom'] as const).map(a => {
               const Icon = a === 'claude' ? ClaudeTabIcon : a === 'gemini' ? GeminiTabIcon : a === 'codex' ? CodexTabIcon : a === 'antigravity' ? AntigravityTabIcon : CustomTabIcon;
               const label = a === 'claude' ? 'Claude Code' : a === 'gemini' ? 'Gemini' : a === 'codex' ? 'Codex' : a === 'antigravity' ? 'Antigravity' : 'Custom LLM';
               const v = agentVersions[a as 'claude' | 'gemini' | 'codex'];

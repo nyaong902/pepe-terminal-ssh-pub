@@ -25,8 +25,26 @@ const CodexIcon = () => (
     <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" fill="#b0b0b0"/>
   </svg>
 );
-const AGENT_ICON: Record<'claude' | 'gemini' | 'codex', React.FC> = {
-  claude: ClaudeIcon, gemini: GeminiIcon, codex: CodexIcon,
+const AntigravityIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="sqlAgyO" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#ffb37a"/><stop offset="100%" stopColor="#ff8a4c"/></linearGradient>
+      <linearGradient id="sqlAgyB" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#7aa7ff"/><stop offset="100%" stopColor="#4f7fe6"/></linearGradient>
+    </defs>
+    <path d="M12 2 L4 21 L8 21 L12 11 Z" fill="url(#sqlAgyO)"/>
+    <path d="M12 2 L20 21 L16 21 L12 11 Z" fill="url(#sqlAgyB)"/>
+  </svg>
+);
+const CustomLLMIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="#7ad3a7" strokeWidth="1.6"/>
+    <rect x="6" y="9.5" width="12" height="2" rx="1" fill="#7ad3a7"/>
+    <rect x="6" y="12.5" width="8" height="2" rx="1" fill="#7ad3a7"/>
+  </svg>
+);
+type SqlAgent = 'claude' | 'gemini' | 'codex' | 'antigravity' | 'custom';
+const AGENT_ICON: Record<SqlAgent, React.FC> = {
+  claude: ClaudeIcon, gemini: GeminiIcon, codex: CodexIcon, antigravity: AntigravityIcon, custom: CustomLLMIcon,
 };
 
 export type DbmsType = 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
@@ -76,7 +94,7 @@ type ParsedResult = {
 type Props = {
   sessionId: string;
   sessionName: string;
-  aiAgent?: 'claude' | 'gemini' | 'codex';
+  aiAgent?: SqlAgent;
 };
 
 // 히스토리 보관 한도 — 너무 많아지면 IPC 직렬화 비용이 커짐.
@@ -285,8 +303,8 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   // EXPLAIN PLAN 트리 — 접힘 노드 인덱스(자식 숨김). result 바뀔 때 자동 초기화.
   const [collapsedPlanNodes, setCollapsedPlanNodes] = useState<Set<number>>(new Set());
   // AI 에이전트 선택 — props 의 aiAgent 가 초기값. 세션 캐시에 보존.
-  const [selectedAgent, setSelectedAgent] = useState<'claude' | 'gemini' | 'codex'>(
-    () => ((sqlStateCache.get(sessionId + ':ai') as any) || aiAgent) as 'claude' | 'gemini' | 'codex'
+  const [selectedAgent, setSelectedAgent] = useState<SqlAgent>(
+    () => ((sqlStateCache.get(sessionId + ':ai') as any) || aiAgent) as SqlAgent
   );
   useEffect(() => { sqlStateCache.set(sessionId + ':ai' as any, selectedAgent as any); }, [sessionId, selectedAgent]);
   const [agentMenuOpen, setAgentMenuOpen] = useState<boolean>(false);
@@ -2313,7 +2331,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
                   {([
                     { id: 'claude' as const, label: 'Claude', color: '#a070ff' },
                     { id: 'gemini' as const, label: 'Gemini', color: '#4a9eff' },
+                    { id: 'antigravity' as const, label: 'Antigravity', color: '#ff9d6c' },
                     { id: 'codex'  as const, label: 'Codex',  color: '#5cd97a' },
+                    { id: 'custom' as const, label: 'Custom LLM', color: '#7ad3a7' },
                   ]).map(opt => {
                     const Ico = AGENT_ICON[opt.id];
                     return (
