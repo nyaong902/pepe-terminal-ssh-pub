@@ -3763,7 +3763,14 @@ export const TerminalPanel: React.FC<Props> = ({
                   />
                 </div>
               )}
-              <div ref={containerRef} className="panel-terminal-area" onMouseDown={() => onSelect?.(nodeId)} />
+              <div
+                ref={containerRef}
+                className="panel-terminal-area"
+                onMouseDown={() => onSelect?.(nodeId)}
+                // 선택한 텍스트가 마우스로 드래그되어 다른 창/앱에 떨어지는 동작 차단
+                draggable={false}
+                onDragStart={(e) => { e.preventDefault(); }}
+              />
             </>
           );
         })()}
