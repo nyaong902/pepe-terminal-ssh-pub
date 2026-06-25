@@ -2016,6 +2016,8 @@ function App() {
 
   // ── 탭 분리/재부착(멀티 윈도우) ──────────────────────────────────────
   // 라이브 세션 재부착: 세션 매핑 등록 + 연결 상태 시딩 (이후 출력은 broadcast 로 수신, 재연결 방지)
+  // FileExplorer 인스턴스 별 현재 상태(leftTabs/rightTabs/...) — 분리 직전 serializeTab 이 끌어다 쓴다.
+  const fileExplorerStateRef = useRef<Map<string, any>>(new Map());
   // 다른 탭에서 끌어온 sibling 세션 스냅샷 — FileExplorer 가 비어보이지 않도록 보관.
   const [carriedSiblingSessions, setCarriedSiblingSessions] = useState<{ termId: string; sessionId: string; sessionName: string; host: string }[]>([]);
   const seedReattach = useCallback(async (tab: Tab, siblings?: { termId: string; sessionId: string; sessionName: string; host: string; quickSession?: any }[]) => {
@@ -2145,18 +2147,22 @@ function App() {
         }));
     } catch { return []; }
   };
-  const serializeTab = (tab: Tab) => ({
-    kind: 'workspace' as const,
-    buffers: collectTabBuffers(tab),
-    styles: collectTabStyles(tab),
-    siblingSessions: collectSiblingSessions(tab),
-    tab: JSON.parse(JSON.stringify({
-      id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
-      sqlTool: tab.sqlTool, editor: tab.editor,
-      initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
-      fileExplorerState: tab.fileExplorerState,
-    })),
-  });
+  const serializeTab = (tab: Tab) => {
+    // FileExplorer 최신 상태(ref) 가 있으면 그걸로 덮어 직렬화.
+    const liveFeState = fileExplorerStateRef.current.get(tab.id);
+    return {
+      kind: 'workspace' as const,
+      buffers: collectTabBuffers(tab),
+      styles: collectTabStyles(tab),
+      siblingSessions: collectSiblingSessions(tab),
+      tab: JSON.parse(JSON.stringify({
+        id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
+        sqlTool: tab.sqlTool, editor: tab.editor,
+        initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
+        fileExplorerState: liveFeState || tab.fileExplorerState,
+      })),
+    };
+  };
 
   // 원본 창에서 분리된/이동한 탭 제거 — 백엔드 세션은 살리고 xterm 만 dispose.
   const removeTabAfterMove = (tabId: TabId, layout: LayoutNode) => {
@@ -3892,8 +3898,8 @@ function App() {
               tabId={t.id}
               initialState={t.fileExplorerState}
               onStateChange={(st) => {
-                // tab.fileExplorerState 에 저장 — serializeTab 시 함께 carry 되어 분리 창에서 복원.
-                setTabs(prev => prev.map(x => x.id === t.id ? { ...x, fileExplorerState: st } : x));
+                // ref 에 저장 — setTabs 를 매번 호출하면 재렌더 루프 발생. 분리 시점(serializeTab)에 끌어 쓴다.
+                fileExplorerStateRef.current.set(t.id, st);
               }}
             />
           </div>
