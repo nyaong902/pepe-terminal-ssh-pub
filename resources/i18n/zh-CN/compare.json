@@ -57,5 +57,17 @@
   "sourceReadFail": "源读取失败：{{error}}",
   "targetReadFail": "目标读取失败：{{error}}",
   "sourceErrorPrefix": "源：{{error}}",
-  "targetErrorPrefix": "目标：{{error}}"
+  "targetErrorPrefix": "目标：{{error}}",
+  "options": {
+    "button": "选项",
+    "title": "比较选项",
+    "whitespace": "空白字符",
+    "significant": "比较所有空白字符",
+    "ignoreLeading": "忽略行首空白",
+    "ignoreTrailing": "忽略行尾空白",
+    "ignoreConsecutive": "忽略连续空白",
+    "ignoreAll": "忽略所有空白",
+    "showEol": "显示行尾符",
+    "collapseUnchanged": "折叠未更改区域"
+  }
 }

@@ -45,6 +45,7 @@ import { getVpnService } from './vpnService';
 import { listLanguages, listNamespaces, loadNamespace, loadBundledNamespace, loadOverrideNamespace, saveOverrideNamespace, addLanguage, removeLanguage } from './i18nStore';
 import { t, setCurrentLang } from './i18n';
 import { setupAutoUpdater, checkForUpdatesOnStartup } from './updater';
+import { RemoteShareServer, type RemoteShareStartOptions } from './remoteShareServer';
 // MCP 서버 스크립트를 번들에 임베드 (vite ?raw) — 런타임에 임시 파일로 추출 후 spawn
 // @ts-ignore
 import mcpSshServerScript from './mcpSshServer.cjs?raw';
@@ -64,6 +65,7 @@ const __dirname = path.dirname(__filename);
 // app.setPath('sessionData', sessionDataPath);
 
 let mainWindow: BrowserWindow | null = null;
+const remoteShareServer = new RemoteShareServer(() => mainWindow);
 // 분리된(탭 tear-off) 보조 앱 창들 — 터미널/파일전송 데이터 broadcast 대상
 const detachedWindows = new Set<BrowserWindow>();
 // 터미널/SFTP 데이터를 메인 + 모든 분리 창에 전달한다. 수신 측 렌더러는 자기 termId 만 처리하므로
@@ -524,6 +526,10 @@ app.whenReady().then(() => {
   });
 });
 
+ipcMain.handle('remote-share:state', () => remoteShareServer.state());
+ipcMain.handle('remote-share:start', (_event, options?: RemoteShareStartOptions) => remoteShareServer.start(options));
+ipcMain.handle('remote-share:stop', () => remoteShareServer.stop());
+
 app.on('window-all-closed', () => {
   // 단일 윈도우 앱 — macOS 에서도 마지막 창 닫히면 완전 종료 (activate 핸들러 없어 dock 클릭으로 복귀 불가).
   app.quit();
@@ -533,6 +539,7 @@ app.on('window-all-closed', () => {
 // PTY/Claude 자식 프로세스 정리는 파일 하단에서 추가 등록 (Map 선언 후).
 // WebDAV 는 별도 종료 API 가 없지만 SSH 끊으면 의존 스트림이 모두 close.
 app.on('before-quit', () => {
+  remoteShareServer.stop();
   try { stopAllBundledX11(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}

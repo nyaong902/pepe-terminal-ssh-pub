@@ -62,7 +62,8 @@
     "compareWs": "🔍 File Compare",
     "logAnalyzerWs": "📈 Log Analyzer",
     "vpnWs": "🔒 VPN",
-    "i18nWs": "🌍 Translation Editor"
+    "i18nWs": "🌍 Translation Editor",
+    "remoteShare": "📱 PePe Remote Share"
   },
   "help": {
     "title": "Help",

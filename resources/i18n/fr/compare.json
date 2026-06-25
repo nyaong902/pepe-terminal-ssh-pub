@@ -57,5 +57,17 @@
   "sourceReadFail": "Échec de lecture de la source : {{error}}",
   "targetReadFail": "Échec de lecture de la cible : {{error}}",
   "sourceErrorPrefix": "Source : {{error}}",
-  "targetErrorPrefix": "Cible : {{error}}"
+  "targetErrorPrefix": "Cible : {{error}}",
+  "options": {
+    "button": "Options",
+    "title": "Options de comparaison",
+    "whitespace": "Espaces",
+    "significant": "Tous les espaces significatifs",
+    "ignoreLeading": "Ignorer les espaces initiaux",
+    "ignoreTrailing": "Ignorer les espaces finaux",
+    "ignoreConsecutive": "Ignorer les espaces consécutifs",
+    "ignoreAll": "Ignorer tous les espaces",
+    "showEol": "Afficher les fins de ligne",
+    "collapseUnchanged": "Réduire les zones inchangées"
+  }
 }

@@ -1,0 +1,63 @@
+{
+  "badge": "TAILSCALE 전용",
+  "title": "PePe 원격 공유",
+  "status": {
+    "running": "공유 중",
+    "stopped": "공유 꺼짐",
+    "clients": "접속 브라우저 {{count}}대",
+    "stoppedHelp": "외부에서 PePe 화면을 볼 수 없습니다."
+  },
+  "address": "브라우저 접속 주소",
+  "copy": "복사",
+  "copied": "복사됨",
+  "close": "닫기",
+  "runningHelp": "같은 Tailscale 네트워크의 PC나 휴대폰 브라우저에서 주소를 열고 PIN을 입력하세요.",
+  "start": "원격 공유 시작",
+  "starting": "공유 서버 여는 중...",
+  "stop": "원격 공유 중지",
+  "tailscale": {
+    "installRequired": "Tailscale 설치 필요",
+    "connected": "Tailscale 연결됨",
+    "connectionRequired": "Tailscale 연결 필요",
+    "installHelp": "먼저 Tailscale을 설치하고 로그인해 주세요.",
+    "connectionHelp": "Tailscale을 실행하고 네트워크 연결 상태를 확인해 주세요."
+  },
+  "intro": {
+    "title": "PePe 창만 공유합니다.",
+    "body": "Windows 바탕화면이나 다른 프로그램은 보이지 않습니다. 연결된 브라우저에서는 PePe 내부 클릭, 스크롤, 키보드 입력을 제어할 수 있습니다."
+  },
+  "pin": {
+    "random": "랜덤 PIN",
+    "randomHelp": "공유를 시작할 때마다 새 PIN 생성",
+    "fixed": "고정 PIN",
+    "fixedHelp": "항상 같은 6자리 PIN 사용",
+    "oneTime": "일회용 PIN",
+    "fixedActive": "고정 PIN 사용 중",
+    "placeholder": "숫자 6자리"
+  },
+  "client": {
+    "loginHelp": "PePe 화면에 표시된 6자리 PIN을 입력하세요.",
+    "connect": "연결",
+    "endedTitle": "원격 공유가 종료되었습니다",
+    "endedHelp": "PePe에서 공유를 다시 시작한 뒤 재접속해 주세요.",
+    "reload": "접속 화면으로 돌아가기",
+    "directControl": "화면을 터치하거나 클릭해 제어",
+    "virtualMouse": "가상 마우스",
+    "fitScreen": "화면 맞춤",
+    "collapse": "접기",
+    "scrollUp": "스크롤 ▲",
+    "keyboard": "키보드",
+    "scrollDown": "스크롤 ▼",
+    "leftClick": "좌클릭",
+    "doubleClick": "더블클릭",
+    "rightClick": "우클릭",
+    "touchpadHint": "손가락으로 커서 이동\n탭하여 클릭",
+    "pinRequired": "6자리 PIN을 입력하세요.",
+    "invalidPin": "PIN이 올바르지 않거나 공유가 종료되었습니다."
+  },
+  "errors": {
+    "tailscaleNotInstalled": "Tailscale이 설치되어 있지 않습니다. Tailscale을 설치하고 로그인한 뒤 다시 시도하세요.",
+    "tailscaleDisconnected": "Tailscale이 설치되어 있지만 연결되어 있지 않습니다. Tailscale을 실행하고 네트워크에 연결해 주세요.",
+    "invalidFixedPin": "고정 PIN은 숫자 6자리로 입력해 주세요."
+  }
+}

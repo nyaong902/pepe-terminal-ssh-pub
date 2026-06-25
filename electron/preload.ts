@@ -207,6 +207,10 @@ contextBridge.exposeInMainWorld('api', {
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
   windowClose: () => ipcRenderer.invoke('window:close'),
   windowFocus: () => ipcRenderer.invoke('window:focus'),
+  remoteShareState: () => ipcRenderer.invoke('remote-share:state'),
+  remoteShareStart: (options?: { port?: number; pinMode?: 'random' | 'fixed'; fixedPin?: string }) =>
+    ipcRenderer.invoke('remote-share:start', options),
+  remoteShareStop: () => ipcRenderer.invoke('remote-share:stop'),
   windowIsMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   // 탭 분리(멀티 윈도우)
   detachTab: (payload: any, bounds?: any) => ipcRenderer.invoke('window:detach-tab', { payload, bounds }),

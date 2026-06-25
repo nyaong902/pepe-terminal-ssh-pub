@@ -1,0 +1,63 @@
+{
+  "badge": "TAILSCALE ONLY",
+  "title": "PePe Remote Share",
+  "status": {
+    "running": "Sharing",
+    "stopped": "Sharing off",
+    "clients": "{{count}} browser connected",
+    "stoppedHelp": "The PePe screen is not available remotely."
+  },
+  "address": "Browser address",
+  "copy": "Copy",
+  "copied": "Copied",
+  "close": "Close",
+  "runningHelp": "Open this address on a PC or phone in the same Tailscale network and enter the PIN.",
+  "start": "Start remote sharing",
+  "starting": "Starting share server...",
+  "stop": "Stop remote sharing",
+  "tailscale": {
+    "installRequired": "Tailscale installation required",
+    "connected": "Tailscale connected",
+    "connectionRequired": "Tailscale connection required",
+    "installHelp": "Install Tailscale and sign in first.",
+    "connectionHelp": "Start Tailscale and check its network connection."
+  },
+  "intro": {
+    "title": "Only the PePe window is shared.",
+    "body": "The Windows desktop and other applications remain hidden. Connected browsers can control clicks, scrolling, and keyboard input inside PePe."
+  },
+  "pin": {
+    "random": "Random PIN",
+    "randomHelp": "Generate a new PIN whenever sharing starts",
+    "fixed": "Fixed PIN",
+    "fixedHelp": "Always use the same six-digit PIN",
+    "oneTime": "One-time PIN",
+    "fixedActive": "Fixed PIN active",
+    "placeholder": "Six digits"
+  },
+  "client": {
+    "loginHelp": "Enter the six-digit PIN shown in PePe.",
+    "connect": "Connect",
+    "endedTitle": "Remote sharing has ended",
+    "endedHelp": "Restart sharing in PePe and reconnect.",
+    "reload": "Return to connection screen",
+    "directControl": "Touch or click the screen to control",
+    "virtualMouse": "Virtual mouse",
+    "fitScreen": "Fit screen",
+    "collapse": "Collapse",
+    "scrollUp": "Scroll ▲",
+    "keyboard": "Keyboard",
+    "scrollDown": "Scroll ▼",
+    "leftClick": "Left click",
+    "doubleClick": "Double click",
+    "rightClick": "Right click",
+    "touchpadHint": "Move the cursor with one finger\nTap to click",
+    "pinRequired": "Enter a six-digit PIN.",
+    "invalidPin": "The PIN is invalid or sharing has ended."
+  },
+  "errors": {
+    "tailscaleNotInstalled": "Tailscale is not installed. Install it and sign in before trying again.",
+    "tailscaleDisconnected": "Tailscale is installed but disconnected. Start it and connect to the network.",
+    "invalidFixedPin": "The fixed PIN must contain six digits."
+  }
+}
