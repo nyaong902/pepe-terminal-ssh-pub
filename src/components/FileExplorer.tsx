@@ -93,7 +93,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   const [transferring, setTransferring] = useState(false);
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const rightSourceSetRef = React.useRef(false);
+  // initialState 로 시작했으면(분리 창에서 복원) 자동 우측-원격-설정 effect 비활성 — 복원 상태 우선.
+  const rightSourceSetRef = React.useRef<boolean>(!!(initialState && (initialState.rightTabs?.length || initialState.leftTabs?.length)));
   const [showSftpConnect, setShowSftpConnect] = useState<'left' | 'right' | null>(null);
   const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left');
   const [sftpHost, setSftpHost] = useState('');
@@ -200,10 +201,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       try {
         const home = await api?.feGetHome?.();
         if (home) {
-          setLeftPath(home);
-          // initialRemotePath(활성 SSH pwd) 가 있으면 우측은 원격 경로로 열 것이므로 로컬 home 으로 덮어쓰지 않음.
-          const hasRemoteInit = !!(initialRemotePath && initialRemotePath.trim() && initialRemotePath !== '/');
-          if (!hasRemoteInit) setRightPath(home);
+          // initialState 로 복원된 상태에서는 저장된 path 를 덮어쓰지 않는다.
+          const hasRestoredState = !!(initialState && (initialState.leftTabs?.length || initialState.rightTabs?.length));
+          if (!hasRestoredState) {
+            setLeftPath(home);
+            const hasRemoteInit = !!(initialRemotePath && initialRemotePath.trim() && initialRemotePath !== '/');
+            if (!hasRemoteInit) setRightPath(home);
+          }
         }
       } catch {}
       setInitDone(true);
