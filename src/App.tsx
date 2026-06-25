@@ -5149,6 +5149,7 @@ function App() {
               defaultSshSession={defaultSsh}
               pinned={claudeChatPinned}
               onTogglePin={() => setClaudeChatPinned(p => !p)}
+              visible={claudeChatPinned || claudeChatVisible}
               view={claudeChatView}
               onViewChange={setClaudeChatView}
               aiAgent={aiAgent}

@@ -58,9 +58,10 @@ function scanLabel(payload: any) {
 
 export const MessengerWorkspace: React.FC<{
   connectedSessions?: ConnectedSession[];
+  visible?: boolean;
   initialState?: { selectedPeerId?: string; text?: string; settingsExpanded?: boolean } | null;
   onStateChange?: (state: { selectedPeerId: string; text: string; settingsExpanded: boolean }) => void;
-}> = ({ connectedSessions = [], initialState, onStateChange }) => {
+}> = ({ connectedSessions = [], visible = true, initialState, onStateChange }) => {
   const [state, setState] = useState<State>(emptyState);
   const [selectedPeerId, setSelectedPeerId] = useState(() => {
     if (initialState?.selectedPeerId) return initialState.selectedPeerId;
@@ -76,6 +77,12 @@ export const MessengerWorkspace: React.FC<{
     try { onStateChange({ selectedPeerId, text, settingsExpanded }); } catch {}
   }, [selectedPeerId, text, settingsExpanded, onStateChange]);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const msgListRef = useRef<HTMLElement | null>(null);
+  const scrollMsgsToBottom = (delay = 0) => {
+    const run = () => { const el = msgListRef.current; if (el) el.scrollTop = el.scrollHeight; };
+    if (delay > 0) setTimeout(run, delay);
+    else requestAnimationFrame(run);
+  };
   const [readMarks, setReadMarks] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }
   });
@@ -139,6 +146,18 @@ export const MessengerWorkspace: React.FC<{
 
   const selectedPeer = state.peers.find(p => p.id === selectedPeerId);
   const messages = useMemo(() => state.messages.filter(m => m.peerId === selectedPeerId).sort((a, b) => a.ts - b.ts), [state.messages, selectedPeerId]);
+  // 새 메시지/대화 전환 시 항상 맨 아래로.
+  useEffect(() => {
+    scrollMsgsToBottom();
+    scrollMsgsToBottom(60);
+  }, [messages.length, selectedPeerId]);
+  // 패널이 숨김→표시로 전환될 때(unpinned) — 숨김 동안 scrollHeight 가 0 이라 위로 올라가 있으므로 맨 아래로.
+  useEffect(() => {
+    if (!visible) return;
+    scrollMsgsToBottom();
+    scrollMsgsToBottom(60);
+    scrollMsgsToBottom(160);
+  }, [visible]);
   const storedName = state.prefs.displayName ?? '';
   const fallbackName = state.self?.name || '';
 
@@ -463,7 +482,7 @@ export const MessengerWorkspace: React.FC<{
           )}
         </header>
 
-        <section className="messenger-messages">
+        <section className="messenger-messages" ref={msgListRef}>
           {messages.length === 0 && <div className="messenger-empty large">아직 대화가 없습니다.</div>}
           {messages.map(m => (
             <div key={m.id} className={`messenger-bubble ${m.direction}`}>

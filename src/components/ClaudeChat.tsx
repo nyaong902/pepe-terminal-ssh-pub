@@ -1179,6 +1179,7 @@ type Props = {
   defaultSshSession?: { termId: string; label: string } | null;
   pinned?: boolean;
   onTogglePin?: () => void;
+  visible?: boolean;
   view?: 'ai' | 'messenger';
   onViewChange?: (view: 'ai' | 'messenger') => void;
   aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
@@ -1187,7 +1188,7 @@ type Props = {
 
 let sessionCounter = 0;
 
-export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange }) => {
+export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange }) => {
   const activeView = view;
   // 채팅창 내에서 독립적으로 전환 가능한 에이전트 (전역 설정과 분리)
   const [currentAgent, setCurrentAgentState] = useState<AgentType>(aiAgent);
@@ -2518,6 +2519,14 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     scrollChatToBottom();
     scrollChatToBottom(80);
   }, [activeHistoryId, messages.length, scrollChatToBottom]);
+  // unpinned 상태에서 패널이 보여질 때(또는 AI 뷰로 전환 시) — 숨김 동안 scrollHeight 가 0 이라
+  // 위로 올라가 있으므로, 표시되는 순간 항상 맨 아래로 내린다. (레이아웃 정착 위해 지연 재시도)
+  useEffect(() => {
+    if (!visible || activeView !== 'ai') return;
+    scrollChatToBottom();
+    scrollChatToBottom(60);
+    scrollChatToBottom(160);
+  }, [visible, activeView, scrollChatToBottom]);
 
   // Mermaid 다이어그램 렌더링 — messages 변경 / pendingPlan 시 미렌더 mermaid 코드블록을 SVG 로 변환
   useEffect(() => {
@@ -4457,6 +4466,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       {activeView === 'messenger' ? (
         <div className="claude-chat-messenger-pane">
           <MessengerWorkspace
+            visible={visible && activeView === 'messenger'}
             connectedSessions={connectedSessions.map(s => ({
               panelId: s.termId,
               sessionName: s.label,
