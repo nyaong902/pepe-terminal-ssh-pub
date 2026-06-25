@@ -36,8 +36,13 @@ type DiffRow = {
 
 type Props = {
   sessions: PanelSession[];
-  initialState?: { leftPath?: string; rightPath?: string; leftSession?: any; rightSession?: any; filterText?: string; hideSame?: boolean; hideUnpaired?: boolean } | null;
-  onStateChange?: (state: { leftPath: string; rightPath: string; leftSession: any; rightSession: any; filterText: string; hideSame: boolean; hideUnpaired: boolean }) => void;
+  initialState?: {
+    leftPath?: string; rightPath?: string; filterText?: string; hideSame?: boolean; hideUnpaired?: boolean;
+    rows?: DiffRow[]; selectedRel?: string | null;
+    leftContent?: string; rightContent?: string; leftOriginal?: string; rightOriginal?: string;
+    leftEol?: string; rightEol?: string; leftEnc?: string; rightEnc?: string;
+  } | null;
+  onStateChange?: (state: any) => void;
 };
 
 const ROW_H = 22;
@@ -80,7 +85,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
 
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState('');
-  const [rows, setRows] = useState<DiffRow[]>([]);
+  const [rows, setRows] = useState<DiffRow[]>(initialState?.rows || []);
   const [truncated, setTruncated] = useState(false);
   const [hideSame, setHideSame] = useState(initialState?.hideSame ?? true);
   const [hideUnpaired, setHideUnpaired] = useState(initialState?.hideUnpaired ?? false);
@@ -89,29 +94,36 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const [sortBy, setSortBy] = useState<'path' | 'status' | 'leftSize' | 'rightSize'>('path');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  const [selectedRel, setSelectedRel] = useState<string | null>(null);
-  const [leftContent, setLeftContent] = useState<string>('');
-  const [rightContent, setRightContent] = useState<string>('');
-  const [leftOriginal, setLeftOriginal] = useState<string>(''); // 디스크에서 읽은 원본 (dirty 판단용)
-  const [rightOriginal, setRightOriginal] = useState<string>('');
+  const [selectedRel, setSelectedRel] = useState<string | null>(initialState?.selectedRel ?? null);
+  const [leftContent, setLeftContent] = useState<string>(initialState?.leftContent || '');
+  const [rightContent, setRightContent] = useState<string>(initialState?.rightContent || '');
+  const [leftOriginal, setLeftOriginal] = useState<string>(initialState?.leftOriginal || '');
+  const [rightOriginal, setRightOriginal] = useState<string>(initialState?.rightOriginal || '');
   const [contentErr, setContentErr] = useState<string>('');
   const [contentLoading, setContentLoading] = useState(false);
   const [savingMsg, setSavingMsg] = useState<string>('');
-  const [sameNote, setSameNote]   = useState<string>(''); // 크기 달라도 내용 동일 안내
-  // All match 모달 — 두 파일이 완전히 일치할 때 띄움. 사용자가 X 닫기 전까지 유지.
+  const [sameNote, setSameNote]   = useState<string>('');
   const [allMatchModal, setAllMatchModal] = useState<{ left: string; right: string } | null>(null);
-  const [leftEol,  setLeftEol]    = useState('');
-  const [rightEol, setRightEol]   = useState('');
-  const [leftEnc,  setLeftEnc]    = useState('');
-  const [rightEnc, setRightEnc]   = useState('');
+  const [leftEol,  setLeftEol]    = useState(initialState?.leftEol || '');
+  const [rightEol, setRightEol]   = useState(initialState?.rightEol || '');
+  const [leftEnc,  setLeftEnc]    = useState(initialState?.leftEnc || '');
+  const [rightEnc, setRightEnc]   = useState(initialState?.rightEnc || '');
   // 선택된 파일의 양쪽 절대경로 (저장용)
   const [leftFilePath, setLeftFilePath] = useState<string>(initialState?.leftPath || '');
   const [rightFilePath, setRightFilePath] = useState<string>(initialState?.rightPath || '');
-  // 부모에 상태 보고 (분리 시 사용)
+  // 부모에 상태 보고 — 작업 데이터(rows/content/선택) 전부 포함해야 새 창에서 그대로 복원됨.
   useEffect(() => {
     if (!onStateChange) return;
-    try { onStateChange({ leftPath: leftFilePath, rightPath: rightFilePath, leftSession: null, rightSession: null, filterText, hideSame, hideUnpaired }); } catch {}
-  }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired, onStateChange]);
+    try {
+      onStateChange({
+        leftPath: leftFilePath, rightPath: rightFilePath, filterText, hideSame, hideUnpaired,
+        rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
+        leftEol, rightEol, leftEnc, rightEnc,
+      });
+    } catch {}
+  }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired,
+      rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
+      leftEol, rightEol, leftEnc, rightEnc, onStateChange]);
   // 상단 경로 input 의 편집 중 값 — Enter 누르기 전까지는 실제 경로와 분리되어 있음
   const [leftPathDraft, setLeftPathDraft] = useState<string>('');
   const [rightPathDraft, setRightPathDraft] = useState<string>('');

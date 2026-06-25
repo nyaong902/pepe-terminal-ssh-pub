@@ -49,8 +49,11 @@ const CustomLLMIcon = () => (
 
 type LogProps = {
   sessions: PanelSession[];
-  initialState?: { srcMode?: 'local' | 'remote'; srcTermId?: string; srcPath?: string } | null;
-  onStateChange?: (state: { srcMode: 'local' | 'remote'; srcTermId: string; srcPath: string }) => void;
+  initialState?: {
+    srcMode?: 'local' | 'remote'; srcTermId?: string; srcPath?: string;
+    entries?: LogEntry[]; seedEntries?: LogEntry[];
+  } | null;
+  onStateChange?: (state: any) => void;
 };
 
 type LogEntry = {
@@ -229,11 +232,6 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
   const [srcMode, setSrcMode] = useState<'local' | 'remote'>(initialState?.srcMode || 'local');
   const [srcTermId, setSrcTermId] = useState<string>(initialState?.srcTermId || '');
   const [srcPath, setSrcPath] = useState<string>(initialState?.srcPath || '');
-  // 부모에 상태 보고 — 분리 시 직렬화.
-  useEffect(() => {
-    if (!onStateChange) return;
-    try { onStateChange({ srcMode, srcTermId, srcPath }); } catch {}
-  }, [srcMode, srcTermId, srcPath, onStateChange]);
   // sessions.json 메타데이터 캐시 — 세션 선택 시 logPath 자동 입력용
   const sessionMetaRef = useRef<Map<string, any>>(new Map());
   useEffect(() => {
@@ -250,9 +248,14 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
   const [loading, setLoading] = useState(false);
   const [loadErr, setLoadErr] = useState<string>('');
 
-  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [entries, setEntries] = useState<LogEntry[]>(initialState?.entries || []);
   // 실시간 watch 모드 — 옵션 생성용 seed (초기 파일 내용 파싱). 화면 entries 와 분리.
-  const [seedEntries, setSeedEntries] = useState<LogEntry[]>([]);
+  const [seedEntries, setSeedEntries] = useState<LogEntry[]>(initialState?.seedEntries || []);
+  // 부모에 상태 보고 — 작업 데이터(parsed entries) 포함.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try { onStateChange({ srcMode, srcTermId, srcPath, entries, seedEntries }); } catch {}
+  }, [srcMode, srcTermId, srcPath, entries, seedEntries, onStateChange]);
   const [watching, setWatching] = useState(false);
   const watchIdRef = useRef<string>('');
   const watchBufRef = useRef<string>('');
