@@ -93,11 +93,18 @@ function get(url, dest, redirects = 0) {
 }
 
 function extractZip(zipFile, destDir) {
-  // PowerShell Expand-Archive is available on every modern Windows host.
-  const r = spawnSync('powershell', ['-NoProfile', '-Command',
+  // Windows 10+ bundles bsdtar, which extracts ZIP files without depending on
+  // the optional Microsoft.PowerShell.Archive module.
+  const tar = spawnSync('tar', ['-xf', zipFile, '-C', destDir], { stdio: 'inherit' });
+  if (tar.status === 0) return;
+
+  console.warn(`[download-jre] tar extraction failed (status=${tar.status}); trying PowerShell fallback`);
+  const powershell = spawnSync('powershell', ['-NoProfile', '-Command',
     `Expand-Archive -LiteralPath '${zipFile.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force`,
   ], { stdio: 'inherit' });
-  if (r.status !== 0) throw new Error('Expand-Archive failed');
+  if (powershell.status !== 0) {
+    throw new Error(`ZIP extraction failed (tar=${tar.status}, Expand-Archive=${powershell.status})`);
+  }
 }
 
 function extractTarGz(tarFile, destDir) {

@@ -7302,6 +7302,8 @@ mark.claude-search-hit.current {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
 .remote-share-backdrop {
   z-index: 12000;
   background: rgba(2, 9, 14, 0.74);
