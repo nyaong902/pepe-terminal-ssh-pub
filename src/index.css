@@ -41,8 +41,8 @@ input, textarea, select,
 .xterm, .xterm *,
 .panel-terminal-area,
 .monaco-editor, .monaco-editor *,
-.claude-chat-bubble, .claude-chat-bubble *,
-.claude-chat-message, .claude-chat-message *,
+.claude-chat-messages, .claude-chat-messages *,
+.claude-chat-msg-content, .claude-chat-msg-content *,
 .compare-diff, .compare-diff *,
 pre, code, .markdown-body, .markdown-body * {
   -webkit-user-select: text;
