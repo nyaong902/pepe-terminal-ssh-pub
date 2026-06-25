@@ -1,4 +1,4 @@
-﻿// electron/main.ts
+// electron/main.ts
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
@@ -402,6 +402,7 @@ app.whenReady().then(() => {
   cleanupStaleTempFiles();
   createWindow();
   installX11DisplayHook();
+  void messengerStartService();
 
   // 자동 업데이트 (GitHub Releases) — IPC 배선 + 시작 시 1회 확인
   setupAutoUpdater(() => mainWindow);
@@ -913,7 +914,7 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
   }
 }
 
-ipcMain.handle('messenger:start', async (_e, prefs?: MessengerPrefs) => {
+async function messengerStartService(prefs?: MessengerPrefs) {
   const dgram = require('dgram');
   const net = require('net');
   messengerPrefs = { retainEnabled: false, retainDays: 30, ...(loadUIPrefs().messenger || {}), ...(prefs || {}) };
@@ -952,8 +953,6 @@ ipcMain.handle('messenger:start', async (_e, prefs?: MessengerPrefs) => {
         if (p?.app !== 'pepe-terminal-ssh' || p?.type !== 'hello' || p?.id === messengerId) return;
         messengerPeers.set(String(p.id), { id: String(p.id), name: String(p.name || 'PePe'), host: rinfo.address, port: Number(p.port) || 0, lastSeen: Date.now() });
         messengerSavePeers();
-        // Answer an initiating hello once with a reply hello. Reply packets are
-        // not answered again, which keeps presence mutual without a ping-pong loop.
         if (!p.reply) messengerSendHelloTo(rinfo.address, true);
         messengerEmit({ type: 'peers', state: messengerState() });
       } catch {}
@@ -974,7 +973,8 @@ ipcMain.handle('messenger:start', async (_e, prefs?: MessengerPrefs) => {
   messengerBroadcast();
   messengerKeepalive();
   return { success: true, state: messengerState() };
-});
+}
+ipcMain.handle('messenger:start', async (_e, prefs?: MessengerPrefs) => messengerStartService(prefs));
 ipcMain.handle('messenger:stop', () => {
   if (messengerTimer) clearInterval(messengerTimer);
   messengerTimer = null;
