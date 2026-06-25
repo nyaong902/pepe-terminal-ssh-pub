@@ -36,6 +36,8 @@ type DiffRow = {
 
 type Props = {
   sessions: PanelSession[];
+  initialState?: { leftPath?: string; rightPath?: string; leftSession?: any; rightSession?: any; filterText?: string; hideSame?: boolean; hideUnpaired?: boolean } | null;
+  onStateChange?: (state: { leftPath: string; rightPath: string; leftSession: any; rightSession: any; filterText: string; hideSame: boolean; hideUnpaired: boolean }) => void;
 };
 
 const ROW_H = 22;
@@ -73,16 +75,16 @@ function formatSize(n: number | undefined): string {
   return (n / 1024 / 1024).toFixed(1) + 'M';
 }
 
-export const CompareWorkspace: React.FC<Props> = ({ sessions }) => {
+export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onStateChange }) => {
   const { t } = useTranslation('compare');
 
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState('');
   const [rows, setRows] = useState<DiffRow[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [hideSame, setHideSame] = useState(true);
-  const [hideUnpaired, setHideUnpaired] = useState(false); // 한쪽만 있는 항목 숨김
-  const [filterText, setFilterText] = useState('');
+  const [hideSame, setHideSame] = useState(initialState?.hideSame ?? true);
+  const [hideUnpaired, setHideUnpaired] = useState(initialState?.hideUnpaired ?? false);
+  const [filterText, setFilterText] = useState(initialState?.filterText || '');
   const [filterStatus, setFilterStatus] = useState<'' | DiffStatus>('');
   const [sortBy, setSortBy] = useState<'path' | 'status' | 'leftSize' | 'rightSize'>('path');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -103,8 +105,13 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions }) => {
   const [leftEnc,  setLeftEnc]    = useState('');
   const [rightEnc, setRightEnc]   = useState('');
   // 선택된 파일의 양쪽 절대경로 (저장용)
-  const [leftFilePath, setLeftFilePath] = useState<string>('');
-  const [rightFilePath, setRightFilePath] = useState<string>('');
+  const [leftFilePath, setLeftFilePath] = useState<string>(initialState?.leftPath || '');
+  const [rightFilePath, setRightFilePath] = useState<string>(initialState?.rightPath || '');
+  // 부모에 상태 보고 (분리 시 사용)
+  useEffect(() => {
+    if (!onStateChange) return;
+    try { onStateChange({ leftPath: leftFilePath, rightPath: rightFilePath, leftSession: null, rightSession: null, filterText, hideSame, hideUnpaired }); } catch {}
+  }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired, onStateChange]);
   // 상단 경로 input 의 편집 중 값 — Enter 누르기 전까지는 실제 경로와 분리되어 있음
   const [leftPathDraft, setLeftPathDraft] = useState<string>('');
   const [rightPathDraft, setRightPathDraft] = useState<string>('');

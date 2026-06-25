@@ -60,7 +60,7 @@ export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from '.
 
 export type TabId = string;
 export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any };
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
 function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
@@ -2018,6 +2018,8 @@ function App() {
   // 라이브 세션 재부착: 세션 매핑 등록 + 연결 상태 시딩 (이후 출력은 broadcast 로 수신, 재연결 방지)
   // FileExplorer 인스턴스 별 현재 상태(leftTabs/rightTabs/...) — 분리 직전 serializeTab 이 끌어다 쓴다.
   const fileExplorerStateRef = useRef<Map<string, any>>(new Map());
+  // 그 외 모든 워크스페이스 (메신저/파일비교/브라우저/로그분석) 공통 — tab.id → state.
+  const workspaceStateRef = useRef<Map<string, any>>(new Map());
   // 다른 탭에서 끌어온 sibling 세션 스냅샷 — FileExplorer 가 비어보이지 않도록 보관.
   const [carriedSiblingSessions, setCarriedSiblingSessions] = useState<{ termId: string; sessionId: string; sessionName: string; host: string }[]>([]);
   const seedReattach = useCallback(async (tab: Tab, siblings?: { termId: string; sessionId: string; sessionName: string; host: string; quickSession?: any }[]) => {
@@ -2148,8 +2150,8 @@ function App() {
     } catch { return []; }
   };
   const serializeTab = (tab: Tab) => {
-    // FileExplorer 최신 상태(ref) 가 있으면 그걸로 덮어 직렬화.
     const liveFeState = fileExplorerStateRef.current.get(tab.id);
+    const liveWsState = workspaceStateRef.current.get(tab.id);
     return {
       kind: 'workspace' as const,
       buffers: collectTabBuffers(tab),
@@ -2160,6 +2162,7 @@ function App() {
         sqlTool: tab.sqlTool, editor: tab.editor,
         initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
         fileExplorerState: liveFeState || tab.fileExplorerState,
+        workspaceState: liveWsState || tab.workspaceState,
       })),
     };
   };
@@ -4047,6 +4050,8 @@ function App() {
                 initialUrl="https://www.google.com"
                 connectedSessions={connectedBrowserSessions}
                 onTitleChange={(title) => renameTab(t.id, `🌐 ${title}`)}
+                initialState={t.workspaceState}
+                onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
             </ErrorBoundary>
           </div>
@@ -4054,14 +4059,22 @@ function App() {
         {tabs.filter(t => t.type === 'compare').map(t => (
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label="파일 비교">
-              <CompareWorkspace sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)} />
+              <CompareWorkspace
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                initialState={t.workspaceState}
+                onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
+              />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'logAnalyzer').map(t => (
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label="로그 분석">
-              <LogAnalyzer sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)} />
+              <LogAnalyzer
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                initialState={t.workspaceState}
+                onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
+              />
             </ErrorBoundary>
           </div>
         ))}
@@ -4075,7 +4088,10 @@ function App() {
         {tabs.filter(t => t.type === 'messenger').map(t => (
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label="메신저">
-              <MessengerWorkspace />
+              <MessengerWorkspace
+                initialState={t.workspaceState}
+                onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
+              />
             </ErrorBoundary>
           </div>
         ))}

@@ -47,8 +47,10 @@ const CustomLLMIcon = () => (
   </svg>
 );
 
-type Props = {
+type LogProps = {
   sessions: PanelSession[];
+  initialState?: { srcMode?: 'local' | 'remote'; srcTermId?: string; srcPath?: string } | null;
+  onStateChange?: (state: { srcMode: 'local' | 'remote'; srcTermId: string; srcPath: string }) => void;
 };
 
 type LogEntry = {
@@ -222,11 +224,16 @@ const MultiSelectDropdown: React.FC<{
   );
 };
 
-export const LogAnalyzer: React.FC<Props> = ({ sessions }) => {
+export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStateChange }) => {
   const { t } = useTranslation('logAnalyzer');
-  const [srcMode, setSrcMode] = useState<'local' | 'remote'>('local');
-  const [srcTermId, setSrcTermId] = useState<string>('');
-  const [srcPath, setSrcPath] = useState<string>('');
+  const [srcMode, setSrcMode] = useState<'local' | 'remote'>(initialState?.srcMode || 'local');
+  const [srcTermId, setSrcTermId] = useState<string>(initialState?.srcTermId || '');
+  const [srcPath, setSrcPath] = useState<string>(initialState?.srcPath || '');
+  // 부모에 상태 보고 — 분리 시 직렬화.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try { onStateChange({ srcMode, srcTermId, srcPath }); } catch {}
+  }, [srcMode, srcTermId, srcPath, onStateChange]);
   // sessions.json 메타데이터 캐시 — 세션 선택 시 logPath 자동 입력용
   const sessionMetaRef = useRef<Map<string, any>>(new Map());
   useEffect(() => {

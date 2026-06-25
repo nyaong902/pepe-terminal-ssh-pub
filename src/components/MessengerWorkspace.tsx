@@ -56,13 +56,22 @@ function scanLabel(payload: any) {
   return ranges.length ? ranges.join(', ') : '할당 IP 대역';
 }
 
-export const MessengerWorkspace: React.FC<{ connectedSessions?: ConnectedSession[] }> = ({ connectedSessions = [] }) => {
+export const MessengerWorkspace: React.FC<{
+  connectedSessions?: ConnectedSession[];
+  initialState?: { selectedPeerId?: string; text?: string; settingsExpanded?: boolean } | null;
+  onStateChange?: (state: { selectedPeerId: string; text: string; settingsExpanded: boolean }) => void;
+}> = ({ connectedSessions = [], initialState, onStateChange }) => {
   const [state, setState] = useState<State>(emptyState);
-  const [selectedPeerId, setSelectedPeerId] = useState('');
-  const [text, setText] = useState('');
+  const [selectedPeerId, setSelectedPeerId] = useState(initialState?.selectedPeerId || '');
+  const [text, setText] = useState(initialState?.text || '');
   const [saving, setSaving] = useState(false);
   const [scanText, setScanText] = useState('');
-  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [settingsExpanded, setSettingsExpanded] = useState(initialState?.settingsExpanded ?? false);
+  // 부모에게 상태 보고 — 분리 시 직렬화.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try { onStateChange({ selectedPeerId, text, settingsExpanded }); } catch {}
+  }, [selectedPeerId, text, settingsExpanded, onStateChange]);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [readMarks, setReadMarks] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }

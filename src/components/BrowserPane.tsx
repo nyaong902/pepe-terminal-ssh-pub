@@ -8,6 +8,9 @@ type Props = {
   initialUrl: string;
   onTitleChange?: (title: string) => void;
   connectedSessions?: ActiveSshTarget[];
+  // 새 창 분리/병합 시 상태 복원용.
+  initialState?: { editUrl?: string; zoom?: number; targetSessionId?: string; targetPanelId?: string } | null;
+  onStateChange?: (state: { editUrl: string; zoom: number; targetSessionId: string; targetPanelId: string }) => void;
 };
 
 type ActiveSshTarget = {
@@ -25,25 +28,30 @@ type StoredSession = {
   browserUrl?: string;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [] }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
   const partitionName = useMemo(
     () => `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     [],
   );
-  // src 는 초기 1회만 설정. 이후 네비게이션은 webview 내부에서 처리되며,
-  // src 를 state 로 묶어 갱신하면 리다이렉트마다 webview 가 reload 되어 무한 새로고침이 발생함.
-  const initialSrcRef = useRef(initialUrl);
-  const [editUrl, setEditUrl] = useState(initialUrl);
+  // 복원된 URL 이 있으면 그걸로 시작.
+  const startUrl = (initialState?.editUrl && initialState.editUrl.trim()) ? initialState.editUrl : initialUrl;
+  const initialSrcRef = useRef(startUrl);
+  const [editUrl, setEditUrl] = useState(startUrl);
   const [canBack, setCanBack] = useState(false);
   const [canFwd, setCanFwd] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [zoom, setZoom] = useState(1.0); // 1.0 = 100%
+  const [zoom, setZoom] = useState(initialState?.zoom ?? 1.0);
   const [sshTargets, setSshTargets] = useState<ActiveSshTarget[]>([]);
   const [storedSessions, setStoredSessions] = useState<StoredSession[]>([]);
-  const [targetSessionId, setTargetSessionId] = useState<string>('');
-  const [targetPanelId, setTargetPanelId] = useState<string>('');
+  const [targetSessionId, setTargetSessionId] = useState<string>(initialState?.targetSessionId || '');
+  const [targetPanelId, setTargetPanelId] = useState<string>(initialState?.targetPanelId || '');
+  // 부모에게 상태 변경 보고 — 분리 시 직렬화.
+  useEffect(() => {
+    if (!onStateChange) return;
+    try { onStateChange({ editUrl, zoom, targetSessionId, targetPanelId }); } catch {}
+  }, [editUrl, zoom, targetSessionId, targetPanelId, onStateChange]);
   const [proxyState, setProxyState] = useState<{ proxyId: string; localPort: number; panelId: string } | null>(null);
   const [proxyBusy, setProxyBusy] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
