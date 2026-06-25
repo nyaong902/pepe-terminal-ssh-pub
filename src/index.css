@@ -29,6 +29,26 @@ body {
   box-sizing: border-box;
 }
 
+/* UI 라벨/버튼/탭 등 일반 chrome 요소는 사용자가 텍스트 드래그 선택하지 못하게 차단.
+   터미널, 입력 필드, 코드 에디터, 코드 블록 등 "실제 텍스트" 영역만 user-select 활성. */
+html, body, #root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 텍스트 입력/선택이 의미 있는 영역 — 명시적으로 다시 켠다 */
+input, textarea, select,
+[contenteditable="true"],
+.xterm, .xterm *,
+.panel-terminal-area,
+.monaco-editor, .monaco-editor *,
+.claude-chat-bubble, .claude-chat-bubble *,
+.claude-chat-message, .claude-chat-message *,
+.compare-diff, .compare-diff *,
+pre, code, .markdown-body, .markdown-body * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 button {
   border-radius: 4px;
   border: 1px solid transparent;
