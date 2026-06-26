@@ -87,6 +87,31 @@ class SSHBridge extends EventEmitter {
   // 생성 중인 worker promise — 동일 panelId로 중복 생성 방지
   private sftpWorkerPromises: Map<string, Promise<Worker>> = new Map();
   private scriptRunners: Map<string, ExpectSendRunner> = new Map();
+  // X11 서버 측 실패 hint 중복 방지 — panelId 별 1회만.
+  private x11HintEmitted: Set<string> = new Set();
+
+  /** ssh2 debug 에서 서버가 보내는 X11 관련 흔한 실패 패턴을 잡아 사용자 친화 안내 송출 */
+  private maybeEmitX11ServerHint(panelId: string, msg: string) {
+    if (this.x11HintEmitted.has(panelId)) return;
+    const m = msg || '';
+    let hint = '';
+    if (/no xauth program/i.test(m)) {
+      hint = 'X11 forwarding 실패 — 원격 서버에 xauth 가 없습니다.\n'
+        + '  RHEL/Oracle Linux/CentOS:  sudo yum install -y xorg-x11-xauth\n'
+        + '  Debian/Ubuntu:             sudo apt install -y xauth\n'
+        + '  Alpine:                    sudo apk add xauth\n'
+        + '  SUSE:                      sudo zypper install xauth\n'
+        + '설치 후 재접속하면 동작합니다.';
+    } else if (/x11 forwarding (request failed|disabled|not permitted)/i.test(m)) {
+      hint = 'X11 forwarding 실패 — 원격 sshd 설정에서 차단됨.\n'
+        + '/etc/ssh/sshd_config 에서 X11Forwarding yes 확인 후 sshd 재시작 필요.';
+    } else if (/refused our (request|x11)/i.test(m)) {
+      hint = 'X11 forwarding 거부됨 — 서버 sshd 설정 또는 권한 확인 필요.';
+    }
+    if (!hint) return;
+    this.x11HintEmitted.add(panelId);
+    this.emit('message', { type: 'x11-log', panelId, data: `[hint] ${hint}` });
+  }
   private pendingAuth: Map<string, (responses: string[]) => void> = new Map();
   // panelId → AI 에이전트(handleExec/SFTP) 진행 중 카운트 + 마지막 활동 시각.
   // cwd 폴러가 에이전트 작업 중에는 양보(스킵)하도록 — 공유 SSH 연결 경합·채널 고갈 방지.
@@ -267,6 +292,7 @@ class SSHBridge extends EventEmitter {
         if (msg.includes('x11') || msg.includes('X11')) {
           console.log(`[ssh2-debug] ${msg}`);
           this.emit('message', { type: 'x11-log', panelId, data: `[ssh2] ${msg}` });
+          this.maybeEmitX11ServerHint(panelId, msg);
         }
       };
     }
@@ -352,6 +378,7 @@ class SSHBridge extends EventEmitter {
         if (msg.includes('x11') || msg.includes('X11')) {
           console.log(`[ssh2-jump] ${msg}`);
           this.emit('message', { type: 'x11-log', panelId, data: `[ssh2-jump] ${msg}` });
+          this.maybeEmitX11ServerHint(panelId, msg);
         }
       } : undefined;
       jumpConn.connect({
@@ -1104,6 +1131,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     }
     this.sftpCache.delete(panelId);
     this.scriptRunners.delete(panelId);
+    this.x11HintEmitted.delete(panelId);
     this._cleanupDedicatedSftp(panelId);
     this._stopCwdPolling(panelId);
     this.shellPids.delete(panelId);

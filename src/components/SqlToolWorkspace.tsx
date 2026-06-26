@@ -109,6 +109,23 @@ export type FavoriteQuery = { id: string; name: string; sql: string; ts: number 
 type SqlSessionCache = { history: HistoryEntry[]; favorites: FavoriteQuery[]; editorTabs: EditorTab[] };
 const sqlStateCache = new Map<string, SqlSessionCache>();
 
+// 탭 분리/복원 시 sessionId 별 캐시 전체를 carry 하기 위한 helper.
+// App.tsx serializeTab 이 detach 직전 호출 → 새 창에서 마운트 직전 hydrate.
+export function serializeSqlSession(sessionId: string): Record<string, any> {
+  const snap: Record<string, any> = {};
+  const prefix = sessionId + ':';
+  for (const [k, v] of sqlStateCache.entries()) {
+    if (k === sessionId || k.startsWith(prefix)) snap[k] = v;
+  }
+  return snap;
+}
+export function hydrateSqlSession(_sessionId: string, data: Record<string, any> | null | undefined): void {
+  if (!data) return;
+  for (const [k, v] of Object.entries(data)) {
+    if (!sqlStateCache.has(k)) sqlStateCache.set(k, v as any);
+  }
+}
+
 function loadFavorites(sessionId: string): FavoriteQuery[] {
   return sqlStateCache.get(sessionId)?.favorites ?? [];
 }
@@ -336,9 +353,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     affectedText?: string; raw?: string; error?: string;
     lastTable: string;
   };
-  const [pinnedSnapshots, setPinnedSnapshots] = useState<ResultSnapshot[]>([]);
+  const [pinnedSnapshots, setPinnedSnapshots] = useState<ResultSnapshot[]>(() => (sqlStateCache.get(sessionId + ':pinSnaps') as any) || []);
   // 'current' = 라이브 결과. 그 외는 핀된 스냅샷 id.
-  const [viewingTabId, setViewingTabId] = useState<string>('current');
+  const [viewingTabId, setViewingTabId] = useState<string>(() => (sqlStateCache.get(sessionId + ':viewTabId') as any) || 'current');
   const DEFAULT_COL_W = 160;
   const INDEX_COL_W = 44;
   const MIN_COL_W = 40;
@@ -397,8 +414,12 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     }, 60000);
     return () => window.clearInterval(id);
   }, [connected, backend]);
-  const [result, setResult] = useState<ParsedResult | null>(null);
-  const [resultError, setResultError] = useState<string>('');
+  const [result, setResult] = useState<ParsedResult | null>(() => (sqlStateCache.get(sessionId + ':result') as any) || null);
+  const [resultError, setResultError] = useState<string>(() => (sqlStateCache.get(sessionId + ':resultErr') as any) || '');
+  useEffect(() => { sqlStateCache.set(sessionId + ':result' as any, result as any); }, [sessionId, result]);
+  useEffect(() => { sqlStateCache.set(sessionId + ':resultErr' as any, resultError as any); }, [sessionId, resultError]);
+  useEffect(() => { sqlStateCache.set(sessionId + ':viewTabId' as any, viewingTabId as any); }, [sessionId, viewingTabId]);
+  useEffect(() => { sqlStateCache.set(sessionId + ':pinSnaps' as any, pinnedSnapshots as any); }, [sessionId, pinnedSnapshots]);
   // 새 result 가 도착하면 그리드 사용자 상태 초기화 — 컬럼 구조가 바뀌었을 가능성
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setSortState(null); setColFilters(new Map()); setColWidths(new Map()); setPinnedCols(new Set()); setColOrder([]); }, [result?.columns.join('|'), viewingTabId]);
@@ -593,6 +614,27 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     setConnectError('');
     try {
       const api: any = (window as any).api || {};
+      // 1) 분리/복원으로 새로 마운트된 케이스 — sidecar 에 같은 connectionId 의 살아있는
+      // connection 이 있으면 SSH 터널/드라이버 로딩 다 건너뛰고 즉시 adopt.
+      try {
+        if (api.jdbcIsConnected) {
+          const probe = await api.jdbcIsConnected(`sql-${sessionId}`);
+          if (probe?.success && probe.result?.connected) {
+            const drivers0: any[] = (await api.jdbcListDrivers?.()) || [];
+            const def0 = resolveDriverFromList(drivers0, session.dbms);
+            if (def0) {
+              const adopted = new JdbcBackend(sessionId, session.dbms, def0);
+              const cr = await adopted.tryAdopt();
+              if (cr) {
+                console.log('[SqlTool] adopted existing JDBC connection', adopted.connectionId);
+                setBackend(adopted);
+                setConnected(true);
+                return;
+              }
+            }
+          }
+        }
+      } catch {}
       const drivers: any[] = (await api.jdbcListDrivers?.()) || [];
       const def = resolveDriverFromList(drivers, session.dbms);
       if (!def) {
@@ -693,9 +735,12 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     await connect();
   }, [backend, connect]);
 
-  // 언마운트 시 JDBC 연결 종료 (사이드카 측) + SSH 터널 정리
+  // 언마운트 시 JDBC 연결 종료 (사이드카 측) + SSH 터널 정리.
+  // 단, 탭 분리/복원 케이스(window.__preserveSqlConns)에서는 sidecar connection 을
+  // 그대로 두어 새 창이 같은 connectionId 로 adopt 할 수 있게 한다.
   useEffect(() => {
     return () => {
+      if ((window as any).__preserveSqlConns) return;
       const b = backend;
       if (b) {
         try { b.disconnect(); } catch {}

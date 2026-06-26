@@ -17,7 +17,7 @@ import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
-import { SqlToolWorkspace } from './components/SqlToolWorkspace';
+import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
@@ -2250,7 +2250,11 @@ function App() {
   };
   const serializeTab = (tab: Tab) => {
     const liveFeState = fileExplorerStateRef.current.get(tab.id);
-    const liveWsState = workspaceStateRef.current.get(tab.id);
+    let liveWsState = workspaceStateRef.current.get(tab.id);
+    // SqlTool 은 module-level sqlStateCache 에 상태를 보관 — 분리 시 직접 dump.
+    if (tab.type === 'sqlTool' && tab.sqlTool?.sessionId) {
+      liveWsState = serializeSqlSession(tab.sqlTool.sessionId);
+    }
     return {
       kind: 'workspace' as const,
       buffers: collectTabBuffers(tab),
@@ -2289,14 +2293,19 @@ function App() {
     if (!tab) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
+    // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
     (window as any).__preserveFileExplorerConns = true;
+    (window as any).__preserveSqlConns = true;
     try {
       const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
       if (res === undefined) return; // IPC 실패
       removeTabAfterMove(tabId, tab.layout);
     } finally {
       // unmount cleanup 이 다 끝난 다음 플래그 해제 (마이크로태스크 두 번)
-      setTimeout(() => { (window as any).__preserveFileExplorerConns = false; }, 0);
+      setTimeout(() => {
+        (window as any).__preserveFileExplorerConns = false;
+        (window as any).__preserveSqlConns = false;
+      }, 0);
     }
   }, []);
 
@@ -4226,13 +4235,19 @@ function App() {
           </div>
         ))}
         {/* SQL Tool 탭은 sessionId 별로 마운트 유지 (재방문 시 쿼리/연결 상태 보존) */}
-        {tabs.filter(t => t.type === 'sqlTool').map(t => (
-          <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
-            <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
-              <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
-            </ErrorBoundary>
-          </div>
-        ))}
+        {tabs.filter(t => t.type === 'sqlTool').map(t => {
+          // 분리/복원으로 carry 된 workspaceState 가 있으면 자식 마운트 전 cache 에 hydrate.
+          if (t.workspaceState && t.sqlTool?.sessionId) {
+            hydrateSqlSession(t.sqlTool.sessionId, t.workspaceState);
+          }
+          return (
+            <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+              <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
+                <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
+              </ErrorBoundary>
+            </div>
+          );
+        })}
 
         {activeTab && activeTab.type !== 'fileExplorer' && activeTab.type !== 'fileEditor' && activeTab.type !== 'browser' && activeTab.type !== 'compare' && activeTab.type !== 'logAnalyzer' && activeTab.type !== 'vpn' && activeTab.type !== 'i18nEditor' && activeTab.type !== 'sqlTool' && (() => {
           // 워크스페이스 레벨 파일 트리 — 선택된 패널의 활성 세션이 SSH 연결이면 표시

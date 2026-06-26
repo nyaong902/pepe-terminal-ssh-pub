@@ -120,6 +120,7 @@ contextBridge.exposeInMainWorld('api', {
   jdbcLoadDriver: (def: any) => ipcRenderer.invoke('jdbc:load-driver', def),
   jdbcConnect: (args: { connectionId: string; driver: any; url: string; user?: string; password?: string; props?: Record<string,string> }) =>
     ipcRenderer.invoke('jdbc:connect', args),
+  jdbcIsConnected: (connectionId: string) => ipcRenderer.invoke('jdbc:is-connected', connectionId),
   jdbcDisconnect: (connectionId: string) => ipcRenderer.invoke('jdbc:disconnect', connectionId),
   jdbcExec: (args: { connectionId: string; sql: string; maxRows?: number }) => ipcRenderer.invoke('jdbc:exec', args),
   jdbcTxBegin: (args: { connectionId: string }) => ipcRenderer.invoke('jdbc:tx-begin', args),

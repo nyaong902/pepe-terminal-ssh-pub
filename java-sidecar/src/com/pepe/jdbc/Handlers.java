@@ -30,6 +30,7 @@ public final class Handlers {
       case "ping":             return ping();
       case "loadDriver":       return loadDriver(params);
       case "connect":          return connect(params);
+      case "isConnected":      return isConnected(params);
       case "disconnect":       return disconnect(params);
       case "exec":             return exec(params);
       case "meta.tables":      return metaTables(params);
@@ -129,6 +130,34 @@ public final class Handlers {
     info.put("ok", true);
     info.put("connectionId", connId);
     return info;
+  }
+
+  // 분리/복원 시 같은 connectionId 로 sidecar 의 살아있는 connection 을 그대로 adopt 한다.
+  // 연결이 살아 있으면 connect 때와 동일한 info 를 돌려준다.
+  private Map<String, Object> isConnected(JsonNode p) {
+    String connId = req(p, "connectionId");
+    Connection c = conns.get(connId);
+    Map<String, Object> out = new LinkedHashMap<>();
+    out.put("ok", true);
+    if (c == null) { out.put("connected", false); return out; }
+    try {
+      if (c.isClosed()) { conns.remove(connId); out.put("connected", false); return out; }
+    } catch (Exception ignore) { out.put("connected", false); return out; }
+    out.put("connected", true);
+    Map<String, Object> info = new LinkedHashMap<>();
+    try {
+      DatabaseMetaData md = c.getMetaData();
+      info.put("productName", md.getDatabaseProductName());
+      info.put("productVersion", md.getDatabaseProductVersion());
+      info.put("driverName", md.getDriverName());
+      info.put("driverVersion", md.getDriverVersion());
+      info.put("url", md.getURL());
+      info.put("catalog", safeCatalog(c));
+      info.put("schema", safeSchema(c));
+    } catch (Exception ignore) {}
+    info.put("connectionId", connId);
+    out.put("info", info);
+    return out;
   }
 
   private Map<String, Object> disconnect(JsonNode p) {

@@ -330,32 +330,42 @@ function createWindow() {
   mainWindow.on('resize', updateSaved);
   mainWindow.on('move', updateSaved);
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-    // 메인 창 닫히면 검색창/이력 dropdown 도 같이 닫음
-    try { if (searchWindow && !searchWindow.isDestroyed()) searchWindow.close(); } catch {}
-    try { if (histDropdownWindow && !histDropdownWindow.isDestroyed()) histDropdownWindow.close(); } catch {}
-    // 페이스트 모달 창들도 정리
-    for (const [, pw] of pasteWindows) { try { if (!pw.isDestroyed()) pw.close(); } catch {} }
-    // 메인 창이 닫히면 앱 종료 — Aero Snap 미리보기창/플로팅창 등 보조 BrowserWindow 가 남아있으면
-    // window-all-closed 가 안 떠서 app.quit() 이 호출되지 않는 문제 방지. 모든 잔여 창을 파괴 후 quit.
-    try {
-      for (const w of BrowserWindow.getAllWindows()) {
-        try { w.destroy(); } catch {}
-      }
-    } catch {}
-    app.quit();
-    // 강제 종료 보장 — before-quit 의 process.exit 가 어떤 이유로든 안 되면,
-    // 자기 프로세스 트리(에이전트/MCP/JDBC/git 등 모든 자식 포함)를 detached taskkill 로 확실히 정리.
-    // detached 라 main 종료와 무관하게 살아남아 트리를 정리한다.
-    if (process.platform === 'win32') {
-      setTimeout(() => {
-        try {
-          require('child_process').spawn('taskkill', ['/pid', String(process.pid), '/T', '/F'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-        } catch {}
-      }, 1200);
+  mainWindow.on('closed', onMainWindowClosed);
+}
+
+// 메인 창(또는 승격된 창)이 닫힐 때 — 부수창 정리 + 살아있는 분리 창 중 하나를 새 main 으로 승격,
+// 없으면 앱 종료.
+function onMainWindowClosed() {
+  try { if (searchWindow && !searchWindow.isDestroyed()) searchWindow.close(); } catch {}
+  try { if (histDropdownWindow && !histDropdownWindow.isDestroyed()) histDropdownWindow.close(); } catch {}
+  for (const [, pw] of pasteWindows) { try { if (!pw.isDestroyed()) pw.close(); } catch {} }
+  const aliveDetached = Array.from(detachedWindows).filter(w => w && !w.isDestroyed());
+  if (aliveDetached.length > 0) {
+    const promoted = aliveDetached[0];
+    mainWindow = promoted;
+    detachedWindows.delete(promoted);
+    promoted.on('closed', onMainWindowClosed);
+    console.log(`[main] mainWindow closed — promoting detached window (id=${promoted.id}); ${aliveDetached.length - 1} other detached survive`);
+    return;
+  }
+  mainWindow = null;
+  try {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { w.destroy(); } catch {}
     }
-  });
+  } catch {}
+  console.log('[main] no windows left — forcing exit');
+  // before-quit 핸들러 발동을 기다리지 않고, 자식 프로세스(taskkill)와 자체 exit 를 즉시 큐잉.
+  // app.quit() 은 신호로만 보내고 의존하지 않음.
+  try { app.quit(); } catch {}
+  // before-quit 가 동기 cleanup 할 시간 ~50ms 후 hard exit. taskkill 도 백업으로 같이 큐잉.
+  if (process.platform === 'win32') {
+    try {
+      require('child_process').spawn('taskkill', ['/pid', String(process.pid), '/T', '/F'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } catch {}
+  }
+  setTimeout(() => { try { process.exit(0); } catch {} }, 100);
+  setImmediate(() => { try { process.exit(0); } catch {} });
 }
 
 // ── App lifecycle ──
@@ -511,7 +521,13 @@ app.whenReady().then(() => {
         break;
       case 'x11-log':
         // x11 관련 로그를 renderer 콘솔로 — DevTools 에서 확인
-        mainWindow.webContents.executeJavaScript(`console.log('[X11]', ${JSON.stringify(msg.data)})`).catch(() => {});
+        try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.executeJavaScript(`console.log('[X11]', ${JSON.stringify(msg.data)})`).catch(() => {}); } catch {}
+        // [hint] 로 시작하는 사용자 친화 안내는 터미널에도 노란색으로 표시
+        if (typeof msg.data === 'string' && msg.data.includes('[hint]')) {
+          const body = msg.data.replace(/^\[[^\]]+\]\s*/, '');
+          const colored = body.split('\n').map(l => `\x1b[33m${l}\x1b[0m`).join('\r\n');
+          termBroadcast('ssh:data', { panelId: msg.panelId, data: `\r\n${colored}\r\n` });
+        }
         break;
       case 'sftp-delete-start':
         termBroadcast('sftp:delete-start', { panelId: msg.panelId, data: msg.data });
@@ -540,13 +556,12 @@ app.on('window-all-closed', () => {
 // PTY/Claude 자식 프로세스 정리는 파일 하단에서 추가 등록 (Map 선언 후).
 // WebDAV 는 별도 종료 API 가 없지만 SSH 끊으면 의존 스트림이 모두 close.
 app.on('before-quit', () => {
-  remoteShareServer.stop();
+  // 종료 안전 장치 — 어떤 cleanup 도 실패해도 강제 종료가 무조건 진행되도록 setTimeout 을 가장 먼저 큐잉.
+  setTimeout(() => { try { process.exit(0); } catch {} }, 600);
+  try { remoteShareServer.stop(); } catch {}
   try { stopAllBundledX11(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}
-  // 강제 종료 보장 — PTY/ssh/webdav/소켓 등이 이벤트 루프를 잡고 있어도 확실히 프로세스 종료.
-  // (dev 모드에서 electron 이 안 죽으면 vite-plugin-electron 이 process.exit 를 못 해 npm run dev 가 안 끝남)
-  setTimeout(() => { try { process.exit(0); } catch {} }, 600);
 });
 
 // 앱 시작 5초 후 비동기로 과거 session-* 폴더 정리 (현재 더 이상 안 만드는데 기존 orphan 잔존 가능)
@@ -3959,6 +3974,14 @@ ipcMain.handle('jdbc:connect', async (_e, args: {
     return { success: false, error: String(e?.message || e) };
   }
 });
+ipcMain.handle('jdbc:is-connected', async (_e, connectionId: string) => {
+  try {
+    const result = await getSharedJdbcSidecar().call('isConnected', { connectionId }, 8000);
+    return { success: true, result };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
 ipcMain.handle('jdbc:disconnect', async (_e, connectionId: string) => {
   try {
     const result = await getSharedJdbcSidecar().call('disconnect', { connectionId }, 8000);
@@ -4643,9 +4666,12 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
   detachedWindows.add(win);
   detachedInitPayloads.set(win.webContents.id, payload);
   win.once('ready-to-show', () => { try { win.show(); win.focus(); } catch {} });
+  // closed 시점엔 win.webContents 가 이미 destroy 됐을 수 있으므로 id 를 미리 캡처.
+  // 핸들러 내부 throw 가 같은 'closed' 의 다른 리스너(onMainWindowClosed) 호출을 막지 않게 try 로 감싼다.
+  const wcId = win.webContents.id;
   win.on('closed', () => {
-    detachedWindows.delete(win);
-    detachedInitPayloads.delete(win.webContents.id);
+    try { detachedWindows.delete(win); } catch {}
+    try { detachedInitPayloads.delete(wcId); } catch {}
   });
   // http(s) 외부 링크는 기본 브라우저로 (메인 창과 동일 정책)
   win.webContents.on('will-navigate', (event, url) => {
@@ -5733,7 +5759,7 @@ function markAgentStopped(procKey: string) {
 // procKey(requestId) 기준으로 webContents.send 자체를 봉인 — stdout/stderr 핸들러
 // 가드 외에 다른 경로(예: 핸들러 안에서 await 사이에 끼어든 send) 잔여 이벤트도 차단.
 function sendAgentStream(channel: string, payload: any) {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const rid = payload && payload.requestId;
   if (rid && stoppedAgentProcs.has(rid)) return;
   try { mainWindow.webContents.send(channel, payload); } catch {}
