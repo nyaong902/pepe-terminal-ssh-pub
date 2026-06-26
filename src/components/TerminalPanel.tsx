@@ -3802,27 +3802,6 @@ export const TerminalPanel: React.FC<Props> = ({
             { icon: '📋', label: t('menu.duplicateSession'), onClick: () => { onDuplicateSession?.(nodeId, miniCtx.termId); } },
             ...(onDetachSession ? [{ icon: '🪟', label: t('menu.openInNewWindow'), onClick: () => { onDetachSession(nodeId, miniCtx.termId); } }] : []),
             ...(onDuplicateSessionToNewWindow ? [{ icon: '🪟', label: t('menu.duplicateToNewWindow'), onClick: () => { onDuplicateSessionToNewWindow(nodeId, miniCtx.termId); } }] : []),
-            ...(onSetSessionColor ? [(() => {
-              const curColor = panel.sessions.find(s => s.termId === miniCtx.termId)?.color || 'default';
-              const opts: Array<{ id: 'default'|'red'|'orange'|'yellow'|'green'|'blue'|'purple'; label: string; swatch?: string }> = [
-                { id: 'default', label: t('menu.colorDefault') },
-                { id: 'red',     label: t('menu.colorRed'),    swatch: '#e74c3c' },
-                { id: 'orange',  label: t('menu.colorOrange'), swatch: '#e67e22' },
-                { id: 'yellow',  label: t('menu.colorYellow'), swatch: '#f1c40f' },
-                { id: 'green',   label: t('menu.colorGreen'),  swatch: '#27ae60' },
-                { id: 'blue',    label: t('menu.colorBlue'),   swatch: '#3498db' },
-                { id: 'purple',  label: t('menu.colorPurple'), swatch: '#9b59b6' },
-              ];
-              return {
-                icon: '🎨',
-                label: t('menu.colorSetting'),
-                submenu: opts.map(opt => ({
-                  label: (curColor === opt.id ? '✓ ' : '   ') + opt.label,
-                  icon: opt.swatch ? <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: opt.swatch }} /> : undefined,
-                  onClick: () => onSetSessionColor(nodeId, miniCtx.termId, opt.id),
-                })),
-              };
-            })()] : []),
             { icon: '🔄', label: t('menu.reconnectSession'), onClick: async () => {
               const tid = miniCtx.termId;
               const info = termSessionMap.get(tid);
@@ -3896,6 +3875,27 @@ export const TerminalPanel: React.FC<Props> = ({
                 setMoveWorkspaceCtx({ x: miniCtx.x, y: miniCtx.y, termId: miniCtx.termId });
               },
             }] : []),
+            ...(onSetSessionColor ? [(() => {
+              const curColor = panel.sessions.find(s => s.termId === miniCtx.termId)?.color || 'default';
+              const opts: Array<{ id: 'default'|'red'|'orange'|'yellow'|'green'|'blue'|'purple'; label: string; swatch?: string }> = [
+                { id: 'default', label: t('menu.colorDefault') },
+                { id: 'red',     label: t('menu.colorRed'),    swatch: '#e74c3c' },
+                { id: 'orange',  label: t('menu.colorOrange'), swatch: '#e67e22' },
+                { id: 'yellow',  label: t('menu.colorYellow'), swatch: '#f1c40f' },
+                { id: 'green',   label: t('menu.colorGreen'),  swatch: '#27ae60' },
+                { id: 'blue',    label: t('menu.colorBlue'),   swatch: '#3498db' },
+                { id: 'purple',  label: t('menu.colorPurple'), swatch: '#9b59b6' },
+              ];
+              return {
+                icon: '🎨',
+                label: t('menu.colorSetting'),
+                submenu: opts.map(opt => ({
+                  label: (curColor === opt.id ? '✓ ' : '   ') + opt.label,
+                  icon: opt.swatch ? <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: opt.swatch }} /> : undefined,
+                  onClick: () => onSetSessionColor(nodeId, miniCtx.termId, opt.id),
+                })),
+              };
+            })()] : []),
             { icon: '✕', label: t('menu.close'), onClick: () => { window.api?.disconnectSSH?.(miniCtx.termId); onCloseSession?.(nodeId, miniCtx.termId); } },
           ]}
         />
