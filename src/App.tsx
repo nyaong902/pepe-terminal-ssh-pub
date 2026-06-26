@@ -17,7 +17,7 @@ import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
-import { SqlToolWorkspace } from './components/SqlToolWorkspace';
+import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
@@ -2168,34 +2168,70 @@ function App() {
       await seedReattach(payload.tab, payload.siblingSessions);
       try { for (const [tid, s] of Object.entries(payload.styles || {})) setPendingRestoreStyle(tid, s); } catch {}
       try { for (const [tid, b] of Object.entries(payload.buffers || {})) setPendingRestoreBuffer(tid, b as string); } catch {}
-      // 미니탭 → 드롭 지점 패널에 병합/분할 시도
-      if (payload.kind === 'session' && payload.point) {
+      // 드롭 지점 hit-test — 탭바면 활성 패널에 미니탭 병합, panel 내부면 zone 분할/병합, 그 외 새 탭.
+      if (payload.point) {
         try {
+          // 수신 측 cursor 위치를 main 에서 직접 받아 사용 — DIPs 보장, DPI/멀티모니터 환경 일관.
+          const cursorPt: any = await (window as any).api?.getCursorPoint?.();
           const b: any = await (window as any).api?.getWindowBounds?.();
           if (b) {
-            const cx = payload.point.x - b.x, cy = payload.point.y - b.y;
+            const sx = cursorPt?.x ?? payload.point.x;
+            const sy = cursorPt?.y ?? payload.point.y;
+            const cx = sx - b.x;
+            const cy = sy - b.y;
             const el = document.elementFromPoint(cx, cy) as HTMLElement | null;
-            const leafEl = el?.closest('[data-leaf-id]') as HTMLElement | null;
+            // 탭바 영역 검출 — 클래스 매칭 우선, 못 잡으면 y 좌표(상단 50px 이내) 폴백.
+            const onChrome = !!el?.closest('.tab-bar-row, .tab-bar, .titlebar-drag-area, .titlebar, .menu-bar, [data-no-drop-zone]') || cy < 50;
+            console.log('[adopt-tab] hit-test', { kind: payload.kind, cx, cy, elTag: el?.tagName, elClass: el?.className, onChrome });
+            const leafEl = onChrome ? null : (el?.closest('[data-leaf-id]') as HTMLElement | null);
             const leafId = leafEl?.getAttribute('data-leaf-id') || null;
-            const sess = collectAllSessions(payload.tab.layout)[0];
+            const allSess = collectAllSessions(payload.tab.layout);
+            const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
-            if (leafId && leafEl && sess && curTabId) {
+            // 탭바 위 드롭 — kind 무관, 가져온 모든 세션을 활성 탭의 첫 leaf 에 미니탭으로 병합.
+            if (onChrome && allSess.length > 0 && curTabId) {
+              const curTab = tabsRef.current.find(t => t.id === curTabId);
+              const targetLeafId = curTab ? findFirstLeafId(curTab.layout) : null;
+              console.log('[adopt-tab] tabbar→merge', { curTab: !!curTab, targetLeafId, sessions: allSess.length });
+              if (targetLeafId) {
+                updateLayout(curTabId, l => appendSessionsToPanel(l, targetLeafId, allSess, true));
+                setSelectedPanelId(targetLeafId);
+                setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+                return;
+              }
+            }
+            // 패널 미니탭바(panel-header / panel-session-tabs)에 드롭 → 그 패널에 미니탭 병합 (split 금지)
+            const onPanelTabBar = !!el?.closest('.panel-header, .panel-session-tabs, .panel-session-tabs-wrapper');
+            if (onPanelTabBar && leafId && sess && curTabId) {
+              console.log('[adopt-tab] panel-tabbar→merge', { leafId });
+              updateLayout(curTabId, l => appendSessionsToPanel(l, leafId, [sess], true));
+              setSelectedPanelId(leafId);
+              setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+              return;
+            }
+            // panel 내부 드롭은 kind='session' 일 때만 zone 기반 분할/병합 (워크스페이스 전체는 새 탭으로).
+            if (payload.kind === 'session' && !onPanelTabBar && leafId && leafEl && sess && curTabId) {
               // 패널 내 드롭 위치로 zone 판정 (가장자리=분할, 중앙=미니탭 병합)
               const rect = leafEl.getBoundingClientRect();
-              const rx = (cx - rect.left) / rect.width;
-              const ry = (cy - rect.top) / rect.height;
-              const th = 0.25;
-              let zone: 'left' | 'right' | 'top' | 'bottom' | 'center' = 'center';
-              if (rx < th) zone = 'left'; else if (rx > 1 - th) zone = 'right';
-              else if (ry < th) zone = 'top'; else if (ry > 1 - th) zone = 'bottom';
-              updateLayout(curTabId, l => {
-                if (zone === 'center') return appendSessionsToPanel(l, leafId, [sess], true);
-                const direction: 'row' | 'column' = (zone === 'left' || zone === 'right') ? 'row' : 'column';
-                const insertBefore = zone === 'left' || zone === 'top';
-                return splitNodeWithSessions(l, leafId, direction, [sess], insertBefore);
-              });
-              setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-              return; // 병합/분할 완료
+              // 드롭이 leaf 사각형 바깥이면 zone 계산 의미 없음 → 새 탭 fallback.
+              if (cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom) {
+                const rx = (cx - rect.left) / rect.width;
+                const ry = (cy - rect.top) / rect.height;
+                const th = 0.2;
+                let zone: 'left' | 'right' | 'top' | 'bottom' | 'center' = 'center';
+                if (rx < th) zone = 'left'; else if (rx > 1 - th) zone = 'right';
+                else if (ry < th) zone = 'top'; else if (ry > 1 - th) zone = 'bottom';
+                console.log('[adopt-tab] zone', { sx, sy, winBounds: b, cx, cy, leafId, rect, rx, ry, zone, fromCursorApi: !!cursorPt });
+                updateLayout(curTabId, l => {
+                  if (zone === 'center') return appendSessionsToPanel(l, leafId, [sess], true);
+                  const direction: 'row' | 'column' = (zone === 'left' || zone === 'right') ? 'row' : 'column';
+                  const insertBefore = zone === 'left' || zone === 'top';
+                  return splitNodeWithSessions(l, leafId, direction, [sess], insertBefore);
+                });
+                setSelectedPanelId(leafId);
+                setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+                return; // 병합/분할 완료
+              }
             }
           }
         } catch {}
@@ -2250,7 +2286,11 @@ function App() {
   };
   const serializeTab = (tab: Tab) => {
     const liveFeState = fileExplorerStateRef.current.get(tab.id);
-    const liveWsState = workspaceStateRef.current.get(tab.id);
+    let liveWsState = workspaceStateRef.current.get(tab.id);
+    // SqlTool 은 module-level sqlStateCache 에 상태를 보관 — 분리 시 직접 dump.
+    if (tab.type === 'sqlTool' && tab.sqlTool?.sessionId) {
+      liveWsState = serializeSqlSession(tab.sqlTool.sessionId);
+    }
     return {
       kind: 'workspace' as const,
       buffers: collectTabBuffers(tab),
@@ -2289,14 +2329,19 @@ function App() {
     if (!tab) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
+    // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
     (window as any).__preserveFileExplorerConns = true;
+    (window as any).__preserveSqlConns = true;
     try {
       const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
       if (res === undefined) return; // IPC 실패
       removeTabAfterMove(tabId, tab.layout);
     } finally {
       // unmount cleanup 이 다 끝난 다음 플래그 해제 (마이크로태스크 두 번)
-      setTimeout(() => { (window as any).__preserveFileExplorerConns = false; }, 0);
+      setTimeout(() => {
+        (window as any).__preserveFileExplorerConns = false;
+        (window as any).__preserveSqlConns = false;
+      }, 0);
     }
   }, []);
 
@@ -2482,10 +2527,11 @@ function App() {
       const sess = findSess(layout);
       if (!sess) return layout;
       let updated = removeSessionFromPanel(layout, fromNodeId, termId);
-      updated = appendSessionsToPanel(updated, toNodeId, [sess], false);
+      updated = appendSessionsToPanel(updated, toNodeId, [sess], true);
       updated = cleanEmptyLeaf(updated, fromNodeId);
       return updated;
     });
+    setSelectedPanelId(toNodeId);
   };
 
   // 미니탭을 다른 패널 가장자리에 드롭 → 분할 + 세션 이동
@@ -2506,6 +2552,7 @@ function App() {
       updated = splitNodeWithSessions(updated, toNodeId, direction, [sess], insertBefore);
       return updated;
     });
+    setSelectedPanelId(toNodeId);
     setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
   };
 
@@ -4226,13 +4273,19 @@ function App() {
           </div>
         ))}
         {/* SQL Tool 탭은 sessionId 별로 마운트 유지 (재방문 시 쿼리/연결 상태 보존) */}
-        {tabs.filter(t => t.type === 'sqlTool').map(t => (
-          <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
-            <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
-              <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
-            </ErrorBoundary>
-          </div>
-        ))}
+        {tabs.filter(t => t.type === 'sqlTool').map(t => {
+          // 분리/복원으로 carry 된 workspaceState 가 있으면 자식 마운트 전 cache 에 hydrate.
+          if (t.workspaceState && t.sqlTool?.sessionId) {
+            hydrateSqlSession(t.sqlTool.sessionId, t.workspaceState);
+          }
+          return (
+            <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+              <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
+                <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
+              </ErrorBoundary>
+            </div>
+          );
+        })}
 
         {activeTab && activeTab.type !== 'fileExplorer' && activeTab.type !== 'fileEditor' && activeTab.type !== 'browser' && activeTab.type !== 'compare' && activeTab.type !== 'logAnalyzer' && activeTab.type !== 'vpn' && activeTab.type !== 'i18nEditor' && activeTab.type !== 'sqlTool' && (() => {
           // 워크스페이스 레벨 파일 트리 — 선택된 패널의 활성 세션이 SSH 연결이면 표시

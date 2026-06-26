@@ -116,7 +116,25 @@ export class JdbcBackend {
     public readonly driverDef: any,
   ) {
     this.type = ((driverDef?.dialect || dbms?.type || 'altibase') as Dialect);
-    this.connectionId = `sql-${sessionId}-${Date.now().toString(36)}`;
+    // 안정적 id — 같은 sessionId 면 어느 창에서 인스턴스를 새로 만들어도 sidecar 의
+    // 동일 connection 을 adopt 할 수 있어야 함 (탭 분리/복원 시 재연결 회피).
+    this.connectionId = `sql-${sessionId}`;
+  }
+
+  // 사이드카에 같은 connectionId 의 살아있는 connection 이 있으면 adopt.
+  // ensureConnected 가 자동 호출하므로 직접 부를 필요는 보통 없음.
+  async tryAdopt(): Promise<boolean> {
+    const api: any = (window as any).api || {};
+    if (!api.jdbcIsConnected) return false;
+    try {
+      const r = await api.jdbcIsConnected(this.connectionId);
+      if (r?.success && r.result?.connected) {
+        this._connected = true;
+        this._info = r.result.info || {};
+        return true;
+      }
+    } catch {}
+    return false;
   }
 
   get connected(): boolean { return this._connected; }
@@ -136,6 +154,7 @@ export class JdbcBackend {
 
   async ensureConnected(): Promise<{ ok: boolean; error?: string }> {
     if (this._connected) return { ok: true };
+    if (await this.tryAdopt()) return { ok: true };
     const api: any = (window as any).api || {};
     const r = await api.jdbcConnect?.({
       connectionId: this.connectionId,
