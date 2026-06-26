@@ -2195,6 +2195,7 @@ function App() {
               console.log('[adopt-tab] tabbar→merge', { curTab: !!curTab, targetLeafId, sessions: allSess.length });
               if (targetLeafId) {
                 updateLayout(curTabId, l => appendSessionsToPanel(l, targetLeafId, allSess, true));
+                setSelectedPanelId(targetLeafId);
                 setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
                 return;
               }
@@ -2204,6 +2205,7 @@ function App() {
             if (onPanelTabBar && leafId && sess && curTabId) {
               console.log('[adopt-tab] panel-tabbar→merge', { leafId });
               updateLayout(curTabId, l => appendSessionsToPanel(l, leafId, [sess], true));
+              setSelectedPanelId(leafId);
               setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
               return;
             }
@@ -2226,6 +2228,7 @@ function App() {
                   const insertBefore = zone === 'left' || zone === 'top';
                   return splitNodeWithSessions(l, leafId, direction, [sess], insertBefore);
                 });
+                setSelectedPanelId(leafId);
                 setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
                 return; // 병합/분할 완료
               }
@@ -2524,10 +2527,11 @@ function App() {
       const sess = findSess(layout);
       if (!sess) return layout;
       let updated = removeSessionFromPanel(layout, fromNodeId, termId);
-      updated = appendSessionsToPanel(updated, toNodeId, [sess], false);
+      updated = appendSessionsToPanel(updated, toNodeId, [sess], true);
       updated = cleanEmptyLeaf(updated, fromNodeId);
       return updated;
     });
+    setSelectedPanelId(toNodeId);
   };
 
   // 미니탭을 다른 패널 가장자리에 드롭 → 분할 + 세션 이동
@@ -2548,6 +2552,7 @@ function App() {
       updated = splitNodeWithSessions(updated, toNodeId, direction, [sess], insertBefore);
       return updated;
     });
+    setSelectedPanelId(toNodeId);
     setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
   };
 
