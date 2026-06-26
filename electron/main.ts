@@ -4697,7 +4697,13 @@ ipcMain.handle('window:detach-tab', (_e, { payload, bounds }: { payload: any; bo
 ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {
   try {
     const sourceWin = winOf(e);
-    const appWins = [mainWindow, ...detachedWindows].filter(w => w && !w.isDestroyed()) as BrowserWindow[];
+    // 최소화/숨김 창은 화면에 안 보여도 getBounds() 가 restored 좌표를 돌려주므로
+    // hit-test 에 포함하면 안 됨 (사용자가 그 위치에 드롭할 의도가 없음).
+    const appWins = [mainWindow, ...detachedWindows].filter(w => {
+      if (!w || w.isDestroyed()) return false;
+      try { if (w.isMinimized() || !w.isVisible()) return false; } catch {}
+      return true;
+    }) as BrowserWindow[];
     let target: BrowserWindow | null = null;
     if (point) {
       for (const w of appWins) {
