@@ -40,7 +40,16 @@
     "changeScrollback": "스크롤 버퍼 크기 변경...",
     "clearScrollbackBuffer": "스크롤 버퍼 지우기",
     "fontDots": "글꼴...",
-    "openInNewWindow": "새 창으로 열기"
+    "openInNewWindow": "새 창으로 열기",
+    "duplicateToNewWindow": "복제하여 새 창으로 분리",
+    "colorSetting": "색 설정",
+    "colorDefault": "기본",
+    "colorRed": "빨강",
+    "colorOrange": "주황",
+    "colorYellow": "노랑",
+    "colorGreen": "초록",
+    "colorBlue": "파랑",
+    "colorPurple": "보라"
   },
   "float": "플로팅",
   "unfloat": "플로팅 해제",

@@ -39,7 +39,16 @@
     "changeScrollback": "تغيير حجم سجل التمرير...",
     "clearScrollbackBuffer": "مسح ذاكرة سجل التمرير",
     "fontDots": "الخط...",
-    "openInNewWindow": "فتح في نافذة جديدة"
+    "openInNewWindow": "فتح في نافذة جديدة",
+    "duplicateToNewWindow": "تكرار في نافذة جديدة",
+    "colorSetting": "لون التبويب",
+    "colorDefault": "افتراضي",
+    "colorRed": "أحمر",
+    "colorOrange": "برتقالي",
+    "colorYellow": "أصفر",
+    "colorGreen": "أخضر",
+    "colorBlue": "أزرق",
+    "colorPurple": "بنفسجي"
   },
   "float": "تعويم",
   "unfloat": "إلغاء التعويم",

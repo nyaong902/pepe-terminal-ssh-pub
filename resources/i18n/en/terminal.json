@@ -40,7 +40,16 @@
     "changeScrollback": "Change scrollback size...",
     "clearScrollbackBuffer": "Clear scrollback buffer",
     "fontDots": "Font...",
-    "openInNewWindow": "Open in new window"
+    "openInNewWindow": "Open in new window",
+    "duplicateToNewWindow": "Duplicate to New Window",
+    "colorSetting": "Tab Color",
+    "colorDefault": "Default",
+    "colorRed": "Red",
+    "colorOrange": "Orange",
+    "colorYellow": "Yellow",
+    "colorGreen": "Green",
+    "colorBlue": "Blue",
+    "colorPurple": "Purple"
   },
   "float": "Float",
   "unfloat": "Unfloat",

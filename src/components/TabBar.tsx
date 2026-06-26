@@ -1,7 +1,7 @@
 // src/components/TabBar.tsx
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Tab } from '../App';
+import type { Tab, TabColor } from '../App';
 import { ContextMenu } from './ContextMenu';
 
 type ShellInfo = { name: string; path: string; icon?: string };
@@ -19,6 +19,7 @@ type Props = {
   onRenameTab?: (id: string, name: string) => void;
   onReorderTabs?: (fromId: string, toId: string) => void;
   onDetachTab?: (id: string, screenX?: number, screenY?: number) => void;
+  onSetTabColor?: (id: string, color: TabColor) => void;
   hasSession?: Record<string, boolean>;
   themeName?: string;
   themeList?: string[];
@@ -26,7 +27,7 @@ type Props = {
   availableShells?: ShellInfo[];
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, hasSession, themeName, themeList, onThemeChange, availableShells }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -73,7 +74,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
       {tabs.map(tab => (
         <div
           key={tab.id}
-          className={`tab-item ${tab.id === activeTabId ? 'active' : ''}${draggingId === tab.id ? ' dragging' : ''}${dragOverId === tab.id && draggingId && draggingId !== tab.id ? ' drag-over' : ''}`}
+          className={`tab-item ${tab.id === activeTabId ? 'active' : ''}${draggingId === tab.id ? ' dragging' : ''}${dragOverId === tab.id && draggingId && draggingId !== tab.id ? ' drag-over' : ''}${tab.color && tab.color !== 'default' ? ` tab-color-${tab.color}` : ''}`}
           draggable={renamingId !== tab.id}
           onDragStart={e => {
             setDraggingId(tab.id);
@@ -138,12 +139,14 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
               return tab.title;
             })()}</span>
           )}
-          <button
-            className="tab-close"
-            onClick={e => { e.stopPropagation(); onCloseTab(tab.id); }}
-          >
-            &times;
-          </button>
+          {tabs.length > 1 && (
+            <button
+              className="tab-close"
+              onClick={e => { e.stopPropagation(); onCloseTab(tab.id); }}
+            >
+              &times;
+            </button>
+          )}
         </div>
       ))}
       </div>
@@ -168,9 +171,29 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           x={contextMenu.x} y={contextMenu.y}
           onClose={() => setContextMenu(null)}
           items={[
-            { label: tc('rename'), onClick: () => startRename(contextMenu.tabId) },
-            ...(onDetachTab ? [{ label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
-            { label: tc('close'), onClick: () => onCloseTab(contextMenu.tabId) },
+            { icon: '✏️', label: tc('rename'), onClick: () => startRename(contextMenu.tabId) },
+            ...(onDetachTab ? [{ icon: '🪟', label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
+            ...(onSetTabColor ? [{
+              icon: '🎨',
+              label: t('colorSetting'),
+              submenu: ([
+                { id: 'default' as TabColor, label: t('colorDefault') },
+                { id: 'red' as TabColor,     label: t('colorRed'),    swatch: '#e74c3c' },
+                { id: 'orange' as TabColor,  label: t('colorOrange'), swatch: '#e67e22' },
+                { id: 'yellow' as TabColor,  label: t('colorYellow'), swatch: '#f1c40f' },
+                { id: 'green' as TabColor,   label: t('colorGreen'),  swatch: '#27ae60' },
+                { id: 'blue' as TabColor,    label: t('colorBlue'),   swatch: '#3498db' },
+                { id: 'purple' as TabColor,  label: t('colorPurple'), swatch: '#9b59b6' },
+              ]).map(opt => {
+                const cur = tabs.find(t2 => t2.id === contextMenu.tabId)?.color || 'default';
+                return {
+                  label: (cur === opt.id ? '✓ ' : '   ') + opt.label,
+                  icon: opt.swatch ? <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: opt.swatch }} /> : undefined,
+                  onClick: () => onSetTabColor(contextMenu.tabId, opt.id),
+                };
+              }),
+            }] : []),
+            { icon: '✕', label: tc('close'), onClick: () => onCloseTab(contextMenu.tabId) },
           ]}
         />
       )}

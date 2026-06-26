@@ -15,5 +15,13 @@
   "scrollNext": "Next",
   "renameContext": "Rename",
   "closeContext": "Close",
-  "openInNewWindow": "Open in new window"
+  "openInNewWindow": "Open in new window",
+  "colorSetting": "Tab Color",
+  "colorDefault": "Default",
+  "colorRed": "Red",
+  "colorOrange": "Orange",
+  "colorYellow": "Yellow",
+  "colorGreen": "Green",
+  "colorBlue": "Blue",
+  "colorPurple": "Purple"
 }

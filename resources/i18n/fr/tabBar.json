@@ -15,5 +15,13 @@
   "workspace": "Espace de travail",
   "fileTransferTab": "📁 Transfert de fichiers",
   "workspaceN": "Espace de travail {{n}}",
-  "openInNewWindow": "Ouvrir dans une nouvelle fenêtre"
+  "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+  "colorSetting": "Couleur",
+  "colorDefault": "Défaut",
+  "colorRed": "Rouge",
+  "colorOrange": "Orange",
+  "colorYellow": "Jaune",
+  "colorGreen": "Vert",
+  "colorBlue": "Bleu",
+  "colorPurple": "Violet"
 }

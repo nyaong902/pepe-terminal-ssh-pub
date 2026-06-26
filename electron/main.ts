@@ -4694,7 +4694,19 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
   });
   detachedWindows.add(win);
   detachedInitPayloads.set(win.webContents.id, payload);
+  console.log('[detached] payload preview:', JSON.stringify({
+    kind: payload?.kind,
+    tabId: payload?.tab?.id,
+    connectAfterAdopt: payload?.connectAfterAdopt,
+    snapshotOnly: payload?.snapshotOnly,
+  }));
   win.once('ready-to-show', () => { try { win.show(); win.focus(); } catch {} });
+  // 디버깅: 복제→새 창 분리 시 cd 자동 명령 추적용 — 분리 창 DevTools 자동 오픈.
+  if (Array.isArray(payload?.connectAfterAdopt) && payload.connectAfterAdopt.some((it: any) => it?.cdAfterConnect)) {
+    win.webContents.once('did-finish-load', () => {
+      try { win.webContents.openDevTools({ mode: 'detach' }); } catch {}
+    });
+  }
   // closed 시점엔 win.webContents 가 이미 destroy 됐을 수 있으므로 id 를 미리 캡처.
   // 핸들러 내부 throw 가 같은 'closed' 의 다른 리스너(onMainWindowClosed) 호출을 막지 않게 try 로 감싼다.
   const wcId = win.webContents.id;
@@ -4746,7 +4758,9 @@ ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?
       try { target.show(); target.focus(); } catch {}
       return { docked: true };
     }
-    createDetachedWindow(payload, point ? { x: Math.max(0, point.x - 250), y: Math.max(0, point.y - 16) } : undefined);
+    // 멀티모니터 환경에서 음수 좌표(주모니터 왼쪽/위쪽 모니터)도 그대로 보존해야
+    // 사용자가 드롭한 모니터에 정확히 분리 창이 생성됨. Math.max(0, ...) 클램프는 금지.
+    createDetachedWindow(payload, point ? { x: point.x - 250, y: point.y - 16 } : undefined);
     return { docked: false };
   } catch (err) { console.error('[drop-tab] fail', err); return { docked: false, error: String(err) }; }
 });

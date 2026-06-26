@@ -24,7 +24,8 @@
     "fontSizeUp": "🔠 글꼴 크기 +",
     "fontSizeDown": "🔡 글꼴 크기 -",
     "wheelUp": "Ctrl+휠 위",
-    "wheelDown": "Ctrl+휠 아래"
+    "wheelDown": "Ctrl+휠 아래",
+    "uiLanguage": "🌐 UI 언어"
   },
   "window": {
     "title": "창",

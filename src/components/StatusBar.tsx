@@ -10,6 +10,18 @@ type Props = {
   selectedPanelId: string | null;
   tabs: Tab[];
   onClickVpn?: () => void;
+  messenger?: {
+    visible: boolean;
+    hidden: boolean;
+    unreadCount: number;
+    onClick: () => void;
+  };
+  windowTheme?: {
+    current: string;
+    list: { id: string; name: string }[];
+    onChange: (id: string) => void;
+    label: string;
+  };
 };
 
 function getActiveSession(layout: LayoutNode, panelId: string | null): PanelSession | null {
@@ -27,8 +39,9 @@ function getActiveSession(layout: LayoutNode, panelId: string | null): PanelSess
   return null;
 }
 
-export const StatusBar: React.FC<Props> = ({ activeTab, selectedPanelId, tabs, onClickVpn }) => {
+export const StatusBar: React.FC<Props> = ({ activeTab, selectedPanelId, tabs, onClickVpn, messenger, windowTheme }) => {
   const { t } = useTranslation('statusBar');
+  const { t: tMsg } = useTranslation('messenger');
   const [time, setTime] = useState(new Date());
   const [copyInfo, setCopyInfo] = useState<string | null>(null);
   const [vpnState, setVpnState] = useState<{ status: string; assignedIp?: string; configName?: string }>({ status: 'disconnected' });
@@ -92,6 +105,30 @@ export const StatusBar: React.FC<Props> = ({ activeTab, selectedPanelId, tabs, o
         )}
       </div>
       <div className="status-bar-right">
+        {messenger?.visible && (
+          <>
+            <span
+              className={`status-info statusbar-messenger${messenger.unreadCount > 0 ? ' attention' : ''}${messenger.hidden ? ' hidden-presence' : ''}`}
+              onClick={messenger.onClick}
+              style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              title={messenger.unreadCount > 0
+                ? tMsg('statusUnreadTitle', { count: messenger.unreadCount })
+                : (messenger.hidden ? tMsg('statusHiddenTitle') : tMsg('statusActiveTitle'))}
+            >
+              <span style={{
+                display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                background: messenger.unreadCount > 0 ? '#e36b6b' : (messenger.hidden ? '#888' : '#7fcf6e'),
+                boxShadow: messenger.unreadCount > 0 ? '0 0 6px #e36b6b' : (messenger.hidden ? 'none' : '0 0 6px #7fcf6e'),
+              }} />
+              <span style={{ fontSize: 11 }}>
+                {messenger.unreadCount > 0
+                  ? tMsg('statusUnread', { count: messenger.unreadCount })
+                  : (messenger.hidden ? tMsg('statusHidden') : tMsg('statusActive'))}
+              </span>
+            </span>
+            <span className="status-separator">|</span>
+          </>
+        )}
         {copyInfo && <span className="status-copy-info">{copyInfo}</span>}
         {copyInfo && <span className="status-separator">|</span>}
         <span
@@ -110,11 +147,64 @@ export const StatusBar: React.FC<Props> = ({ activeTab, selectedPanelId, tabs, o
           }} />
           <span style={{ fontSize: 11 }}>{t('vpnLabel')}{vpnState.status === 'connected' && vpnState.assignedIp ? ` · ${vpnState.assignedIp}` : ''}</span>
         </span>
-        <span className="status-separator">|</span>
         <span className="status-info">{dateStr}</span>
         <span className="status-separator">|</span>
         <span className="status-info">{timeStr}</span>
+        {windowTheme && (
+          <>
+            <span className="status-separator">|</span>
+            <WindowThemeButton windowTheme={windowTheme} />
+          </>
+        )}
       </div>
     </div>
+  );
+};
+
+const WindowThemeButton: React.FC<{ windowTheme: NonNullable<Props['windowTheme']> }> = ({ windowTheme }) => {
+  const [open, setOpen] = useState(false);
+  const btnRef = React.useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('.status-theme-btn') && !t.closest('.status-theme-menu')) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  const current = windowTheme.list.find(wt => wt.id === windowTheme.current);
+  const rect = btnRef.current?.getBoundingClientRect();
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="status-theme-btn"
+        onClick={() => setOpen(v => !v)}
+        title={windowTheme.label}
+      >
+        {current?.name || windowTheme.current}
+      </button>
+      {open && rect && (
+        <div
+          className="status-theme-menu"
+          style={{
+            position: 'fixed',
+            right: Math.max(0, window.innerWidth - rect.right),
+            bottom: window.innerHeight - rect.top + 4,
+          }}
+        >
+          {windowTheme.list.map(wt => (
+            <div
+              key={wt.id}
+              className={`status-theme-menu-item${wt.id === windowTheme.current ? ' active' : ''}`}
+              onClick={() => { windowTheme.onChange(wt.id); setOpen(false); }}
+            >
+              {wt.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 };

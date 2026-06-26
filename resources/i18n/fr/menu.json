@@ -24,7 +24,8 @@
     "wheelUp": "Ctrl+Molette haut",
     "wheelDown": "Ctrl+Molette bas",
     "terminalTheme": "🎨 Thème du terminal",
-    "windowTheme": "🪟 Thème de la fenêtre"
+    "windowTheme": "🪟 Thème de la fenêtre",
+    "uiLanguage": "🌐 Langue UI"
   },
   "window": {
     "title": "Fenêtre",

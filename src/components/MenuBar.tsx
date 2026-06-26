@@ -48,9 +48,39 @@ export const MenuBar: React.FC<Props> = ({ menus }) => {
     close();
   };
 
+  // 햄버거 버튼: 단순 클릭 = 메뉴 토글, 드래그 = 윈도우 이동.
+  const onBtnMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const startX = e.screenX, startY = e.screenY;
+    const api = (window as any).api;
+    const THRESHOLD = 5;
+    let dragStarted = false;
+    const onMove = (ev: MouseEvent) => {
+      if (!dragStarted) {
+        if (Math.abs(ev.screenX - startX) < THRESHOLD && Math.abs(ev.screenY - startY) < THRESHOLD) return;
+        dragStarted = true;
+        api?.windowStartDrag?.(startX, startY);
+      }
+      ev.preventDefault();
+      api?.windowDragMove?.(ev.screenX, ev.screenY);
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (dragStarted) {
+        api?.windowEndDrag?.();
+      } else {
+        // 드래그 임계값 미달 → 클릭으로 처리 (메뉴 토글)
+        setIsOpen(p => !p); setOpenIdx(null); setSubOpen(null);
+      }
+      void ev;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   return (
     <div className="hamburger-menu">
-      <button className="hamburger-btn" onClick={() => { setIsOpen(p => !p); setOpenIdx(null); setSubOpen(null); }} title={tMenu('hamburgerTooltip')}>
+      <button className="hamburger-btn" onMouseDown={onBtnMouseDown} title={tMenu('hamburgerTooltip')}>
         <span className="hamburger-icon">&#9776;</span>
       </button>
       {isOpen && (

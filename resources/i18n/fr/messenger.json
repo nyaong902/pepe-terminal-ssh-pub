@@ -84,5 +84,7 @@
   "replyPlaceholder": "Réponse rapide",
   "open": "Ouvrir",
   "sendReply": "Envoyer",
-  "replyFail": "Échec de l'envoi de la réponse"
+  "replyFail": "Échec de l'envoi de la réponse",
+  "triggerTextAi": "🤖 Chat IA",
+  "triggerTextMessenger": "💬 Messagerie"
 }

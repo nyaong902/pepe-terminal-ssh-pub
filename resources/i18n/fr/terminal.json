@@ -39,7 +39,16 @@
     "changeScrollback": "Modifier la taille du défilement...",
     "clearScrollbackBuffer": "Effacer le tampon de défilement",
     "fontDots": "Police...",
-    "openInNewWindow": "Ouvrir dans une nouvelle fenêtre"
+    "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+    "duplicateToNewWindow": "Dupliquer dans une nouvelle fenêtre",
+    "colorSetting": "Couleur",
+    "colorDefault": "Défaut",
+    "colorRed": "Rouge",
+    "colorOrange": "Orange",
+    "colorYellow": "Jaune",
+    "colorGreen": "Vert",
+    "colorBlue": "Bleu",
+    "colorPurple": "Violet"
   },
   "float": "Flottant",
   "unfloat": "Ancrer",

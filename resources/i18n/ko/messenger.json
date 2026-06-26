@@ -84,5 +84,7 @@
   "replyPlaceholder": "간단한 답장",
   "open": "열기",
   "sendReply": "보내기",
-  "replyFail": "메신저 답장 실패"
+  "replyFail": "메신저 답장 실패",
+  "triggerTextAi": "🤖 AI Chat",
+  "triggerTextMessenger": "💬 메신저"
 }
