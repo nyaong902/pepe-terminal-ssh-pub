@@ -16,6 +16,7 @@ import { BrowserPane } from './components/BrowserPane';
 import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
+import { MicroSipWorkspace } from './components/MicroSipWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
 import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -59,7 +60,7 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
 
@@ -2075,6 +2076,7 @@ function App() {
   const addCompareTab = () => addSpecialTab('compare', tApp('tabs.compare'));
   const addLogAnalyzerTab = () => addSpecialTab('logAnalyzer', tApp('tabs.logAnalyzer'));
   const addVpnTab = () => addSpecialTab('vpn', tApp('tabs.vpn'));
+  const addMicroSipTab = () => addSpecialTab('microsip', '📞 MicroSIP');
   const addI18nEditorTab = () => addSpecialTab('i18nEditor', tApp('tabs.i18nEditor'));
   const openSqlToolTab = (sessionId: string, sessionName: string) => {
     // 동일 sessionId 의 SQL Tool 탭이 이미 있으면 그 탭으로 전환
@@ -2916,7 +2918,7 @@ function App() {
     // 터미널이 아닌 워크스페이스(브라우저/파일비교/로그분석/VPN/다국어/SQL Tool)에서 더블클릭한 경우
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
-    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger'];
+    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip'];
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
       // 터미널 탭은 type 미지정 또는 'terminal' (실제로 type 필드 없는 게 일반적)
       let termTab = tabs.find(t => !t.type || t.type === 'terminal');
@@ -3372,6 +3374,7 @@ function App() {
         { label: tMenu('tools.compareWs'), action: addCompareTab },
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
         { label: tMenu('tools.vpnWs'), action: addVpnTab },
+        { label: '📞 MicroSIP', action: addMicroSipTab },
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
@@ -3878,6 +3881,7 @@ function App() {
           onAddCompareTab={addCompareTab}
           onAddLogAnalyzerTab={addLogAnalyzerTab}
           onAddVpnTab={addVpnTab}
+          onAddMicroSipTab={addMicroSipTab}
           onAddI18nEditorTab={addI18nEditorTab}
           onCloseTab={closeTab} onRenameTab={renameTab}
           onReorderTabs={(fromId, toId) => {
@@ -4360,7 +4364,7 @@ function App() {
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -4371,7 +4375,7 @@ function App() {
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -4382,6 +4386,13 @@ function App() {
           <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
             <ErrorBoundary label="VPN">
               <VpnWorkspace />
+            </ErrorBoundary>
+          </div>
+        ))}
+        {tabs.filter(t => t.type === 'microsip').map(t => (
+          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+            <ErrorBoundary label="MicroSIP">
+              <MicroSipWorkspace />
             </ErrorBoundary>
           </div>
         ))}
@@ -4407,7 +4418,7 @@ function App() {
           );
         })}
 
-        {activeTab && activeTab.type !== 'fileExplorer' && activeTab.type !== 'fileEditor' && activeTab.type !== 'browser' && activeTab.type !== 'compare' && activeTab.type !== 'logAnalyzer' && activeTab.type !== 'vpn' && activeTab.type !== 'i18nEditor' && activeTab.type !== 'sqlTool' && (() => {
+        {activeTab && activeTab.type !== 'fileExplorer' && activeTab.type !== 'fileEditor' && activeTab.type !== 'browser' && activeTab.type !== 'compare' && activeTab.type !== 'logAnalyzer' && activeTab.type !== 'vpn' && activeTab.type !== 'i18nEditor' && activeTab.type !== 'sqlTool' && activeTab.type !== 'microsip' && (() => {
           // 워크스페이스 레벨 파일 트리 — 선택된 패널의 활성 세션이 SSH 연결이면 표시
           let fileTreeNode: React.ReactNode = null;
           if (selectedPanelId) {

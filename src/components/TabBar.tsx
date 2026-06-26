@@ -14,6 +14,7 @@ type Props = {
   onAddCompareTab?: () => void;
   onAddLogAnalyzerTab?: () => void;
   onAddVpnTab?: () => void;
+  onAddMicroSipTab?: () => void;
   onAddI18nEditorTab?: () => void;
   onCloseTab: (id: string) => void;
   onRenameTab?: (id: string, name: string) => void;
@@ -27,7 +28,7 @@ type Props = {
   availableShells?: ShellInfo[];
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -227,6 +228,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 { label: t('compareWorkspace'), onClick: () => onAddCompareTab?.() },
                 { label: t('logAnalyzerWorkspace'), onClick: () => onAddLogAnalyzerTab?.() },
                 { label: t('vpnWorkspace'), onClick: () => onAddVpnTab?.() },
+                { label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() },
                 { label: t('translationEditor'), onClick: () => onAddI18nEditorTab?.() },
               ],
             },

@@ -147,6 +147,20 @@ contextBridge.exposeInMainWorld('api', {
   // 활성 터미널 없이 세션의 점프 체인으로 백그라운드 SSH 연결 후 SOCKS 프록시 (브라우저)
   sshOpenDedicatedSocks: (args: { sessionId: string }) => ipcRenderer.invoke('ssh:open-dedicated-socks', args),
   sshCloseDedicatedSocks: (args: { proxyId?: string; connId?: string }) => ipcRenderer.invoke('ssh:close-dedicated-socks', args),
+
+  // MicroSIP — 네이티브 PJSIP 사이드카 제어 (Phase 2 에서 데몬 연결)
+  sipEngineStatus: () => ipcRenderer.invoke('sip:engine-status'),
+  sipRegister: (args: { endpoint: any }) => ipcRenderer.invoke('sip:register', args),
+  sipUnregister: (args: { endpointId: string }) => ipcRenderer.invoke('sip:unregister', args),
+  sipCall: (args: { endpointId: string; target: string }) => ipcRenderer.invoke('sip:call', args),
+  sipHangup: (args: { endpointId: string }) => ipcRenderer.invoke('sip:hangup', args),
+  sipSendDtmf: (args: { endpointId: string; digit: string }) => ipcRenderer.invoke('sip:send-dtmf', args),
+  sipSetAudioDevices: (args: { input?: string; output?: string }) => ipcRenderer.invoke('sip:set-audio-devices', args),
+  onSipEvent: (cb: (p: any) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('sip:event', handler);
+    return () => ipcRenderer.removeListener('sip:event', handler);
+  },
   sshTestWebTarget: (args: { panelId: string; url: string }) => ipcRenderer.invoke('ssh:test-web-target', args),
   sshGetShellCwd: (args: { termId: string }) => ipcRenderer.invoke('ssh:get-shell-cwd', args),
   saveTextFile: (args: { defaultName?: string; content: string; filters?: { name: string; extensions: string[] }[] }) =>

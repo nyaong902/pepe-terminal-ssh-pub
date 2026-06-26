@@ -33,6 +33,7 @@ import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
 import { getSSHBridge } from './sshBridge';
+import { getSipSidecar } from './sipSidecar';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
@@ -4916,6 +4917,23 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
     return { success: false, error: String(e?.message || e) };
   }
 });
+
+// ── MicroSIP (네이티브 PJSIP 사이드카) 제어 ──
+{
+  const sip = getSipSidecar();
+  sip.on('event', (payload: any) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.webContents.send('sip:event', payload); } catch {}
+    }
+  });
+  ipcMain.handle('sip:engine-status', () => sip.status());
+  ipcMain.handle('sip:register', async (_e, args: { endpoint: any }) => sip.register(args?.endpoint));
+  ipcMain.handle('sip:unregister', async (_e, args: { endpointId: string }) => sip.unregister(args?.endpointId));
+  ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string }) => sip.call(args?.endpointId, args?.target));
+  ipcMain.handle('sip:hangup', async (_e, args: { endpointId: string }) => sip.hangup(args?.endpointId));
+  ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
+  ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
+}
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
 ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {
   try {
