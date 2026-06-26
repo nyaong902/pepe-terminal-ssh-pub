@@ -253,6 +253,7 @@ function htmlPage(): string {
   let pinchStart = null;
   let statusTimer = null;
   let statusFailures = 0;
+  let keyboardComposing = false;
 
   function showEnded() {
     if (statusTimer) clearInterval(statusTimer);
@@ -523,6 +524,7 @@ function htmlPage(): string {
   window.addEventListener('resize', () => applyView());
   window.addEventListener('keydown', e => {
     if (document.activeElement === pinInput) return;
+    if (e.isComposing || e.key === 'Process' || e.key === 'Dead') return;
     e.preventDefault();
     send({ type:'key', action:'down', key:e.key, modifiers:[
       e.ctrlKey && 'control', e.shiftKey && 'shift', e.altKey && 'alt', e.metaKey && 'meta'
@@ -530,12 +532,23 @@ function htmlPage(): string {
   });
   window.addEventListener('keyup', e => {
     if (document.activeElement === pinInput) return;
+    if (e.isComposing || e.key === 'Process' || e.key === 'Dead') return;
     e.preventDefault();
     send({ type:'key', action:'up', key:e.key, modifiers:[
       e.ctrlKey && 'control', e.shiftKey && 'shift', e.altKey && 'alt', e.metaKey && 'meta'
     ].filter(Boolean) });
   });
   keyboard.addEventListener('input', () => {
+    if (keyboardComposing) return;
+    if (!keyboard.value) return;
+    send({ type:'text', text:keyboard.value });
+    keyboard.value = '';
+  });
+  keyboard.addEventListener('compositionstart', () => {
+    keyboardComposing = true;
+  });
+  keyboard.addEventListener('compositionend', () => {
+    keyboardComposing = false;
     if (!keyboard.value) return;
     send({ type:'text', text:keyboard.value });
     keyboard.value = '';

@@ -98,21 +98,38 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
   // 세션의 fileTreeEnabled / initialPath 조회 — 자동 로드 결정용. autoTrackPwd 는 여기서 게이트로 안 씀 (cwd 동기화 전용)
   const [sessionFileTreeEnabled, setSessionFileTreeEnabled] = useState<boolean>(false);
   useEffect(() => {
-    if (initialPathProp) { setResolvedInitialPath(initialPathProp); return; }
-    if (!sessionId) { setResolvedInitialPath(''); return; }
     let cancelled = false;
     (async () => {
+      let nextInitialPath = initialPathProp ?? '';
+      let nextFileTreeEnabled = false;
       try {
-        const data: any = await (window as any).api?.listSessions?.();
+        if (sessionId) {
+          const data: any = await (window as any).api?.listSessions?.();
+          const list = Array.isArray(data) ? data : (data?.sessions || []);
+          const sess = list.find((s: any) => s.id === sessionId);
+          if (!nextInitialPath) nextInitialPath = sess?.initialPath || '';
+          nextFileTreeEnabled = !!sess?.fileTreeEnabled;
+        }
+        // 원격 셸은 /proc 기반의 실제 cwd 를 한 번 더 확인해, stale initialPath 나
+        // 추적 누락 상태에서도 현재 경로를 우선 표시한다.
+        if (mode === 'remote' && termId) {
+          try {
+            const r: any = await (window as any).api?.sshGetShellCwd?.({ termId });
+            if (r?.ok && r.pwd) nextInitialPath = r.pwd;
+          } catch {}
+        }
         if (cancelled) return;
-        const list = Array.isArray(data) ? data : (data?.sessions || []);
-        const sess = list.find((s: any) => s.id === sessionId);
-        setResolvedInitialPath(sess?.initialPath || '');
-        setSessionFileTreeEnabled(!!sess?.fileTreeEnabled);
-      } catch { if (!cancelled) setResolvedInitialPath(''); }
+        setResolvedInitialPath(nextInitialPath);
+        setSessionFileTreeEnabled(nextFileTreeEnabled);
+      } catch {
+        if (!cancelled) {
+          setResolvedInitialPath(initialPathProp ?? '');
+          if (sessionId) setSessionFileTreeEnabled(false);
+        }
+      }
     })();
     return () => { cancelled = true; };
-  }, [sessionId, initialPathProp, mode]);
+  }, [sessionId, initialPathProp, mode, termId]);
   const initialPath = resolvedInitialPath;
   // 사용자가 명시적으로 "파일트리 연결" 클릭한 경우 표식 — 자동 게이트 우회
   const [userLoaded, setUserLoaded] = useState<boolean>(false);

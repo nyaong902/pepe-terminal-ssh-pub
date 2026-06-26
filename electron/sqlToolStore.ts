@@ -46,3 +46,14 @@ export function setSessionState(sessionId: string, partial: SqlToolSessionState)
   }
   return next;
 }
+
+export function duplicateSessionState(sourceSessionId: string, targetSessionId: string): SqlToolSessionState {
+  const state = getSessionState(sourceSessionId);
+  const next: SqlToolSessionState = JSON.parse(JSON.stringify(state || {}));
+  try {
+    fs.writeFileSync(statePath(targetSessionId), JSON.stringify(next, null, 2), 'utf8');
+  } catch (err: any) {
+    console.warn('[sql-tool] duplicate failed:', err?.message || err);
+  }
+  return next;
+}

@@ -7033,6 +7033,7 @@ mark.claude-search-hit.current {
   flex: 1;
   min-height: 0;
   display: flex;
+  container-type: inline-size;
   background:
     radial-gradient(circle at 15% 10%, rgba(58, 132, 255, 0.16), transparent 28%),
     radial-gradient(circle at 85% 85%, rgba(47, 186, 122, 0.14), transparent 30%),
@@ -7043,6 +7044,7 @@ mark.claude-search-hit.current {
 .messenger-side {
   width: 320px;
   min-width: 260px;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(166, 200, 230, 0.14);
@@ -7152,7 +7154,15 @@ mark.claude-search-hit.current {
   cursor: not-allowed;
 }
 .messenger-scan small { color: var(--win-text-dim, #7f9ab0); line-height: 1.35; }
-.messenger-peers { overflow: auto; padding: 10px; }
+.messenger-peers {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .messenger-peer {
   width: 100%;
   display: flex;
@@ -7273,23 +7283,147 @@ mark.claude-search-hit.current {
 }
 .messenger-compose {
   display: flex;
-  align-items: stretch;
-  gap: 10px;
-  padding: 14px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
   border-top: 1px solid rgba(166, 200, 230, 0.12);
-  background: var(--win-surface, rgba(8,15,22,0.7));
+  background:
+    linear-gradient(180deg, rgba(14, 31, 43, 0.95), rgba(8, 16, 23, 0.92)),
+    var(--win-surface, rgba(8,15,22,0.7));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.messenger-compose-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.messenger-chip-btn {
+  height: 32px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(123, 158, 190, 0.32);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(16, 45, 63, 0.95), rgba(10, 25, 36, 0.95));
+  color: var(--win-text, #e8f3ff);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.messenger-chip-btn:hover:not(:disabled) {
+  border-color: rgba(104, 184, 228, 0.65);
+  background: linear-gradient(180deg, rgba(22, 59, 80, 0.98), rgba(12, 31, 46, 0.98));
+  transform: translateY(-1px);
+}
+.messenger-chip-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+.messenger-chip-btn-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.messenger-chip-btn-text {
+  font-weight: 600;
+}
+.messenger-compose-editor {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.messenger-send-btn {
+  min-width: 88px;
+  height: 42px;
+  white-space: nowrap;
+  border-radius: 10px;
+  align-self: stretch;
 }
 .messenger-compose textarea {
-  flex: 1;
+  width: 100%;
   resize: none;
   min-height: 46px;
   max-height: 140px;
   background: var(--win-surface-2, rgba(4,9,14,0.92));
   border: 1px solid rgba(123, 158, 190, 0.28);
   color: var(--win-text, #e8f3ff);
-  border-radius: 12px;
+  border-radius: 11px;
   padding: 11px 12px;
   outline: none;
+  flex: 1;
+}
+.messenger-compose-hint {
+  color: rgba(170, 203, 226, 0.72);
+  font-size: 11px;
+  line-height: 1.35;
+  min-height: 15px;
+  padding-left: 2px;
+}
+
+@container (max-width: 920px) {
+  .messenger-side {
+    width: 84px;
+    min-width: 84px;
+    overflow: hidden;
+  }
+  .messenger-brand,
+  .messenger-settings,
+  .messenger-scan,
+  .messenger-peer-main,
+  .messenger-count {
+    display: none;
+  }
+  .messenger-peers {
+    padding: 8px 6px;
+    gap: 6px;
+  }
+  .messenger-peer {
+    justify-content: center;
+    padding: 10px 8px;
+  }
+  .messenger-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+  }
+  .messenger-compose-editor {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .messenger-send-btn {
+    align-self: stretch;
+  }
+  .messenger-chip-btn-text {
+    display: none;
+  }
+  .messenger-chip-btn {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+@container (max-width: 760px) {
+  .messenger-ws {
+    flex-direction: column;
+  }
+  .messenger-side {
+    width: auto;
+    min-width: 0;
+    max-height: 132px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(166, 200, 230, 0.14);
+  }
+  .messenger-peers {
+    padding: 8px 6px;
+  }
+  .messenger-peer {
+    width: 100%;
+  }
 }
 .messenger-popup {
   position: fixed;

@@ -36,7 +36,7 @@ import { getSSHBridge } from './sshBridge';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
-import { getSessionState as getSqlToolState, setSessionState as setSqlToolState, SqlToolSessionState } from './sqlToolStore';
+import { getSessionState as getSqlToolState, setSessionState as setSqlToolState, duplicateSessionState, SqlToolSessionState } from './sqlToolStore';
 import { createWebDAVBridge } from './webdavBridge';
 import { installX11DisplayHook } from './x11Display';
 import { startBundledX11, stopBundledX11, stopAllBundledX11, listRunningX11 } from './x11Bundled';
@@ -1691,6 +1691,35 @@ ipcMain.handle('sessions:save', (_e, s: Session) => {
   else sessionsData.sessions.push(s);
   saveSessionsData(sessionsData);
   return sessionsData;
+});
+
+function cloneSessionForDuplicate(source: Session, newId: string, nameSuffix: string): Session {
+  const cloned: Session = JSON.parse(JSON.stringify(source));
+  cloned.id = newId;
+  cloned.name = `${source.name} (${nameSuffix || 'Copy'})`;
+  return cloned;
+}
+
+ipcMain.handle('sessions:duplicate', (_e, args: { sessionId: string; targetFolderId?: string | null; nameSuffix?: string }) => {
+  const source = sessionsData.sessions.find(s => s.id === args?.sessionId);
+  if (!source) return { success: false, error: 'source session not found' };
+
+  const newId = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const duplicateFolderId = args?.targetFolderId !== undefined ? (args.targetFolderId ?? undefined) : (source.folderId ?? undefined);
+  const cloned = cloneSessionForDuplicate(source, newId, args?.nameSuffix || 'Copy');
+  cloned.folderId = duplicateFolderId;
+
+  sessionsData.sessions.push(cloned);
+
+  if (duplicateFolderId === (source.folderId ?? undefined)) {
+    addToChildOrder(duplicateFolderId, cloned.id, { after: source.id });
+  } else {
+    addToChildOrder(duplicateFolderId, cloned.id, 'last');
+  }
+
+  duplicateSessionState(source.id, cloned.id);
+  saveSessionsData(sessionsData);
+  return { success: true, session: cloned, data: sessionsData };
 });
 
 // childOrder 헬퍼: 부모의 자식 순서 목록 가져오기 (없으면 폴더 먼저, 세션 나중 기본값 생성)
@@ -4767,8 +4796,82 @@ ipcMain.handle('ssh:close-local-forward', (_e, args: { forwardId: string }) => {
     return { success: false, error: String(e?.message || e) };
   }
 });
+// SQL Tool 등 — 활성 터미널 없이도 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 맺고
+// 그 위로 DB 포트를 로컬 포워딩. (점프된 세션에서 터미널을 안 띄워도 SQL 연결되도록)
+ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId: string; remoteHost: string; remotePort: number }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    const session = sessionsData.sessions.find(s => s.id === args.sessionId);
+    if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
+    const needsPw = !session.auth || (session.auth.type === 'password' && !session.auth.password);
+    if (needsPw) return { success: false, error: '이 세션은 저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. 세션에 자격증명을 저장하거나 먼저 해당 세션으로 터미널을 연결하세요.' };
+    const connId = `sqlfwd-${args.sessionId}-${Date.now().toString(36)}`;
+    try {
+      await bridge.handleSFTPConnect(connId, session.host, session.port || 22, session.username, session.auth, undefined, (session as any).jumps);
+    } catch (e: any) {
+      try { bridge.handleSFTPDisconnect?.(connId); } catch {}
+      return { success: false, error: `백그라운드 SSH 연결 실패: ${e?.message || e}` };
+    }
+    try {
+      const { forwardId, localPort } = await bridge.openLocalForward(connId, args.remoteHost, args.remotePort);
+      return { success: true, forwardId, localPort, connId, panelId: connId };
+    } catch (e: any) {
+      try { bridge.handleSFTPDisconnect?.(connId); } catch {}
+      return { success: false, error: `포워드 열기 실패: ${e?.message || e}` };
+    }
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('ssh:close-dedicated-forward', (_e, args: { forwardId?: string; connId?: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    if (args.forwardId) { try { bridge.closeLocalForward?.(args.forwardId); } catch {} }
+    if (args.connId) { try { bridge.handleSFTPDisconnect?.(args.connId); } catch {} }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 브라우저 — 활성 터미널 없이도 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 맺고
+// 그 위로 SOCKS5 프록시를 열어 webview 트래픽을 라우팅. (점프+URL 세션을 터미널 없이 브라우저만 열어도 사용)
+ipcMain.handle('ssh:open-dedicated-socks', async (_e, args: { sessionId: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    const session = sessionsData.sessions.find(s => s.id === args.sessionId);
+    if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
+    const needsPw = !session.auth || (session.auth.type === 'password' && !session.auth.password);
+    if (needsPw) return { success: false, error: '이 세션은 저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. 세션에 자격증명을 저장하거나 먼저 해당 세션으로 터미널을 연결하세요.' };
+    const connId = `websocks-${args.sessionId}-${Date.now().toString(36)}`;
+    try {
+      await bridge.handleSFTPConnect(connId, session.host, session.port || 22, session.username, session.auth, undefined, (session as any).jumps);
+    } catch (e: any) {
+      try { bridge.handleSFTPDisconnect?.(connId); } catch {}
+      return { success: false, error: `백그라운드 SSH 연결 실패: ${e?.message || e}` };
+    }
+    try {
+      const r = await bridge.openSocksProxy(connId);
+      return { success: !!r, ...(r || {}), connId };
+    } catch (e: any) {
+      try { bridge.handleSFTPDisconnect?.(connId); } catch {}
+      return { success: false, error: `SOCKS 프록시 열기 실패: ${e?.message || e}` };
+    }
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connId?: string }) => {
+  try {
+    const bridge: any = getSSHBridge();
+    if (args.proxyId) { try { bridge.closeSocksProxy?.(args.proxyId); } catch {} }
+    if (args.connId) { try { bridge.handleSFTPDisconnect?.(args.connId); } catch {} }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
-ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null }) => {
+ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {
   try {
     const wc = webContents.fromId(args.webContentsId);
     if (!wc) return { success: false, error: 'webContents not found' };
@@ -4779,7 +4882,10 @@ ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; pr
       try { await session.closeAllConnections?.(); } catch {}
       return { success: true };
     }
-    await session.setProxy({ mode: 'fixed_servers', proxyRules: args.proxyRules, proxyBypassRules: 'localhost,127.0.0.1,::1' });
+    // 점프 경유로 "원격지 기준 127.0.0.1/localhost" 에 접속하려면 그 주소도 프록시를 타야 하므로,
+    // 호출 측이 빈 문자열(또는 미지정)을 주면 bypass 없이 모든 트래픽을 SOCKS 로 보낸다.
+    const proxyBypassRules = typeof args.proxyBypassRules === 'string' ? args.proxyBypassRules : 'localhost,127.0.0.1,::1';
+    await session.setProxy({ mode: 'fixed_servers', proxyRules: args.proxyRules, proxyBypassRules });
     try { await session.closeAllConnections?.(); } catch {}
     return { success: true };
   } catch (e: any) {

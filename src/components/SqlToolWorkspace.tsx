@@ -606,6 +606,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
       // SSH 터널 사용 시 — 로컬 포트 포워딩 열고 host/port 교체.
       let effectiveDbms: any = session.dbms;
       let forwardId = '';
+      let dedConnId = '';
       console.log('[SqlTool] connect() session.dbms =', session.dbms);
       const forceSshTunnel = hasJumpChain(session);
       const useSshTunnel = !!session.dbms?.useSshTunnel || forceSshTunnel;
@@ -616,7 +617,8 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
         }
         const remoteHost = dbmsRemoteHostForSession(session);
         const remotePort = session.dbms.port || def.defaultPort || 0;
-        let fwd: any;
+        // 1차: 이미 연결된 활성 터미널(점프 포함) 위로 포워딩 재사용
+        let fwd: any = null;
         try {
           fwd = await api.sshOpenLocalForward({
             sessionId,
@@ -626,35 +628,41 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
             sshHost: (session as any).host,
             sshPort: (session as any).port || 22,
           });
-        } catch (ipcErr: any) {
-          setConnectError(tr('wsSshIpcException', { error: ipcErr?.message || ipcErr }));
-          return;
-        }
+        } catch { fwd = null; }
         console.log('[SqlTool] sshOpenLocalForward result =', fwd);
-        if (!fwd || fwd.success !== true) {
-          // 메인 프로세스가 이미 상황별 친화 메시지를 줌 (활성 호스트 목록 + 안내).
-          // 중복 문구 붙이지 말고 그대로 노출.
-          setConnectError(fwd?.error ? tr('wsSshOpenFailedErr', { error: fwd.error }) : tr('wsSshOpenFailedNoResp'));
-          return;
-        }
-        if (!fwd.localPort) {
-          setConnectError(tr('wsSshNoLocalPort', { panelId: fwd.panelId || '?' }));
-          return;
+        // 2차 폴백: 활성 터미널이 없으면 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 수립해 포워딩
+        if (!fwd || fwd.success !== true || !fwd.localPort) {
+          const reuseErr = fwd?.error;
+          let ded: any = null;
+          if (typeof api.sshOpenDedicatedForward === 'function') {
+            try { ded = await api.sshOpenDedicatedForward({ sessionId, remoteHost, remotePort }); } catch { ded = null; }
+          }
+          console.log('[SqlTool] sshOpenDedicatedForward result =', ded);
+          if (ded?.success && ded.localPort) {
+            fwd = ded;
+            dedConnId = ded.connId || '';
+          } else {
+            const msg = ded?.error || reuseErr;
+            setConnectError(msg ? tr('wsSshOpenFailedErr', { error: msg }) : tr('wsSshOpenFailedNoResp'));
+            return;
+          }
         }
         forwardId = fwd.forwardId;
         // urlOverride 가 남아있으면 host/port 교체가 무시되므로 함께 비움
         effectiveDbms = { ...session.dbms, host: '127.0.0.1', port: fwd.localPort, urlOverride: undefined };
-        console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: fwd.localPort, forwardId, panelId: fwd.panelId, forcedByJump: forceSshTunnel });
+        console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: fwd.localPort, forwardId, dedicated: !!dedConnId, forcedByJump: forceSshTunnel });
       }
       const newBackend = new JdbcBackend(sessionId, effectiveDbms, def);
-      // forwardId 를 backend 에 저장해 disconnect 시 정리
+      // forwardId/전용연결 id 를 backend 에 저장해 disconnect 시 정리
       (newBackend as any).__forwardId = forwardId;
+      (newBackend as any).__dedConnId = dedConnId;
       // 진단 로그 — 실제 빌드된 URL
       const dbgUrl = newBackend.buildUrl();
       console.log('[SqlTool] connecting JDBC →', dbgUrl, forwardId ? `(via SSH tunnel ${forwardId})` : '(direct)');
       const cr = await newBackend.ensureConnected();
       if (!cr.ok) {
-        if (forwardId) { try { await api.sshCloseLocalForward?.({ forwardId }); } catch {} }
+        if (dedConnId) { try { await api.sshCloseDedicatedForward?.({ forwardId, connId: dedConnId }); } catch {} }
+        else if (forwardId) { try { await api.sshCloseLocalForward?.({ forwardId }); } catch {} }
         const prefix = forwardId ? `[SSH tunnel: ${dbgUrl}] ` : '';
         setConnectError(prefix + (cr.error || tr('wsConnectFailed')));
         return;
@@ -685,7 +693,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     if (b) {
       try { await b.disconnect(); } catch {}
       const fwd = (b as any).__forwardId;
-      if (fwd) { try { await (window as any).api?.sshCloseLocalForward?.({ forwardId: fwd }); } catch {} }
+      const ded = (b as any).__dedConnId;
+      if (ded) { try { await (window as any).api?.sshCloseDedicatedForward?.({ forwardId: fwd, connId: ded }); } catch {} }
+      else if (fwd) { try { await (window as any).api?.sshCloseLocalForward?.({ forwardId: fwd }); } catch {} }
     }
     setBackend(null);
     setConnected(false);
@@ -700,7 +710,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
       if (b) {
         try { b.disconnect(); } catch {}
         const fwd = (b as any).__forwardId;
-        if (fwd) { try { (window as any).api?.sshCloseLocalForward?.({ forwardId: fwd }); } catch {} }
+        const ded = (b as any).__dedConnId;
+        if (ded) { try { (window as any).api?.sshCloseDedicatedForward?.({ forwardId: fwd, connId: ded }); } catch {} }
+        else if (fwd) { try { (window as any).api?.sshCloseLocalForward?.({ forwardId: fwd }); } catch {} }
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

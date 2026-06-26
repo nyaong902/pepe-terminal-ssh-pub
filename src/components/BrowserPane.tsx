@@ -26,6 +26,9 @@ type StoredSession = {
   id: string;
   name?: string;
   browserUrl?: string;
+  host?: string;
+  port?: number;
+  hasJumps?: boolean;
 };
 
 export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange }) => {
@@ -52,7 +55,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     if (!onStateChange) return;
     try { onStateChange({ editUrl, zoom, targetSessionId, targetPanelId }); } catch {}
   }, [editUrl, zoom, targetSessionId, targetPanelId, onStateChange]);
-  const [proxyState, setProxyState] = useState<{ proxyId: string; localPort: number; panelId: string } | null>(null);
+  const [proxyState, setProxyState] = useState<{ proxyId: string; localPort: number; panelId: string; connId?: string; sessionId?: string } | null>(null);
   const [proxyBusy, setProxyBusy] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string>('');
@@ -61,6 +64,18 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const lastAutoLoadedRef = useRef<string>('');
   const liveTargets = connectedSessions.length > 0 ? connectedSessions : sshTargets;
 
+  // 언마운트(탭 닫힘) 시 활성 프록시/전용 백그라운드 SSH 연결 정리 — 누수 방지.
+  const proxyStateRef = useRef(proxyState);
+  useEffect(() => { proxyStateRef.current = proxyState; }, [proxyState]);
+  useEffect(() => {
+    return () => {
+      const ps = proxyStateRef.current;
+      if (!ps?.proxyId) return;
+      if (ps.connId) { try { (window as any).api?.sshCloseDedicatedSocks?.({ proxyId: ps.proxyId, connId: ps.connId }); } catch {} }
+      else { try { (window as any).api?.sshCloseSocksProxy?.({ proxyId: ps.proxyId }); } catch {} }
+    };
+  }, []);
+
   const currentProxyLabel = useMemo(() => {
     if (!targetSessionId) return t('directConnect');
     const stored = storedSessions.find(s => s.id === targetSessionId);
@@ -68,12 +83,6 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     const title = stored?.name?.trim() || match?.sessionName || match?.sessionId || targetSessionId;
     return `${title}${match?.host ? ` (${match.host}${match.port && match.port !== 22 ? `:${match.port}` : ''})` : ''}`;
   }, [liveTargets, storedSessions, targetSessionId]);
-
-  const resolvePanelLabelForDisplay = (sessionId: string) => {
-    const stored = storedSessions.find(s => s.id === sessionId);
-    const active = liveTargets.find(t => t.sessionId === sessionId);
-    return stored?.name?.trim() || active?.sessionName || active?.sessionId || sessionId;
-  };
 
   const resolveBrowserUrlForSession = (sessionId: string) => {
     const storedUrl = storedSessions.find(s => s.id === sessionId)?.browserUrl?.trim();
@@ -84,15 +93,11 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     return '';
   };
 
-  const connectedSessionTargets = useMemo(() => {
-    const seen = new Set<string>();
-    return liveTargets.filter(t => {
-      const sid = t.sessionId?.trim();
-      if (!sid || seen.has(sid)) return false;
-      seen.add(sid);
-      return true;
-    });
-  }, [liveTargets]);
+  // 직접연결 목록 = "브라우저 URL + SSH 점프"가 둘 다 설정된 세션만 (터미널 연결 여부 무관).
+  // 선택 시 항상 백그라운드 점프 SSH 연결을 직접 수립해 그 위로 SOCKS 프록시.
+  const browserJumpTargets = useMemo(() =>
+    storedSessions.filter(s => !!s.id && s.hasJumps && (s.browserUrl || '').trim()),
+  [storedSessions]);
 
   const normalizeUrlForCompare = (url: string) => {
     try {
@@ -111,7 +116,14 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     try {
       const data = await (window as any).api?.listSessions?.();
       const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
-      setStoredSessions(sessions.map((s: any) => ({ id: String(s.id || ''), name: s.name, browserUrl: s.browserUrl })));
+      setStoredSessions(sessions.map((s: any) => ({
+        id: String(s.id || ''),
+        name: s.name,
+        browserUrl: s.browserUrl,
+        host: s.host,
+        port: s.port,
+        hasJumps: Array.isArray(s.jumps) && s.jumps.some((j: any) => j && typeof j.host === 'string' && j.host.trim()),
+      })));
     } catch {}
   };
 
@@ -123,15 +135,12 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
 
   useEffect(() => {
     if (!targetSessionId) return;
-    const active = liveTargets.find(t => t.sessionId === targetSessionId);
-    if (!active) {
-      setTargetPanelId('');
-      setTargetSessionId('');
-      return;
-    }
-    setTargetPanelId(active.panelId || '');
-    if (proxyState?.panelId === active.panelId) return;
-  }, [liveTargets, targetSessionId, proxyState?.panelId]);
+    setTargetPanelId('');
+    // 이미 같은 세션으로 전용 프록시가 떠 있으면 재오픈 안 함 (4초 폴링 재실행 방지)
+    if (proxyState?.connId && proxyState?.sessionId === targetSessionId) return;
+    void applyDedicatedProxy(targetSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetSessionId, proxyState?.connId, proxyState?.sessionId]);
 
   useEffect(() => {
     if (targetSessionId) return;
@@ -147,7 +156,12 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     setProxyBusy(true);
     try {
       if (cur?.proxyId) {
-        try { await (window as any).api?.sshCloseSocksProxy?.({ proxyId: cur.proxyId }); } catch {}
+        if (cur.connId) {
+          // 전용(백그라운드) 연결 — 프록시 + 점프 SSH 연결 모두 정리
+          try { await (window as any).api?.sshCloseDedicatedSocks?.({ proxyId: cur.proxyId, connId: cur.connId }); } catch {}
+        } else {
+          try { await (window as any).api?.sshCloseSocksProxy?.({ proxyId: cur.proxyId }); } catch {}
+        }
       }
       const wv: any = webviewRef.current;
       const webContentsId = typeof wv?.getWebContentsId === 'function' ? wv.getWebContentsId() : null;
@@ -188,7 +202,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         setProxyState(null);
         return;
       }
-      await (window as any).api?.setWebviewProxy?.({ webContentsId, proxyRules: `socks5://127.0.0.1:${r.localPort}` });
+      // bypass 비움 → 원격지 기준 127.0.0.1/localhost 도 SOCKS(점프 SSH) 를 타게 함
+      await (window as any).api?.setWebviewProxy?.({ webContentsId, proxyRules: `socks5://127.0.0.1:${r.localPort}`, proxyBypassRules: '' });
       if (seq !== proxySeqRef.current) return;
       setProxyState({ proxyId: r.proxyId, localPort: r.localPort, panelId });
       const savedBrowserUrl = resolveBrowserUrlForSession(
@@ -225,6 +240,52 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     }
   };
 
+  // 활성 터미널 없이 세션의 점프 체인으로 백그라운드 SSH 연결을 수립하고 그 위로 SOCKS5 프록시 적용.
+  const applyDedicatedProxy = async (sessionId: string) => {
+    const seq = ++proxySeqRef.current;
+    setProxyBusy(true);
+    try {
+      const wv: any = webviewRef.current;
+      const webContentsId = typeof wv?.getWebContentsId === 'function' ? wv.getWebContentsId() : null;
+      if (!webContentsId) return;
+      // 기존 프록시 정리 (전용/일반 구분)
+      if (proxyState?.proxyId) {
+        if (proxyState.connId) { try { await (window as any).api?.sshCloseDedicatedSocks?.({ proxyId: proxyState.proxyId, connId: proxyState.connId }); } catch {} }
+        else { try { await (window as any).api?.sshCloseSocksProxy?.({ proxyId: proxyState.proxyId }); } catch {} }
+      }
+      const r: any = await (window as any).api?.sshOpenDedicatedSocks?.({ sessionId });
+      if (seq !== proxySeqRef.current) return;
+      if (!r?.success || !r?.proxyId) {
+        setTargetSessionId('');
+        setTargetPanelId('');
+        setTestOk(false);
+        setTestResult(t('proxyOpenFailed', { reason: r?.error || t('proxyForwardingBlocked') }));
+        setProxyState(null);
+        return;
+      }
+      // bypass 비움 → 원격지 기준 127.0.0.1/localhost 도 SOCKS(점프 SSH) 를 타게 함
+      await (window as any).api?.setWebviewProxy?.({ webContentsId, proxyRules: `socks5://127.0.0.1:${r.localPort}`, proxyBypassRules: '' });
+      if (seq !== proxySeqRef.current) return;
+      setProxyState({ proxyId: r.proxyId, localPort: r.localPort, panelId: '', connId: r.connId, sessionId });
+      const savedBrowserUrl = resolveBrowserUrlForSession(sessionId);
+      if (savedBrowserUrl) setEditUrl(savedBrowserUrl);
+      const loadUrl = savedBrowserUrl ? resolveBrowserUrl(savedBrowserUrl) : '';
+      if (loadUrl) {
+        window.setTimeout(() => {
+          if (seq !== proxySeqRef.current) return;
+          try {
+            wv?.loadURL?.(loadUrl).catch((err: any) => {
+              const msg = String(err?.message || err || '');
+              if (!/aborted/i.test(msg)) { setTestOk(false); setTestResult(t('browserLoadFailed', { msg })); }
+            });
+          } catch {}
+        }, 150);
+      }
+    } finally {
+      if (seq === proxySeqRef.current) setProxyBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!targetPanelId) return;
     applyProxyForPanel(targetPanelId);
@@ -233,6 +294,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
 
   useEffect(() => {
     if (!proxyState) return;
+    if (proxyState.connId) return; // 전용(백그라운드) 연결은 활성 패널 목록과 무관 — 유지
     const cur = liveTargets.find(t => t.panelId === proxyState.panelId);
     if (cur) return;
     clearProxy();
@@ -373,7 +435,9 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     }
     setTestBusy(true);
     try {
-      const testPanelId = targetPanelId || (liveTargets.find(t => t.sessionId === targetSessionId)?.panelId || '');
+      const testPanelId = targetPanelId
+        || (liveTargets.find(t => t.sessionId === targetSessionId)?.panelId || '')
+        || (proxyState?.sessionId === targetSessionId ? (proxyState?.connId || '') : '');
       const r: any = await (window as any).api?.sshTestWebTarget?.({ panelId: testPanelId, url: targetUrl });
       if (!r?.success) {
         setTestOk(false);
@@ -477,15 +541,13 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           title={t('proxySelectTooltip')}
         >
           <option value="">{t('directConnect')}</option>
-          {connectedSessionTargets.map(tgt => {
-            const sid = tgt.sessionId || '';
-            return (
-            <option key={tgt.panelId} value={sid}>
-              {resolvePanelLabelForDisplay(sid)}
-              {tgt.host ? ` (${tgt.host}${tgt.port && tgt.port !== 22 ? `:${tgt.port}` : ''})` : ''}
-              {resolveBrowserUrlForSession(sid) ? ' · ' + resolveBrowserUrlForSession(sid) : ''}
+          {browserJumpTargets.map(s => (
+            <option key={s.id} value={s.id}>
+              {(s.name?.trim() || s.id)}
+              {s.host ? ` (${s.host}${s.port && s.port !== 22 ? `:${s.port}` : ''})` : ''}
+              {s.browserUrl ? ` ⤳ ${s.browserUrl}` : ''}
             </option>
-          )})}
+          ))}
         </select>
         <span style={{ color: '#9aa3ad', fontSize: 12, marginLeft: 2 }} title={proxyState ? `SOCKS5 127.0.0.1:${proxyState.localPort}` : t('directConnect')}>
           {proxyBusy ? t('proxyApplying') : currentProxyLabel}

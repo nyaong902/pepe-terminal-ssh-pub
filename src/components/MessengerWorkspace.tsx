@@ -103,6 +103,19 @@ export const MessengerWorkspace: React.FC<{
   const [remoteSelected, setRemoteSelected] = useState<Set<string>>(new Set());
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState('');
+  const [narrowLayout, setNarrowLayout] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = workspaceRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect?.width || 0;
+      setNarrowLayout(width < 920);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -375,7 +388,7 @@ export const MessengerWorkspace: React.FC<{
   };
 
   return (
-    <div className="messenger-ws" onClick={() => setMenu(null)}>
+    <div className={`messenger-ws ${narrowLayout ? 'narrow' : ''}`} ref={workspaceRef} onClick={() => setMenu(null)}>
       <aside className="messenger-side">
         <div className="messenger-brand">
           <div>
@@ -512,21 +525,36 @@ export const MessengerWorkspace: React.FC<{
         </section>
 
         <footer className="messenger-compose">
-          <button disabled={!canSend} onClick={sendFiles}>{t('localFile')}</button>
-          <button disabled={!canSend} onClick={() => setRemoteOpen(true)}>{t('remoteFile')}</button>
-          <textarea
-            value={text}
-            disabled={!canSend}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={selectedPeer ? (hidePresence ? t('composeHidden') : (selectedOnline ? t('composePlaceholder') : t('composeOffline'))) : t('selectPeer')}
-          />
-          <button disabled={!canSend || !text.trim()} onClick={send}>{t('send')}</button>
+          <div className="messenger-compose-toolbar">
+            <button className="messenger-chip-btn" disabled={!canSend} onClick={sendFiles} title={t('localFile')} aria-label={t('localFile')}>
+              <span className="messenger-chip-btn-icon">📎</span>
+              <span className="messenger-chip-btn-text">{t('localFile')}</span>
+            </button>
+            <button className="messenger-chip-btn" disabled={!canSend} onClick={() => setRemoteOpen(true)} title={t('remoteFile')} aria-label={t('remoteFile')}>
+              <span className="messenger-chip-btn-icon">🌐</span>
+              <span className="messenger-chip-btn-text">{t('remoteFile')}</span>
+            </button>
+          </div>
+          <div className="messenger-compose-editor">
+            <textarea
+              value={text}
+              disabled={!canSend}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              placeholder={selectedPeer ? (hidePresence ? t('composeHidden') : (selectedOnline ? t('composePlaceholder') : t('composeOffline'))) : t('selectPeer')}
+            />
+            <button className="messenger-send-btn" disabled={!canSend || !text.trim()} onClick={send}>{t('send')} (Enter)</button>
+          </div>
+          <div className="messenger-compose-hint">
+            {selectedPeer
+              ? '📎 로컬 파일 · 🌐 원격 파일 버튼으로 파일을 전송할 수 있습니다.'
+              : t('selectPeer')}
+          </div>
         </footer>
       </main>
 

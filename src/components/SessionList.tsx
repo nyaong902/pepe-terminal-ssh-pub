@@ -370,6 +370,25 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     await reload();
   };
 
+  const duplicateSession = async (source: Session, targetFolderId?: string | null) => {
+    try {
+      const res = await (window as any).api?.duplicateSession?.({
+        sessionId: source.id,
+        targetFolderId: targetFolderId ?? undefined,
+        nameSuffix: t('copySuffix'),
+      });
+      if (res?.success && res?.session?.id) {
+        await reload();
+        setSelectedId(res.session.id);
+        setSelectedType('session');
+        return res.session as Session;
+      }
+    } catch (err) {
+      console.error('[session-duplicate] failed:', err);
+    }
+    return null;
+  };
+
   const handleConnect = (s: Session) => onConnect(s.id, s.name, targetPanelId ?? null, s.theme, s.fontFamily, s.fontSize, s.scrollback);
   const _handleDisconnect = () => onDisconnect?.(targetPanelId ?? null); void _handleDisconnect;
 
@@ -845,8 +864,8 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 handlePasteFolder(target);
               } else if (copiedSession) {
                 e.preventDefault();
-                const newSess = { ...copiedSession, id: `sess-${Date.now()}`, name: `${copiedSession.name} (${t('copySuffix')})` };
-                (async () => { await (window as any).api.saveSession(newSess); await reload(); setSelectedId(newSess.id); setSelectedType('session'); })();
+                const targetFolderId = selectedType === 'folder' ? selectedId : copiedSession.folderId ?? undefined;
+                void duplicateSession(copiedSession, targetFolderId);
               }
             }
           }}
@@ -1044,6 +1063,13 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               }}>
                 {t('ctxCopy')}
               </div>
+              <div className="context-menu-item" onClick={() => {
+                const s = sessions.find(x => x.id === contextMenu.id);
+                if (s) void duplicateSession(s, s.folderId ?? undefined);
+                setContextMenu(null);
+              }}>
+                복제
+              </div>
             </>
           )}
           {contextMenu.type === 'folder' && (
@@ -1061,8 +1087,8 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 const target = contextMenu.type === 'folder' ? contextMenu.id : null;
                 handlePasteFolder(target);
               } else if (copiedSession) {
-                const newSess = { ...copiedSession, id: `sess-${Date.now()}`, name: `${copiedSession.name} (${t('copySuffix')})` };
-                (async () => { await (window as any).api.saveSession(newSess); await reload(); setSelectedId(newSess.id); setSelectedType('session'); })();
+                const targetFolderId = contextMenu.type === 'folder' ? contextMenu.id : copiedSession.folderId ?? undefined;
+                void duplicateSession(copiedSession, targetFolderId);
               }
               setContextMenu(null);
             }}>
