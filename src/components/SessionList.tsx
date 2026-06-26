@@ -4,6 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { SessionEditor } from './SessionEditor';
 import { notifyConfirm } from './Notify';
 
+// 컨텍스트 메뉴 아이콘 헬퍼 — 라벨 앞에 일정 폭(18px) 컬럼으로 표시.
+const MenuIcon: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <span style={{ display: 'inline-block', width: 18, textAlign: 'center', marginRight: 6, fontSize: 13 }}>{children}</span>
+);
+
 type LoginScriptRule = {
   expect: string;
   send: string;
@@ -976,10 +981,10 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                       };
                       return (
                         <>
-                          <div className="context-menu-item" onClick={() => doConnect('minitab')}>{t('ctxOpenMini')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-v')}>{t('ctxOpenVSplit')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-h')}>{t('ctxOpenHSplit')}</div>
-                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}>{t('ctxOpenTile')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('minitab')}><MenuIcon>🪟</MenuIcon>{t('ctxOpenMini')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-v')}><MenuIcon>◫</MenuIcon>{t('ctxOpenVSplit')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-h')}><MenuIcon>⊟</MenuIcon>{t('ctxOpenHSplit')}</div>
+                          <div className="context-menu-item" onClick={() => doConnect('split-tile')}><MenuIcon>▦</MenuIcon>{t('ctxOpenTile')}</div>
                         </>
                       );
                     })()}
@@ -993,11 +998,11 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                   if (sessIds.length > 0) setFolderPicker({ sessionIds: sessIds });
                   setContextMenu(null);
                 }}>
-                  {t('ctxMoveToFolder')}
+                  <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
                 </div>
               )}
               <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDelete(); }}>
-                {t('ctxDeleteSelected')}
+                <MenuIcon>🗑️</MenuIcon>{t('ctxDeleteSelected')}
               </div>
             </>
           ) : (
@@ -1029,15 +1034,15 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                     ))}
                   </select>
                 </div>
-                <div className="context-menu-item" onClick={() => doConnect('minitab')}>{t('ctxOpenMini')}</div>
-                <div className="context-menu-item" onClick={() => doConnect('split-v')}>{t('ctxOpenVSplit')}</div>
-                <div className="context-menu-item" onClick={() => doConnect('split-h')}>{t('ctxOpenHSplit')}</div>
+                <div className="context-menu-item" onClick={() => doConnect('minitab')}><MenuIcon>🪟</MenuIcon>{t('ctxOpenMini')}</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-v')}><MenuIcon>◫</MenuIcon>{t('ctxOpenVSplit')}</div>
+                <div className="context-menu-item" onClick={() => doConnect('split-h')}><MenuIcon>⊟</MenuIcon>{t('ctxOpenHSplit')}</div>
                 <div className="context-menu-separator" />
               </>
             );
           })()}
           <div className="context-menu-item" onClick={() => { startRename(contextMenu.id, contextMenu.type, contextMenu.name); setContextMenu(null); }}>
-            {t('ctxRename')}
+            <MenuIcon>✏️</MenuIcon>{t('ctxRename')}
           </div>
           <div className="context-menu-item" onClick={() => {
             setSelectedId(contextMenu.id);
@@ -1045,7 +1050,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             setContextMenu(null);
             handleDelete();
           }}>
-            {t('delete')}
+            <MenuIcon>🗑️</MenuIcon>{t('delete')}
           </div>
           {contextMenu.type === 'session' && (
             <>
@@ -1054,14 +1059,14 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 if (s) setEditing(s);
                 setContextMenu(null);
               }}>
-                {t('edit')}
+                <MenuIcon>⚙️</MenuIcon>{t('edit')}
               </div>
               <div className="context-menu-item" onClick={() => {
                 const s = sessions.find(x => x.id === contextMenu.id);
                 if (s) { setCopiedSession(s); setCopiedFolder(null); }
                 setContextMenu(null);
               }}>
-                {t('ctxCopy')}
+                <MenuIcon>📋</MenuIcon>{t('ctxCopy')}
               </div>
               <div className="context-menu-item" onClick={() => {
                 const s = sessions.find(x => x.id === contextMenu.id);
@@ -1077,13 +1082,12 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               handleCopyFolder(contextMenu.id);
               setContextMenu(null);
             }}>
-              {t('ctxCopy')}
+              <MenuIcon>📋</MenuIcon>{t('ctxCopy')}
             </div>
           )}
           {(copiedSession || copiedFolder) && (
             <div className="context-menu-item" onClick={() => {
               if (copiedFolder) {
-                // 우클릭 대상이 폴더이면 그 안에, 아니면 원본과 같은 레벨
                 const target = contextMenu.type === 'folder' ? contextMenu.id : null;
                 handlePasteFolder(target);
               } else if (copiedSession) {
@@ -1092,7 +1096,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               }
               setContextMenu(null);
             }}>
-              {t('ctxPaste')}
+              <MenuIcon>📌</MenuIcon>{t('ctxPaste')}
             </div>
           )}
           {contextMenu.type === 'session' && (
@@ -1101,7 +1105,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               if (s) onFileTransfer?.(s.id, s.name);
               setContextMenu(null);
             }}>
-              {t('ctxFileTransfer')}
+              <MenuIcon>📁</MenuIcon>{t('ctxFileTransfer')}
             </div>
           )}
           {contextMenu.type === 'session' && (() => {
@@ -1116,10 +1120,10 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             ) : null;
           })()}
           <div className="context-menu-separator" />
-          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'up'); await reload(); })(); setContextMenu(null); }}>{t('ctxUp')}</div>
-          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'down'); await reload(); })(); setContextMenu(null); }}>{t('ctxDown')}</div>
-          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'top'); await reload(); })(); setContextMenu(null); }}>{t('ctxTop')}</div>
-          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'bottom'); await reload(); })(); setContextMenu(null); }}>{t('ctxBottom')}</div>
+          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'up'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↑</MenuIcon>{t('ctxUp')}</div>
+          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'down'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↓</MenuIcon>{t('ctxDown')}</div>
+          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'top'); await reload(); })(); setContextMenu(null); }}><MenuIcon>⤒</MenuIcon>{t('ctxTop')}</div>
+          <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'bottom'); await reload(); })(); setContextMenu(null); }}><MenuIcon>⤓</MenuIcon>{t('ctxBottom')}</div>
           {contextMenu.type === 'session' && folders.length > 0 && (
             <>
               <div className="context-menu-separator" />
@@ -1131,7 +1135,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 setFolderPicker({ sessionIds: sessIds.length > 0 ? sessIds : [contextMenu.id] });
                 setContextMenu(null);
               }}>
-                {t('ctxMoveToFolder')}
+                <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
               </div>
             </>
           )}

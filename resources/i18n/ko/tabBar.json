@@ -15,5 +15,13 @@
   "scrollNext": "다음",
   "renameContext": "이름 변경",
   "closeContext": "닫기",
-  "openInNewWindow": "새 창으로 열기"
+  "openInNewWindow": "새 창으로 열기",
+  "colorSetting": "색 설정",
+  "colorDefault": "기본",
+  "colorRed": "빨강",
+  "colorOrange": "주황",
+  "colorYellow": "노랑",
+  "colorGreen": "초록",
+  "colorBlue": "파랑",
+  "colorPurple": "보라"
 }

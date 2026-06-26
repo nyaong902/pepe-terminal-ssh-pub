@@ -15,5 +15,13 @@
   "closeContext": "إغلاق",
   "fileTransferTab": "📁 نقل الملفات",
   "workspaceN": "مساحة العمل {{n}}",
-  "openInNewWindow": "فتح في نافذة جديدة"
+  "openInNewWindow": "فتح في نافذة جديدة",
+  "colorSetting": "لون التبويب",
+  "colorDefault": "افتراضي",
+  "colorRed": "أحمر",
+  "colorOrange": "برتقالي",
+  "colorYellow": "أصفر",
+  "colorGreen": "أخضر",
+  "colorBlue": "أزرق",
+  "colorPurple": "بنفسجي"
 }

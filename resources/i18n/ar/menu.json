@@ -24,7 +24,8 @@
     "wheelUp": "Ctrl+عجلة للأعلى",
     "wheelDown": "Ctrl+عجلة للأسفل",
     "terminalTheme": "🎨 سمة الطرفية",
-    "windowTheme": "🪟 سمة النافذة"
+    "windowTheme": "🪟 سمة النافذة",
+    "uiLanguage": "🌐 لغة الواجهة"
   },
   "window": {
     "title": "نافذة",

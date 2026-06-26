@@ -84,5 +84,7 @@
   "replyPlaceholder": "快速回复",
   "open": "打开",
   "sendReply": "发送",
-  "replyFail": "回复发送失败"
+  "replyFail": "回复发送失败",
+  "triggerTextAi": "🤖 AI 聊天",
+  "triggerTextMessenger": "💬 即时通讯"
 }

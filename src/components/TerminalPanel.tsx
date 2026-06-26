@@ -453,6 +453,15 @@ export function markTermConnected(termId: string) {
   try { notifyConnectedChange(); } catch {}
 }
 
+// 복제→새 창 분리 시 — 원본 화면 버퍼만 표시하고 SSH 연결은 하지 말라는 플래그.
+const snapshotOnlyTerms = new Set<string>();
+export function markTermSnapshotOnly(termId: string) { snapshotOnlyTerms.add(termId); }
+export function isTermSnapshotOnly(termId: string): boolean { return snapshotOnlyTerms.has(termId); }
+// auto-connect 차단 — 호출자가 직접 명시적 connectSSH(quiet 등) 를 보내고 싶을 때 사용.
+const suppressAutoConnect = new Set<string>();
+export function markSuppressAutoConnect(termId: string) { suppressAutoConnect.add(termId); }
+export function clearSuppressAutoConnect(termId: string) { suppressAutoConnect.delete(termId); }
+
 // ── 탭 분리 시 화면 버퍼 이관 ──
 // 원본 터미널의 화면(스크롤백 포함)을 직렬화 → 새 창에서 동일 termId 생성 시 복원.
 const pendingRestoreBuffers = new Map<string, string>();
@@ -2839,6 +2848,8 @@ type Props = {
   onSwitchSession?: (nodeId: string, idx: number) => void;
   onCloseSession?: (nodeId: string, termId: string) => void;
   onDetachSession?: (nodeId: string, termId: string, screenX?: number, screenY?: number) => void;
+  onDuplicateSessionToNewWindow?: (nodeId: string, termId: string) => void;
+  onSetSessionColor?: (nodeId: string, termId: string, color: 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple') => void;
   onMoveSession?: (fromNodeId: string, termId: string, toNodeId: string) => void;
   workspaceList?: { id: string; title: string }[];
   currentWorkspaceId?: string;
@@ -2862,7 +2873,7 @@ type Props = {
 };
 
 export const TerminalPanel: React.FC<Props> = ({
-  nodeId, panel, onSplit, onClose, onSelect, onSwitchSession, onCloseSession, onDetachSession, onMoveSession, onSplitMoveSession, onReorderSession, onAddSession, onRenameSession, onConnectDrop, onDuplicateSession, availableShells,
+  nodeId, panel, onSplit, onClose, onSelect, onSwitchSession, onCloseSession, onDetachSession, onDuplicateSessionToNewWindow, onSetSessionColor, onMoveSession, onSplitMoveSession, onReorderSession, onAddSession, onRenameSession, onConnectDrop, onDuplicateSession, availableShells,
   treeWidth = 240, onTreeWidthChange, onOpenRemoteFile, onAttachToClaude,
   isFloating, onToggleFloat, isSelected: _isSelected, onSplitWithPicker,
   workspaceList, currentWorkspaceId, onMoveSessionToWorkspace,
@@ -3003,7 +3014,7 @@ export const TerminalPanel: React.FC<Props> = ({
       const rows = (term as any).rows || 24;
       safeTermFocus(term);
 
-      if (activeSession && activeSession.sessionId && !sshConnecting.has(activeTermId) && !globalConnected.has(activeTermId) && !reconnectState.has(activeTermId) && !reconnectUserCancelled.has(activeTermId)) {
+      if (activeSession && activeSession.sessionId && !sshConnecting.has(activeTermId) && !globalConnected.has(activeTermId) && !reconnectState.has(activeTermId) && !reconnectUserCancelled.has(activeTermId) && !snapshotOnlyTerms.has(activeTermId) && !suppressAutoConnect.has(activeTermId)) {
         // 같은 termId에 PTY가 실행 중이면 종료 (Local Shell → SSH 전환)
         if (ptyConnected.has(activeTermId)) {
           window.api?.ptyKill?.(activeTermId);
@@ -3433,7 +3444,7 @@ export const TerminalPanel: React.FC<Props> = ({
             {panel.sessions.map((sess, idx) => (
               <span
                 key={sess.termId}
-                className={`panel-session-tab ${idx === panel.activeIdx ? 'active' : ''}`}
+                className={`panel-session-tab ${idx === panel.activeIdx ? 'active' : ''}${sess.color && sess.color !== 'default' ? ` mini-tab-color-${sess.color}` : ''}`}
                 title={sess.sessionName}
                 draggable
                 onDragStart={e => {
@@ -3780,17 +3791,18 @@ export const TerminalPanel: React.FC<Props> = ({
           x={miniCtx.x} y={miniCtx.y}
           onClose={() => setMiniCtx(null)}
           items={[
-            { label: t('menu.renameTab'), onClick: () => { setRenamingTermId(miniCtx.termId); setRenameValue(miniCtx.name); } },
-            { label: t('menu.editSession'), onClick: () => {
+            { icon: '✏️', label: t('menu.renameTab'), onClick: () => { setRenamingTermId(miniCtx.termId); setRenameValue(miniCtx.name); } },
+            { icon: '⚙️', label: t('menu.editSession'), onClick: () => {
               const info = termSessionMap.get(miniCtx.termId);
               if (info?.sessionId || info?.quickSession) {
                 // 전역 이벤트로 App.tsx 가 SessionEditor 모달 띄우도록
                 window.dispatchEvent(new CustomEvent('open-session-editor', { detail: { sessionId: info.sessionId, quickSession: info.quickSession, sessionName: info.sessionName, termId: miniCtx.termId } }));
               }
             } },
-            { label: t('menu.duplicateSession'), onClick: () => { onDuplicateSession?.(nodeId, miniCtx.termId); } },
-            ...(onDetachSession ? [{ label: t('menu.openInNewWindow'), onClick: () => { onDetachSession(nodeId, miniCtx.termId); } }] : []),
-            { label: t('menu.reconnectSession'), onClick: async () => {
+            { icon: '📋', label: t('menu.duplicateSession'), onClick: () => { onDuplicateSession?.(nodeId, miniCtx.termId); } },
+            ...(onDetachSession ? [{ icon: '🪟', label: t('menu.openInNewWindow'), onClick: () => { onDetachSession(nodeId, miniCtx.termId); } }] : []),
+            ...(onDuplicateSessionToNewWindow ? [{ icon: '🪟', label: t('menu.duplicateToNewWindow'), onClick: () => { onDuplicateSessionToNewWindow(nodeId, miniCtx.termId); } }] : []),
+            { icon: '🔄', label: t('menu.reconnectSession'), onClick: async () => {
               const tid = miniCtx.termId;
               const info = termSessionMap.get(tid);
               if (!info) return;
@@ -3857,12 +3869,34 @@ export const TerminalPanel: React.FC<Props> = ({
               } catch {}
             }},
             ...(onMoveSessionToWorkspace ? [{
+              icon: '↗️',
               label: t('menu.moveToWorkspace'),
               onClick: () => {
                 setMoveWorkspaceCtx({ x: miniCtx.x, y: miniCtx.y, termId: miniCtx.termId });
               },
             }] : []),
-            { label: t('menu.close'), onClick: () => { window.api?.disconnectSSH?.(miniCtx.termId); onCloseSession?.(nodeId, miniCtx.termId); } },
+            ...(onSetSessionColor ? [(() => {
+              const curColor = panel.sessions.find(s => s.termId === miniCtx.termId)?.color || 'default';
+              const opts: Array<{ id: 'default'|'red'|'orange'|'yellow'|'green'|'blue'|'purple'; label: string; swatch?: string }> = [
+                { id: 'default', label: t('menu.colorDefault') },
+                { id: 'red',     label: t('menu.colorRed'),    swatch: '#e74c3c' },
+                { id: 'orange',  label: t('menu.colorOrange'), swatch: '#e67e22' },
+                { id: 'yellow',  label: t('menu.colorYellow'), swatch: '#f1c40f' },
+                { id: 'green',   label: t('menu.colorGreen'),  swatch: '#27ae60' },
+                { id: 'blue',    label: t('menu.colorBlue'),   swatch: '#3498db' },
+                { id: 'purple',  label: t('menu.colorPurple'), swatch: '#9b59b6' },
+              ];
+              return {
+                icon: '🎨',
+                label: t('menu.colorSetting'),
+                submenu: opts.map(opt => ({
+                  label: (curColor === opt.id ? '✓ ' : '   ') + opt.label,
+                  icon: opt.swatch ? <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: opt.swatch }} /> : undefined,
+                  onClick: () => onSetSessionColor(nodeId, miniCtx.termId, opt.id),
+                })),
+              };
+            })()] : []),
+            { icon: '✕', label: t('menu.close'), onClick: () => { window.api?.disconnectSSH?.(miniCtx.termId); onCloseSession?.(nodeId, miniCtx.termId); } },
           ]}
         />
       )}

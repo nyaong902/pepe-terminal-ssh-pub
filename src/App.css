@@ -734,12 +734,12 @@ body.popout-options .session-editor h3:first-child {
   margin-right: var(--claude-chat-width, 360px);
 }
 /* 일괄전송 바도 패널보다 아래 → 전체 폭 유지 (.broadcast-bar 기본 right:0 사용, override 안 함) */
-/* Claude 사이드바가 자동 숨김 모드일 때: 트리거(20px) 공간만 예약 */
+/* Claude 사이드바가 자동 숨김 모드일 때: 트리거(22px) 공간만 예약 */
 .app-root.has-claude-autohide .app-content-area {
-  margin-right: 20px;
+  margin-right: 22px;
 }
 .app-root.has-claude-autohide .broadcast-bar {
-  right: 20px;
+  right: 22px;
 }
 
 .app-main {
@@ -833,6 +833,26 @@ body.popout-options .session-editor h3:first-child {
   border-color: var(--win-accent, #2b6b9b);
 }
 
+/* 탭 색깔 — 전체 배경에 색상 채움 */
+.tab-item.tab-color-red    { background: #c0392b; color: #fff; border-color: #962d22; }
+.tab-item.tab-color-orange { background: #d35400; color: #fff; border-color: #a04000; }
+.tab-item.tab-color-yellow { background: #d4ac0d; color: #2a2a2a; border-color: #a8870a; }
+.tab-item.tab-color-green  { background: #1e8449; color: #fff; border-color: #145c33; }
+.tab-item.tab-color-blue   { background: #2874a6; color: #fff; border-color: #1c557d; }
+.tab-item.tab-color-purple { background: #7d3c98; color: #fff; border-color: #5b2c6f; }
+.tab-item.tab-color-red:hover    { background: #e74c3c; }
+.tab-item.tab-color-orange:hover { background: #e67e22; }
+.tab-item.tab-color-yellow:hover { background: #f1c40f; }
+.tab-item.tab-color-green:hover  { background: #27ae60; }
+.tab-item.tab-color-blue:hover   { background: #3498db; }
+.tab-item.tab-color-purple:hover { background: #9b59b6; }
+.tab-item.tab-color-red.active    { background: #e74c3c; border-color: #fff; }
+.tab-item.tab-color-orange.active { background: #e67e22; border-color: #fff; }
+.tab-item.tab-color-yellow.active { background: #f1c40f; border-color: #fff; color: #2a2a2a; }
+.tab-item.tab-color-green.active  { background: #27ae60; border-color: #fff; }
+.tab-item.tab-color-blue.active   { background: #3498db; border-color: #fff; }
+.tab-item.tab-color-purple.active { background: #9b59b6; border-color: #fff; }
+
 .tab-status-dot {
   width: 7px;
   height: 7px;
@@ -884,6 +904,44 @@ body.popout-options .session-editor h3:first-child {
 .theme-select:focus {
   border-color: var(--win-accent, #2b6b9b);
 }
+
+/* 상태바 우측 끝 윈도우 테마 버튼 — 클릭 시 위로 팝업 메뉴 */
+.status-theme-btn {
+  background: var(--win-surface, #1a1a2e);
+  color: var(--win-text-dim, #aaa);
+  border: 1px solid var(--win-border, #333);
+  border-radius: 3px;
+  padding: 0 6px;
+  height: 18px;
+  font-size: 11px;
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  outline: none;
+}
+.status-theme-btn:hover { border-color: #555; color: var(--win-text, #fff); }
+.status-theme-menu {
+  background: var(--win-surface, #1a1a2e);
+  border: 1px solid var(--win-border, #444);
+  border-radius: 4px;
+  padding: 4px 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  min-width: 160px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  z-index: 10000;
+}
+.status-theme-menu-item {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--win-text-dim, #ccc);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.status-theme-menu-item:hover { background: var(--win-bg, #0d0f10); color: var(--win-text, #fff); }
+.status-theme-menu-item.active { background: var(--win-accent, #2b6b9b); color: #fff; }
 
 .tab-add-btn {
   margin-left: 2px;
@@ -1815,6 +1873,26 @@ body.popout-options .session-editor h3:first-child {
   background: var(--win-surface-2, #2a2a3e);
   border-color: var(--win-accent, #2b6b9b);
 }
+
+/* 미니탭 색깔 — 전체 배경에 색상 채움 */
+.panel-session-tab.mini-tab-color-red    { background: #c0392b; color: #fff; border-color: #962d22; }
+.panel-session-tab.mini-tab-color-orange { background: #d35400; color: #fff; border-color: #a04000; }
+.panel-session-tab.mini-tab-color-yellow { background: #d4ac0d; color: #2a2a2a; border-color: #a8870a; }
+.panel-session-tab.mini-tab-color-green  { background: #1e8449; color: #fff; border-color: #145c33; }
+.panel-session-tab.mini-tab-color-blue   { background: #2874a6; color: #fff; border-color: #1c557d; }
+.panel-session-tab.mini-tab-color-purple { background: #7d3c98; color: #fff; border-color: #5b2c6f; }
+.panel-session-tab.mini-tab-color-red:hover    { background: #e74c3c; }
+.panel-session-tab.mini-tab-color-orange:hover { background: #e67e22; }
+.panel-session-tab.mini-tab-color-yellow:hover { background: #f1c40f; }
+.panel-session-tab.mini-tab-color-green:hover  { background: #27ae60; }
+.panel-session-tab.mini-tab-color-blue:hover   { background: #3498db; }
+.panel-session-tab.mini-tab-color-purple:hover { background: #9b59b6; }
+.panel-session-tab.mini-tab-color-red.active    { background: #e74c3c; border-color: #fff; }
+.panel-session-tab.mini-tab-color-orange.active { background: #e67e22; border-color: #fff; }
+.panel-session-tab.mini-tab-color-yellow.active { background: #f1c40f; border-color: #fff; color: #2a2a2a; }
+.panel-session-tab.mini-tab-color-green.active  { background: #27ae60; border-color: #fff; }
+.panel-session-tab.mini-tab-color-blue.active   { background: #3498db; border-color: #fff; }
+.panel-session-tab.mini-tab-color-purple.active { background: #9b59b6; border-color: #fff; }
 .panel-session-tab.dragging-preview {
   color: var(--win-text, #fff) !important;
   background: var(--win-accent, #2b6b9b) !important;
@@ -5125,32 +5203,36 @@ body.popout-options .session-editor h3:first-child {
    투명 모드에서 트리거 아닌 영역이 desktop 으로 새는 문제 방지 (왼쪽 session-sidebar-trigger 와 동일 패턴) */
 .claude-chat-sidebar-trigger {
   position: fixed;
-  top: 40px;        /* tab-bar-row 바로 아래 (갭 0) */
-  bottom: 24px;     /* status-bar 바로 위 (갭 0) — 투명 모드에서 desktop 안 새도록 */
+  top: 40px;
+  bottom: 24px;
   right: 0;
-  width: 20px;
-  background: var(--win-bg, #0d0f10);
-  border-left: 1px solid var(--win-border, #333);
-  /* border-radius 제거 — 둥근 모서리 바깥쪽이 투명 모드에서 desktop 보이는 문제 방지 */
+  width: 22px;
   z-index: 1340;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
   pointer-events: none;
-  overflow: hidden;
+  background: transparent;
 }
 .claude-chat-sidebar-trigger > * { pointer-events: auto; }
 /* 트리거는 top:40px ~ bottom:24px 풀-높이 유지 (퀵커넥트/브로드캐스트와 horizontal 으로
    안 겹치므로 위치 변동 불필요). 이렇게 해야 우측 20px 컬럼 전체가 var(--win-bg, #0d0f10) 로 채워져서
    투명 모드에서 desktop 안 새도록 함. */
-/* 상단 아이콘 버튼 (session-sidebar-trigger-top 과 동일 패턴) */
+/* 좌측이 둥근 탭 형태 — 우측 가장자리에서 튀어나온 두 박스 */
 .claude-chat-sidebar-trigger-top {
+  width: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  padding: 8px 0;
+  padding: 14px 0;
+  background: var(--win-bg, #0d0f10);
+  border: 1px solid var(--win-border, #333);
+  border-right: none;
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
   transition: background 0.15s;
-  border-bottom: 1px solid var(--win-border, #333);
 }
 .claude-chat-sidebar-trigger-top:hover {
   background: var(--win-surface, #1a1a2e);
@@ -5158,7 +5240,7 @@ body.popout-options .session-editor h3:first-child {
 .claude-chat-sidebar-trigger-top:hover .claude-chat-sidebar-trigger-text {
   color: var(--win-text, #ccc);
 }
-/* 하단: 빈 공간 채움 — 세션 사이드바와 동일 */
+/* 하단: 빈 공간 채움 — 두 트리거를 위쪽에 정렬 */
 .claude-chat-sidebar-trigger-bottom {
   flex: 1;
 }

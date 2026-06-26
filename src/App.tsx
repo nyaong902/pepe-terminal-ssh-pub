@@ -23,7 +23,7 @@ import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
 import { StatusBar } from './components/StatusBar';
 import { RemoteShareDialog } from './components/RemoteShareDialog';
-import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle } from './components/TerminalPanel';
+import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle } from './components/TerminalPanel';
 import { marked } from 'marked';
 // @ts-ignore — vite ?raw 로 docs/MANUAL.md 를 번들 문자열로 임베드
 import manualMd from '../docs/MANUAL.md?raw';
@@ -60,7 +60,8 @@ export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from '.
 
 export type TabId = string;
 export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
+export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
 function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
@@ -202,14 +203,18 @@ function App() {
       if (input && document.activeElement !== input) input.focus();
     };
 
-    // 포커스 트랩: 모달 외부로 포커스 이동 시 첫 번째 ask-pwd-input 으로 리다이렉트
+    // 포커스 트랩: 모달 외부로 포커스 이동 시 첫 번째 ask-pwd-input 으로 리다이렉트.
+    // 단, 사용자가 명시적으로 다른 텍스트 입력란/편집기에 클릭한 경우는 빼앗지 않음
+    // (예: 세션 트리에서 이름 변경 input — 트랩이 막으면 rename 불가).
     const trap = (e: FocusEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      if (!target.closest('.ask-pwd-card')) {
-        e.stopImmediatePropagation();
-        focusInput();
-      }
+      if (target.closest('.ask-pwd-card')) return;
+      const tag = target.tagName;
+      const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+      if (isEditable) return; // 다른 입력란은 그대로 둔다
+      e.stopImmediatePropagation();
+      focusInput();
     };
     document.addEventListener('focusin', trap, true);
 
@@ -487,6 +492,8 @@ function App() {
   const [remotePickerCredShowPass, setRemotePickerCredShowPass] = useState(false);
   const [remotePickerCredConnecting, setRemotePickerCredConnecting] = useState(false);
   const [askPwdShowPass, setAskPwdShowPass] = useState<Record<string, boolean>>({});
+  // 비밀번호 모달 드래그 오프셋 — termId 별 (탭 전환해도 위치 기억).
+  const [askPwdOffset, setAskPwdOffset] = useState<Record<string, { x: number; y: number }>>({});
   const remotePickerCredUserRef = useRef<HTMLInputElement>(null);
   const remotePickerCredModalRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -2093,6 +2100,8 @@ function App() {
   }, []);
 
   const closeTab = (id: TabId) => {
+    // 워크스페이스가 단 하나만 남아있으면 닫지 못하게 막는다 — 빈 앱 상태 방지.
+    if (tabs.length <= 1) return;
     // 닫히는 탭이 들고 있는 모든 세션의 백엔드 리소스 해제
     const tab = tabs.find(t => t.id === id);
     if (tab) {
@@ -2153,8 +2162,41 @@ function App() {
         await seedReattach(init.tab, init.siblingSessions);
         try { for (const [tid, s] of Object.entries(init.styles || {})) setPendingRestoreStyle(tid, s); } catch {}
         try { for (const [tid, b] of Object.entries(init.buffers || {})) setPendingRestoreBuffer(tid, b as string); } catch {}
+        // 복제→새 창 분리: SSH 재연결 금지 — 버퍼 표시만.
+        if (init.snapshotOnly) {
+          try { for (const tid of Object.keys(init.buffers || {})) markTermSnapshotOnly(tid); } catch {}
+        }
+        // TerminalPanel auto-connect 가 일반(시끄러운) 연결을 먼저 가져가지 않도록 setTabs 전에 차단.
+        if (Array.isArray(init.connectAfterAdopt)) {
+          try { for (const it of init.connectAfterAdopt) markSuppressAutoConnect(it.termId); } catch {}
+        }
         setTabs([init.tab]);
         setActiveTabId(init.tab.id);
+        if (Array.isArray(init.connectAfterAdopt)) {
+          setTimeout(() => {
+            for (const it of init.connectAfterAdopt) {
+              try {
+                clearSuppressAutoConnect(it.termId);
+                console.log('[connectAfterAdopt:detached] termId=', it.termId, 'cdAfterConnect=', it.cdAfterConnect);
+                if (it.cdAfterConnect) {
+                  const targetCwd = String(it.cdAfterConnect).replace(/"/g, '\\"');
+                  let off: (() => void) | undefined;
+                  off = (window as any).api?.onSSHConnected?.((p: any) => {
+                    console.log('[onSSHConnected:detached] panelId=', p?.panelId, 'expected=', it.termId);
+                    if (p?.panelId !== it.termId) return;
+                    try { off?.(); } catch {}
+                    setTimeout(() => {
+                      console.log('[duplicate:detached] sending cd:', targetCwd);
+                      try { (window as any).api?.sendSSHInput?.(it.termId, `cd "${targetCwd}"\r`); } catch (e) { console.error('cd send failed', e); }
+                    }, 1500);
+                  });
+                }
+                if (it.sessionId) (window as any).api?.connectSSH?.(it.termId, it.sessionId);
+                else if (it.quickSession) (window as any).api?.quickConnectSSH?.(it.termId, it.quickSession);
+              } catch (e) { console.error('[connectAfterAdopt:detached] fail', e); }
+            }
+          }, 500);
+        }
       } catch (err) { console.error('[detached] init fail', err); }
     })();
   }, [seedReattach]);
@@ -2168,6 +2210,35 @@ function App() {
       await seedReattach(payload.tab, payload.siblingSessions);
       try { for (const [tid, s] of Object.entries(payload.styles || {})) setPendingRestoreStyle(tid, s); } catch {}
       try { for (const [tid, b] of Object.entries(payload.buffers || {})) setPendingRestoreBuffer(tid, b as string); } catch {}
+      if (payload.snapshotOnly) {
+        try { for (const tid of Object.keys(payload.buffers || {})) markTermSnapshotOnly(tid); } catch {}
+      }
+      if (Array.isArray(payload.connectAfterAdopt)) {
+        try { for (const it of payload.connectAfterAdopt) markSuppressAutoConnect(it.termId); } catch {}
+        setTimeout(() => {
+          for (const it of payload.connectAfterAdopt) {
+            try {
+              clearSuppressAutoConnect(it.termId);
+              console.log('[connectAfterAdopt] termId=', it.termId, 'cdAfterConnect=', it.cdAfterConnect);
+              if (it.cdAfterConnect) {
+                const targetCwd = String(it.cdAfterConnect).replace(/"/g, '\\"');
+                let off: (() => void) | undefined;
+                off = (window as any).api?.onSSHConnected?.((p: any) => {
+                  console.log('[onSSHConnected] panelId=', p?.panelId, 'expected=', it.termId);
+                  if (p?.panelId !== it.termId) return;
+                  try { off?.(); } catch {}
+                  setTimeout(() => {
+                    console.log('[duplicate] sending cd:', targetCwd);
+                    try { (window as any).api?.sendSSHInput?.(it.termId, `cd "${targetCwd}"\r`); } catch (e) { console.error('cd send failed', e); }
+                  }, 1500);
+                });
+              }
+              if (it.sessionId) (window as any).api?.connectSSH?.(it.termId, it.sessionId);
+              else if (it.quickSession) (window as any).api?.quickConnectSSH?.(it.termId, it.quickSession);
+            } catch (e) { console.error('connectAfterAdopt fail', e); }
+          }
+        }, 500);
+      }
       // 드롭 지점 hit-test — 탭바면 활성 패널에 미니탭 병합, panel 내부면 zone 분할/병합, 그 외 새 탭.
       if (payload.point) {
         try {
@@ -2752,6 +2823,38 @@ function App() {
 
   // 미니탭(개별 세션)을 분리/재부착 — 단일 세션 워크스페이스로 넘긴다.
   // 드롭 좌표가 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창. 좌표 미지정(메뉴)이면 새 창.
+  // 복제하여 새 창으로 분리 — 원본은 그대로 두고, 새 termId 로 같은 sessionId 에 연결하는
+  // 워크스페이스를 새 창에 만든다. 원본 터미널의 현재 화면 버퍼/스타일도 그대로 시드.
+  const duplicateSessionToNewWindow = useCallback(async (_nodeId: string, termId: string) => {
+    const info = getTermSessionInfo(termId);
+    if (!info) return;
+    const newTermId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const panelId = `panel-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const layout: LayoutNode = {
+      id: panelId, type: 'leaf',
+      panel: { id: panelId, activeIdx: 0, sessions: [{ termId: newTermId, sessionId: info.sessionId || '', sessionName: info.sessionName || '' }] },
+    };
+    const st = getTermStyle(termId);
+    // 원본 cwd 확보 — autoTrackPwd 캐시 우선, 없으면 main 에 온디맨드 조회 (/proc 기반).
+    let originalCwd: string | null = getCurrentPwdForTerm(termId) || null;
+    if (!originalCwd) {
+      try {
+        const r = await (window as any).api?.sshGetShellCwd?.({ termId });
+        if (r?.ok && r.pwd) originalCwd = r.pwd;
+      } catch {}
+    }
+    console.log('[duplicate] originalCwd =', originalCwd, 'sourceTermId =', termId);
+    const payload: any = {
+      kind: 'session' as const,
+      buffers: {},
+      styles: st ? { [newTermId]: st } : {},
+      tab: JSON.parse(JSON.stringify({ id: tabId, title: info.sessionName || 'Session', layout })),
+      connectAfterAdopt: [{ termId: newTermId, sessionId: info.sessionId || '', quickSession: info.quickSession || null, cdAfterConnect: originalCwd }],
+    };
+    await (window as any).api?.dropTab?.(payload, undefined);
+  }, []);
+
   const detachSessionToNewWindow = useCallback(async (nodeId: string, termId: string, screenX?: number, screenY?: number) => {
     const tab = tabsRef.current.find(t => t.id === activeTabId);
     if (!tab) return;
@@ -3236,6 +3339,13 @@ function App() {
           submenu: getWindowThemeList().map(wt => ({
             label: (wt.id === windowTheme ? '✓ ' : '   ') + wt.name,
             action: () => handleWindowThemeChange(wt.id),
+          })),
+        },
+        {
+          label: tMenu('view.uiLanguage'),
+          submenu: availableLangs.map(l => ({
+            label: (l === uiLang ? '✓ ' : '   ') + l,
+            action: () => { setUiLang(l); setLanguage(l); },
           })),
         },
         { separator: true, label: '' },
@@ -3782,6 +3892,7 @@ function App() {
             });
           }}
           onDetachTab={detachTabToNewWindow}
+          onSetTabColor={(id, color) => setTabs(prev => prev.map(t => t.id === id ? { ...t, color } : t))}
           hasSession={tabs.reduce((acc, t) => { acc[t.id] = collectAllSessions(t.layout).length > 0; return acc; }, {} as Record<string, boolean>)}
           availableShells={availableShells}
         />
@@ -3818,32 +3929,6 @@ function App() {
             }}
           />
           <div className="window-controls-right">
-            <div
-              className={`topbar-messenger-status${messengerUnreadCount > 0 ? ' attention' : ''}${messengerHidden ? ' hidden-presence' : ''}`}
-              title={messengerUnreadCount > 0
-                ? tMsg('statusUnreadTitle', { count: messengerUnreadCount })
-                : (messengerHidden ? tMsg('statusHiddenTitle') : tMsg('statusActiveTitle'))}
-              onClick={() => openClaudeChatView('messenger')}
-            >
-              <span className="claude-chat-view-status-dot" />
-              <span className="topbar-messenger-status-text">
-                {messengerUnreadCount > 0
-                  ? tMsg('statusUnread', { count: messengerUnreadCount })
-                  : (messengerHidden ? tMsg('statusHidden') : tMsg('statusActive'))}
-              </span>
-            </div>
-            <select
-              className="theme-select"
-              value={uiLang}
-              onChange={e => { setUiLang(e.target.value); setLanguage(e.target.value); }}
-              title="UI Language"
-              style={{ marginRight: 4 }}
-            >
-              {availableLangs.map(l => <option key={l} value={l}>{l}</option>)}
-            </select>
-            <select className="theme-select" value={themeName} onChange={e => handleThemeChange(e.target.value)}>
-              {getThemeList().map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
             <button className="window-ctrl-btn" onClick={() => (window as any).api?.windowMinimize?.()}>─</button>
             <button
               className="window-ctrl-btn"
@@ -4026,8 +4111,43 @@ function App() {
                   </div>
                 ) : null;
                 const tb = showToolbar ? toolbar : null;
+                const onRowMouseDown = (e: React.MouseEvent) => {
+                  // 인터랙티브 요소 위는 무시 — 빈 영역에서만 윈도우 드래그.
+                  const tgt = e.target as HTMLElement;
+                  if (tgt.closest('button, input, select, textarea, a, [contenteditable], .tool-btn, .tool-drag, .quickconnect-input, .qc-input')) return;
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  const startX = e.screenX, startY = e.screenY;
+                  const api = (window as any).api;
+                  const THRESHOLD = 5;
+                  let dragStarted = false;
+                  const onMove = (ev: MouseEvent) => {
+                    if (!dragStarted) {
+                      if (Math.abs(ev.screenX - startX) < THRESHOLD && Math.abs(ev.screenY - startY) < THRESHOLD) return;
+                      dragStarted = true;
+                      api?.windowStartDrag?.(startX, startY);
+                    }
+                    ev.preventDefault();
+                    api?.windowDragMove?.(ev.screenX, ev.screenY);
+                  };
+                  const onUp = () => {
+                    if (dragStarted) api?.windowEndDrag?.();
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                  };
+                  window.addEventListener('mousemove', onMove);
+                  window.addEventListener('mouseup', onUp);
+                };
                 return (
-                  <div className="quickconnect-row">
+                  <div
+                    className="quickconnect-row"
+                    onMouseDown={onRowMouseDown}
+                    onDoubleClick={() => {
+                      (window as any).api?.windowEndDrag?.();
+                      (window as any).api?.windowToggleMaximize?.();
+                      [50, 200, 500].forEach(ms => setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); }, ms));
+                    }}
+                  >
                     {(toolbarSlot === 'top' || !showToolbar) && qc}
                     {showToolbar && toolbarSlot === 'qc-left' && (
                       <>
@@ -4521,6 +4641,20 @@ function App() {
                     onSwitchSession={handleSwitchSession}
                     onCloseSession={handleCloseSession}
                     onDetachSession={detachSessionToNewWindow}
+                    onDuplicateSessionToNewWindow={duplicateSessionToNewWindow}
+                    onSetSessionColor={(nodeId, termId, color) => {
+                      if (!activeTab) return;
+                      updateLayout(activeTab.id, layout => {
+                        const walk = (n: LayoutNode): LayoutNode => {
+                          if (n.type === 'leaf') {
+                            if (n.id !== nodeId) return n;
+                            return { ...n, panel: { ...n.panel, sessions: n.panel.sessions.map(s => s.termId === termId ? { ...s, color } : s) } };
+                          }
+                          return { ...n, children: n.children.map(walk) };
+                        };
+                        return walk(layout);
+                      });
+                    }}
                     onMoveSession={handleMoveSession}
                     onSplitMoveSession={handleSplitMoveSession}
                     onReorderSession={handleReorderSession}
@@ -4638,7 +4772,23 @@ function App() {
         </div>
       )}
 
-      <StatusBar activeTab={activeTab} selectedPanelId={selectedPanelId} tabs={tabs} />
+      <StatusBar
+        activeTab={activeTab}
+        selectedPanelId={selectedPanelId}
+        tabs={tabs}
+        messenger={{
+          visible: true,
+          hidden: messengerHidden,
+          unreadCount: messengerUnreadCount,
+          onClick: () => openClaudeChatView('messenger'),
+        }}
+        windowTheme={{
+          current: windowTheme,
+          list: getWindowThemeList(),
+          onChange: handleWindowThemeChange,
+          label: tMenu('view.windowTheme'),
+        }}
+      />
 
       {editSessionCtx && (
         <SessionEditor
@@ -5118,8 +5268,25 @@ function App() {
           <>
             {!claudeChatPinned && (
               <div className="claude-chat-sidebar-trigger">
-                <div className="claude-chat-sidebar-trigger-top" onClick={onClickTrigger} onMouseEnter={onEnterTriggerHover} onMouseLeave={onLeaveTriggerHover} style={{ cursor: 'pointer' }} title={tApp('claudeChat.triggerTooltip')}>
-                  <span className="claude-chat-sidebar-trigger-text">{tMsg('triggerText')}</span>
+                <div
+                  className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-ai"
+                  onClick={() => { if (claudeChatView === 'ai' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('ai'); } }}
+                  onMouseEnter={onEnterTriggerHover}
+                  onMouseLeave={onLeaveTriggerHover}
+                  style={{ cursor: 'pointer' }}
+                  title={tApp('claudeChat.triggerTooltip')}
+                >
+                  <span className="claude-chat-sidebar-trigger-text">{tMsg('triggerTextAi')}</span>
+                </div>
+                <div
+                  className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-messenger"
+                  onClick={() => { if (claudeChatView === 'messenger' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('messenger'); } }}
+                  onMouseEnter={onEnterTriggerHover}
+                  onMouseLeave={onLeaveTriggerHover}
+                  style={{ cursor: 'pointer' }}
+                  title={tApp('claudeChat.triggerTooltip')}
+                >
+                  <span className="claude-chat-sidebar-trigger-text">{tMsg('triggerTextMessenger')}</span>
                 </div>
                 <div className="claude-chat-sidebar-trigger-bottom" />
               </div>
@@ -5876,10 +6043,28 @@ function App() {
           try { return document.querySelector(`.layout-leaf[data-active-term="${activeTid}"]`) as HTMLElement | null; } catch { return null; }
         })();
         if (!targetEl) return null;
+        const offset = askPwdOffset[item.termId] || { x: 0, y: 0 };
+        const startDrag = (e: React.MouseEvent) => {
+          // 닫기 버튼/입력 영역은 드래그 시작 제외
+          const tag = (e.target as HTMLElement).tagName;
+          if (tag === 'BUTTON' || tag === 'INPUT' || (e.target as HTMLElement).closest('.ask-pwd-close')) return;
+          e.preventDefault();
+          const startX = e.clientX, startY = e.clientY;
+          const baseX = offset.x, baseY = offset.y;
+          const onMove = (ev: MouseEvent) => {
+            setAskPwdOffset(prev => ({ ...prev, [item.termId]: { x: baseX + (ev.clientX - startX), y: baseY + (ev.clientY - startY) } }));
+          };
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        };
         return createPortal(
           <div className="ask-pwd-stack">
-            <div key={item.termId} className="ask-pwd-card">
-              <div className="ask-pwd-header">
+            <div key={item.termId} className="ask-pwd-card" style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}>
+              <div className="ask-pwd-header" onMouseDown={startDrag} style={{ cursor: 'move', userSelect: 'none' }}>
                 <span className="ask-pwd-icon">🔐</span>
                 <span className="ask-pwd-title">{item.needUsername ? tApp('askPwd.credTitle') : tApp('askPwd.pwdTitle')}</span>
                 <button className="ask-pwd-close" title={tApp('askPwd.cancelTooltip')} onClick={() => closeAskPwd(item.termId, null)}>✕</button>

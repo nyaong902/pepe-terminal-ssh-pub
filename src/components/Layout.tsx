@@ -12,6 +12,8 @@ type CommonHandlers = {
   onSwitchSession?: (nodeId: string, idx: number) => void;
   onCloseSession?: (nodeId: string, termId: string) => void;
   onDetachSession?: (nodeId: string, termId: string) => void;
+  onDuplicateSessionToNewWindow?: (nodeId: string, termId: string) => void;
+  onSetSessionColor?: (nodeId: string, termId: string, color: 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple') => void;
   onMoveSession?: (fromNodeId: string, termId: string, toNodeId: string) => void;
   onSplitMoveSession?: (fromNodeId: string, termId: string, toNodeId: string, zone: 'left' | 'right' | 'top' | 'bottom') => void;
   onReorderSession?: (nodeId: string, fromIdx: number, toIdx: number) => void;
@@ -67,6 +69,8 @@ const NodeView: React.FC<NodeProps> = ({ node, ...h }) => {
             onSplit={h.onSplit} onClose={h.onClose} onSelect={h.onSelectPanel}
             onSwitchSession={h.onSwitchSession} onCloseSession={h.onCloseSession}
             onDetachSession={h.onDetachSession}
+            onDuplicateSessionToNewWindow={h.onDuplicateSessionToNewWindow}
+            onSetSessionColor={h.onSetSessionColor}
             onMoveSession={h.onMoveSession} onSplitMoveSession={h.onSplitMoveSession}
             onReorderSession={h.onReorderSession} onAddSession={h.onAddSession}
             onRenameSession={h.onRenameSession} onConnectDrop={h.onConnectDrop}

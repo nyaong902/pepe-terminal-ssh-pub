@@ -24,7 +24,8 @@
     "wheelUp": "Ctrl+滚轮向上",
     "wheelDown": "Ctrl+滚轮向下",
     "terminalTheme": "🎨 终端主题",
-    "windowTheme": "🪟 窗口主题"
+    "windowTheme": "🪟 窗口主题",
+    "uiLanguage": "🌐 界面语言"
   },
   "window": {
     "title": "窗口",

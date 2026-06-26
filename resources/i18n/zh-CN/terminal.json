@@ -39,7 +39,16 @@
     "changeScrollback": "更改回滚大小...",
     "clearScrollbackBuffer": "清除回滚缓冲区",
     "fontDots": "字体...",
-    "openInNewWindow": "在新窗口中打开"
+    "openInNewWindow": "在新窗口中打开",
+    "duplicateToNewWindow": "复制到新窗口",
+    "colorSetting": "标签颜色",
+    "colorDefault": "默认",
+    "colorRed": "红",
+    "colorOrange": "橙",
+    "colorYellow": "黄",
+    "colorGreen": "绿",
+    "colorBlue": "蓝",
+    "colorPurple": "紫"
   },
   "float": "浮动",
   "unfloat": "取消浮动",

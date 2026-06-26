@@ -24,7 +24,8 @@
     "fontSizeUp": "🔠 Font size +",
     "fontSizeDown": "🔡 Font size -",
     "wheelUp": "Ctrl+Wheel up",
-    "wheelDown": "Ctrl+Wheel down"
+    "wheelDown": "Ctrl+Wheel down",
+    "uiLanguage": "🌐 UI Language"
   },
   "window": {
     "title": "Window",

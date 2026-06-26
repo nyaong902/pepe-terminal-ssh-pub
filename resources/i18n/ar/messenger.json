@@ -84,5 +84,7 @@
   "replyPlaceholder": "رد سريع",
   "open": "فتح",
   "sendReply": "إرسال",
-  "replyFail": "فشل إرسال الرد"
+  "replyFail": "فشل إرسال الرد",
+  "triggerTextAi": "🤖 محادثة الذكاء الاصطناعي",
+  "triggerTextMessenger": "💬 المراسلة"
 }

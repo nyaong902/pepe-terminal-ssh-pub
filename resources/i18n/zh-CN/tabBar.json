@@ -15,5 +15,13 @@
   "closeContext": "关闭",
   "fileTransferTab": "📁 文件传输",
   "workspaceN": "工作区 {{n}}",
-  "openInNewWindow": "在新窗口中打开"
+  "openInNewWindow": "在新窗口中打开",
+  "colorSetting": "标签颜色",
+  "colorDefault": "默认",
+  "colorRed": "红",
+  "colorOrange": "橙",
+  "colorYellow": "黄",
+  "colorGreen": "绿",
+  "colorBlue": "蓝",
+  "colorPurple": "紫"
 }

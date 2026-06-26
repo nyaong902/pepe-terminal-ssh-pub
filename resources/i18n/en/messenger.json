@@ -84,5 +84,7 @@
   "replyPlaceholder": "Quick reply",
   "open": "Open",
   "sendReply": "Send",
-  "replyFail": "Failed to send reply"
+  "replyFail": "Failed to send reply",
+  "triggerTextAi": "🤖 AI Chat",
+  "triggerTextMessenger": "💬 Messenger"
 }

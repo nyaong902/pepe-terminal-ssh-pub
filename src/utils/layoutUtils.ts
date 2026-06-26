@@ -7,6 +7,7 @@ export type PanelSession = {
   sessionName: string; // 표시 이름 (예: "My Server #1")
   shellPath?: string;  // 로컬 셸 경로 (PTY용, 예: 'powershell.exe')
   shellCwd?: string;   // 로컬 셸 시작 디렉토리
+  color?: 'default' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple';
 };
 
 export type Panel = {
