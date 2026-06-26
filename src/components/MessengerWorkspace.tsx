@@ -111,7 +111,7 @@ export const MessengerWorkspace: React.FC<{
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(entries => {
       const width = entries[0]?.contentRect?.width || 0;
-      setNarrowLayout(width < 920);
+      setNarrowLayout(width < 560);
     });
     ro.observe(el);
     return () => ro.disconnect();
