@@ -45,5 +45,6 @@
   "scopeAll": "معلومات الإعدادات",
   "searchScopeTitle": "نطاق البحث",
   "searchPlaceholder": "بحث {{scope}}",
-  "searchClear": "مسح البحث"
+  "searchClear": "مسح البحث",
+  "ctxDuplicate": "تكرار"
 }

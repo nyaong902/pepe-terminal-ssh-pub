@@ -45,5 +45,6 @@
   "ctxDown": "아래로",
   "ctxTop": "맨 위로",
   "ctxBottom": "맨 아래로",
-  "ctxMoveToFolder": "폴더로 이동..."
+  "ctxMoveToFolder": "폴더로 이동...",
+  "ctxDuplicate": "복제"
 }

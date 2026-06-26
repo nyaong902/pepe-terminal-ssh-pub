@@ -79,7 +79,7 @@
   "toolCount": "{{count}}",
   "collapse": "折叠",
   "expand": "展开",
-  "attachWebdavTitle": "📂 WebDAV 挂载:{{count}}(实时 SSH)",
+  "attachWebdavTitle": "📂 SSH 附件 {{count}} 个",
   "attachInline": "📎 附件:{{count}} ({{size}} KB)",
   "attachLocalCount": "📁 本地:{{count}} 个文件",
   "removeAll": "全部移除",

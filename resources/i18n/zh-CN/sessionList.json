@@ -45,5 +45,6 @@
   "scopeAll": "设置信息",
   "searchScopeTitle": "搜索范围",
   "searchPlaceholder": "搜索 {{scope}}",
-  "searchClear": "清除搜索"
+  "searchClear": "清除搜索",
+  "ctxDuplicate": "复制"
 }

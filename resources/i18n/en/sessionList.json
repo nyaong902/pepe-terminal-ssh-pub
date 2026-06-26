@@ -45,5 +45,6 @@
   "ctxDown": "Down",
   "ctxTop": "Top",
   "ctxBottom": "Bottom",
-  "ctxMoveToFolder": "Move to folder..."
+  "ctxMoveToFolder": "Move to folder...",
+  "ctxDuplicate": "Duplicate"
 }
