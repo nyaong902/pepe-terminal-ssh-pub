@@ -82,7 +82,7 @@
   "toolCount": "{{count}}개",
   "collapse": "접기",
   "expand": "펼치기",
-  "attachWebdavTitle": "📂 WebDAV 마운트 {{count}}개 (실시간 SSH)",
+  "attachWebdavTitle": "📂 SSH 첨부 {{count}}개",
   "attachInline": "📎 첨부 {{count}}개 ({{size}} KB)",
   "attachLocalCount": "📁 로컬 {{count}}개 파일",
   "removeAll": "전체 제거",

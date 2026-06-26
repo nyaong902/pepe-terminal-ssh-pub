@@ -79,7 +79,7 @@
   "toolCount": "{{count}}",
   "collapse": "Réduire",
   "expand": "Développer",
-  "attachWebdavTitle": "📂 Montages WebDAV : {{count}} (SSH actif)",
+  "attachWebdavTitle": "📂 {{count}} fichier(s) SSH attaché(s)",
   "attachInline": "📎 Pièces jointes : {{count}} ({{size}} Ko)",
   "attachLocalCount": "📁 Local : {{count}} fichiers",
   "removeAll": "Tout supprimer",

@@ -79,7 +79,7 @@
   "toolCount": "{{count}}",
   "collapse": "طي",
   "expand": "توسيع",
-  "attachWebdavTitle": "📂 نقاط تحميل WebDAV: {{count}} (SSH مباشر)",
+  "attachWebdavTitle": "📂 {{count}} مرفق SSH",
   "attachInline": "📎 المرفقات: {{count}} ({{size}} ك.ب)",
   "attachLocalCount": "📁 محلي: {{count}} ملف",
   "removeAll": "إزالة الكل",

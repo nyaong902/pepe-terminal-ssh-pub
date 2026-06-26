@@ -4410,7 +4410,7 @@ ipcMain.handle('sftp:list-dir', async (_e, { panelId, remotePath }: { panelId: s
 
 ipcMain.handle('sftp:read-file', async (_e, { panelId, remotePath, encoding }: { panelId: string; remotePath: string; encoding?: string }) => {
   try {
-    const bridge = getSSHBridge();
+    const bridge: any = getSSHBridge();
     let buf: Buffer;
     try {
       buf = await bridge.handleSFTPReadFile(panelId, remotePath);
@@ -4421,18 +4421,34 @@ ipcMain.handle('sftp:read-file', async (_e, { panelId, remotePath, encoding }: {
       } else throw e;
     }
     const iconv = require('iconv-lite');
-    const enc = (encoding || 'utf-8').toLowerCase();
+    // 인코딩 명시 안 됐으면 세션의 encoding (터미널 인코딩) 사용. 없으면 휴리스틱: utf-8 디코드 실패하면 cp949 폴백.
+    let enc = (encoding || '').toLowerCase();
+    if (!enc) {
+      try {
+        const sess = bridge.sessionStore?.get?.(panelId) || bridge.clients?.get?.(panelId)?.session;
+        if (sess?.encoding) enc = String(sess.encoding).toLowerCase();
+      } catch {}
+    }
+    // UTF-8 시도 후 �(REPLACEMENT) 가 많으면 cp949 로 재해석 (Korean Linux 호스트에서 흔함).
+    const decodeAuto = (b: Buffer): string => {
+      const utf = b.toString('utf-8');
+      const bad = (utf.match(/�/g) || []).length;
+      if (bad > 0 && bad * 50 > utf.length) {
+        try { return iconv.decode(b, 'cp949'); } catch { return utf; }
+      }
+      return utf;
+    };
     let text: string;
     try {
-      if (enc === 'utf-8' || enc === 'utf8') {
-        text = buf.toString('utf-8');
+      if (!enc || enc === 'utf-8' || enc === 'utf8') {
+        text = decodeAuto(buf);
       } else if (iconv.encodingExists(enc)) {
         text = iconv.decode(buf, enc);
       } else {
-        text = buf.toString('utf-8');
+        text = decodeAuto(buf);
       }
     } catch {
-      text = buf.toString('utf-8');
+      text = decodeAuto(buf);
     }
     return { success: true, text, size: buf.length };
   } catch (err: any) {
@@ -6232,25 +6248,41 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
       } catch (err) {
         console.error('[claude] MCP script extract failed:', err);
       }
+      // MCP 서버 실행 바이너리 — node 가 있으면 그것을 우선 (electron 보다 ~5x 빠른 startup).
+      // node 미설치 환경에선 electron(ELECTRON_RUN_AS_NODE) 폴백.
+      const nodeBin = (() => {
+        try {
+          const which = isWin ? 'where' : 'which';
+          const out = require('child_process').execSync(`${which} node`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split(/\r?\n/)[0];
+          if (out && fs.existsSync(out)) return out;
+        } catch {}
+        return '';
+      })();
+      const mcpServerCmd = nodeBin || process.execPath;
+      const mcpServerEnv: Record<string, string> = {
+        PEPE_CTRL_PORT: String(mcpControlPort),
+        PEPE_CTRL_TOKEN: mcpControlToken,
+        PEPE_TERM_ID: sshTermId,
+        // 멀티 SSH 세션 — JSON [{id,label}] (MCP 가 session 인자로 선택). 없으면 단일 PEPE_TERM_ID.
+        PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
+      };
+      if (!nodeBin) mcpServerEnv.ELECTRON_RUN_AS_NODE = '1';
       const mcpCfg = {
         mcpServers: {
           pepe_ssh: {
-            command: process.execPath,
+            command: mcpServerCmd,
             args: [mcpScriptPath],
-            env: {
-              PEPE_CTRL_PORT: String(mcpControlPort),
-              PEPE_CTRL_TOKEN: mcpControlToken,
-              PEPE_TERM_ID: sshTermId,
-              // 멀티 SSH 세션 — JSON [{id,label}] (MCP 가 session 인자로 선택). 없으면 단일 PEPE_TERM_ID.
-              PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
-              ELECTRON_RUN_AS_NODE: '1',
-            },
+            env: mcpServerEnv,
           },
         },
       };
+      console.log('[claude] MCP server binary:', mcpServerCmd, '(node found:', !!nodeBin, ')');
       mcpCfgTmp = path.join(os.tmpdir(), `claude-mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
       fs.writeFileSync(mcpCfgTmp, JSON.stringify(mcpCfg), 'utf-8');
-      mcpConfigArg = `--mcp-config "${mcpCfgTmp}"`;
+      // --strict-mcp-config: 사용자 글로벌 ~/.claude.json 의 다른 MCP 서버(calculator/weather 등)를
+      // 같이 로드하지 않도록. 다른 MCP 가 pending 상태로 남으면 tool registration 타이밍 경합으로
+      // pepe_ssh 의 일부 도구(ssh_read_file 등)가 Claude 내부 레지스트리에 안 잡히는 문제 회피.
+      mcpConfigArg = `--mcp-config "${mcpCfgTmp}" --strict-mcp-config`;
       console.log('[claude] MCP config written:', mcpCfgTmp, 'termId:', sshTermId, 'scriptExists:', fs.existsSync(mcpScriptPath), 'path:', mcpScriptPath);
     }
 
@@ -6265,7 +6297,10 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
     // 사용자 인터랙션 도구는 비대화형 모드에서 무용지물 (ToolSearch 로 동적 로드 시도까지 차단)
     // SSH 컨텍스트면 Bash 도 명시적으로 차단 (allowedTools 만으론 일부 빌드에서 빠져나가는 케이스 방지)
     const sshDisallow = disallowBash ? `"Bash"` : '';
-    const disallowedFlag = `--disallowedTools "AskUserQuestion" "ToolSearch" ${sshDisallow}`;
+    // ToolSearch 는 차단하지 않음 — Claude CLI 2.1.x 의 deferred tool 메커니즘으로 MCP 도구
+    // 스키마가 lazy load 됨. ToolSearch 차단하면 ssh_read_file/ssh_grep 등 호출 시 schema 없어
+    // "No such tool available" 거부됨.
+    const disallowedFlag = `--disallowedTools "AskUserQuestion" ${sshDisallow}`;
 
     // 이전 대화 세션 이어가기 (--resume <session_id>)
     const resumeFlag = resumeSessionId ? `--resume "${resumeSessionId}"` : '';
@@ -8171,14 +8206,20 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
       LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
     };
     const cwd = process.env.USERPROFILE || process.env.HOME || os.homedir();
+    // agy 의 write_to_file 도구는 절대 경로 + agy artifact dir(brain/<cid>/) 안만 허용.
+    // 우리는 cid 를 미리 모르므로, 절대 경로의 임시 파일을 지정 — agy 가 거부하면 자체 retry 로직으로
+    // 결국 자기 artifact dir 에 저장. 둘 다 잘 되도록 명령은 절대 경로 명시.
+    const agyReportPath = path.join(os.tmpdir(), `pepe-agy-report-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.md`);
+    const agyReportPathFwd = agyReportPath.replace(/\\/g, '/');
     const sysPrefix = [
       '[시스템 지시 — 반드시 준수]',
       '1. 특별한 언어 요청이 없으면 항상 한국어로 응답하세요.',
       '2. 소스/디렉터리 분석 요청 시:',
       '   (a) ls 로 모든 파일 확인 후 *모든 소스 파일(.c/.cpp/.h/.hpp/.py/.js/.ts/.go/.java/.cs)을 빠짐없이* 읽으세요. 일부만 보고 결론 금지.',
-      '   (b) ⚠️ 분석 결과 전체는 **반드시 write_file 도구로 ./analysis_report.md 파일에 저장**하세요. 인라인 응답에 길게 쓰지 마세요(시스템이 중간을 잘라버립니다).',
+      `   (b) ⚠️ 분석 결과 전체는 **반드시 write_file 도구로 다음 절대경로 파일에 저장**: \`${agyReportPathFwd}\``,
+      '       (인라인 응답에 길게 쓰지 마세요 — 시스템이 중간을 잘라버립니다.)',
       '   (c) 보고서에는 mermaid 다이어그램 1개 이상 포함(```mermaid 코드블록).',
-      '   (d) 인라인 응답에는 한 줄로 "분석 보고서는 [analysis_report.md](file:///절대경로) 에 저장되었습니다." 만 작성.',
+      `   (d) 인라인 응답에는 한 줄로 "분석 보고서는 [analysis_report.md](file:///${agyReportPathFwd}) 에 저장되었습니다." 만 작성.`,
       '',
     ].join('\n') + '\n';
     const fullPrompt = sysPrefix + userPrompt;
@@ -8310,6 +8351,7 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
                 // agy 가 생성한 보고서 md 파일을 inline 으로 펼침: [name.md](file:///path/to.md) → 본문 + 첨부 내용
                 const mdLinks = Array.from(clean.matchAll(/\[([^\]]+\.md)\]\(file:\/\/\/([^)\s]+)\)/g)) as RegExpMatchArray[];
                 const seenMd = new Set<string>();
+                const consumedLinks: string[] = []; // 인라인된 링크 문자열 — 본문에서 제거
                 for (const m of mdLinks) {
                   try {
                     const filePath = decodeURIComponent(m[2]).replace(/\//g, path.sep);
@@ -8322,9 +8364,24 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
                       clean += `\n\n---\n\n### 📄 ${m[1]}\n\n${fc.slice(0, 50000)}${fc.length > 50000 ? '\n\n... (이하 생략)' : ''}\n`;
                       // 보고서 파일은 inline 표시 후 삭제 — 디스크 누적 방지
                       try { fs.unlinkSync(filePath); } catch {}
+                      consumedLinks.push(m[0]);
                     }
                   } catch (e) { console.error('[agy] md inline failed:', e); }
                 }
+                // 인라인된 파일 링크는 본문에서 제거 — 파일이 이미 삭제됐고 내용은 아래 펼쳐졌음.
+                // "분석 보고서는 [...](file:///...) 에 저장되었습니다." 같은 안내 줄도 통째로 제거.
+                for (const lk of consumedLinks) {
+                  const esc = lk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  // 링크 단독으로 또는 "분석 보고서는 <링크> 에 저장되었습니다." 같은 문구 제거.
+                  clean = clean.replace(new RegExp(`^.*?${esc}.*$\\n?`, 'gm'), '');
+                }
+                // 원격 SSH 파일 경로 링크([name](file:///root/...))는 Chromium 이 로드 거부하므로
+                // 링크 형태를 풀고 path 만 inline code 로 표기 (`/path/to/file`).
+                clean = clean.replace(/\[([^\]]+)\]\(file:\/\/\/([\/][^)\s]+)\)/g, (_full, txt, p) => {
+                  const decoded = decodeURIComponent(p);
+                  return decoded === txt || decoded.endsWith(txt) ? `\`${decoded}\`` : `${txt} (\`${decoded}\`)`;
+                });
+                clean = clean.trim();
                 // 인라인 본문 자체에도 동일 처리
                 clean = wrapBareMermaid(clean);
                 // truncation 안내문 (자동 이어받기는 비활성 — 파일 저장 방식으로 회피)
@@ -8411,9 +8468,16 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
             return;
           }
 
-          // 3) 에러
+          // 3) 에러 — agy 가 자체 retry 로 복구하는 케이스는 사용자에게 안 보임 (Retries remaining > 0)
           if (src === 'SYSTEM' && typ === 'ERROR_MESSAGE') {
-            const err = String(ev.error || ev.content || '').slice(0, 1000);
+            const err = String(ev.error || ev.content || '').slice(0, 1500);
+            const remainingMatch = err.match(/Retries\s+remaining:\s*(\d+)/i);
+            const willRetry = remainingMatch && Number(remainingMatch[1]) > 0;
+            if (willRetry) {
+              // 자체 retry 로 회복하므로 사용자에게는 안 보여줌 (콘솔 로그만)
+              console.log('[agy] suppressed retryable error:', err.slice(0, 200));
+              return;
+            }
             sendStream({ type: 'text', text: `\n⚠️ **에러**: ${err}\n\n` });
             return;
           }

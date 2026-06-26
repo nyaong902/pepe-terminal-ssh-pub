@@ -3094,13 +3094,22 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       ``,
     );
 
-    // 1) 개별 WebDAV 마운트 첨부 (파일/폴더 우클릭 → Claude 첨부)
+    // 1) 개별 첨부 (파일/폴더 우클릭 → AI 첨부) — pepe_ssh MCP 도구로 직접 접근.
+    //    WebDAV 마운트는 제거됨. uncPath 가 채워져 있어도 addDirs 에 넣지 않음.
     if (mountEntries.length > 0) {
-      for (const m of mountEntries) addDirsSet.add(m.uncPath);
-      const pathMap = mountEntries.map(m =>
-        `- \`${m.remotePath}\`${m.isDir ? '/' : ''} ← \`${m.uncPath}\``
-      ).join('\n');
-      contextLines.push('', '[명시적으로 첨부된 파일/폴더]', pathMap);
+      const pathMap = mountEntries.map(m => {
+        const sess = connectedSessions.find(s => s.termId === m.termId);
+        const sessLabel = sess?.label ? ` (${sess.label})` : '';
+        return `- \`${m.remotePath}\`${m.isDir ? '/' : ''}${sessLabel}`;
+      }).join('\n');
+      contextLines.push(
+        '',
+        '[명시적으로 첨부된 파일/폴더] — pepe_ssh MCP 도구로 접근:',
+        '  • 파일 읽기: mcp__pepe_ssh__ssh_read_file (path, session)',
+        '  • 디렉터리 목록: mcp__pepe_ssh__ssh_exec ("ls -la <path>", session)',
+        '  • 검색: mcp__pepe_ssh__ssh_grep / mcp__pepe_ssh__ssh_glob',
+        pathMap,
+      );
       attachBadge = `📂 첨부 ${mountEntries.length}개:\n${mountEntries.slice(0, 5).map(m => `• ${m.remotePath}${m.isDir ? '/' : ''}`).join('\n')}${mountEntries.length > 5 ? `\n외 ${mountEntries.length - 5}개` : ''}\n\n`;
     } else if (activeMounts.length > 0) {
       // 멀티 SSH 컨텍스트 — 파일 접근은 pepe_ssh MCP 도구로 (WebDAV 마운트 없음)

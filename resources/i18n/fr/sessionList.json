@@ -45,5 +45,6 @@
   "scopeAll": "Infos de paramètres",
   "searchScopeTitle": "Portée de recherche",
   "searchPlaceholder": "Rechercher {{scope}}",
-  "searchClear": "Effacer la recherche"
+  "searchClear": "Effacer la recherche",
+  "ctxDuplicate": "Dupliquer"
 }

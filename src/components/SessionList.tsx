@@ -1073,7 +1073,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 if (s) void duplicateSession(s, s.folderId ?? undefined);
                 setContextMenu(null);
               }}>
-                복제
+                <MenuIcon>📋</MenuIcon>{t('ctxDuplicate')}
               </div>
             </>
           )}

@@ -82,7 +82,7 @@
   "toolCount": "{{count}}",
   "collapse": "Collapse",
   "expand": "Expand",
-  "attachWebdavTitle": "📂 WebDAV mounts: {{count}} (live SSH)",
+  "attachWebdavTitle": "📂 SSH attached: {{count}}",
   "attachInline": "📎 Attachments: {{count}} ({{size}} KB)",
   "attachLocalCount": "📁 Local: {{count}} files",
   "removeAll": "Remove all",

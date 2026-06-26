@@ -2006,60 +2006,22 @@ function App() {
     setActiveTabId(id);
   };
 
-  // Claude 에 파일/폴더 첨부 (WebDAV 마운트 방식 - 실시간 SSH 접근)
+  // Claude 에 파일/폴더 첨부 — WebDAV 마운트는 제거됨. pepe_ssh MCP 도구로 직접 접근.
+  // uncPath 는 더 이상 사용하지 않음 (빈 값). ClaudeChat 은 remotePath + termId 만으로 동작.
   const handleAttachToClaude = async (termId: string, remotePath: string, _fileName: string, isDir: boolean) => {
     setShowClaudeChat(true);
-    setClaudeAttaching({ message: tApp('claudeAttach.mountPreparing'), progress: 0, total: 1 });
     try {
-      // 세션 라벨(표시용)
-      let sessionLabel = termId;
-      try {
-        const sess = findTermSession(termId);
-        if (sess) sessionLabel = sess.sessionName || sess.host || termId;
-      } catch {}
-
-      // 세션 등록 (한 번만 실제 등록됨 - 내부에서 중복 체크)
-      const reg: any = await (window as any).api?.claudeRegisterMount?.(termId, sessionLabel);
-      if (!reg?.success) {
-        setClaudeAttaching({ message: tApp('claudeAttach.mountFail', { error: reg?.error || tApp('common.unknown') }), progress: 0, total: 0 });
-        setTimeout(() => setClaudeAttaching(null), 3500);
-        return;
-      }
-
-      // UNC 경로 생성
-      const pathRes: any = await (window as any).api?.claudeGetMountPath?.(termId, remotePath);
-      if (!pathRes?.success) {
-        setClaudeAttaching({ message: tApp('claudeAttach.pathConvertFail', { error: pathRes?.error || tApp('common.unknown') }), progress: 0, total: 0 });
-        setTimeout(() => setClaudeAttaching(null), 3500);
-        return;
-      }
-
       setClaudeMountEntries(prev => {
         const map = new Map(prev.map(e => [`${e.termId}:${e.remotePath}`, e]));
-        map.set(`${termId}:${remotePath}`, { termId, remotePath, uncPath: pathRes.uncPath, isDir });
+        map.set(`${termId}:${remotePath}`, { termId, remotePath, uncPath: '', isDir });
         return Array.from(map.values());
       });
-      setClaudeAttaching({ message: tApp('claudeAttach.attached'), progress: 1, total: 1 });
-      setTimeout(() => setClaudeAttaching(null), 2000);
     } catch (err: any) {
       setClaudeAttaching({ message: tApp('claudeAttach.attachFail', { error: err }), progress: 0, total: 0 });
       setTimeout(() => setClaudeAttaching(null), 3500);
     }
   };
 
-  // termId → session meta 찾기 헬퍼 (sessionName/host 참조용)
-  const findTermSession = (termId: string): { sessionName?: string; host?: string } | null => {
-    for (const tab of tabs) {
-      const walk = (n: any): any => {
-        if (n.type === 'leaf' && n.termId === termId) return n;
-        if (n.children) for (const c of n.children) { const r = walk(c); if (r) return r; }
-        return null;
-      };
-      const leaf = walk(tab.layout);
-      if (leaf) return { sessionName: leaf.sessionName, host: leaf.host };
-    }
-    return null;
-  };
 
   const renameTab = (id: TabId, name: string) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, title: name } : t));
