@@ -50,8 +50,9 @@ type MacroStep =
   | { type: 'key'; key: string }
   | { type: 'hold'; ms: number }
   | { type: 'call'; target: string }
+  | { type: 'answer' }
   | { type: 'hangup' };
-type Macro = { id: string; name: string; steps: MacroStep[] };
+type Macro = { id: string; name: string; steps: MacroStep[]; repeat?: number };
 
 type Contact = { id: string; name: string; number: string; epId?: string };
 
@@ -448,13 +449,17 @@ export const MicroSipWorkspace: React.FC = () => {
 
   // ── 매크로 ──
   const runMacro = async (macro: Macro, targetIds: string[]) => {
+    const reps = Math.max(1, macro.repeat || 1);
     // 선택된 단말들에서 "동시" 실행
     await Promise.all(targetIds.map(async (epId) => {
-      for (const step of macro.steps) {
-        if (step.type === 'key') { pressKey(epId, step.key); await new Promise(r => setTimeout(r, 60)); }
-        else if (step.type === 'hold') { await new Promise(r => setTimeout(r, step.ms)); }
-        else if (step.type === 'call') { await makeCall(epId, step.target || rt(epId).dialed); }
-        else if (step.type === 'hangup') { await hangup(epId); }
+      for (let i = 0; i < reps; i++) {
+        for (const step of macro.steps) {
+          if (step.type === 'key') { pressKey(epId, step.key); await new Promise(r => setTimeout(r, 60)); }
+          else if (step.type === 'hold') { await new Promise(r => setTimeout(r, step.ms)); }
+          else if (step.type === 'call') { await makeCall(epId, step.target || rt(epId).dialed); }
+          else if (step.type === 'answer') { await answer(epId); }
+          else if (step.type === 'hangup') { await hangup(epId); }
+        }
       }
     }));
   };
@@ -1014,7 +1019,7 @@ const MacrosView: React.FC<{
   const update = (id: string, patch: Partial<Macro>) => setMacros(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m));
   const addStep = (id: string, step: MacroStep) => setMacros(prev => prev.map(m => m.id === id ? { ...m, steps: [...m.steps, step] } : m));
   const removeStep = (id: string, idx: number) => setMacros(prev => prev.map(m => m.id === id ? { ...m, steps: m.steps.filter((_, i) => i !== idx) } : m));
-  const stepLabel = (s: MacroStep) => s.type === 'key' ? `키 '${s.key}'` : s.type === 'hold' ? `${s.ms}ms 대기` : s.type === 'call' ? `통화${s.target ? ` ${s.target}` : '(입력값)'}` : '끊기';
+  const stepLabel = (s: MacroStep) => s.type === 'key' ? `키 '${s.key}'` : s.type === 'hold' ? `${s.ms}ms 대기` : s.type === 'call' ? `통화${s.target ? ` ${s.target}` : '(입력값)'}` : s.type === 'answer' ? '받기' : '끊기';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div><button onClick={addMacro} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700 }}>+ 매크로 추가</button></div>
@@ -1024,7 +1029,10 @@ const MacrosView: React.FC<{
           <div key={m.id} style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <input value={m.name} onChange={e => update(m.id, { name: e.target.value })} style={{ ...inp, fontWeight: 700 }} />
-              <button onClick={() => onRun(m, targets)} title="선택 단말에서 동시 실행" style={{ ...inp, cursor: 'pointer', background: '#238636', color: '#fff', border: 'none', fontWeight: 700 }}>▶ 동시 실행 ({targets.length})</button>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }} title="매크로 전체 반복 횟수">
+                반복 <input type="number" min={1} value={m.repeat || 1} onChange={e => update(m.id, { repeat: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inp, width: 52 }} />
+              </label>
+              <button onClick={() => onRun(m, targets)} disabled={targets.length === 0} title="선택 단말에서 동시 실행" style={{ ...inp, cursor: targets.length ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: targets.length ? 1 : 0.5 }}>▶ 동시 실행 ({targets.length})</button>
               <button onClick={() => setMacros(prev => prev.filter(x => x.id !== m.id))} style={{ ...inp, cursor: 'pointer', color: '#f85149', marginLeft: 'auto' }}>🗑</button>
             </div>
             {/* 스텝 목록 */}
@@ -1072,6 +1080,7 @@ const StepAdder: React.FC<{ onAdd: (s: MacroStep) => void }> = ({ onAdd }) => {
       <button onClick={() => onAdd({ type: 'hold', ms })} style={btn}>+ 홀드(ms)</button>
       <input value={target} onChange={e => setTarget(e.target.value)} placeholder="통화 대상(선택)" style={{ ...inp, width: 120 }} />
       <button onClick={() => onAdd({ type: 'call', target })} style={btn}>+ 통화</button>
+      <button onClick={() => onAdd({ type: 'answer' })} style={btn}>+ 받기</button>
       <button onClick={() => onAdd({ type: 'hangup' })} style={btn}>+ 끊기</button>
     </div>
   );
