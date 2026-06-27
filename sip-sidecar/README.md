@@ -25,7 +25,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
 ```
-→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory"}}
+→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory","iceEnabled":false,"stunServer":"host:port","turnServer":"host:port","turnUser","turnPassword"}}
 → {"cmd":"unregister","endpointId":"ep-.."}
 → {"cmd":"call","endpointId":"ep-..","target":"1001"}
 → {"cmd":"hangup","endpointId":"ep-.."}
@@ -63,6 +63,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 
   ✔ 구현 완료(소스): answer/reject/hold/mute/transfer, 등록 만료·DTMF 방식·SRTP 설정,
     오디오 장치 매핑(데몬이 PJMEDIA 장치 목록을 `audio-devices` 이벤트로 제공 → UI 가 name 으로 선택 → `audio` 명령으로 setCaptureDev/setPlaybackDev),
-    IM(pager MESSAGE, `Buddy::sendInstantMessage`) + 프레즌스(`Buddy` SUBSCRIBE/NOTIFY, `setOnlineStatus` 게시).
+    IM(pager MESSAGE, `Buddy::sendInstantMessage`) + 프레즌스(`Buddy` SUBSCRIBE/NOTIFY, `setOnlineStatus` 게시),
+    NAT 통과(단말별 ICE/STUN/TURN — `natConfig` + 전역 `natUpdateStunServers`).
 
 빌드된 `sipd` 가 경로에 있으면 MicroSIP 워크스페이스의 등록/통화/DTMF 가 그대로 동작한다.

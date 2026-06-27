@@ -169,6 +169,11 @@ static void cmdRegister(const json& ep) {
     std::string proxy = ep.value("proxy", "");
     int regExpiry = ep.value("regExpiry", 300);
     std::string srtp = ep.value("srtp", "disabled");
+    bool iceEnabled = ep.value("iceEnabled", false);
+    std::string stunServer = ep.value("stunServer", "");
+    std::string turnServer = ep.value("turnServer", "");
+    std::string turnUser = ep.value("turnUser", "");
+    std::string turnPass = ep.value("turnPassword", "");
     g_dtmfMode[id] = ep.value("dtmfMode", std::string("rfc2833"));
 
     if (ep.contains("codecs")) setCodecPriorities(ep["codecs"]);
@@ -188,6 +193,24 @@ static void cmdRegister(const json& ep) {
     if (srtp == "mandatory")      { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY; acfg.mediaConfig.srtpSecureSignaling = 1; }
     else if (srtp == "optional")  { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;  acfg.mediaConfig.srtpSecureSignaling = 0; }
     else                          { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_DISABLED;  acfg.mediaConfig.srtpSecureSignaling = 0; }
+    // NAT 통과 — ICE / STUN / TURN
+    acfg.natConfig.iceEnabled = iceEnabled;
+    if (!stunServer.empty()) {
+        acfg.natConfig.sipStunUse   = PJSUA_STUN_USE_DEFAULT;
+        acfg.natConfig.mediaStunUse = PJSUA_STUN_USE_DEFAULT;
+        // STUN 서버는 PJSUA 전역 — 마지막 등록값이 적용된다(단일 STUN 환경 가정).
+        try { StringVector v; v.push_back(stunServer); g_ep.natUpdateStunServers(v, false); } catch (...) {}
+    } else {
+        acfg.natConfig.sipStunUse   = PJSUA_STUN_USE_DISABLED;
+        acfg.natConfig.mediaStunUse = PJSUA_STUN_USE_DISABLED;
+    }
+    if (!turnServer.empty()) {
+        acfg.natConfig.turnConfig.enableTurn = true;
+        acfg.natConfig.turnConfig.server = turnServer;
+        acfg.natConfig.turnConfig.username = turnUser;
+        acfg.natConfig.turnConfig.password = turnPass;
+        acfg.natConfig.turnConfig.passwordType = PJ_STUN_PASSWD_PLAIN;
+    }
 
     auto it = g_accounts.find(id);
     try {

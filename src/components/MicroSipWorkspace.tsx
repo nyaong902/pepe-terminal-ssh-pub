@@ -30,6 +30,12 @@ export type SipEndpoint = {
   regExpiry?: number;                              // 등록 만료(초), 기본 300
   dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
   srtp?: 'disabled' | 'optional' | 'mandatory';    // 미디어 암호화(SRTP)
+  // ── NAT 통과 ──
+  iceEnabled?: boolean;                            // ICE 사용
+  stunServer?: string;                             // STUN 서버 (host:port)
+  turnServer?: string;                             // TURN 서버 (host:port)
+  turnUser?: string;
+  turnPassword?: string;
 };
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
@@ -96,6 +102,11 @@ function defaultEndpoint(n: number): SipEndpoint {
     regExpiry: 300,
     dtmfMode: 'rfc2833',
     srtp: 'disabled',
+    iceEnabled: false,
+    stunServer: '',
+    turnServer: '',
+    turnUser: '',
+    turnPassword: '',
   };
 }
 
@@ -857,6 +868,13 @@ const SettingsCard: React.FC<{
         {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
         {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
         {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <input type="checkbox" checked={!!ep.iceEnabled} onChange={e => onChange({ iceEnabled: e.target.checked })} /> ICE 사용
+        </label>
+        {field('STUN 서버(host:port)', <input value={ep.stunServer || ''} onChange={e => onChange({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
+        {field('TURN 서버(host:port)', <input value={ep.turnServer || ''} onChange={e => onChange({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
+        {ep.turnServer ? field('TURN 사용자', <input value={ep.turnUser || ''} onChange={e => onChange({ turnUser: e.target.value })} style={inp} />) : null}
+        {ep.turnServer ? field('TURN 비밀번호', <input type="password" value={ep.turnPassword || ''} onChange={e => onChange({ turnPassword: e.target.value })} style={inp} />) : null}
       </div>
     </div>
   );
