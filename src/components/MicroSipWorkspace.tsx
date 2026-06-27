@@ -43,6 +43,8 @@ type MacroStep =
   | { type: 'hangup' };
 type Macro = { id: string; name: string; steps: MacroStep[] };
 
+type Contact = { id: string; name: string; number: string; epId?: string };
+
 type CallHistEntry = {
   id: string;
   epId: string;
@@ -82,7 +84,7 @@ function defaultEndpoint(n: number): SipEndpoint {
 }
 
 export const MicroSipWorkspace: React.FC = () => {
-  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'log'>('phones');
+  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'contacts' | 'log'>('phones');
   const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
@@ -96,6 +98,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const [audioIn, setAudioIn] = useState('');
   const [audioOut, setAudioOut] = useState('');
   const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [ringEnabled, setRingEnabled] = useState(true);
   const loadedRef = useRef(false);
   const ringCtxRef = useRef<AudioContext | null>(null);
@@ -112,6 +115,7 @@ export const MicroSipWorkspace: React.FC = () => {
         if (Array.isArray(ms.endpoints)) setEndpoints(ms.endpoints);
         if (Array.isArray(ms.macros)) setMacros(ms.macros);
         if (Array.isArray(ms.callHistory)) setCallHistory(ms.callHistory);
+        if (Array.isArray(ms.contacts)) setContacts(ms.contacts);
         if (typeof ms.ringEnabled === 'boolean') setRingEnabled(ms.ringEnabled);
         if (ms.audioIn) setAudioIn(ms.audioIn);
         if (ms.audioOut) setAudioOut(ms.audioOut);
@@ -120,11 +124,12 @@ export const MicroSipWorkspace: React.FC = () => {
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
   useEffect(() => { if (loadedRef.current) persist({ callHistory }); /* eslint-disable-next-line */ }, [callHistory]);
+  useEffect(() => { if (loadedRef.current) persist({ contacts }); /* eslint-disable-next-line */ }, [contacts]);
 
   // ── 오디오 장치 열거 (마이크/스피커 선택) ──
   useEffect(() => {
@@ -376,6 +381,10 @@ export const MicroSipWorkspace: React.FC = () => {
           <MacrosView macros={macros} setMacros={setMacros} endpoints={endpoints} onRun={runMacro} />
         )}
 
+        {view === 'contacts' && (
+          <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial} />
+        )}
+
         {view === 'log' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <CallHistory history={callHistory} endpoints={endpoints} onRedial={redial} onClear={() => setCallHistory([])} />
@@ -389,7 +398,7 @@ export const MicroSipWorkspace: React.FC = () => {
 
 // ───────────────────────── 헤더 ─────────────────────────
 const MicroSipHeader: React.FC<{
-  view: 'phones' | 'settings' | 'macros' | 'log'; setView: (v: any) => void;
+  view: 'phones' | 'settings' | 'macros' | 'contacts' | 'log'; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
   ringEnabled: boolean; onToggleRing: () => void;
@@ -410,6 +419,7 @@ const MicroSipHeader: React.FC<{
       {tab('phones', '☎ 단말')}
       {tab('settings', '⚙ 설정')}
       {tab('macros', '⚡ 매크로')}
+      {tab('contacts', '👤 주소록')}
       {tab('log', '🗒 기록')}
       <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
@@ -442,6 +452,46 @@ const MicroSipHeader: React.FC<{
 };
 const selStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 11, maxWidth: 160 };
 const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
+
+// ───────────────────────── 주소록 ─────────────────────────
+const ContactsView: React.FC<{
+  contacts: Contact[]; setContacts: React.Dispatch<React.SetStateAction<Contact[]>>;
+  endpoints: SipEndpoint[]; onDial: (epId: string, number: string) => void;
+}> = ({ contacts, setContacts, endpoints, onDial }) => {
+  const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 };
+  const add = () => setContacts(prev => [...prev, { id: uid('c'), name: '', number: '', epId: endpoints[0]?.id }]);
+  const update = (id: string, patch: Partial<Contact>) => setContacts(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+  const remove = (id: string) => setContacts(prev => prev.filter(c => c.id !== id));
+  const dialEp = (c: Contact) => (c.epId && endpoints.some(e => e.id === c.epId)) ? c.epId : endpoints[0]?.id;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 760 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <b style={{ fontSize: 13 }}>👤 주소록</b>
+        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>{contacts.length}건</span>
+        <button onClick={add} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700, marginLeft: 'auto' }}>+ 연락처 추가</button>
+      </div>
+      {contacts.length === 0 && (
+        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>연락처가 없습니다. <b>+ 연락처 추가</b> 로 등록하세요.</div>
+      )}
+      {contacts.map(c => {
+        const ep = dialEp(c);
+        return (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', flexWrap: 'wrap' }}>
+            <input value={c.name} onChange={e => update(c.id, { name: e.target.value })} placeholder="이름" style={{ ...inp, flex: '1 1 120px', minWidth: 100 }} />
+            <input value={c.number} onChange={e => update(c.id, { number: e.target.value })} placeholder="번호/SIP" style={{ ...inp, flex: '1 1 120px', minWidth: 100, fontFamily: 'Consolas, monospace' }} />
+            <select value={c.epId || ''} onChange={e => update(c.id, { epId: e.target.value || undefined })} title="발신 단말" style={{ ...inp, flex: '0 1 130px' }}>
+              <option value="">단말 자동</option>
+              {endpoints.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
+            <button onClick={() => ep && onDial(ep, c.number)} disabled={!c.number.trim() || !ep} title={ep ? '통화' : '등록된 단말 없음'}
+              style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>📞</button>
+            <button onClick={() => remove(c.id)} title="삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 // ───────────────────────── 통화 기록 ─────────────────────────
 const histResult: Record<CallHistEntry['result'], { label: string; color: string }> = {
