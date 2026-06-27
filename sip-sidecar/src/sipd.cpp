@@ -456,6 +456,15 @@ static void cmdSubscribe(const std::string& id, const std::string& target, bool 
     }
 }
 
+// 마이크(송신)/스피커(수신) 음량 — 1.0=기본, 0=무음, 2.0=+6dB 부근
+static void cmdVolume(double mic, double spk) {
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        if (mic >= 0) { try { mgr.getCaptureDevMedia().adjustTxLevel((float)mic); } catch (...) {} }
+        if (spk >= 0) { try { mgr.getPlaybackDevMedia().adjustRxLevel((float)spk); } catch (...) {} }
+    } catch (...) {}
+}
+
 int main() {
     try {
         g_ep.libCreate();
@@ -500,6 +509,7 @@ int main() {
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "listAudio")  cmdListAudio();
+            else if (cmd == "volume")     cmdVolume(msg.value("mic", -1.0), msg.value("speaker", -1.0));
             else if (cmd == "im")         cmdIm(msg.value("endpointId", ""), msg.value("target", ""), msg.value("text", ""));
             else if (cmd == "presence")   cmdPresence(msg.value("endpointId", ""), msg.value("online", false));
             else if (cmd == "subscribe")  cmdSubscribe(msg.value("endpointId", ""), msg.value("target", ""), msg.value("subscribe", true));

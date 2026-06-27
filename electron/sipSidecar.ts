@@ -126,6 +126,7 @@ class SipSidecar extends EventEmitter {
   }
   setAudioDevices(input?: string, output?: string): void { this.send({ cmd: 'audio', input: input || '', output: output || '' }); }
   listAudioDevices(): void { this.send({ cmd: 'listAudio' }); }
+  setVolume(mic: number, speaker: number): void { this.send({ cmd: 'volume', mic, speaker }); }
   async sendIm(endpointId: string, target: string, text: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
     return this.send({ cmd: 'im', endpointId, target, text }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };

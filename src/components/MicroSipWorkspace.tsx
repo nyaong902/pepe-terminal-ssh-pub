@@ -124,6 +124,8 @@ export const MicroSipWorkspace: React.FC = () => {
   const [sipOutputs, setSipOutputs] = useState<{ idx: number; name: string }[]>([]);
   const [audioIn, setAudioIn] = useState('');
   const [audioOut, setAudioOut] = useState('');
+  const [micLevel, setMicLevel] = useState(1);   // 0~2 (1=기본)
+  const [spkLevel, setSpkLevel] = useState(1);
   const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [conversations, setConversations] = useState<Conversations>({});
@@ -150,12 +152,14 @@ export const MicroSipWorkspace: React.FC = () => {
         if (typeof ms.ringEnabled === 'boolean') setRingEnabled(ms.ringEnabled);
         if (ms.audioIn) setAudioIn(ms.audioIn);
         if (ms.audioOut) setAudioOut(ms.audioOut);
+        if (typeof ms.micLevel === 'number') setMicLevel(ms.micLevel);
+        if (typeof ms.spkLevel === 'number') setSpkLevel(ms.spkLevel);
       } catch {}
       loadedRef.current = true;
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, conversations, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, conversations, ringEnabled, audioIn, audioOut, micLevel, spkLevel, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
@@ -393,6 +397,10 @@ export const MicroSipWorkspace: React.FC = () => {
     else setRt(id, { dialed: (cur.dialed || '') + key });
   };
 
+  // 음량(마이크/스피커) — 변경/엔진 준비 시 데몬에 적용
+  useEffect(() => { if (engineReady) { try { api().sipSetVolume?.({ mic: micLevel, speaker: spkLevel }); } catch {} } /* eslint-disable-next-line */ }, [engineReady, micLevel, spkLevel]);
+  const applyVolume = (mic: number, spk: number) => { setMicLevel(mic); setSpkLevel(spk); persist({ micLevel: mic, spkLevel: spk }); };
+
   const applyAudioDevices = (inId: string, outId: string) => {
     setAudioIn(inId); setAudioOut(outId);
     persist({ audioIn: inId, audioOut: outId });
@@ -424,6 +432,7 @@ export const MicroSipWorkspace: React.FC = () => {
         audioInputs={audioInputs} audioOutputs={audioOutputs}
         sipInputs={sipInputs} sipOutputs={sipOutputs}
         audioIn={audioIn} audioOut={audioOut} onAudio={applyAudioDevices}
+        micLevel={micLevel} spkLevel={spkLevel} onVolume={applyVolume}
         epCount={endpoints.length}
       />
 
@@ -512,6 +521,7 @@ const MicroSipHeader: React.FC<{
   audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
   sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
   audioIn: string; audioOut: string; onAudio: (i: string, o: string) => void;
+  micLevel: number; spkLevel: number; onVolume: (mic: number, spk: number) => void;
 }> = (p) => {
   // 네이티브 엔진이 장치를 제공하면(name 기준) 그 목록을, 아니면 브라우저 장치를 사용
   const useSip = p.sipInputs.length > 0 || p.sipOutputs.length > 0;
@@ -551,6 +561,12 @@ const MicroSipHeader: React.FC<{
           ? p.sipOutputs.map(d => <option key={d.idx} value={d.name}>🔊 {d.name}</option>)
           : p.audioOutputs.map(d => <option key={d.deviceId} value={d.deviceId}>🔊 {d.label || d.deviceId.slice(0, 8)}</option>)}
       </select>
+      <span title={`마이크 음량 ${Math.round(p.micLevel * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
+        🎙<input type="range" min={0} max={2} step={0.05} value={p.micLevel} onChange={e => p.onVolume(Number(e.target.value), p.spkLevel)} style={{ width: 64 }} />
+      </span>
+      <span title={`스피커 음량 ${Math.round(p.spkLevel * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
+        🔈<input type="range" min={0} max={2} step={0.05} value={p.spkLevel} onChange={e => p.onVolume(p.micLevel, Number(e.target.value))} style={{ width: 64 }} />
+      </span>
       <button onClick={p.onAdd} disabled={!p.canAdd} title={p.canAdd ? '단말 추가' : '최대 10대'}
         style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--win-accent, #2b6b9b)', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: p.canAdd ? 'pointer' : 'not-allowed', opacity: p.canAdd ? 1 : 0.5 }}>
         + 단말 ({p.epCount}/{MAX_ENDPOINTS})

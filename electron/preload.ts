@@ -163,6 +163,7 @@ contextBridge.exposeInMainWorld('api', {
   sipSendDtmf: (args: { endpointId: string; digit: string }) => ipcRenderer.invoke('sip:send-dtmf', args),
   sipSetAudioDevices: (args: { input?: string; output?: string }) => ipcRenderer.invoke('sip:set-audio-devices', args),
   sipListAudioDevices: () => ipcRenderer.invoke('sip:list-audio-devices'),
+  sipSetVolume: (args: { mic: number; speaker: number }) => ipcRenderer.invoke('sip:volume', args),
   sipSendIm: (args: { endpointId: string; target: string; text: string }) => ipcRenderer.invoke('sip:im', args),
   sipSetPresence: (args: { endpointId: string; online: boolean }) => ipcRenderer.invoke('sip:presence', args),
   sipSubscribePresence: (args: { endpointId: string; target: string; subscribe: boolean }) => ipcRenderer.invoke('sip:subscribe', args),
