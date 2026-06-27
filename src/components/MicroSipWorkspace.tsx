@@ -372,6 +372,14 @@ export const MicroSipWorkspace: React.FC = () => {
   const unregister = async (id: string) => { await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' }); };
   const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
   const unregisterAll = () => endpoints.forEach(e => unregister(e.id));
+  // 일괄 통화 제어 (다중 단말)
+  const isActiveCall = (c: CallState) => c === 'connected' || c === 'held' || c === 'calling' || c === 'ringing' || c === 'incoming';
+  const hangupAll = () => endpoints.forEach(e => { if (isActiveCall(rt(e.id).call)) hangup(e.id); });
+  const muteAll = () => {
+    const live = endpoints.filter(e => rt(e.id).call === 'connected' || rt(e.id).call === 'held');
+    const mute = live.some(e => !rt(e.id).muted); // 하나라도 안 된게 있으면 전체 뮤트, 아니면 전체 해제
+    live.forEach(e => { setRt(e.id, { muted: mute }); try { api().sipMute?.({ endpointId: e.id, mute }); } catch {} });
+  };
   const applyDialPrefix = (id: string, number: string): string => {
     const ep = endpoints.find(e => e.id === id);
     const pfx = ep?.dialPrefix?.trim();
@@ -459,6 +467,8 @@ export const MicroSipWorkspace: React.FC = () => {
         canAdd={endpoints.length < MAX_ENDPOINTS}
         onAdd={addEndpoint}
         onRegisterAll={registerAll} onUnregisterAll={unregisterAll}
+        onHangupAll={hangupAll} onMuteAll={muteAll}
+        hasActiveCall={endpoints.some(e => isActiveCall(rt(e.id).call))}
         ringEnabled={ringEnabled} onToggleRing={() => { setRingEnabled(v => { persist({ ringEnabled: !v }); return !v; }); }}
         audioInputs={audioInputs} audioOutputs={audioOutputs}
         sipInputs={sipInputs} sipOutputs={sipOutputs}
@@ -550,6 +560,7 @@ const MicroSipHeader: React.FC<{
   view: 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
+  onHangupAll: () => void; onMuteAll: () => void; hasActiveCall: boolean;
   ringEnabled: boolean; onToggleRing: () => void;
   audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
   sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
@@ -576,6 +587,10 @@ const MicroSipHeader: React.FC<{
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
       <button onClick={p.onUnregisterAll} disabled={p.epCount === 0} title="모든 단말 해제"
         style={miniBtn(p.epCount > 0)}>전체 해제</button>
+      <button onClick={p.onHangupAll} disabled={!p.hasActiveCall} title="진행 중인 모든 통화 끊기"
+        style={{ ...miniBtn(p.hasActiveCall), color: p.hasActiveCall ? '#f85149' : undefined }}>전체 끊기</button>
+      <button onClick={p.onMuteAll} disabled={!p.hasActiveCall} title="통화 중 단말 전체 뮤트/해제"
+        style={miniBtn(p.hasActiveCall)}>전체 뮤트</button>
       <button onClick={p.onToggleRing} title={p.ringEnabled ? '인입 벨소리 끄기' : '인입 벨소리 켜기'}
         style={miniBtn(true)}>{p.ringEnabled ? '🔔' : '🔕'}</button>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: p.engineReady ? '#3fb950' : '#d29922' }}
