@@ -96,7 +96,10 @@ export const MicroSipWorkspace: React.FC = () => {
   const [audioIn, setAudioIn] = useState('');
   const [audioOut, setAudioOut] = useState('');
   const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
+  const [ringEnabled, setRingEnabled] = useState(true);
   const loadedRef = useRef(false);
+  const ringCtxRef = useRef<AudioContext | null>(null);
+  const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
 
@@ -109,6 +112,7 @@ export const MicroSipWorkspace: React.FC = () => {
         if (Array.isArray(ms.endpoints)) setEndpoints(ms.endpoints);
         if (Array.isArray(ms.macros)) setMacros(ms.macros);
         if (Array.isArray(ms.callHistory)) setCallHistory(ms.callHistory);
+        if (typeof ms.ringEnabled === 'boolean') setRingEnabled(ms.ringEnabled);
         if (ms.audioIn) setAudioIn(ms.audioIn);
         if (ms.audioOut) setAudioOut(ms.audioOut);
       } catch {}
@@ -116,7 +120,7 @@ export const MicroSipWorkspace: React.FC = () => {
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, audioIn, audioOut, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
@@ -201,6 +205,40 @@ export const MicroSipWorkspace: React.FC = () => {
   const rt = (id: string): EndpointRuntime => runtime[id] || { reg: engineReady === false ? 'no-engine' : 'unregistered', call: 'idle', dialed: '' };
   const setRt = (id: string, patch: Partial<EndpointRuntime>) =>
     setRuntime(prev => ({ ...prev, [id]: { ...rt(id), ...patch } }));
+
+  // ── 인입 벨소리 (WebAudio) ──
+  const anyIncoming = Object.values(runtime).some(r => r.call === 'incoming');
+  useEffect(() => {
+    const stop = () => {
+      if (ringTimerRef.current) { clearInterval(ringTimerRef.current); ringTimerRef.current = null; }
+    };
+    if (!ringEnabled || !anyIncoming) { stop(); return; }
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    if (!ringCtxRef.current) { try { ringCtxRef.current = new Ctx(); } catch { return; } }
+    const ctx = ringCtxRef.current!;
+    try { ctx.resume?.(); } catch {}
+    const beep = () => {
+      try {
+        const now = ctx.currentTime;
+        const gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        gain.gain.setValueAtTime(0.0001, now);
+        // 전화 벨 비슷한 1초 울림(440+480Hz), 페이드 인/아웃
+        [440, 480].forEach(f => { const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gain); o.start(now); o.stop(now + 1.0); });
+        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.05);
+        gain.gain.setValueAtTime(0.18, now + 0.9);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.0);
+      } catch {}
+    };
+    beep();
+    ringTimerRef.current = setInterval(beep, 3000); // 1s 울림 / 2s 정적 케이던스
+    return stop;
+  }, [anyIncoming, ringEnabled]);
+  useEffect(() => () => { // 언마운트 정리
+    if (ringTimerRef.current) clearInterval(ringTimerRef.current);
+    try { ringCtxRef.current?.close(); } catch {}
+  }, []);
 
   // ── 단말 추가/삭제 ──
   const addEndpoint = () => {
@@ -287,6 +325,7 @@ export const MicroSipWorkspace: React.FC = () => {
         canAdd={endpoints.length < MAX_ENDPOINTS}
         onAdd={addEndpoint}
         onRegisterAll={registerAll} onUnregisterAll={unregisterAll}
+        ringEnabled={ringEnabled} onToggleRing={() => { setRingEnabled(v => { persist({ ringEnabled: !v }); return !v; }); }}
         audioInputs={audioInputs} audioOutputs={audioOutputs}
         sipInputs={sipInputs} sipOutputs={sipOutputs}
         audioIn={audioIn} audioOut={audioOut} onAudio={applyAudioDevices}
@@ -353,6 +392,7 @@ const MicroSipHeader: React.FC<{
   view: 'phones' | 'settings' | 'macros' | 'log'; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
+  ringEnabled: boolean; onToggleRing: () => void;
   audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
   sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
   audioIn: string; audioOut: string; onAudio: (i: string, o: string) => void;
@@ -375,6 +415,8 @@ const MicroSipHeader: React.FC<{
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
       <button onClick={p.onUnregisterAll} disabled={p.epCount === 0} title="모든 단말 해제"
         style={miniBtn(p.epCount > 0)}>전체 해제</button>
+      <button onClick={p.onToggleRing} title={p.ringEnabled ? '인입 벨소리 끄기' : '인입 벨소리 켜기'}
+        style={miniBtn(true)}>{p.ringEnabled ? '🔔' : '🔕'}</button>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: p.engineReady ? '#3fb950' : '#d29922' }}
         title={p.engineReady ? 'SIP 엔진 연결됨' : 'SIP 엔진(네이티브 사이드카) 미연결 — Phase 2에서 활성화'}>
         ● {p.engineReady ? 'SIP 엔진 ON' : 'SIP 엔진 미연결'}
