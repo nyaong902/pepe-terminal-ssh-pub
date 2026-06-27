@@ -43,6 +43,16 @@ type MacroStep =
   | { type: 'hangup' };
 type Macro = { id: string; name: string; steps: MacroStep[] };
 
+type CallHistEntry = {
+  id: string;
+  epId: string;
+  dir: 'in' | 'out';
+  remote: string;
+  ts: number;            // 통화 시작 시각
+  durationSec: number;   // 연결 통화 시간(초)
+  result: 'answered' | 'missed' | 'no-answer';
+};
+
 const MAX_ENDPOINTS = 10;
 const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 // 단말/설정 카드 공통 최소 폭 — 둘 중 더 넓은(설정) 기준으로 맞춰 동일 grid 컬럼 폭 사용
@@ -85,7 +95,10 @@ export const MicroSipWorkspace: React.FC = () => {
   const [sipOutputs, setSipOutputs] = useState<{ idx: number; name: string }[]>([]);
   const [audioIn, setAudioIn] = useState('');
   const [audioOut, setAudioOut] = useState('');
+  const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
   const loadedRef = useRef(false);
+  // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
+  const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
 
   // ── 영속(UI prefs) ──
   useEffect(() => {
@@ -95,6 +108,7 @@ export const MicroSipWorkspace: React.FC = () => {
         const ms = prefs?.microsip || {};
         if (Array.isArray(ms.endpoints)) setEndpoints(ms.endpoints);
         if (Array.isArray(ms.macros)) setMacros(ms.macros);
+        if (Array.isArray(ms.callHistory)) setCallHistory(ms.callHistory);
         if (ms.audioIn) setAudioIn(ms.audioIn);
         if (ms.audioOut) setAudioOut(ms.audioOut);
       } catch {}
@@ -102,10 +116,11 @@ export const MicroSipWorkspace: React.FC = () => {
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, audioIn, audioOut, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, audioIn, audioOut, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
+  useEffect(() => { if (loadedRef.current) persist({ callHistory }); /* eslint-disable-next-line */ }, [callHistory]);
 
   // ── 오디오 장치 열거 (마이크/스피커 선택) ──
   useEffect(() => {
@@ -147,6 +162,28 @@ export const MicroSipWorkspace: React.FC = () => {
         ev.ev === 'log' ? String(ev.text || '') : '';
       if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev }, ...prev].slice(0, 200));
       if (!ev.endpointId) return;
+      // 통화 기록 추적 — call 상태 전이로 항목 산출
+      if (ev.ev === 'call' && ev.call) {
+        const ep = ev.endpointId as string;
+        const track = callTrackRef.current;
+        if (ev.call === 'calling' || ev.call === 'incoming') {
+          track[ep] = { dir: ev.call === 'incoming' ? 'in' : 'out', remote: ev.remote || '', sawConnected: false, connectedTs: 0 };
+        } else if (ev.call === 'connected') {
+          if (!track[ep]) track[ep] = { dir: 'out', remote: ev.remote || '', sawConnected: false, connectedTs: 0 };
+          track[ep].sawConnected = true;
+          track[ep].connectedTs = Date.now();
+          if (ev.remote) track[ep].remote = ev.remote;
+        } else if (ev.call === 'ended' || ev.call === 'idle') {
+          const t = track[ep];
+          if (t) {
+            const durationSec = t.connectedTs ? Math.max(0, Math.round((Date.now() - t.connectedTs) / 1000)) : 0;
+            const result: CallHistEntry['result'] = t.sawConnected ? 'answered' : (t.dir === 'in' ? 'missed' : 'no-answer');
+            const entry: CallHistEntry = { id: uid('ch'), epId: ep, dir: t.dir, remote: t.remote, ts: Date.now() - durationSec * 1000, durationSec, result };
+            setCallHistory(prev => [entry, ...prev].slice(0, 200));
+            delete track[ep];
+          }
+        }
+      }
       setRuntime(prev => ({
         ...prev,
         [ev.endpointId]: {
@@ -205,6 +242,12 @@ export const MicroSipWorkspace: React.FC = () => {
   const reject = async (id: string) => { await api().sipReject?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
   const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
   const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
+  const redial = (epId: string, remote: string) => {
+    if (!remote.trim()) return;
+    if (!endpoints.some(e => e.id === epId)) return; // 단말이 삭제된 기록
+    setView('phones');
+    void makeCall(epId, remote);
+  };
   const transfer = async (id: string) => {
     const target = (typeof window !== 'undefined' ? window.prompt('전환할 번호/대상(SIP)을 입력하세요:', '') : '') || '';
     if (!target.trim()) return;
@@ -295,7 +338,10 @@ export const MicroSipWorkspace: React.FC = () => {
         )}
 
         {view === 'log' && (
-          <ActivityLog activity={activity} endpoints={endpoints} onClear={() => setActivity([])} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <CallHistory history={callHistory} endpoints={endpoints} onRedial={redial} onClear={() => setCallHistory([])} />
+            <ActivityLog activity={activity} endpoints={endpoints} onClear={() => setActivity([])} />
+          </div>
         )}
       </div>
     </div>
@@ -354,6 +400,47 @@ const MicroSipHeader: React.FC<{
 };
 const selStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 11, maxWidth: 160 };
 const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
+
+// ───────────────────────── 통화 기록 ─────────────────────────
+const histResult: Record<CallHistEntry['result'], { label: string; color: string }> = {
+  answered: { label: '응답', color: '#3fb950' },
+  missed: { label: '부재중', color: '#f85149' },
+  'no-answer': { label: '무응답', color: '#d29922' },
+};
+const fmtDur = (s: number) => s <= 0 ? '' : `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+const CallHistory: React.FC<{
+  history: CallHistEntry[]; endpoints: SipEndpoint[];
+  onRedial: (epId: string, remote: string) => void; onClear: () => void;
+}> = ({ history, endpoints, onRedial, onClear }) => {
+  const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id;
+  const exists = (id: string) => endpoints.some(e => e.id === id);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 760 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <b style={{ fontSize: 13 }}>📞 통화 기록</b>
+        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>최근 {history.length}건</span>
+        <button onClick={onClear} disabled={history.length === 0} style={{ ...miniBtn(history.length > 0), marginLeft: 'auto' }}>지우기</button>
+      </div>
+      {history.length === 0 && (
+        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>통화 기록이 없습니다.</div>
+      )}
+      {history.map(h => {
+        const r = histResult[h.result];
+        return (
+          <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', fontSize: 12 }}>
+            <span title={h.dir === 'in' ? '수신' : '발신'} style={{ fontSize: 13, color: h.dir === 'in' ? '#58a6ff' : '#3fb950' }}>{h.dir === 'in' ? '↙' : '↗'}</span>
+            <span style={{ flex: 1, fontFamily: 'Consolas, monospace', color: 'var(--win-text, #e6edf3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.remote || '(번호 없음)'}</span>
+            <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>{labelOf(h.epId)}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: r.color, whiteSpace: 'nowrap' }}>{r.label}{h.durationSec > 0 ? ` ${fmtDur(h.durationSec)}` : ''}</span>
+            <span style={{ fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>{new Date(h.ts).toLocaleString()}</span>
+            <button onClick={() => onRedial(h.epId, h.remote)} disabled={!h.remote || !exists(h.epId)} title={exists(h.epId) ? '재다이얼' : '단말 삭제됨'}
+              style={{ ...miniBtn(!!h.remote && exists(h.epId)), padding: '3px 8px' }}>↺</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 // ───────────────────────── 활동 로그 ─────────────────────────
 const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e' };
