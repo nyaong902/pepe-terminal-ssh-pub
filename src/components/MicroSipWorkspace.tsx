@@ -173,7 +173,11 @@ export const MicroSipWorkspace: React.FC = () => {
     const r = await api().sipCall?.({ endpointId: id, target: number }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) setRt(id, { call: 'idle', error: r?.error });
   };
-  const hangup = async (id: string) => { await api().sipHangup?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
+  const hangup = async (id: string) => { await api().sipHangup?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle', muted: false }); };
+  const answer = async (id: string) => { await api().sipAnswer?.({ endpointId: id }).catch(() => {}); };
+  const reject = async (id: string) => { await api().sipReject?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
+  const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
+  const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
   const sendDtmf = async (id: string, digit: string) => { await api().sipSendDtmf?.({ endpointId: id, digit }).catch(() => {}); };
   const pressKey = (id: string, key: string) => {
     const cur = rt(id);
@@ -228,6 +232,10 @@ export const MicroSipWorkspace: React.FC = () => {
                 onCall={() => makeCall(e.id, rt(e.id).dialed)}
                 onHangup={() => hangup(e.id)}
                 onClear={() => setRt(e.id, { dialed: '' })}
+                onAnswer={() => answer(e.id)}
+                onReject={() => reject(e.id)}
+                onToggleMute={() => toggleMute(e.id)}
+                onToggleHold={() => toggleHold(e.id)}
               />
             ))}
           </div>
@@ -299,8 +307,22 @@ const regColor: Record<RegState, string> = { registered: '#3fb950', registering:
 const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear }) => {
+  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold }) => {
   const inCall = rt.call === 'connected' || rt.call === 'calling' || rt.call === 'ringing' || rt.call === 'held';
+  const incoming = rt.call === 'incoming';
+  // 통화 시간 타이머 (connected/held 동안)
+  const [sec, setSec] = useState(0);
+  const startRef = useRef(0);
+  useEffect(() => {
+    if (rt.call === 'connected' || rt.call === 'held') {
+      if (!startRef.current) startRef.current = Date.now();
+      const t = setInterval(() => setSec(Math.floor((Date.now() - startRef.current) / 1000)), 500);
+      return () => clearInterval(t);
+    }
+    startRef.current = 0; setSec(0);
+  }, [rt.call]);
+  const mmss = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
   return (
     <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -309,8 +331,10 @@ const PhoneCard: React.FC<{
         <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{ep.username || '미설정'}@{ep.server || '—'}</span>
       </div>
       <div style={{ minHeight: 34, padding: '6px 10px', borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 16, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>{inCall ? (rt.remote || '') : (rt.dialed || '')}</span>
-        <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{rt.call !== 'idle' ? rt.call : ''}</span>
+        <span>{(inCall || incoming) ? (rt.remote || '') : (rt.dialed || '')}</span>
+        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+          {(rt.call === 'connected' || rt.call === 'held') ? mmss : (rt.call !== 'idle' ? rt.call : '')}
+        </span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
         {DIAL_KEYS.map(k => (
@@ -318,15 +342,28 @@ const PhoneCard: React.FC<{
             style={{ padding: '10px 0', borderRadius: 8, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 16, fontWeight: 600, cursor: 'pointer' }}>{k}</button>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        {!inCall ? (
-          <button onClick={onCall} style={callBtn('#238636')}>📞 통화</button>
-        ) : (
+      {incoming ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={onAnswer} style={callBtn('#238636')}>📞 받기</button>
+          <button onClick={onReject} style={callBtn('#da3633')}>✖ 거절</button>
+        </div>
+      ) : (rt.call === 'connected' || rt.call === 'held') ? (
+        <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
-        )}
-        <button onClick={onBackspace} title="지우기" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>⌫</button>
-        <button onClick={onClear} title="초기화" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>C</button>
-      </div>
+          <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
+          <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
+        </div>
+      ) : inCall ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={onCall} style={callBtn('#238636')}>📞 통화</button>
+          <button onClick={onBackspace} title="지우기" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>⌫</button>
+          <button onClick={onClear} title="초기화" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>C</button>
+        </div>
+      )}
       {rt.error && <div style={{ fontSize: 10, color: '#f85149' }}>{rt.error}</div>}
     </div>
   );

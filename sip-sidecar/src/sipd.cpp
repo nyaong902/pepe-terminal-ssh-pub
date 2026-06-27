@@ -210,6 +210,47 @@ static void cmdHangup(const std::string& id) {
     try { CallOpParam p; c->second->hangup(p); } catch (...) {}
 }
 
+static void cmdAnswer(const std::string& id) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    try { CallOpParam op; op.statusCode = PJSIP_SC_OK; c->second->answer(op); } catch (...) {}
+}
+static void cmdReject(const std::string& id) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    try { CallOpParam op; op.statusCode = PJSIP_SC_DECLINE; c->second->hangup(op); } catch (...) {}
+}
+static void cmdHold(const std::string& id, bool hold) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    try {
+        CallOpParam op(true);
+        if (hold) c->second->setHold(op);
+        else { op.opt.flag = PJSUA_CALL_UNHOLD; c->second->reinvite(op); }
+    } catch (...) {}
+}
+// 마이크 뮤트 — capture 장치 → call 오디오 전송을 끊거나 잇는다.
+static AudioMedia* firstCallAudio(MyCall* call) {
+    try {
+        CallInfo ci = call->getInfo();
+        for (unsigned i = 0; i < ci.media.size(); i++)
+            if (ci.media[i].type == PJMEDIA_TYPE_AUDIO && call->getMedia(i))
+                return static_cast<AudioMedia*>(call->getMedia(i));
+    } catch (...) {}
+    return nullptr;
+}
+static void cmdMute(const std::string& id, bool mute) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    AudioMedia* am = firstCallAudio(c->second);
+    if (!am) return;
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        if (mute) mgr.getCaptureDevMedia().stopTransmit(*am);
+        else      mgr.getCaptureDevMedia().startTransmit(*am);
+    } catch (...) {}
+}
+
 static void cmdDtmf(const std::string& id, const std::string& digit) {
     auto c = g_calls.find(id);
     if (c == g_calls.end()) return;
@@ -256,6 +297,10 @@ int main() {
             else if (cmd == "unregister") cmdUnregister(msg.value("endpointId", ""));
             else if (cmd == "call")       cmdCall(msg.value("endpointId", ""), msg.value("target", ""));
             else if (cmd == "hangup")     cmdHangup(msg.value("endpointId", ""));
+            else if (cmd == "answer")     cmdAnswer(msg.value("endpointId", ""));
+            else if (cmd == "reject")     cmdReject(msg.value("endpointId", ""));
+            else if (cmd == "hold")       cmdHold(msg.value("endpointId", ""), msg.value("hold", false));
+            else if (cmd == "mute")       cmdMute(msg.value("endpointId", ""), msg.value("mute", false));
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "quit")       break;
