@@ -283,10 +283,46 @@ static void cmdDtmf(const std::string& id, const std::string& digit) {
     } catch (...) {}
 }
 
-static void cmdAudio(const std::string& /*input*/, const std::string& /*output*/) {
-    // deviceId(렌더러) ↔ PJMEDIA 장치 인덱스 매핑은 별도 동기화 필요.
-    // 우선은 기본 장치를 사용; 확장 시 audDevManager().setCaptureDev/ setPlaybackDev 호출.
-    emitLog("info", "audio device 설정은 Phase 2.1 에서 매핑 예정 (기본 장치 사용)");
+// PJMEDIA 오디오 장치 목록을 이벤트로 제공 — UI 가 이 목록(name)에서 선택한다.
+static void cmdListAudio() {
+    json inputs = json::array(), outputs = json::array();
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        const AudioDevInfoVector2 devs = mgr.enumDev2();
+        for (unsigned i = 0; i < devs.size(); i++) {
+            const AudioDevInfo& d = devs[i];
+            if (d.inputCount  > 0) inputs.push_back({{"idx",(int)i},{"name",d.name}});
+            if (d.outputCount > 0) outputs.push_back({{"idx",(int)i},{"name",d.name}});
+        }
+    } catch (...) {}
+    emitJson({{"ev","audio-devices"},{"inputs",inputs},{"outputs",outputs}});
+}
+
+// 장치 식별자(name)로 PJMEDIA 인덱스를 찾는다. 빈 문자열이면 -1(기본 장치).
+static int findAudioDev(const std::string& name, bool capture) {
+    if (name.empty()) return -1;
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        const AudioDevInfoVector2 devs = mgr.enumDev2();
+        for (unsigned i = 0; i < devs.size(); i++) {
+            const AudioDevInfo& d = devs[i];
+            if ((capture ? d.inputCount : d.outputCount) > 0 && d.name == name) return (int)i;
+        }
+    } catch (...) {}
+    return -1;
+}
+
+static void cmdAudio(const std::string& input, const std::string& output) {
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        int cap = findAudioDev(input, true);
+        int play = findAudioDev(output, false);
+        // 기본(-1) 이면 PJMEDIA 기본 장치 인덱스 사용
+        if (cap < 0)  cap  = PJMEDIA_AUD_DEFAULT_CAPTURE_DEV;
+        if (play < 0) play = PJMEDIA_AUD_DEFAULT_PLAYBACK_DEV;
+        mgr.setCaptureDev(cap);
+        mgr.setPlaybackDev(play);
+    } catch (...) {}
 }
 
 int main() {
@@ -306,6 +342,7 @@ int main() {
 
         g_ep.libStart();
         emitJson({{"ev","ready"}});
+        cmdListAudio(); // 기동 직후 오디오 장치 목록 1회 통지
     } catch (Error& e) {
         emitJson({{"ev","error"},{"error",e.info()}});
         return 1;
@@ -330,6 +367,7 @@ int main() {
             else if (cmd == "transfer")   cmdTransfer(msg.value("endpointId", ""), msg.value("target", ""));
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
+            else if (cmd == "listAudio")  cmdListAudio();
             else if (cmd == "quit")       break;
         } catch (Error& e) {
             emitJson({{"ev","error"},{"error",e.info()}});

@@ -121,6 +121,7 @@ class SipSidecar extends EventEmitter {
     return this.send({ cmd: 'dtmf', endpointId, digit }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
   }
   setAudioDevices(input?: string, output?: string): void { this.send({ cmd: 'audio', input: input || '', output: output || '' }); }
+  listAudioDevices(): void { this.send({ cmd: 'listAudio' }); }
 
   dispose(): void {
     try { if (this.proc && !this.proc.killed) { this.send({ cmd: 'quit' }); this.proc.kill(); } } catch {}

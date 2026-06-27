@@ -35,9 +35,11 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 → {"cmd":"mute","endpointId":"ep-..","mute":true}
 → {"cmd":"transfer","endpointId":"ep-..","target":"2002"}   // blind transfer(REFER)
 → {"cmd":"dtmf","endpointId":"ep-..","digit":"1"}          // dtmfMode 에 따라 RFC2833/SIP INFO
-→ {"cmd":"audio","input":"<deviceId|>","output":"<deviceId|>"}
+→ {"cmd":"audio","input":"<장치 name|>","output":"<장치 name|>"}  // 빈 값=기본 장치
+→ {"cmd":"listAudio"}                                          // 오디오 장치 목록 요청
 ← {"ev":"reg","endpointId":"ep-..","reg":"registered|registering|failed|unregistered","error":"?"}
 ← {"ev":"call","endpointId":"ep-..","call":"calling|ringing|incoming|connected|held|ended","remote":"?"}
+← {"ev":"audio-devices","inputs":[{"idx":0,"name":".."}],"outputs":[{"idx":0,"name":".."}]}  // ready 직후 + listAudio 응답
 ```
 - 단말당 1개의 PJSUA account, 최대 10개 동시. 각 account 의 코덱 우선순위는 `pjsua_codec_set_priority` 로 endpoint.codecs 순서대로 설정.
 - 오디오 장치: PJMEDIA snd dev 인덱스로 매핑(렌더러의 deviceId ↔ 데몬의 장치 목록 동기화 필요). 대안: 데몬이 장치 열거를 제공하고 UI 가 그 목록에서 선택.
@@ -52,6 +54,8 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
   2. **EVS**: 3GPP 레퍼런스 코드를 PJMEDIA 커스텀 코덱으로 통합 후 `libInit` 직후 등록 (sipd.cpp 의 주석 위치).
   3. `cmake` 로 `sipd` 빌드 → `sip-sidecar/bin/<plat>/sipd(.exe)` 에 배치 (또는 `PEPE_SIPD` 환경변수로 경로 지정).
   4. 배포 시 electron-builder `extraResources` 에 `{ from: "sip-sidecar/bin", to: "sip-sidecar" }` 추가.
-  5. (선택) 오디오 장치 매핑: 데몬이 PJMEDIA 장치 목록을 이벤트로 제공하고 UI 가 그 목록에서 선택하도록 확장.
+
+  ✔ 구현 완료(소스): answer/reject/hold/mute/transfer, 등록 만료·DTMF 방식·SRTP 설정,
+    오디오 장치 매핑(데몬이 PJMEDIA 장치 목록을 `audio-devices` 이벤트로 제공 → UI 가 name 으로 선택 → `audio` 명령으로 setCaptureDev/setPlaybackDev).
 
 빌드된 `sipd` 가 경로에 있으면 MicroSIP 워크스페이스의 등록/통화/DTMF 가 그대로 동작한다.

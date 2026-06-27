@@ -80,6 +80,9 @@ export const MicroSipWorkspace: React.FC = () => {
   const [engineReady, setEngineReady] = useState<boolean | null>(null);
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+  // 네이티브 데몬(PJMEDIA)이 제공하는 장치 목록 — 엔진 ON 시 이쪽을 우선 사용
+  const [sipInputs, setSipInputs] = useState<{ idx: number; name: string }[]>([]);
+  const [sipOutputs, setSipOutputs] = useState<{ idx: number; name: string }[]>([]);
   const [audioIn, setAudioIn] = useState('');
   const [audioOut, setAudioOut] = useState('');
   const loadedRef = useRef(false);
@@ -126,10 +129,16 @@ export const MicroSipWorkspace: React.FC = () => {
       try {
         const st = await api().sipEngineStatus?.();
         setEngineReady(!!st?.ready);
+        if (st?.ready) { try { api().sipListAudioDevices?.(); } catch {} }
       } catch { setEngineReady(false); }
     })();
     const off = api().onSipEvent?.((ev: any) => {
       if (!ev) return;
+      if (ev.ev === 'audio-devices') {
+        setSipInputs(Array.isArray(ev.inputs) ? ev.inputs : []);
+        setSipOutputs(Array.isArray(ev.outputs) ? ev.outputs : []);
+        return;
+      }
       // 활동 로그 적재 (reg/call/error/log)
       const txt =
         ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
@@ -236,6 +245,7 @@ export const MicroSipWorkspace: React.FC = () => {
         onAdd={addEndpoint}
         onRegisterAll={registerAll} onUnregisterAll={unregisterAll}
         audioInputs={audioInputs} audioOutputs={audioOutputs}
+        sipInputs={sipInputs} sipOutputs={sipOutputs}
         audioIn={audioIn} audioOut={audioOut} onAudio={applyAudioDevices}
         epCount={endpoints.length}
       />
@@ -298,8 +308,11 @@ const MicroSipHeader: React.FC<{
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
   audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
+  sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
   audioIn: string; audioOut: string; onAudio: (i: string, o: string) => void;
 }> = (p) => {
+  // 네이티브 엔진이 장치를 제공하면(name 기준) 그 목록을, 아니면 브라우저 장치를 사용
+  const useSip = p.sipInputs.length > 0 || p.sipOutputs.length > 0;
   const tab = (id: string, label: string) => (
     <button onClick={() => p.setView(id)}
       style={{ padding: '6px 12px', borderRadius: '8px 8px 0 0', border: '1px solid var(--win-border, #30363d)', borderBottom: 'none',
@@ -320,13 +333,17 @@ const MicroSipHeader: React.FC<{
         title={p.engineReady ? 'SIP 엔진 연결됨' : 'SIP 엔진(네이티브 사이드카) 미연결 — Phase 2에서 활성화'}>
         ● {p.engineReady ? 'SIP 엔진 ON' : 'SIP 엔진 미연결'}
       </span>
-      <select value={p.audioIn} onChange={e => p.onAudio(e.target.value, p.audioOut)} title="마이크" style={selStyle}>
+      <select value={p.audioIn} onChange={e => p.onAudio(e.target.value, p.audioOut)} title={useSip ? '마이크(SIP 엔진)' : '마이크'} style={selStyle}>
         <option value="">🎤 기본 마이크</option>
-        {p.audioInputs.map(d => <option key={d.deviceId} value={d.deviceId}>🎤 {d.label || d.deviceId.slice(0, 8)}</option>)}
+        {useSip
+          ? p.sipInputs.map(d => <option key={d.idx} value={d.name}>🎤 {d.name}</option>)
+          : p.audioInputs.map(d => <option key={d.deviceId} value={d.deviceId}>🎤 {d.label || d.deviceId.slice(0, 8)}</option>)}
       </select>
-      <select value={p.audioOut} onChange={e => p.onAudio(p.audioIn, e.target.value)} title="스피커" style={selStyle}>
+      <select value={p.audioOut} onChange={e => p.onAudio(p.audioIn, e.target.value)} title={useSip ? '스피커(SIP 엔진)' : '스피커'} style={selStyle}>
         <option value="">🔊 기본 스피커</option>
-        {p.audioOutputs.map(d => <option key={d.deviceId} value={d.deviceId}>🔊 {d.label || d.deviceId.slice(0, 8)}</option>)}
+        {useSip
+          ? p.sipOutputs.map(d => <option key={d.idx} value={d.name}>🔊 {d.name}</option>)
+          : p.audioOutputs.map(d => <option key={d.deviceId} value={d.deviceId}>🔊 {d.label || d.deviceId.slice(0, 8)}</option>)}
       </select>
       <button onClick={p.onAdd} disabled={!p.canAdd} title={p.canAdd ? '단말 추가' : '최대 10대'}
         style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--win-accent, #2b6b9b)', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: p.canAdd ? 'pointer' : 'not-allowed', opacity: p.canAdd ? 1 : 0.5 }}>

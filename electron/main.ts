@@ -4955,6 +4955,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
   ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
   ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
+  ipcMain.handle('sip:list-audio-devices', () => { sip.listAudioDevices(); return { ok: true }; });
 }
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
 ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {
