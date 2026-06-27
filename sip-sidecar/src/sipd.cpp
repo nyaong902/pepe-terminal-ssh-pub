@@ -132,6 +132,14 @@ public:
     virtual void onInstantMessageStatus(OnInstantMessageStatusParam& prm) override {
         emitJson({{"ev","im-status"},{"endpointId",epId},{"to",prm.toUri},{"code",(int)prm.code},{"reason",prm.reason}});
     }
+    // 음성사서함 알림(MWI NOTIFY)
+    virtual void onMwiInfo(OnMwiInfoParam& prm) override {
+        std::string body = prm.rdata.wholeMsg;
+        // "Messages-Waiting: yes/no" 파싱 (공백 유무 모두 허용)
+        bool waiting = body.find("Messages-Waiting: yes") != std::string::npos
+                    || body.find("Messages-Waiting:yes") != std::string::npos;
+        emitJson({{"ev","mwi"},{"endpointId",epId},{"waiting",waiting}});
+    }
 };
 
 // 프레즌스 버디 — 상태 변경을 이벤트로 전달
@@ -200,6 +208,7 @@ static void cmdRegister(const json& ep) {
     AuthCredInfo cred("digest", "*", authId.empty() ? user : authId, 0, pass);
     acfg.sipConfig.authCreds.push_back(cred);
     acfg.callConfig.timerMinSESec = 90;
+    acfg.mwiConfig.enabled = true; // 음성사서함(MWI) 구독
     // SRTP(미디어 암호화)
     if (srtp == "mandatory")      { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY; acfg.mediaConfig.srtpSecureSignaling = 1; }
     else if (srtp == "optional")  { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;  acfg.mediaConfig.srtpSecureSignaling = 0; }

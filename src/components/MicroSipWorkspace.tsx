@@ -27,6 +27,7 @@ export type SipEndpoint = {
   codecs: SipCodec[];      // 우선순위 순서
   autoAnswer?: boolean;
   dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
+  voicemailNumber?: string; // 음성사서함 접속 번호
   // ── 고급 설정 ──
   regExpiry?: number;                              // 등록 만료(초), 기본 300
   dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
@@ -41,7 +42,7 @@ export type SipEndpoint = {
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
 type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; error?: string };
+type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; mwi?: boolean; error?: string };
 
 type MacroStep =
   | { type: 'key'; key: string }
@@ -101,6 +102,7 @@ function defaultEndpoint(n: number): SipEndpoint {
     codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
     autoAnswer: false,
     dnd: false,
+    voicemailNumber: '',
     regExpiry: 300,
     dtmfMode: 'rfc2833',
     srtp: 'disabled',
@@ -218,6 +220,11 @@ export const MicroSipWorkspace: React.FC = () => {
       if (ev.ev === 'record') {
         if (ev.endpointId) setRuntime(prev => ({ ...prev, [ev.endpointId]: { ...(prev[ev.endpointId] || { reg: 'unregistered', call: 'idle', dialed: '' }), recording: !!ev.recording } }));
         if (ev.error) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `녹음 오류: ${ev.error}`, kind: 'error' }, ...prev].slice(0, 200));
+        return;
+      }
+      if (ev.ev === 'mwi') {
+        if (ev.endpointId) setRuntime(prev => ({ ...prev, [ev.endpointId]: { ...(prev[ev.endpointId] || { reg: 'unregistered', call: 'idle', dialed: '' }), mwi: !!ev.waiting } }));
+        setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `음성사서함 ${ev.waiting ? '도착' : '없음'}`, kind: 'reg' }, ...prev].slice(0, 200));
         return;
       }
       // 활동 로그 적재 (reg/call/error/log)
@@ -461,6 +468,7 @@ export const MicroSipWorkspace: React.FC = () => {
                 onToggleHold={() => toggleHold(e.id)}
                 onTransfer={() => transfer(e.id)}
                 onToggleRecord={() => toggleRecord(e.id)}
+                onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
               />
             ))}
           </div>
@@ -792,8 +800,8 @@ const regColor: Record<RegState, string> = { registered: '#3fb950', registering:
 const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
-  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord }) => {
+  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void; onVoicemail: () => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail }) => {
   const inCall = rt.call === 'connected' || rt.call === 'calling' || rt.call === 'ringing' || rt.call === 'held';
   const incoming = rt.call === 'incoming';
   // 통화 시간 타이머 (connected/held 동안)
@@ -814,6 +822,8 @@ const PhoneCard: React.FC<{
         <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[rt.reg] }} title={rt.reg} />
         <b style={{ fontSize: 13 }}>{ep.label}</b>
         {ep.dnd && <span title="방해 금지" style={{ fontSize: 11 }}>🌙</span>}
+        {rt.mwi && <button onClick={onVoicemail} title={ep.voicemailNumber ? '음성사서함 듣기' : '음성사서함 도착'} disabled={!ep.voicemailNumber}
+          style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 12, padding: 0 }}>📨</button>}
         <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{ep.username || '미설정'}@{ep.server || '—'}</span>
       </div>
       <div style={{ minHeight: 34, padding: '6px 10px', borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 16, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -937,6 +947,7 @@ const SettingsCard: React.FC<{
       </div>
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>고급</div>
+        {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
         {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
         {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
         {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
