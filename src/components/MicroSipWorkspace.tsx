@@ -26,6 +26,7 @@ export type SipEndpoint = {
   proxy?: string;          // outbound proxy (선택)
   codecs: SipCodec[];      // 우선순위 순서
   autoAnswer?: boolean;
+  autoRegister?: boolean;  // 워크스페이스 진입(엔진 준비) 시 자동 등록 (기본 on)
   dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
   voicemailNumber?: string; // 음성사서함 접속 번호
   dialPrefix?: string;       // 발신 시 앞에 붙이는 prefix (외부 회선 등; */# 코드·SIP URI 제외)
@@ -102,6 +103,7 @@ function defaultEndpoint(n: number): SipEndpoint {
     proxy: '',
     codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
     autoAnswer: false,
+    autoRegister: true,
     dnd: false,
     voicemailNumber: '',
     dialPrefix: '',
@@ -141,6 +143,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const ringCtxRef = useRef<AudioContext | null>(null);
   const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const autoRegDoneRef = useRef(false);
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
 
@@ -420,6 +423,14 @@ export const MicroSipWorkspace: React.FC = () => {
   // 음량(마이크/스피커) — 변경/엔진 준비 시 데몬에 적용
   useEffect(() => { if (engineReady) { try { api().sipSetVolume?.({ mic: micLevel, speaker: spkLevel }); } catch {} } /* eslint-disable-next-line */ }, [engineReady, micLevel, spkLevel]);
   const applyVolume = (mic: number, spk: number) => { setMicLevel(mic); setSpkLevel(spk); persist({ micLevel: mic, spkLevel: spk }); };
+
+  // 엔진 준비 + 단말 로드 완료 후 1회: autoRegister 단말 자동 등록
+  useEffect(() => {
+    if (autoRegDoneRef.current || !loadedRef.current || engineReady !== true || endpoints.length === 0) return;
+    autoRegDoneRef.current = true;
+    endpoints.forEach(e => { if (e.autoRegister !== false && e.server.trim() && e.username.trim()) void register(e); });
+    /* eslint-disable-next-line */
+  }, [engineReady, endpoints.length]);
 
   const applyAudioDevices = (inId: string, outId: string) => {
     setAudioIn(inId); setAudioOut(outId);
@@ -947,6 +958,9 @@ const SettingsCard: React.FC<{
           })}
         </div>
         <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={ep.autoRegister !== false} onChange={e => onChange({ autoRegister: e.target.checked })} /> 시작 시 등록
+          </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
           </label>
