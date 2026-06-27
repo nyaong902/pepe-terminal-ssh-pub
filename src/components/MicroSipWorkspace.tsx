@@ -28,6 +28,7 @@ export type SipEndpoint = {
   autoAnswer?: boolean;
   dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
   voicemailNumber?: string; // 음성사서함 접속 번호
+  dialPrefix?: string;       // 발신 시 앞에 붙이는 prefix (외부 회선 등; */# 코드·SIP URI 제외)
   // ── 고급 설정 ──
   regExpiry?: number;                              // 등록 만료(초), 기본 300
   dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
@@ -103,6 +104,7 @@ function defaultEndpoint(n: number): SipEndpoint {
     autoAnswer: false,
     dnd: false,
     voicemailNumber: '',
+    dialPrefix: '',
     regExpiry: 300,
     dtmfMode: 'rfc2833',
     srtp: 'disabled',
@@ -367,10 +369,18 @@ export const MicroSipWorkspace: React.FC = () => {
   const unregister = async (id: string) => { await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' }); };
   const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
   const unregisterAll = () => endpoints.forEach(e => unregister(e.id));
+  const applyDialPrefix = (id: string, number: string): string => {
+    const ep = endpoints.find(e => e.id === id);
+    const pfx = ep?.dialPrefix?.trim();
+    const n = number.trim();
+    if (!pfx || !n || /^[*#]/.test(n) || /^sips?:/i.test(n) || n.startsWith(pfx)) return n;
+    return pfx + n;
+  };
   const makeCall = async (id: string, number: string) => {
-    if (!number.trim()) return;
-    setRt(id, { call: 'calling', remote: number });
-    const r = await api().sipCall?.({ endpointId: id, target: number }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
+    const target = applyDialPrefix(id, number);
+    if (!target) return;
+    setRt(id, { call: 'calling', remote: target });
+    const r = await api().sipCall?.({ endpointId: id, target }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) setRt(id, { call: 'idle', error: r?.error });
   };
   const hangup = async (id: string) => { await api().sipHangup?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle', muted: false }); };
@@ -948,6 +958,7 @@ const SettingsCard: React.FC<{
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>고급</div>
         {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
+        {field('발신 prefix', <input value={ep.dialPrefix || ''} onChange={e => onChange({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
         {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
         {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
         {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
