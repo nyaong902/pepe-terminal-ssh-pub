@@ -4952,6 +4952,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:reject', async (_e, args: { endpointId: string }) => sip.reject(args?.endpointId));
   ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean }) => sip.hold(args?.endpointId, !!args?.hold));
   ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.mute(args?.endpointId, !!args?.mute));
+  ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
   ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
   ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
 }

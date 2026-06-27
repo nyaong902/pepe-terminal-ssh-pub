@@ -112,6 +112,10 @@ class SipSidecar extends EventEmitter {
   async reject(endpointId: string): Promise<{ ok: boolean }> { this.send({ cmd: 'reject', endpointId }); return { ok: true }; }
   async hold(endpointId: string, hold: boolean): Promise<{ ok: boolean }> { this.send({ cmd: 'hold', endpointId, hold }); return { ok: true }; }
   async mute(endpointId: string, mute: boolean): Promise<{ ok: boolean }> { this.send({ cmd: 'mute', endpointId, mute }); return { ok: true }; }
+  async transfer(endpointId: string, target: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'transfer', endpointId, target }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
   async sendDtmf(endpointId: string, digit: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
     return this.send({ cmd: 'dtmf', endpointId, digit }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };

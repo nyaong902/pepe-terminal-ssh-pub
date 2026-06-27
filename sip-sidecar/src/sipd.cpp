@@ -251,6 +251,13 @@ static void cmdMute(const std::string& id, bool mute) {
     } catch (...) {}
 }
 
+// 호전환 — 현재 통화를 target 으로 blind transfer(REFER).
+static void cmdTransfer(const std::string& id, const std::string& target) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end() || target.empty()) return;
+    try { CallOpParam op; c->second->xfer(target, op); } catch (...) {}
+}
+
 static void cmdDtmf(const std::string& id, const std::string& digit) {
     auto c = g_calls.find(id);
     if (c == g_calls.end()) return;
@@ -301,6 +308,7 @@ int main() {
             else if (cmd == "reject")     cmdReject(msg.value("endpointId", ""));
             else if (cmd == "hold")       cmdHold(msg.value("endpointId", ""), msg.value("hold", false));
             else if (cmd == "mute")       cmdMute(msg.value("endpointId", ""), msg.value("mute", false));
+            else if (cmd == "transfer")   cmdTransfer(msg.value("endpointId", ""), msg.value("target", ""));
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "quit")       break;

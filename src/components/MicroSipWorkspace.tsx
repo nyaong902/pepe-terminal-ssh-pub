@@ -189,6 +189,11 @@ export const MicroSipWorkspace: React.FC = () => {
   const reject = async (id: string) => { await api().sipReject?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
   const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
   const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
+  const transfer = async (id: string) => {
+    const target = (typeof window !== 'undefined' ? window.prompt('전환할 번호/대상(SIP)을 입력하세요:', '') : '') || '';
+    if (!target.trim()) return;
+    await api().sipTransfer?.({ endpointId: id, target: target.trim() }).catch(() => {});
+  };
   const sendDtmf = async (id: string, digit: string) => { await api().sipSendDtmf?.({ endpointId: id, digit }).catch(() => {}); };
   const pressKey = (id: string, key: string) => {
     const cur = rt(id);
@@ -248,6 +253,7 @@ export const MicroSipWorkspace: React.FC = () => {
                 onReject={() => reject(e.id)}
                 onToggleMute={() => toggleMute(e.id)}
                 onToggleHold={() => toggleHold(e.id)}
+                onTransfer={() => transfer(e.id)}
               />
             ))}
           </div>
@@ -361,8 +367,8 @@ const regColor: Record<RegState, string> = { registered: '#3fb950', registering:
 const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
-  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold }) => {
+  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer }) => {
   const inCall = rt.call === 'connected' || rt.call === 'calling' || rt.call === 'ringing' || rt.call === 'held';
   const incoming = rt.call === 'incoming';
   // 통화 시간 타이머 (connected/held 동안)
@@ -406,6 +412,7 @@ const PhoneCard: React.FC<{
           <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
           <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
           <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
+          <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>↪</button>
         </div>
       ) : inCall ? (
         <div style={{ display: 'flex', gap: 6 }}>
