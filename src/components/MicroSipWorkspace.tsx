@@ -65,7 +65,8 @@ function defaultEndpoint(n: number): SipEndpoint {
 }
 
 export const MicroSipWorkspace: React.FC = () => {
-  const [view, setView] = useState<'phones' | 'settings' | 'macros'>('phones');
+  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'log'>('phones');
+  const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
   const [runtime, setRuntime] = useState<Record<string, EndpointRuntime>>({});
@@ -121,7 +122,15 @@ export const MicroSipWorkspace: React.FC = () => {
       } catch { setEngineReady(false); }
     })();
     const off = api().onSipEvent?.((ev: any) => {
-      if (!ev || !ev.endpointId) return;
+      if (!ev) return;
+      // 활동 로그 적재 (reg/call/error/log)
+      const txt =
+        ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
+        ev.ev === 'call' ? `통화: ${ev.call}${ev.remote ? ` ${ev.remote}` : ''}${ev.error ? ` (${ev.error})` : ''}` :
+        ev.ev === 'error' ? `오류: ${ev.error || ''}` :
+        ev.ev === 'log' ? String(ev.text || '') : '';
+      if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev }, ...prev].slice(0, 200));
+      if (!ev.endpointId) return;
       setRuntime(prev => ({
         ...prev,
         [ev.endpointId]: {
@@ -167,6 +176,8 @@ export const MicroSipWorkspace: React.FC = () => {
     if (!r?.ok) setRt(e.id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error });
   };
   const unregister = async (id: string) => { await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' }); };
+  const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
+  const unregisterAll = () => endpoints.forEach(e => unregister(e.id));
   const makeCall = async (id: string, number: string) => {
     if (!number.trim()) return;
     setRt(id, { call: 'calling', remote: number });
@@ -211,6 +222,7 @@ export const MicroSipWorkspace: React.FC = () => {
         engineReady={engineReady}
         canAdd={endpoints.length < MAX_ENDPOINTS}
         onAdd={addEndpoint}
+        onRegisterAll={registerAll} onUnregisterAll={unregisterAll}
         audioInputs={audioInputs} audioOutputs={audioOutputs}
         audioIn={audioIn} audioOut={audioOut} onAudio={applyAudioDevices}
         epCount={endpoints.length}
@@ -258,6 +270,10 @@ export const MicroSipWorkspace: React.FC = () => {
         {view === 'macros' && (
           <MacrosView macros={macros} setMacros={setMacros} endpoints={endpoints} onRun={runMacro} />
         )}
+
+        {view === 'log' && (
+          <ActivityLog activity={activity} endpoints={endpoints} onClear={() => setActivity([])} />
+        )}
       </div>
     </div>
   );
@@ -265,8 +281,9 @@ export const MicroSipWorkspace: React.FC = () => {
 
 // ───────────────────────── 헤더 ─────────────────────────
 const MicroSipHeader: React.FC<{
-  view: 'phones' | 'settings' | 'macros'; setView: (v: any) => void;
+  view: 'phones' | 'settings' | 'macros' | 'log'; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
+  onRegisterAll: () => void; onUnregisterAll: () => void;
   audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
   audioIn: string; audioOut: string; onAudio: (i: string, o: string) => void;
 }> = (p) => {
@@ -281,6 +298,11 @@ const MicroSipHeader: React.FC<{
       {tab('phones', '☎ 단말')}
       {tab('settings', '⚙ 설정')}
       {tab('macros', '⚡ 매크로')}
+      {tab('log', '🗒 기록')}
+      <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
+        style={miniBtn(p.epCount > 0)}>전체 등록</button>
+      <button onClick={p.onUnregisterAll} disabled={p.epCount === 0} title="모든 단말 해제"
+        style={miniBtn(p.epCount > 0)}>전체 해제</button>
       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: p.engineReady ? '#3fb950' : '#d29922' }}
         title={p.engineReady ? 'SIP 엔진 연결됨' : 'SIP 엔진(네이티브 사이드카) 미연결 — Phase 2에서 활성화'}>
         ● {p.engineReady ? 'SIP 엔진 ON' : 'SIP 엔진 미연결'}
@@ -301,6 +323,38 @@ const MicroSipHeader: React.FC<{
   );
 };
 const selStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 11, maxWidth: 160 };
+const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
+
+// ───────────────────────── 활동 로그 ─────────────────────────
+const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e' };
+const ActivityLog: React.FC<{
+  activity: { ts: number; epId: string; text: string; kind: string }[];
+  endpoints: SipEndpoint[]; onClear: () => void;
+}> = ({ activity, endpoints, onClear }) => {
+  const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id || '시스템';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 760 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <b style={{ fontSize: 13 }}>🗒 활동 기록</b>
+        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>최근 {activity.length}건</span>
+        <button onClick={onClear} disabled={activity.length === 0} style={{ ...miniBtn(activity.length > 0), marginLeft: 'auto' }}>지우기</button>
+      </div>
+      {activity.length === 0 && (
+        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>아직 기록이 없습니다. 등록·통화 이벤트가 여기에 표시됩니다.</div>
+      )}
+      {activity.map((a, i) => (
+        <div key={`${a.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 8px', borderRadius: 6, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', fontSize: 12 }}>
+          <span style={{ fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>
+            {new Date(a.ts).toLocaleTimeString()}
+          </span>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: logKindColor[a.kind] || '#8b949e', flex: '0 0 auto', alignSelf: 'center' }} />
+          <b style={{ fontSize: 11, color: 'var(--win-text, #e6edf3)', whiteSpace: 'nowrap' }}>{labelOf(a.epId)}</b>
+          <span style={{ color: 'var(--win-text-dim, #c9d1d9)' }}>{a.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 // ───────────────────────── 단말 카드(키패드) ─────────────────────────
 const regColor: Record<RegState, string> = { registered: '#3fb950', registering: '#d29922', unregistered: '#8b949e', failed: '#f85149', 'no-engine': '#8b949e' };
