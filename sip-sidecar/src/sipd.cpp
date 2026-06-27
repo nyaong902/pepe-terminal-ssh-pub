@@ -98,6 +98,7 @@ public:
     std::string epId;
     bool autoAnswer = false;
     bool dnd = false;
+    bool callWaiting = true;
     explicit MyAccount(const std::string& id) : epId(id) {}
 
     virtual void onRegState(OnRegStateParam& prm) override {
@@ -109,15 +110,17 @@ public:
         emitJson(j);
     }
     virtual void onIncomingCall(OnIncomingCallParam& prm) override {
+        bool busy = (g_calls.find(epId) != g_calls.end()); // 이미 통화 중인 호가 있나
         MyCall* call = new MyCall(*this, epId, prm.callId);
-        g_calls[epId] = call;
         CallInfo ci = call->getInfo();
-        if (dnd) {
-            // 방해 금지 — 486 Busy Here 로 자동 거절 (onCallState 가 정리/ended 통지)
+        // 방해 금지 또는 (통화중대기 off + 이미 통화중) → 486 Busy 자동 거절
+        if (dnd || (!callWaiting && busy)) {
             CallOpParam op; op.statusCode = PJSIP_SC_BUSY_HERE;
             try { call->hangup(op); } catch (...) {}
+            if (!busy) g_calls[epId] = call; // 활성 호가 없을 때만 추적(onCallState 가 정리). 통화중이면 기존 호 보존.
             return;
         }
+        g_calls[epId] = call;
         emitJson({{"ev","call"},{"endpointId",epId},{"call","incoming"},{"remote",ci.remoteUri}});
         if (autoAnswer) {
             CallOpParam op; op.statusCode = PJSIP_SC_OK;
@@ -189,6 +192,7 @@ static void cmdRegister(const json& ep) {
     int regExpiry = ep.value("regExpiry", 300);
     std::string srtp = ep.value("srtp", "disabled");
     bool iceEnabled = ep.value("iceEnabled", false);
+    int keepAlive = ep.value("keepAlive", 15);
     std::string stunServer = ep.value("stunServer", "");
     std::string turnServer = ep.value("turnServer", "");
     std::string turnUser = ep.value("turnUser", "");
@@ -209,6 +213,7 @@ static void cmdRegister(const json& ep) {
     acfg.sipConfig.authCreds.push_back(cred);
     acfg.callConfig.timerMinSESec = 90;
     acfg.mwiConfig.enabled = true; // 음성사서함(MWI) 구독
+    if (keepAlive > 0) acfg.natConfig.udpKaIntervalSec = keepAlive; // UDP keep-alive(살아유지)
     // SRTP(미디어 암호화)
     if (srtp == "mandatory")      { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY; acfg.mediaConfig.srtpSecureSignaling = 1; }
     else if (srtp == "optional")  { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;  acfg.mediaConfig.srtpSecureSignaling = 0; }
@@ -238,11 +243,13 @@ static void cmdRegister(const json& ep) {
             MyAccount* acc = new MyAccount(id);
             acc->autoAnswer = ep.value("autoAnswer", false);
             acc->dnd = ep.value("dnd", false);
+            acc->callWaiting = ep.value("callWaiting", true);
             acc->create(acfg);
             g_accounts[id] = acc;
         } else {
             it->second->autoAnswer = ep.value("autoAnswer", false);
             it->second->dnd = ep.value("dnd", false);
+            it->second->callWaiting = ep.value("callWaiting", true);
             it->second->modify(acfg);
         }
         emitJson({{"ev","reg"},{"endpointId",id},{"reg","registering"}});

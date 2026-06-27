@@ -30,6 +30,11 @@ export type SipEndpoint = {
   dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
   voicemailNumber?: string; // 음성사서함 접속 번호
   dialPrefix?: string;       // 발신 시 앞에 붙이는 prefix (외부 회선 등; */# 코드·SIP URI 제외)
+  keepAlive?: number;        // UDP keep-alive(살아유지) 초, 기본 15
+  // ── 프로그램 설정(단말별) ──
+  ring?: boolean;            // 인입 벨소리 (단말별), 기본 on
+  callWaiting?: boolean;     // 통화 중 대기 — off 면 통화중 인입을 486 Busy 거절, 기본 on
+  autoRecord?: boolean;      // 연결 시 자동 녹음, 기본 off
   // ── 고급 설정 ──
   regExpiry?: number;                              // 등록 만료(초), 기본 300
   dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
@@ -108,6 +113,10 @@ function defaultEndpoint(n: number): SipEndpoint {
     dnd: false,
     voicemailNumber: '',
     dialPrefix: '',
+    keepAlive: 15,
+    ring: true,
+    callWaiting: true,
+    autoRecord: false,
     regExpiry: 300,
     dtmfMode: 'rfc2833',
     srtp: 'disabled',
@@ -283,8 +292,8 @@ export const MicroSipWorkspace: React.FC = () => {
   const setRt = (id: string, patch: Partial<EndpointRuntime>) =>
     setRuntime(prev => ({ ...prev, [id]: { ...rt(id), ...patch } }));
 
-  // ── 인입 벨소리 (WebAudio) ──
-  const anyIncoming = Object.values(runtime).some(r => r.call === 'incoming');
+  // ── 인입 벨소리 (WebAudio) ── 전역 마스터(ringEnabled) AND 단말별(ep.ring)
+  const anyIncoming = endpoints.some(e => e.ring !== false && rt(e.id).call === 'incoming');
   useEffect(() => {
     const stop = () => {
       if (ringTimerRef.current) { clearInterval(ringTimerRef.current); ringTimerRef.current = null; }
@@ -863,6 +872,11 @@ const PhoneCard: React.FC<{
     }
     startRef.current = 0; setSec(0);
   }, [rt.call]);
+  // 연결 시 자동 녹음 (단말별)
+  useEffect(() => {
+    if (rt.call === 'connected' && ep.autoRecord && !rt.recording) onToggleRecord();
+    /* eslint-disable-next-line */
+  }, [rt.call]);
   const mmss = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
   return (
     <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -999,11 +1013,13 @@ const SettingsCard: React.FC<{
         </div>
       </div>
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>고급</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--win-text, #e6edf3)' }}>📇 계정 · 고급</div>
         {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
         {field('발신 prefix', <input value={ep.dialPrefix || ''} onChange={e => onChange({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
-        {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
-        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
+          {field('살아유지(초)', <input type="number" value={ep.keepAlive ?? 15} onChange={e => onChange({ keepAlive: Number(e.target.value) || 0 })} style={inp} />)}
+        </div>
         {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
           <input type="checkbox" checked={!!ep.iceEnabled} onChange={e => onChange({ iceEnabled: e.target.checked })} /> ICE 사용
@@ -1012,6 +1028,22 @@ const SettingsCard: React.FC<{
         {field('TURN 서버(host:port)', <input value={ep.turnServer || ''} onChange={e => onChange({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
         {ep.turnServer ? field('TURN 사용자', <input value={ep.turnUser || ''} onChange={e => onChange({ turnUser: e.target.value })} style={inp} />) : null}
         {ep.turnServer ? field('TURN 비밀번호', <input type="password" value={ep.turnPassword || ''} onChange={e => onChange({ turnPassword: e.target.value })} style={inp} />) : null}
+      </div>
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--win-text, #e6edf3)' }}>⚙ 프로그램 설정</div>
+        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={ep.ring !== false} onChange={e => onChange({ ring: e.target.checked })} /> 🔔 벨소리
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={ep.callWaiting !== false} onChange={e => onChange({ callWaiting: e.target.checked })} /> 통화 중 대기
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.autoRecord} onChange={e => onChange({ autoRecord: e.target.checked })} /> ⏺ 자동 녹음
+          </label>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 마이크/스피커·음량은 상단 공통(전역) 설정을 사용합니다.</div>
       </div>
     </div>
   );
