@@ -113,7 +113,31 @@ public:
             try { call->answer(op); } catch (...) {}
         }
     }
+    // 수신 IM(pager MESSAGE)
+    virtual void onInstantMessage(OnInstantMessageParam& prm) override {
+        emitJson({{"ev","im"},{"endpointId",epId},{"from",prm.fromUri},{"text",prm.msgBody},{"contentType",prm.contentType},{"dir","in"}});
+    }
+    // 송신 IM 전달 상태
+    virtual void onInstantMessageStatus(OnInstantMessageStatusParam& prm) override {
+        emitJson({{"ev","im-status"},{"endpointId",epId},{"to",prm.toUri},{"code",(int)prm.code},{"reason",prm.reason}});
+    }
 };
+
+// 프레즌스 버디 — 상태 변경을 이벤트로 전달
+class MyBuddy : public Buddy {
+public:
+    std::string epId;
+    explicit MyBuddy(const std::string& id) : epId(id) {}
+    virtual void onBuddyState() override {
+        BuddyInfo bi = getInfo();
+        std::string status =
+            bi.presStatus.status == PJSUA_BUDDY_STATUS_ONLINE  ? "online"  :
+            bi.presStatus.status == PJSUA_BUDDY_STATUS_OFFLINE ? "offline" : "unknown";
+        emitJson({{"ev","presence"},{"endpointId",epId},{"buddy",bi.uri},{"status",status},{"note",bi.presStatus.note}});
+    }
+};
+// (endpointId + "|" + uri) → buddy
+static std::map<std::string, MyBuddy*> g_buddies;
 
 static Endpoint g_ep;
 
@@ -191,23 +215,44 @@ static void cmdUnregister(const std::string& id) {
     delete it->second;
     g_accounts.erase(it);
     g_dtmfMode.erase(id);
+    // 이 계정의 버디 정리
+    for (auto bit = g_buddies.begin(); bit != g_buddies.end(); ) {
+        if (bit->first.rfind(id + "|", 0) == 0) { try { delete bit->second; } catch (...) {} bit = g_buddies.erase(bit); }
+        else ++bit;
+    }
     emitJson({{"ev","reg"},{"endpointId",id},{"reg","unregistered"}});
+}
+
+// target 이 sip URI 가 아니면 계정 도메인 기준으로 보정해 sip URI 로 만든다.
+static std::string toSipUri(MyAccount* acc, const std::string& target) {
+    if (target.rfind("sip:", 0) == 0 || target.rfind("sips:", 0) == 0) return target;
+    std::string host;
+    try {
+        AccountInfo ai = acc->getInfo();
+        std::string domain = ai.uri; // sip:user@domain
+        size_t at = domain.find('@');
+        host = at != std::string::npos ? domain.substr(at + 1) : "";
+        size_t gt = host.find('>'); if (gt != std::string::npos) host = host.substr(0, gt);
+    } catch (...) {}
+    return "sip:" + target + (host.empty() ? "" : ("@" + host));
+}
+
+// (endpointId,uri) 버디 확보(없으면 생성). subscribe=true 면 프레즌스 구독.
+static MyBuddy* ensureBuddy(MyAccount* acc, const std::string& epId, const std::string& uri, bool subscribe) {
+    std::string key = epId + "|" + uri;
+    auto it = g_buddies.find(key);
+    if (it != g_buddies.end()) return it->second;
+    MyBuddy* b = new MyBuddy(epId);
+    BuddyConfig cfg; cfg.uri = uri; cfg.subscribe = subscribe;
+    try { b->create(*acc, cfg); } catch (...) { delete b; return nullptr; }
+    g_buddies[key] = b;
+    return b;
 }
 
 static void cmdCall(const std::string& id, const std::string& target) {
     auto it = g_accounts.find(id);
     if (it == g_accounts.end()) { emitJson({{"ev","call"},{"endpointId",id},{"call","ended"},{"error","not registered"}}); return; }
-    // target 이 sip URI 가 아니면 계정 도메인 기준으로 보정
-    std::string uri = target;
-    if (uri.rfind("sip:", 0) != 0 && uri.rfind("sips:", 0) != 0) {
-        AccountInfo ai = it->second->getInfo();
-        std::string domain = ai.uri; // sip:user@domain
-        size_t at = domain.find('@');
-        std::string host = at != std::string::npos ? domain.substr(at + 1) : "";
-        // host 에서 닫는 '>' 제거
-        size_t gt = host.find('>'); if (gt != std::string::npos) host = host.substr(0, gt);
-        uri = "sip:" + target + "@" + host;
-    }
+    std::string uri = toSipUri(it->second, target);
     MyCall* call = new MyCall(*it->second, id);
     g_calls[id] = call;
     try { CallOpParam op(true); call->makeCall(uri, op); }
@@ -325,6 +370,42 @@ static void cmdAudio(const std::string& input, const std::string& output) {
     } catch (...) {}
 }
 
+// ── IM / 프레즌스 ──
+// 인스턴트 메시지(pager MESSAGE) 송신
+static void cmdIm(const std::string& id, const std::string& target, const std::string& text) {
+    auto it = g_accounts.find(id);
+    if (it == g_accounts.end() || target.empty()) return;
+    std::string uri = toSipUri(it->second, target);
+    MyBuddy* b = ensureBuddy(it->second, id, uri, false);
+    if (!b) { emitJson({{"ev","im-status"},{"endpointId",id},{"to",uri},{"code",0},{"reason","buddy 생성 실패"}}); return; }
+    try { SendInstantMessageParam p; p.content = text; b->sendInstantMessage(p); }
+    catch (Error& e) { emitJson({{"ev","im-status"},{"endpointId",id},{"to",uri},{"code",0},{"reason",e.info()}}); }
+}
+// 자신의 프레즌스(온/오프라인) 게시
+static void cmdPresence(const std::string& id, bool online) {
+    auto it = g_accounts.find(id);
+    if (it == g_accounts.end()) return;
+    try {
+        PresenceStatus ps;
+        ps.status = online ? PJSUA_BUDDY_STATUS_ONLINE : PJSUA_BUDDY_STATUS_OFFLINE;
+        it->second->setOnlineStatus(ps);
+    } catch (...) {}
+}
+// 상대 프레즌스 구독/해제
+static void cmdSubscribe(const std::string& id, const std::string& target, bool sub) {
+    auto it = g_accounts.find(id);
+    if (it == g_accounts.end() || target.empty()) return;
+    std::string uri = toSipUri(it->second, target);
+    if (sub) {
+        MyBuddy* b = ensureBuddy(it->second, id, uri, true);
+        if (b) { try { b->subscribePresence(true); } catch (...) {} }
+    } else {
+        std::string key = id + "|" + uri;
+        auto bit = g_buddies.find(key);
+        if (bit != g_buddies.end()) { try { delete bit->second; } catch (...) {} g_buddies.erase(bit); }
+    }
+}
+
 int main() {
     try {
         g_ep.libCreate();
@@ -368,6 +449,9 @@ int main() {
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "listAudio")  cmdListAudio();
+            else if (cmd == "im")         cmdIm(msg.value("endpointId", ""), msg.value("target", ""), msg.value("text", ""));
+            else if (cmd == "presence")   cmdPresence(msg.value("endpointId", ""), msg.value("online", false));
+            else if (cmd == "subscribe")  cmdSubscribe(msg.value("endpointId", ""), msg.value("target", ""), msg.value("subscribe", true));
             else if (cmd == "quit")       break;
         } catch (Error& e) {
             emitJson({{"ev","error"},{"error",e.info()}});

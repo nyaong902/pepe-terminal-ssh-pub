@@ -45,6 +45,22 @@ type Macro = { id: string; name: string; steps: MacroStep[] };
 
 type Contact = { id: string; name: string; number: string; epId?: string };
 
+type ImMsg = { id: string; dir: 'in' | 'out'; text: string; ts: number; status?: string };
+// 대화는 `${epId}|${peer}` 키로 묶는다. peer 는 정규화된 상대 식별자.
+type Conversations = Record<string, ImMsg[]>;
+// 프레즌스: `${epId}|${peer}` → 'online'|'offline'|'unknown'
+type PresenceMap = Record<string, string>;
+// sip:user@host / <...> → bare user(peer) 정규화
+const normPeer = (uri: string): string => {
+  let s = (uri || '').trim();
+  s = s.replace(/^<|>$/g, '');
+  const lt = s.indexOf('<'); if (lt >= 0) { const gt = s.indexOf('>', lt); s = gt > lt ? s.slice(lt + 1, gt) : s.slice(lt + 1); }
+  s = s.replace(/^sips?:/i, '');
+  const at = s.indexOf('@'); if (at >= 0) s = s.slice(0, at);
+  const semi = s.indexOf(';'); if (semi >= 0) s = s.slice(0, semi);
+  return s.trim();
+};
+
 type CallHistEntry = {
   id: string;
   epId: string;
@@ -84,7 +100,7 @@ function defaultEndpoint(n: number): SipEndpoint {
 }
 
 export const MicroSipWorkspace: React.FC = () => {
-  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'contacts' | 'log'>('phones');
+  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'>('phones');
   const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
@@ -99,6 +115,8 @@ export const MicroSipWorkspace: React.FC = () => {
   const [audioOut, setAudioOut] = useState('');
   const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [conversations, setConversations] = useState<Conversations>({});
+  const [presence, setPresence] = useState<PresenceMap>({});
   const [ringEnabled, setRingEnabled] = useState(true);
   const loadedRef = useRef(false);
   const ringCtxRef = useRef<AudioContext | null>(null);
@@ -116,6 +134,7 @@ export const MicroSipWorkspace: React.FC = () => {
         if (Array.isArray(ms.macros)) setMacros(ms.macros);
         if (Array.isArray(ms.callHistory)) setCallHistory(ms.callHistory);
         if (Array.isArray(ms.contacts)) setContacts(ms.contacts);
+        if (ms.conversations && typeof ms.conversations === 'object') setConversations(ms.conversations);
         if (typeof ms.ringEnabled === 'boolean') setRingEnabled(ms.ringEnabled);
         if (ms.audioIn) setAudioIn(ms.audioIn);
         if (ms.audioOut) setAudioOut(ms.audioOut);
@@ -124,12 +143,13 @@ export const MicroSipWorkspace: React.FC = () => {
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, conversations, ringEnabled, audioIn, audioOut, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
   useEffect(() => { if (loadedRef.current) persist({ callHistory }); /* eslint-disable-next-line */ }, [callHistory]);
   useEffect(() => { if (loadedRef.current) persist({ contacts }); /* eslint-disable-next-line */ }, [contacts]);
+  useEffect(() => { if (loadedRef.current) persist({ conversations }); /* eslint-disable-next-line */ }, [conversations]);
 
   // ── 오디오 장치 열거 (마이크/스피커 선택) ──
   useEffect(() => {
@@ -163,6 +183,20 @@ export const MicroSipWorkspace: React.FC = () => {
         setSipOutputs(Array.isArray(ev.outputs) ? ev.outputs : []);
         return;
       }
+      if (ev.ev === 'presence') {
+        setPresence(prev => ({ ...prev, [`${ev.endpointId}|${normPeer(ev.buddy || '')}`]: ev.status || 'unknown' }));
+        return;
+      }
+      if (ev.ev === 'im') {
+        const peer = normPeer(ev.from || '');
+        const key = `${ev.endpointId}|${peer}`;
+        setConversations(prev => ({ ...prev, [key]: [...(prev[key] || []), { id: uid('im'), dir: 'in' as const, text: String(ev.text || ''), ts: Date.now() }].slice(-200) }));
+        setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `메시지 수신 ${peer}: ${String(ev.text || '').slice(0, 40)}`, kind: 'im' }, ...prev].slice(0, 200));
+        return;
+      }
+      if (ev.ev === 'im-status') {
+        return; // 전달 상태는 현재 표시만 생략(추후 확장)
+      }
       // 활동 로그 적재 (reg/call/error/log)
       const txt =
         ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
@@ -171,6 +205,8 @@ export const MicroSipWorkspace: React.FC = () => {
         ev.ev === 'log' ? String(ev.text || '') : '';
       if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev }, ...prev].slice(0, 200));
       if (!ev.endpointId) return;
+      // 등록 성공 시 자신의 프레즌스를 online 으로 게시
+      if (ev.ev === 'reg' && ev.reg === 'registered') { try { api().sipSetPresence?.({ endpointId: ev.endpointId, online: true }); } catch {} }
       // 통화 기록 추적 — call 상태 전이로 항목 산출
       if (ev.ev === 'call' && ev.call) {
         const ep = ev.endpointId as string;
@@ -291,6 +327,16 @@ export const MicroSipWorkspace: React.FC = () => {
     setView('phones');
     void makeCall(epId, remote);
   };
+  const sendIm = async (epId: string, peer: string, text: string) => {
+    if (!epId || !peer.trim() || !text.trim()) return;
+    const key = `${epId}|${normPeer(peer)}`;
+    setConversations(prev => ({ ...prev, [key]: [...(prev[key] || []), { id: uid('im'), dir: 'out' as const, text, ts: Date.now() }].slice(-200) }));
+    await api().sipSendIm?.({ endpointId: epId, target: peer, text }).catch(() => {});
+  };
+  const toggleSubscribe = (epId: string, peer: string, sub: boolean) => {
+    if (!epId || !peer.trim()) return;
+    try { api().sipSubscribePresence?.({ endpointId: epId, target: peer, subscribe: sub }); } catch {}
+  };
   const transfer = async (id: string) => {
     const target = (typeof window !== 'undefined' ? window.prompt('전환할 번호/대상(SIP)을 입력하세요:', '') : '') || '';
     if (!target.trim()) return;
@@ -382,7 +428,13 @@ export const MicroSipWorkspace: React.FC = () => {
         )}
 
         {view === 'contacts' && (
-          <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial} />
+          <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial}
+            presence={presence} onSubscribe={toggleSubscribe} />
+        )}
+
+        {view === 'messages' && (
+          <MessagesView conversations={conversations} endpoints={endpoints} presence={presence}
+            onSend={sendIm} onClear={(key) => setConversations(prev => { const n = { ...prev }; delete n[key]; return n; })} />
         )}
 
         {view === 'log' && (
@@ -398,7 +450,7 @@ export const MicroSipWorkspace: React.FC = () => {
 
 // ───────────────────────── 헤더 ─────────────────────────
 const MicroSipHeader: React.FC<{
-  view: 'phones' | 'settings' | 'macros' | 'contacts' | 'log'; setView: (v: any) => void;
+  view: 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
   ringEnabled: boolean; onToggleRing: () => void;
@@ -420,6 +472,7 @@ const MicroSipHeader: React.FC<{
       {tab('settings', '⚙ 설정')}
       {tab('macros', '⚡ 매크로')}
       {tab('contacts', '👤 주소록')}
+      {tab('messages', '💬 메시지')}
       {tab('log', '🗒 기록')}
       <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
@@ -454,15 +507,18 @@ const selStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--w
 const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
 
 // ───────────────────────── 주소록 ─────────────────────────
+const presColor: Record<string, string> = { online: '#3fb950', offline: '#8b949e', unknown: '#d29922' };
 const ContactsView: React.FC<{
   contacts: Contact[]; setContacts: React.Dispatch<React.SetStateAction<Contact[]>>;
   endpoints: SipEndpoint[]; onDial: (epId: string, number: string) => void;
-}> = ({ contacts, setContacts, endpoints, onDial }) => {
+  presence: PresenceMap; onSubscribe: (epId: string, peer: string, sub: boolean) => void;
+}> = ({ contacts, setContacts, endpoints, onDial, presence, onSubscribe }) => {
   const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 };
   const add = () => setContacts(prev => [...prev, { id: uid('c'), name: '', number: '', epId: endpoints[0]?.id }]);
   const update = (id: string, patch: Partial<Contact>) => setContacts(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
   const remove = (id: string) => setContacts(prev => prev.filter(c => c.id !== id));
   const dialEp = (c: Contact) => (c.epId && endpoints.some(e => e.id === c.epId)) ? c.epId : endpoints[0]?.id;
+  const presOf = (epId: string | undefined, number: string) => epId ? presence[`${epId}|${normPeer(number)}`] : undefined;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 760 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -475,20 +531,111 @@ const ContactsView: React.FC<{
       )}
       {contacts.map(c => {
         const ep = dialEp(c);
+        const pres = presOf(ep, c.number);
         return (
           <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', flexWrap: 'wrap' }}>
-            <input value={c.name} onChange={e => update(c.id, { name: e.target.value })} placeholder="이름" style={{ ...inp, flex: '1 1 120px', minWidth: 100 }} />
-            <input value={c.number} onChange={e => update(c.id, { number: e.target.value })} placeholder="번호/SIP" style={{ ...inp, flex: '1 1 120px', minWidth: 100, fontFamily: 'Consolas, monospace' }} />
-            <select value={c.epId || ''} onChange={e => update(c.id, { epId: e.target.value || undefined })} title="발신 단말" style={{ ...inp, flex: '0 1 130px' }}>
+            <span title={pres ? `프레즌스: ${pres}` : '프레즌스 미구독'} style={{ width: 9, height: 9, borderRadius: 999, flex: '0 0 auto', background: pres ? presColor[pres] || '#8b949e' : 'transparent', border: pres ? 'none' : '1px solid var(--win-border, #30363d)' }} />
+            <input value={c.name} onChange={e => update(c.id, { name: e.target.value })} placeholder="이름" style={{ ...inp, flex: '1 1 110px', minWidth: 90 }} />
+            <input value={c.number} onChange={e => update(c.id, { number: e.target.value })} placeholder="번호/SIP" style={{ ...inp, flex: '1 1 110px', minWidth: 90, fontFamily: 'Consolas, monospace' }} />
+            <select value={c.epId || ''} onChange={e => update(c.id, { epId: e.target.value || undefined })} title="발신 단말" style={{ ...inp, flex: '0 1 120px' }}>
               <option value="">단말 자동</option>
               {endpoints.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
             </select>
+            <button onClick={() => ep && c.number.trim() && onSubscribe(ep, c.number, !pres)} disabled={!c.number.trim() || !ep} title={pres ? '프레즌스 구독 해제' : '프레즌스 구독'}
+              style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>{pres ? '👁' : '👁‍🗨'}</button>
             <button onClick={() => ep && onDial(ep, c.number)} disabled={!c.number.trim() || !ep} title={ep ? '통화' : '등록된 단말 없음'}
               style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>📞</button>
             <button onClick={() => remove(c.id)} title="삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
           </div>
         );
       })}
+    </div>
+  );
+};
+
+// ───────────────────────── 메시지(IM) + 프레즌스 ─────────────────────────
+const MessagesView: React.FC<{
+  conversations: Conversations; endpoints: SipEndpoint[]; presence: PresenceMap;
+  onSend: (epId: string, peer: string, text: string) => void; onClear: (key: string) => void;
+}> = ({ conversations, endpoints, presence, onSend, onClear }) => {
+  const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 };
+  const [activeKey, setActiveKey] = useState('');
+  const [composeEp, setComposeEp] = useState(endpoints[0]?.id || '');
+  const [peer, setPeer] = useState('');
+  const [draft, setDraft] = useState('');
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  const keys = Object.keys(conversations).sort((a, b) => {
+    const la = conversations[a], lb = conversations[b];
+    return (lb[lb.length - 1]?.ts || 0) - (la[la.length - 1]?.ts || 0);
+  });
+  const splitKey = (k: string): [string, string] => { const i = k.indexOf('|'); return i < 0 ? [k, ''] : [k.slice(0, i), k.slice(i + 1)]; };
+  const [aEp, aPeer] = activeKey ? splitKey(activeKey) : ['', ''];
+  const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id;
+  const msgs = activeKey ? (conversations[activeKey] || []) : [];
+  const aPres = aEp ? presence[`${aEp}|${aPeer}`] : undefined;
+  useEffect(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; }, [activeKey, msgs.length]);
+  const openConv = () => { if (!composeEp || !peer.trim()) return; setActiveKey(`${composeEp}|${normPeer(peer)}`); setPeer(''); };
+  const send = () => { if (!activeKey || !draft.trim()) return; onSend(aEp, aPeer, draft.trim()); setDraft(''); };
+  return (
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      {/* 대화 목록 + 새 대화 */}
+      <div style={{ flex: '1 1 220px', maxWidth: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)' }}>
+          <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>새 대화</div>
+          <select value={composeEp} onChange={e => setComposeEp(e.target.value)} style={inp}>
+            {endpoints.length === 0 && <option value="">단말 없음</option>}
+            {endpoints.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+          </select>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={peer} onChange={e => setPeer(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') openConv(); }} placeholder="상대 번호/SIP" style={{ ...inp, flex: 1, fontFamily: 'Consolas, monospace' }} />
+            <button onClick={openConv} disabled={!composeEp || !peer.trim()} style={{ ...miniBtn(!!composeEp && !!peer.trim()) }}>열기</button>
+          </div>
+        </div>
+        {keys.length === 0 && <div style={{ color: 'var(--win-text-dim, #9aa7b3)', fontSize: 12, padding: 8 }}>대화가 없습니다.</div>}
+        {keys.map(k => {
+          const [ep, pr] = splitKey(k);
+          const last = conversations[k][conversations[k].length - 1];
+          const pres = presence[k];
+          return (
+            <button key={k} onClick={() => setActiveKey(k)}
+              style={{ textAlign: 'left', padding: 8, borderRadius: 8, cursor: 'pointer', border: '1px solid var(--win-border, #30363d)', background: k === activeKey ? 'var(--win-surface-2, #21262d)' : 'var(--win-surface, #161b22)', color: 'var(--win-text, #e6edf3)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, flex: '0 0 auto', background: pres ? (presColor[pres] || '#8b949e') : 'transparent', border: pres ? 'none' : '1px solid var(--win-border, #30363d)' }} />
+                <b style={{ fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pr || '(미상)'}</b>
+                <span style={{ fontSize: 9, color: 'var(--win-text-dim, #9aa7b3)' }}>{labelOf(ep)}</span>
+              </div>
+              {last && <div style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{last.dir === 'out' ? '나: ' : ''}{last.text}</div>}
+            </button>
+          );
+        })}
+      </div>
+      {/* 대화 스레드 */}
+      <div style={{ flex: '2 1 320px', minWidth: 260, display: 'flex', flexDirection: 'column', gap: 8, border: '1px solid var(--win-border, #30363d)', borderRadius: 8, background: 'var(--win-surface, #161b22)', padding: 10, minHeight: 360 }}>
+        {!activeKey ? (
+          <div style={{ color: 'var(--win-text-dim, #9aa7b3)', fontSize: 12, textAlign: 'center', margin: 'auto' }}>대화를 선택하거나 새로 시작하세요.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--win-border, #30363d)', paddingBottom: 6 }}>
+              <span style={{ width: 9, height: 9, borderRadius: 999, background: aPres ? (presColor[aPres] || '#8b949e') : 'transparent', border: aPres ? 'none' : '1px solid var(--win-border, #30363d)' }} title={aPres || '미구독'} />
+              <b style={{ fontSize: 13, fontFamily: 'Consolas, monospace' }}>{aPeer}</b>
+              <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{labelOf(aEp)}</span>
+              <button onClick={() => { onClear(activeKey); setActiveKey(''); }} title="대화 삭제" style={{ ...miniBtn(true), marginLeft: 'auto' }}>지우기</button>
+            </div>
+            <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 420 }}>
+              {msgs.map(m => (
+                <div key={m.id} style={{ alignSelf: m.dir === 'out' ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
+                  <div style={{ padding: '6px 10px', borderRadius: 10, fontSize: 12, background: m.dir === 'out' ? 'var(--win-accent, #2b6b9b)' : 'var(--win-surface-2, #21262d)', color: m.dir === 'out' ? '#fff' : 'var(--win-text, #e6edf3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+                  <div style={{ fontSize: 9, color: 'var(--win-text-dim, #9aa7b3)', textAlign: m.dir === 'out' ? 'right' : 'left', marginTop: 2 }}>{new Date(m.ts).toLocaleTimeString()}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="메시지 입력 후 Enter" style={{ ...inp, flex: 1 }} />
+              <button onClick={send} disabled={!draft.trim()} style={{ ...inp, cursor: draft.trim() ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: draft.trim() ? 1 : 0.5 }}>전송</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 };
@@ -535,7 +682,7 @@ const CallHistory: React.FC<{
 };
 
 // ───────────────────────── 활동 로그 ─────────────────────────
-const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e' };
+const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e', im: '#a371f7' };
 const ActivityLog: React.FC<{
   activity: { ts: number; epId: string; text: string; kind: string }[];
   endpoints: SipEndpoint[]; onClear: () => void;
