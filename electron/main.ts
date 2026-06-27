@@ -4953,6 +4953,18 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean }) => sip.hold(args?.endpointId, !!args?.hold));
   ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.mute(args?.endpointId, !!args?.mute));
   ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
+  ipcMain.handle('sip:record', async (_e, args: { endpointId: string; on: boolean }) => {
+    let file = '';
+    if (args?.on) {
+      try {
+        const dir = path.join(app.getPath('userData'), 'microsip-recordings');
+        fs.mkdirSync(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        file = path.join(dir, `${args.endpointId}-${stamp}.wav`);
+      } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+    }
+    return sip.record(args?.endpointId, !!args?.on, file);
+  });
   ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
   ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
   ipcMain.handle('sip:list-audio-devices', () => { sip.listAudioDevices(); return { ok: true }; });

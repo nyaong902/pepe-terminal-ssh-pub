@@ -159,6 +159,7 @@ contextBridge.exposeInMainWorld('api', {
   sipHold: (args: { endpointId: string; hold: boolean }) => ipcRenderer.invoke('sip:hold', args),
   sipMute: (args: { endpointId: string; mute: boolean }) => ipcRenderer.invoke('sip:mute', args),
   sipTransfer: (args: { endpointId: string; target: string }) => ipcRenderer.invoke('sip:transfer', args),
+  sipRecord: (args: { endpointId: string; on: boolean }) => ipcRenderer.invoke('sip:record', args),
   sipSendDtmf: (args: { endpointId: string; digit: string }) => ipcRenderer.invoke('sip:send-dtmf', args),
   sipSetAudioDevices: (args: { input?: string; output?: string }) => ipcRenderer.invoke('sip:set-audio-devices', args),
   sipListAudioDevices: () => ipcRenderer.invoke('sip:list-audio-devices'),

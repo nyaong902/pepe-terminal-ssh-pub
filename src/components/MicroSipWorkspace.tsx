@@ -40,7 +40,7 @@ export type SipEndpoint = {
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
 type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; error?: string };
+type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; error?: string };
 
 type MacroStep =
   | { type: 'key'; key: string }
@@ -209,6 +209,11 @@ export const MicroSipWorkspace: React.FC = () => {
       if (ev.ev === 'im-status') {
         return; // 전달 상태는 현재 표시만 생략(추후 확장)
       }
+      if (ev.ev === 'record') {
+        if (ev.endpointId) setRuntime(prev => ({ ...prev, [ev.endpointId]: { ...(prev[ev.endpointId] || { reg: 'unregistered', call: 'idle', dialed: '' }), recording: !!ev.recording } }));
+        if (ev.error) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `녹음 오류: ${ev.error}`, kind: 'error' }, ...prev].slice(0, 200));
+        return;
+      }
       // 활동 로그 적재 (reg/call/error/log)
       const txt =
         ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
@@ -359,6 +364,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const reject = async (id: string) => { await api().sipReject?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
   const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
   const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
+  const toggleRecord = async (id: string) => { await api().sipRecord?.({ endpointId: id, on: !rt(id).recording }).catch(() => {}); };
   const redial = (epId: string, remote: string) => {
     if (!remote.trim()) return;
     if (!endpoints.some(e => e.id === epId)) return; // 단말이 삭제된 기록
@@ -442,6 +448,7 @@ export const MicroSipWorkspace: React.FC = () => {
                 onToggleMute={() => toggleMute(e.id)}
                 onToggleHold={() => toggleHold(e.id)}
                 onTransfer={() => transfer(e.id)}
+                onToggleRecord={() => toggleRecord(e.id)}
               />
             ))}
           </div>
@@ -765,8 +772,8 @@ const regColor: Record<RegState, string> = { registered: '#3fb950', registering:
 const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
-  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer }) => {
+  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord }) => {
   const inCall = rt.call === 'connected' || rt.call === 'calling' || rt.call === 'ringing' || rt.call === 'held';
   const incoming = rt.call === 'incoming';
   // 통화 시간 타이머 (connected/held 동안)
@@ -811,6 +818,7 @@ const PhoneCard: React.FC<{
           <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
           <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
           <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>↪</button>
+          <button onClick={onToggleRecord} title={rt.recording ? '녹음 중지' : '녹음'} style={{ ...callBtn(rt.recording ? '#da3633' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.recording ? '⏹' : '⏺'}</button>
         </div>
       ) : inCall ? (
         <div style={{ display: 'flex', gap: 6 }}>

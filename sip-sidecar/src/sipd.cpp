@@ -51,6 +51,7 @@ class MyAccount;
 static std::map<std::string, MyAccount*> g_accounts;
 static std::map<std::string, MyCall*>    g_calls;   // endpointId → 활성 call (1통화/단말 가정)
 static std::map<std::string, std::string> g_dtmfMode; // endpointId → "rfc2833"|"info"|"inband"
+static std::map<std::string, AudioMediaRecorder*> g_recorders; // endpointId → 녹음기(활성 시)
 
 class MyCall : public Call {
     std::string epId;
@@ -72,6 +73,9 @@ public:
         }
         emitJson({{"ev","call"},{"endpointId",epId},{"call",st},{"remote",ci.remoteUri}});
         if (ci.state == PJSIP_INV_STATE_DISCONNECTED) {
+            // 녹음 중이면 종료
+            auto r = g_recorders.find(epId);
+            if (r != g_recorders.end()) { try { delete r->second; } catch (...) {} g_recorders.erase(r); emitJson({{"ev","record"},{"endpointId",epId},{"recording",false}}); }
             if (g_calls[epId] == this) g_calls.erase(epId);
             delete this; // PJSUA2: DISCONNECTED 후 안전하게 해제
         }
@@ -329,6 +333,29 @@ static void cmdMute(const std::string& id, bool mute) {
     } catch (...) {}
 }
 
+// 통화 녹음 — 상대 오디오 + 내 마이크를 WAV 로 기록.
+static void cmdRecord(const std::string& id, bool on, const std::string& file) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    auto existing = g_recorders.find(id);
+    if (on) {
+        if (existing != g_recorders.end()) return; // 이미 녹음 중
+        AudioMedia* am = firstCallAudio(c->second);
+        if (!am || file.empty()) { emitJson({{"ev","record"},{"endpointId",id},{"recording",false},{"error","미디어/경로 없음"}}); return; }
+        AudioMediaRecorder* rec = new AudioMediaRecorder();
+        try {
+            rec->createRecorder(file);
+            am->startTransmit(*rec);                                                  // 상대 음성
+            Endpoint::instance().audDevManager().getCaptureDevMedia().startTransmit(*rec); // 내 음성
+            g_recorders[id] = rec;
+            emitJson({{"ev","record"},{"endpointId",id},{"recording",true},{"file",file}});
+        } catch (Error& e) { delete rec; emitJson({{"ev","record"},{"endpointId",id},{"recording",false},{"error",e.info()}}); }
+    } else {
+        if (existing != g_recorders.end()) { try { delete existing->second; } catch (...) {} g_recorders.erase(existing); }
+        emitJson({{"ev","record"},{"endpointId",id},{"recording",false}});
+    }
+}
+
 // 호전환 — 현재 통화를 target 으로 blind transfer(REFER).
 static void cmdTransfer(const std::string& id, const std::string& target) {
     auto c = g_calls.find(id);
@@ -469,6 +496,7 @@ int main() {
             else if (cmd == "hold")       cmdHold(msg.value("endpointId", ""), msg.value("hold", false));
             else if (cmd == "mute")       cmdMute(msg.value("endpointId", ""), msg.value("mute", false));
             else if (cmd == "transfer")   cmdTransfer(msg.value("endpointId", ""), msg.value("target", ""));
+            else if (cmd == "record")     cmdRecord(msg.value("endpointId", ""), msg.value("on", false), msg.value("file", ""));
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "listAudio")  cmdListAudio();

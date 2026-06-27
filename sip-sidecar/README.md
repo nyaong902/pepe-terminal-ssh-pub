@@ -34,6 +34,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 → {"cmd":"hold","endpointId":"ep-..","hold":true}
 → {"cmd":"mute","endpointId":"ep-..","mute":true}
 → {"cmd":"transfer","endpointId":"ep-..","target":"2002"}   // blind transfer(REFER)
+→ {"cmd":"record","endpointId":"ep-..","on":true,"file":"C:/.../ep-..-<ts>.wav"}  // 통화 녹음(WAV)
 → {"cmd":"dtmf","endpointId":"ep-..","digit":"1"}          // dtmfMode 에 따라 RFC2833/SIP INFO
 → {"cmd":"audio","input":"<장치 name|>","output":"<장치 name|>"}  // 빈 값=기본 장치
 → {"cmd":"listAudio"}                                          // 오디오 장치 목록 요청
@@ -46,6 +47,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 ← {"ev":"im","endpointId":"ep-..","from":"sip:1001@..","text":"안녕","dir":"in"}            // 수신 IM
 ← {"ev":"im-status","endpointId":"ep-..","to":"sip:1001@..","code":200,"reason":"OK"}       // 송신 IM 전달 상태
 ← {"ev":"presence","endpointId":"ep-..","buddy":"sip:1001@..","status":"online|offline|unknown","note":"?"}
+← {"ev":"record","endpointId":"ep-..","recording":true,"file":"..","error":"?"}
 ```
 - 단말당 1개의 PJSUA account, 최대 10개 동시. 각 account 의 코덱 우선순위는 `pjsua_codec_set_priority` 로 endpoint.codecs 순서대로 설정.
 - 오디오 장치: PJMEDIA snd dev 인덱스로 매핑(렌더러의 deviceId ↔ 데몬의 장치 목록 동기화 필요). 대안: 데몬이 장치 열거를 제공하고 UI 가 그 목록에서 선택.
