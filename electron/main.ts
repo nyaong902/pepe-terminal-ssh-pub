@@ -561,6 +561,7 @@ app.on('before-quit', () => {
   setTimeout(() => { try { process.exit(0); } catch {} }, 600);
   try { remoteShareServer.stop(); } catch {}
   try { stopAllBundledX11(); } catch {}
+  try { getSipSidecar().dispose(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}
 });
@@ -8377,7 +8378,7 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
                 }
                 // 원격 SSH 파일 경로 링크([name](file:///root/...))는 Chromium 이 로드 거부하므로
                 // 링크 형태를 풀고 path 만 inline code 로 표기 (`/path/to/file`).
-                clean = clean.replace(/\[([^\]]+)\]\(file:\/\/\/([\/][^)\s]+)\)/g, (_full, txt, p) => {
+                clean = clean.replace(/\[([^\]]+)\]\(file:\/\/\/([\/][^)\s]+)\)/g, (_full: string, txt: string, p: string) => {
                   const decoded = decodeURIComponent(p);
                   return decoded === txt || decoded.endsWith(txt) ? `\`${decoded}\`` : `${txt} (\`${decoded}\`)`;
                 });

@@ -1,38 +1,123 @@
 // electron/sipSidecar.ts
-// MicroSIP 네이티브 PJSIP 사이드카 제어 계층.
+// MicroSIP 네이티브 PJSIP 사이드카 제어 계층 (Phase 2 — 프로세스 호스트 + 프로토콜).
 //
-// Phase 1 (현재): 스켈레톤. 엔진(네이티브 데몬)이 아직 없으므로 ready=false 이며 제어 호출은
-//   친화 메시지를 반환한다. 렌더러 UI 는 이 상태에서도 단말/설정/매크로를 구성·저장할 수 있다.
-// Phase 2: sip-sidecar/ 의 네이티브 데몬(PJSUA2 + opencore-amr/vo-amrwbenc + EVS 플러그인)을
-//   child_process 로 spawn 하고, 아래 protocol 주석대로 JSON-over-stdio(1줄=1메시지) 로
-//   register/call/hangup/dtmf 를 보내고, reg/call 상태 이벤트를 받아 emit('event', ...) 한다.
+// 네이티브 데몬(sip-sidecar/src/sipd.cpp, PJSUA2 + AMR/AMR-WB/EVS/G.711)을 child_process 로
+// spawn 하고, stdin/stdout 으로 1줄=1 JSON 메시지를 주고받는다.
+//   → (제어)  {"cmd":"register"|"unregister"|"call"|"hangup"|"dtmf"|"audio", ...}
+//   ← (이벤트) {"ev":"ready"|"reg"|"call"|"log"|"error", ...}
+// 데몬 바이너리가 없으면 ready=false 로 graceful 동작(렌더러는 구성/저장만 가능).
 //
-// ── 제어 프로토콜(예정) ──
-//  → {"cmd":"register","endpoint":{id,server,port,transport,username,authId,password,displayName,proxy,codecs[],autoAnswer}}
-//  → {"cmd":"unregister","endpointId":"..."}
-//  → {"cmd":"call","endpointId":"...","target":"1001"}
-//  → {"cmd":"hangup","endpointId":"..."}
-//  → {"cmd":"dtmf","endpointId":"...","digit":"1"}
-//  → {"cmd":"audio","input":"<deviceId|>","output":"<deviceId|>"}
-//  ← {"ev":"reg","endpointId":"...","reg":"registered|registering|failed|unregistered","error?":"..."}
-//  ← {"ev":"call","endpointId":"...","call":"calling|ringing|incoming|connected|held|ended","remote?":"..."}
+// 바이너리 경로:
+//   env PEPE_SIPD 우선 → 패키지: <resources>/sip-sidecar/<plat>/sipd(.exe)
+//                      → dev:    <repo>/sip-sidecar/bin/<plat>/sipd(.exe)
+import { app } from 'electron';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
+import * as path from 'path';
+import * as fs from 'fs';
 
-const NOT_READY = '네이티브 SIP 사이드카가 아직 빌드/연결되지 않았습니다 (Phase 2). sip-sidecar/README.md 참고.';
+function platDir(): string {
+  if (process.platform === 'win32') return 'win-x64';
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
+  return 'linux-x64';
+}
+function binName(): string { return process.platform === 'win32' ? 'sipd.exe' : 'sipd'; }
+
+function resolveBinary(): string | null {
+  const candidates: string[] = [];
+  if (process.env.PEPE_SIPD) candidates.push(process.env.PEPE_SIPD);
+  try {
+    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'sip-sidecar', platDir(), binName()));
+    else candidates.push(path.join(process.cwd(), 'sip-sidecar', 'bin', platDir(), binName()));
+  } catch {}
+  for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }
+  return null;
+}
 
 class SipSidecar extends EventEmitter {
+  private proc: ChildProcessWithoutNullStreams | null = null;
   private ready = false;
-  // Phase 2: private proc?: import('child_process').ChildProcess;
+  private stdoutBuf = '';
+  private startError: string | null = null;
 
-  status() { return { ready: this.ready }; }
+  status() { return { ready: this.ready, binary: resolveBinary(), error: this.startError }; }
 
-  async register(_endpoint: any): Promise<{ ok: boolean; error?: string }> { return { ok: false, error: NOT_READY }; }
-  async unregister(_endpointId: string): Promise<{ ok: boolean }> { return { ok: true }; }
-  async call(_endpointId: string, _target: string): Promise<{ ok: boolean; error?: string }> { return { ok: false, error: NOT_READY }; }
-  async hangup(_endpointId: string): Promise<{ ok: boolean }> { return { ok: true }; }
-  async sendDtmf(_endpointId: string, _digit: string): Promise<{ ok: boolean; error?: string }> { return { ok: false, error: NOT_READY }; }
-  setAudioDevices(_input?: string, _output?: string): void { /* Phase 2 */ }
-  dispose(): void { /* Phase 2: proc.kill() */ }
+  /** 데몬이 떠 있지 않으면 spawn. 반환: 사용 가능 여부. */
+  private ensure(): boolean {
+    if (this.proc && !this.proc.killed) return true;
+    const bin = resolveBinary();
+    if (!bin) {
+      this.startError = '네이티브 SIP 데몬(sipd) 바이너리를 찾을 수 없습니다. sip-sidecar/ 빌드 후 bin/<plat>/ 에 배치하거나 PEPE_SIPD 환경변수로 경로를 지정하세요. (sip-sidecar/README.md)';
+      this.ready = false;
+      return false;
+    }
+    try {
+      this.proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      this.startError = null;
+    } catch (e: any) {
+      this.startError = `sipd 실행 실패: ${e?.message || e}`;
+      this.ready = false;
+      this.proc = null;
+      return false;
+    }
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stdout.on('data', (chunk: string) => this.onStdout(chunk));
+    this.proc.stderr.setEncoding('utf8');
+    this.proc.stderr.on('data', (d: string) => { try { this.emit('event', { ev: 'log', level: 'stderr', text: String(d).trim() }); } catch {} });
+    this.proc.on('error', (err: any) => { this.startError = String(err?.message || err); this.ready = false; });
+    this.proc.on('exit', (code) => {
+      this.ready = false;
+      this.proc = null;
+      this.stdoutBuf = '';
+      try { this.emit('event', { ev: 'log', level: 'info', text: `sipd 종료 (code=${code})` }); } catch {}
+    });
+    this.ready = true; // 프로세스 기동 성공 (개별 등록 상태는 reg 이벤트로)
+    return true;
+  }
+
+  private onStdout(chunk: string) {
+    this.stdoutBuf += chunk;
+    let idx: number;
+    while ((idx = this.stdoutBuf.indexOf('\n')) >= 0) {
+      const line = this.stdoutBuf.slice(0, idx).trim();
+      this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
+      if (!line) continue;
+      let msg: any;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg?.ev === 'ready') { this.ready = true; continue; }
+      if (msg?.ev) { try { this.emit('event', msg); } catch {} }
+    }
+  }
+
+  private send(obj: any): boolean {
+    if (!this.ensure() || !this.proc) return false;
+    try { this.proc.stdin.write(JSON.stringify(obj) + '\n'); return true; }
+    catch { return false; }
+  }
+
+  async register(endpoint: any): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'register', endpoint }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
+  async unregister(endpointId: string): Promise<{ ok: boolean }> {
+    this.send({ cmd: 'unregister', endpointId });
+    return { ok: true };
+  }
+  async call(endpointId: string, target: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'call', endpointId, target }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
+  async hangup(endpointId: string): Promise<{ ok: boolean }> { this.send({ cmd: 'hangup', endpointId }); return { ok: true }; }
+  async sendDtmf(endpointId: string, digit: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'dtmf', endpointId, digit }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
+  setAudioDevices(input?: string, output?: string): void { this.send({ cmd: 'audio', input: input || '', output: output || '' }); }
+
+  dispose(): void {
+    try { if (this.proc && !this.proc.killed) { this.send({ cmd: 'quit' }); this.proc.kill(); } } catch {}
+    this.proc = null; this.ready = false;
+  }
 }
 
 let inst: SipSidecar | null = null;
