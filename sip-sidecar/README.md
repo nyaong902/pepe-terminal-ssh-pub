@@ -25,11 +25,16 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
 ```
-→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer"}}
+→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory"}}
 → {"cmd":"unregister","endpointId":"ep-.."}
 → {"cmd":"call","endpointId":"ep-..","target":"1001"}
 → {"cmd":"hangup","endpointId":"ep-.."}
-→ {"cmd":"dtmf","endpointId":"ep-..","digit":"1"}       // RFC2833
+→ {"cmd":"answer","endpointId":"ep-.."}
+→ {"cmd":"reject","endpointId":"ep-.."}
+→ {"cmd":"hold","endpointId":"ep-..","hold":true}
+→ {"cmd":"mute","endpointId":"ep-..","mute":true}
+→ {"cmd":"transfer","endpointId":"ep-..","target":"2002"}   // blind transfer(REFER)
+→ {"cmd":"dtmf","endpointId":"ep-..","digit":"1"}          // dtmfMode 에 따라 RFC2833/SIP INFO
 → {"cmd":"audio","input":"<deviceId|>","output":"<deviceId|>"}
 ← {"ev":"reg","endpointId":"ep-..","reg":"registered|registering|failed|unregistered","error":"?"}
 ← {"ev":"call","endpointId":"ep-..","call":"calling|ringing|incoming|connected|held|ended","remote":"?"}

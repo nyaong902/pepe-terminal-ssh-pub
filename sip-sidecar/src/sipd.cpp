@@ -50,6 +50,7 @@ class MyAccount;
 // endpointId → Account/Call 매핑
 static std::map<std::string, MyAccount*> g_accounts;
 static std::map<std::string, MyCall*>    g_calls;   // endpointId → 활성 call (1통화/단말 가정)
+static std::map<std::string, std::string> g_dtmfMode; // endpointId → "rfc2833"|"info"|"inband"
 
 class MyCall : public Call {
     std::string epId;
@@ -142,6 +143,9 @@ static void cmdRegister(const json& ep) {
     std::string pass = ep.value("password", "");
     std::string disp = ep.value("displayName", "");
     std::string proxy = ep.value("proxy", "");
+    int regExpiry = ep.value("regExpiry", 300);
+    std::string srtp = ep.value("srtp", "disabled");
+    g_dtmfMode[id] = ep.value("dtmfMode", std::string("rfc2833"));
 
     if (ep.contains("codecs")) setCodecPriorities(ep["codecs"]);
 
@@ -151,10 +155,15 @@ static void cmdRegister(const json& ep) {
     std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + server + ">";
     acfg.idUri = idUri;
     acfg.regConfig.registrarUri = scheme + ":" + server + ":" + std::to_string(port) + tparam;
+    if (regExpiry > 0) acfg.regConfig.timeoutSec = regExpiry;
     if (!proxy.empty()) acfg.sipConfig.proxies.push_back(scheme + ":" + proxy + tparam);
     AuthCredInfo cred("digest", "*", authId.empty() ? user : authId, 0, pass);
     acfg.sipConfig.authCreds.push_back(cred);
     acfg.callConfig.timerMinSESec = 90;
+    // SRTP(미디어 암호화)
+    if (srtp == "mandatory")      { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_MANDATORY; acfg.mediaConfig.srtpSecureSignaling = 1; }
+    else if (srtp == "optional")  { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_OPTIONAL;  acfg.mediaConfig.srtpSecureSignaling = 0; }
+    else                          { acfg.mediaConfig.srtpUse = PJMEDIA_SRTP_DISABLED;  acfg.mediaConfig.srtpSecureSignaling = 0; }
 
     auto it = g_accounts.find(id);
     try {
@@ -181,6 +190,7 @@ static void cmdUnregister(const std::string& id) {
     if (c != g_calls.end()) { try { CallOpParam p; c->second->hangup(p); } catch (...) {} }
     delete it->second;
     g_accounts.erase(it);
+    g_dtmfMode.erase(id);
     emitJson({{"ev","reg"},{"endpointId",id},{"reg","unregistered"}});
 }
 
@@ -261,7 +271,16 @@ static void cmdTransfer(const std::string& id, const std::string& target) {
 static void cmdDtmf(const std::string& id, const std::string& digit) {
     auto c = g_calls.find(id);
     if (c == g_calls.end()) return;
-    try { c->second->dialDtmf(digit); } catch (...) {}
+    std::string mode = g_dtmfMode.count(id) ? g_dtmfMode[id] : "rfc2833";
+    try {
+        if (mode == "info") {
+            CallSendDtmfParam p; p.method = PJSUA_DTMF_METHOD_SIP_INFO; p.digits = digit;
+            c->second->sendDtmf(p);
+        } else {
+            // rfc2833(기본) / inband — dialDtmf 는 RFC2833 telephony-event 사용
+            c->second->dialDtmf(digit);
+        }
+    } catch (...) {}
 }
 
 static void cmdAudio(const std::string& /*input*/, const std::string& /*output*/) {

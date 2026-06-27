@@ -26,6 +26,10 @@ export type SipEndpoint = {
   proxy?: string;          // outbound proxy (선택)
   codecs: SipCodec[];      // 우선순위 순서
   autoAnswer?: boolean;
+  // ── 고급 설정 ──
+  regExpiry?: number;                              // 등록 만료(초), 기본 300
+  dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
+  srtp?: 'disabled' | 'optional' | 'mandatory';    // 미디어 암호화(SRTP)
 };
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
@@ -61,6 +65,9 @@ function defaultEndpoint(n: number): SipEndpoint {
     proxy: '',
     codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
     autoAnswer: false,
+    regExpiry: 300,
+    dtmfMode: 'rfc2833',
+    srtp: 'disabled',
   };
 }
 
@@ -501,6 +508,12 @@ const SettingsCard: React.FC<{
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, marginTop: 8 }}>
           <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
         </label>
+      </div>
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>고급</div>
+        {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
+        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
+        {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
       </div>
     </div>
   );
