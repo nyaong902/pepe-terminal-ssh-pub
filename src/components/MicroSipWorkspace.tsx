@@ -132,6 +132,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const loadedRef = useRef(false);
   const ringCtxRef = useRef<AudioContext | null>(null);
   const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
 
@@ -312,6 +313,32 @@ export const MicroSipWorkspace: React.FC = () => {
     updateEndpoint(targetId, rest);
   };
 
+  // ── 프로비저닝(설정 내보내기/가져오기) ──
+  const exportConfig = () => {
+    try {
+      const data = JSON.stringify({ app: 'pepe-microsip', version: 1, exportedAt: new Date().toISOString(), endpoints, macros, contacts }, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'microsip-config.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {}
+  };
+  const importConfig = async (file: File | null | undefined) => {
+    if (!file) return;
+    try {
+      const obj = JSON.parse(await file.text());
+      const epCount = Array.isArray(obj.endpoints) ? obj.endpoints.length : 0;
+      if (!confirm(`설정을 가져오면 현재 단말/매크로/주소록을 덮어씁니다. (단말 ${epCount}개) 계속할까요?`)) return;
+      if (Array.isArray(obj.endpoints)) setEndpoints(obj.endpoints.slice(0, MAX_ENDPOINTS));
+      if (Array.isArray(obj.macros)) setMacros(obj.macros);
+      if (Array.isArray(obj.contacts)) setContacts(obj.contacts);
+    } catch (e: any) {
+      alert(`설정 파일을 읽을 수 없습니다: ${e?.message || e}`);
+    }
+  };
+
   // ── SIP 제어 ──
   const register = async (e: SipEndpoint) => {
     setRt(e.id, { reg: 'registering', error: undefined });
@@ -421,16 +448,26 @@ export const MicroSipWorkspace: React.FC = () => {
         )}
 
         {view === 'settings' && (
-          <div style={cardGrid}>
-            {endpoints.map(e => (
-              <SettingsCard key={e.id} ep={e} all={endpoints} reg={rt(e.id).reg}
-                onChange={(p) => updateEndpoint(e.id, p)}
-                onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
-                onRegister={() => register(e)}
-                onUnregister={() => unregister(e.id)}
-                onRemove={() => removeEndpoint(e.id)}
-              />
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
+              <button onClick={exportConfig} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(true)}>⬇ 내보내기</button>
+              <button onClick={() => importInputRef.current?.click()} title="JSON 설정 가져오기(덮어쓰기)" style={miniBtn(true)}>⬆ 가져오기</button>
+              <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+                onChange={e => { void importConfig(e.target.files?.[0]); e.target.value = ''; }} />
+              <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
+            </div>
+            <div style={cardGrid}>
+              {endpoints.map(e => (
+                <SettingsCard key={e.id} ep={e} all={endpoints} reg={rt(e.id).reg}
+                  onChange={(p) => updateEndpoint(e.id, p)}
+                  onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
+                  onRegister={() => register(e)}
+                  onUnregister={() => unregister(e.id)}
+                  onRemove={() => removeEndpoint(e.id)}
+                />
+              ))}
+            </div>
           </div>
         )}
 
