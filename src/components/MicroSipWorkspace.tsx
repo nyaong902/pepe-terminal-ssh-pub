@@ -331,6 +331,11 @@ export const MicroSipWorkspace: React.FC = () => {
   const updateEndpoint = (id: string, patch: Partial<SipEndpoint>) =>
     setEndpoints(prev => prev.map(e => (e.id === id ? { ...e, ...patch } : e)));
   const setDnd = (id: string, on: boolean) => { updateEndpoint(id, { dnd: on }); try { api().sipSetDnd?.({ endpointId: id, dnd: on }); } catch {} };
+  const moveEndpoint = (id: string, dir: -1 | 1) => setEndpoints(prev => {
+    const i = prev.findIndex(e => e.id === id); const j = i + dir;
+    if (i < 0 || j < 0 || j >= prev.length) return prev;
+    const n = [...prev];[n[i], n[j]] = [n[j], n[i]]; return n;
+  });
   const copyFrom = (targetId: string, sourceId: string) => {
     const src = endpoints.find(e => e.id === sourceId);
     if (!src) return;
@@ -521,11 +526,13 @@ export const MicroSipWorkspace: React.FC = () => {
               <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
             </div>
             <div style={cardGrid}>
-              {endpoints.map(e => (
+              {endpoints.map((e, idx) => (
                 <SettingsCard key={e.id} ep={e} all={endpoints} reg={rt(e.id).reg}
+                  idx={idx} total={endpoints.length}
                   onChange={(p) => updateEndpoint(e.id, p)}
                   onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
                   onDnd={(on) => setDnd(e.id, on)}
+                  onMove={(dir) => moveEndpoint(e.id, dir)}
                   onRegister={() => register(e)}
                   onUnregister={() => unregister(e.id)}
                   onRemove={() => removeEndpoint(e.id)}
@@ -911,11 +918,11 @@ const callBtn = (bg: string): React.CSSProperties => ({ flex: 1, padding: '9px 0
 
 // ───────────────────────── 설정 카드 ─────────────────────────
 const SettingsCard: React.FC<{
-  ep: SipEndpoint; all: SipEndpoint[]; reg: RegState;
+  ep: SipEndpoint; all: SipEndpoint[]; reg: RegState; idx: number; total: number;
   onChange: (p: Partial<SipEndpoint>) => void; onCopyFrom: (srcId: string) => void;
-  onDnd: (on: boolean) => void;
+  onDnd: (on: boolean) => void; onMove: (dir: -1 | 1) => void;
   onRegister: () => void; onUnregister: () => void; onRemove: () => void;
-}> = ({ ep, all, reg, onChange, onCopyFrom, onDnd, onRegister, onUnregister, onRemove }) => {
+}> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove }) => {
   const field = (label: string, node: React.ReactNode) => (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
       <span>{label}</span>{node}
@@ -941,6 +948,8 @@ const SettingsCard: React.FC<{
           {all.filter(x => x.id !== ep.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
         </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button onClick={() => onMove(-1)} disabled={idx === 0} title="위로" style={{ ...inp, cursor: idx === 0 ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.4 : 1, padding: '6px 8px' }}>▲</button>
+          <button onClick={() => onMove(1)} disabled={idx >= total - 1} title="아래로" style={{ ...inp, cursor: idx >= total - 1 ? 'not-allowed' : 'pointer', opacity: idx >= total - 1 ? 0.4 : 1, padding: '6px 8px' }}>▼</button>
           {reg === 'registered'
             ? <button onClick={onUnregister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-surface-2, #21262d)' }}>등록 해제</button>
             : <button onClick={onRegister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700 }}>등록</button>}
