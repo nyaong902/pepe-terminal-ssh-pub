@@ -225,11 +225,11 @@ static void cmdRegister(const json& ep) {
         acfg.natConfig.mediaStunUse = PJSUA_STUN_USE_DISABLED;
     }
     if (!turnServer.empty()) {
-        acfg.natConfig.turnConfig.enableTurn = true;
-        acfg.natConfig.turnConfig.server = turnServer;
-        acfg.natConfig.turnConfig.username = turnUser;
-        acfg.natConfig.turnConfig.password = turnPass;
-        acfg.natConfig.turnConfig.passwordType = PJ_STUN_PASSWD_PLAIN;
+        acfg.natConfig.turnEnabled = true;
+        acfg.natConfig.turnServer = turnServer;
+        acfg.natConfig.turnUserName = turnUser;
+        acfg.natConfig.turnPassword = turnPass;
+        acfg.natConfig.turnPasswordType = PJ_STUN_PASSWD_PLAIN;
     }
 
     auto it = g_accounts.find(id);
