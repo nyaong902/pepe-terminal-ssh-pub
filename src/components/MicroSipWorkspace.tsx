@@ -26,6 +26,7 @@ export type SipEndpoint = {
   proxy?: string;          // outbound proxy (선택)
   codecs: SipCodec[];      // 우선순위 순서
   autoAnswer?: boolean;
+  dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
   // ── 고급 설정 ──
   regExpiry?: number;                              // 등록 만료(초), 기본 300
   dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
@@ -99,6 +100,7 @@ function defaultEndpoint(n: number): SipEndpoint {
     proxy: '',
     codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
     autoAnswer: false,
+    dnd: false,
     regExpiry: 300,
     dtmfMode: 'rfc2833',
     srtp: 'disabled',
@@ -315,6 +317,7 @@ export const MicroSipWorkspace: React.FC = () => {
   };
   const updateEndpoint = (id: string, patch: Partial<SipEndpoint>) =>
     setEndpoints(prev => prev.map(e => (e.id === id ? { ...e, ...patch } : e)));
+  const setDnd = (id: string, on: boolean) => { updateEndpoint(id, { dnd: on }); try { api().sipSetDnd?.({ endpointId: id, dnd: on }); } catch {} };
   const copyFrom = (targetId: string, sourceId: string) => {
     const src = endpoints.find(e => e.id === sourceId);
     if (!src) return;
@@ -478,6 +481,7 @@ export const MicroSipWorkspace: React.FC = () => {
                 <SettingsCard key={e.id} ep={e} all={endpoints} reg={rt(e.id).reg}
                   onChange={(p) => updateEndpoint(e.id, p)}
                   onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
+                  onDnd={(on) => setDnd(e.id, on)}
                   onRegister={() => register(e)}
                   onUnregister={() => unregister(e.id)}
                   onRemove={() => removeEndpoint(e.id)}
@@ -809,6 +813,7 @@ const PhoneCard: React.FC<{
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[rt.reg] }} title={rt.reg} />
         <b style={{ fontSize: 13 }}>{ep.label}</b>
+        {ep.dnd && <span title="방해 금지" style={{ fontSize: 11 }}>🌙</span>}
         <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{ep.username || '미설정'}@{ep.server || '—'}</span>
       </div>
       <div style={{ minHeight: 34, padding: '6px 10px', borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 16, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -857,8 +862,9 @@ const callBtn = (bg: string): React.CSSProperties => ({ flex: 1, padding: '9px 0
 const SettingsCard: React.FC<{
   ep: SipEndpoint; all: SipEndpoint[]; reg: RegState;
   onChange: (p: Partial<SipEndpoint>) => void; onCopyFrom: (srcId: string) => void;
+  onDnd: (on: boolean) => void;
   onRegister: () => void; onUnregister: () => void; onRemove: () => void;
-}> = ({ ep, all, reg, onChange, onCopyFrom, onRegister, onUnregister, onRemove }) => {
+}> = ({ ep, all, reg, onChange, onCopyFrom, onDnd, onRegister, onUnregister, onRemove }) => {
   const field = (label: string, node: React.ReactNode) => (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
       <span>{label}</span>{node}
@@ -920,9 +926,14 @@ const SettingsCard: React.FC<{
             );
           })}
         </div>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, marginTop: 8 }}>
-          <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
-        </label>
+        <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
+          </label>
+        </div>
       </div>
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>고급</div>

@@ -25,7 +25,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
 ```
-→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory","iceEnabled":false,"stunServer":"host:port","turnServer":"host:port","turnUser","turnPassword"}}
+→ {"cmd":"register","endpoint":{"id","server","port","transport","username","authId","password","displayName","proxy","codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","dnd":false,"regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory","iceEnabled":false,"stunServer":"host:port","turnServer":"host:port","turnUser","turnPassword"}}
 → {"cmd":"unregister","endpointId":"ep-.."}
 → {"cmd":"call","endpointId":"ep-..","target":"1001"}
 → {"cmd":"hangup","endpointId":"ep-.."}
@@ -39,6 +39,7 @@ Electron 렌더러/메인은 VoIP 미디어(RTP)와 AMR/AMR-WB/EVS 코덱을 직
 → {"cmd":"audio","input":"<장치 name|>","output":"<장치 name|>"}  // 빈 값=기본 장치
 → {"cmd":"listAudio"}                                          // 오디오 장치 목록 요청
 → {"cmd":"volume","mic":1.0,"speaker":1.0}                     // 마이크/스피커 음량(1=기본, -1=변경안함)
+→ {"cmd":"dnd","endpointId":"ep-..","dnd":true}                // 방해 금지(인입 486 Busy 자동 거절)
 → {"cmd":"im","endpointId":"ep-..","target":"1001","text":"안녕"}      // pager MESSAGE 송신
 → {"cmd":"presence","endpointId":"ep-..","online":true}                // 자신의 프레즌스 게시
 → {"cmd":"subscribe","endpointId":"ep-..","target":"1001","subscribe":true}  // 상대 프레즌스 구독/해제

@@ -97,6 +97,7 @@ class MyAccount : public Account {
 public:
     std::string epId;
     bool autoAnswer = false;
+    bool dnd = false;
     explicit MyAccount(const std::string& id) : epId(id) {}
 
     virtual void onRegState(OnRegStateParam& prm) override {
@@ -111,6 +112,12 @@ public:
         MyCall* call = new MyCall(*this, epId, prm.callId);
         g_calls[epId] = call;
         CallInfo ci = call->getInfo();
+        if (dnd) {
+            // 방해 금지 — 486 Busy Here 로 자동 거절 (onCallState 가 정리/ended 통지)
+            CallOpParam op; op.statusCode = PJSIP_SC_BUSY_HERE;
+            try { call->hangup(op); } catch (...) {}
+            return;
+        }
         emitJson({{"ev","call"},{"endpointId",epId},{"call","incoming"},{"remote",ci.remoteUri}});
         if (autoAnswer) {
             CallOpParam op; op.statusCode = PJSIP_SC_OK;
@@ -221,10 +228,12 @@ static void cmdRegister(const json& ep) {
         if (it == g_accounts.end()) {
             MyAccount* acc = new MyAccount(id);
             acc->autoAnswer = ep.value("autoAnswer", false);
+            acc->dnd = ep.value("dnd", false);
             acc->create(acfg);
             g_accounts[id] = acc;
         } else {
             it->second->autoAnswer = ep.value("autoAnswer", false);
+            it->second->dnd = ep.value("dnd", false);
             it->second->modify(acfg);
         }
         emitJson({{"ev","reg"},{"endpointId",id},{"reg","registering"}});
@@ -456,6 +465,12 @@ static void cmdSubscribe(const std::string& id, const std::string& target, bool 
     }
 }
 
+// 방해 금지(DND) 런타임 토글
+static void cmdDnd(const std::string& id, bool on) {
+    auto it = g_accounts.find(id);
+    if (it != g_accounts.end()) it->second->dnd = on;
+}
+
 // 마이크(송신)/스피커(수신) 음량 — 1.0=기본, 0=무음, 2.0=+6dB 부근
 static void cmdVolume(double mic, double spk) {
     try {
@@ -510,6 +525,7 @@ int main() {
             else if (cmd == "audio")      cmdAudio(msg.value("input", ""), msg.value("output", ""));
             else if (cmd == "listAudio")  cmdListAudio();
             else if (cmd == "volume")     cmdVolume(msg.value("mic", -1.0), msg.value("speaker", -1.0));
+            else if (cmd == "dnd")        cmdDnd(msg.value("endpointId", ""), msg.value("dnd", false));
             else if (cmd == "im")         cmdIm(msg.value("endpointId", ""), msg.value("target", ""), msg.value("text", ""));
             else if (cmd == "presence")   cmdPresence(msg.value("endpointId", ""), msg.value("online", false));
             else if (cmd == "subscribe")  cmdSubscribe(msg.value("endpointId", ""), msg.value("target", ""), msg.value("subscribe", true));

@@ -4969,6 +4969,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
   ipcMain.handle('sip:list-audio-devices', () => { sip.listAudioDevices(); return { ok: true }; });
   ipcMain.handle('sip:volume', (_e, args: { mic: number; speaker: number }) => { sip.setVolume(Number(args?.mic), Number(args?.speaker)); return { ok: true }; });
+  ipcMain.handle('sip:dnd', (_e, args: { endpointId: string; dnd: boolean }) => { sip.setDnd(args?.endpointId, !!args?.dnd); return { ok: true }; });
   ipcMain.handle('sip:im', async (_e, args: { endpointId: string; target: string; text: string }) => sip.sendIm(args?.endpointId, args?.target, args?.text));
   ipcMain.handle('sip:presence', (_e, args: { endpointId: string; online: boolean }) => { sip.setPresence(args?.endpointId, !!args?.online); return { ok: true }; });
   ipcMain.handle('sip:subscribe', (_e, args: { endpointId: string; target: string; subscribe: boolean }) => { sip.subscribePresence(args?.endpointId, args?.target, !!args?.subscribe); return { ok: true }; });
