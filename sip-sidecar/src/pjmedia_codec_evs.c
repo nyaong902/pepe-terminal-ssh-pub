@@ -19,8 +19,8 @@
 #define EVS_SAMPLES     EVS_GLUE_FRAME      /* 320 */
 #define EVS_PCM_BYTES   (EVS_SAMPLES * 2)   /* 640 */
 #define EVS_CLOCK       EVS_GLUE_FS         /* 16000 */
-#define EVS_ENC_BYTES    33                 /* 송신 고정 13.2kbps compact → 33 bytes/frame */
-#define EVS_MIN_BYTES    6                  /* 최소 유효 프레임(SID 2.4k=48bit=6B) */
+#define EVS_ENC_BYTES    34                 /* 송신 13.2kbps header-full → ToC(1)+33 = 34 bytes */
+#define EVS_MIN_BYTES    6                  /* 최소 유효 프레임(header-full SID = ToC+6bit*8... ToC+SID(6B)=7B) */
 #define EVS_DEF_PT      96                  /* 동적 PT 기본값(SDP 협상 시 재배정) */
 
 PJ_DECL(pj_status_t) pjmedia_codec_evs_init(pjmedia_endpt *endpt);
@@ -135,7 +135,10 @@ static pj_status_t evs_default_attr(pjmedia_codec_factory *f, const pjmedia_code
     attr->info.clock_rate = EVS_CLOCK;
     attr->info.channel_cnt = 1;
     attr->info.avg_bps = EVS_GLUE_BRATE;
-    attr->info.max_bps = EVS_GLUE_BRATE;
+    /* max_bps 는 pjmedia 의 RX 프레임 버퍼 크기를 결정한다(max_bps*ptime/8).
+     * 게이트웨이가 EVS Primary 64kbps(header-full, ToC+160B=161B)를 보내므로 13200 으로
+     * 두면 33바이트로 잘려 디코드가 깨졌다. EVS 최대(128k=320B)+여유로 절단을 방지한다. */
+    attr->info.max_bps = 128000;
     attr->info.pcm_bits_per_sample = 16;
     attr->info.frm_ptime = EVS_PTIME;
     attr->info.pt = EVS_DEF_PT;
@@ -272,23 +275,14 @@ static pj_status_t evs_codec_decode(pjmedia_codec *codec, const struct pjmedia_f
     int n;
     pj_assert(d && d->dec);
     PJ_ASSERT_RETURN(out_size >= EVS_PCM_BYTES, PJMEDIA_CODEC_EPCMTOOSHORT);
-    /* 진단: 게이트웨이가 보내는 실제 페이로드 크기/선두바이트 (처음 20프레임만) */
-    {
-        static int dbg = 0;
-        if (dbg < 4) {
-            const unsigned char *b = (const unsigned char *) input->buf;
-            char hex[3 * 40 + 1]; unsigned n = (unsigned) input->size, j, p = 0;
-            if (n > 40) n = 40;
-            for (j = 0; j < n; j++) p += (unsigned) pj_ansi_snprintf(hex + p, sizeof(hex) - p, "%02x ", b[j]);
-            hex[p] = 0;
-            PJ_LOG(3, ("evs", "dec in=%u : %s", (unsigned) input->size, hex));
-            ++dbg;
-        }
+    /* 너무 짧은(특수/NO_DATA) 프레임은 손실로 간주해 PLC 로 디코드 → EVS 상태 연속성 유지.
+     * (건너뛰면 다음 정상 프레임과 desync 되어 전체가 깨진다) */
+    if (input->size < EVS_MIN_BYTES) {
+        n = evs_glue_decode(d->dec, NULL, 0, (short *) output->buf);
+    } else {
+        n = evs_glue_decode(d->dec, (const unsigned char *) input->buf, (int) input->size,
+                            (short *) output->buf);
     }
-    if (input->size < EVS_MIN_BYTES) return PJMEDIA_CODEC_EFRMTOOSHORT;
-
-    n = evs_glue_decode(d->dec, (const unsigned char *) input->buf, (int) input->size,
-                        (short *) output->buf);
     if (n <= 0) return PJMEDIA_CODEC_EFAILED;
     output->size = EVS_PCM_BYTES;
     output->type = PJMEDIA_FRAME_TYPE_AUDIO;
