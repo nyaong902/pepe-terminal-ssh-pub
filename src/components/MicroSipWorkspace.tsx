@@ -97,6 +97,10 @@ const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 const CARD_MIN = 300;
 const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN}px, 1fr))`, gap: 12, alignItems: 'start' };
 
+// 등록에 영향 없는 필드(id/label) 제외한 설정 직렬화 — 자동 재등록 트리거 비교용
+const REG_CFG_OMIT = new Set(['id', 'label']);
+const cfgKey = (ep: SipEndpoint) => JSON.stringify(Object.entries(ep).filter(([k]) => !REG_CFG_OMIT.has(k)).sort(([a], [b]) => a.localeCompare(b)));
+
 const api = () => (window as any).api || {};
 const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -313,6 +317,9 @@ export const MicroSipWorkspace: React.FC = () => {
   runtimeRef.current = runtime;
   const endpointsRef = useRef(endpoints);
   endpointsRef.current = endpoints;
+  // 설정 변경 시 자동 재등록(디바운스) — 등록된 단말의 등록관련 설정이 바뀌면 unregister 없이 register 재적용
+  const reRegTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const lastRegCfgRef = useRef<Record<string, string>>({});
 
   // ── 토스트 알림 (등록/통화 실패 등) ──
   const [toasts, setToasts] = useState<{ id: string; text: string; kind: 'error' | 'info' }[]>([]);
@@ -411,11 +418,16 @@ export const MicroSipWorkspace: React.FC = () => {
 
   // ── SIP 제어 ──
   const register = async (e: SipEndpoint) => {
+    lastRegCfgRef.current[e.id] = cfgKey(e); // 자동 재등록 기준값 갱신
     setRt(e.id, { reg: 'registering', error: undefined });
     const r = await api().sipRegister?.({ endpoint: e }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) { setRt(e.id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error }); pushToast(`${e.label} 등록 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
   };
-  const unregister = async (id: string) => { await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' }); };
+  const unregister = async (id: string) => {
+    if (reRegTimers.current[id]) { clearTimeout(reRegTimers.current[id]); delete reRegTimers.current[id]; }
+    delete lastRegCfgRef.current[id];
+    await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' });
+  };
   const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
   const unregisterAll = () => endpoints.forEach(e => unregister(e.id));
   // 일괄 통화 제어 (다중 단말)
@@ -485,6 +497,24 @@ export const MicroSipWorkspace: React.FC = () => {
     endpoints.forEach(e => { if (e.autoRegister !== false && e.server.trim() && e.username.trim()) void register(e); });
     /* eslint-disable-next-line */
   }, [engineReady, endpoints.length]);
+
+  // 등록된 단말의 설정이 바뀌면 디바운스 후 자동 재등록(unregister 불필요) — 코덱 변경 등 즉시 반영
+  useEffect(() => {
+    endpoints.forEach(ep => {
+      const reg = runtime[ep.id]?.reg;
+      if (reg !== 'registered' && reg !== 'registering') return;
+      const key = cfgKey(ep);
+      if (!(ep.id in lastRegCfgRef.current)) { lastRegCfgRef.current[ep.id] = key; return; } // 기준값 최초 설정
+      if (lastRegCfgRef.current[ep.id] === key) return; // 변경 없음
+      if (reRegTimers.current[ep.id]) clearTimeout(reRegTimers.current[ep.id]);
+      reRegTimers.current[ep.id] = setTimeout(() => {
+        const cur = endpointsRef.current.find(e => e.id === ep.id);
+        const r = runtimeRef.current[ep.id]?.reg;
+        if (cur && (r === 'registered' || r === 'registering')) void register(cur); // register 가 기준값 갱신
+      }, 1000);
+    });
+    /* eslint-disable-next-line */
+  }, [endpoints, runtime]);
 
   const applyAudioDevices = (inId: string, outId: string) => {
     setAudioIn(inId); setAudioOut(outId);
