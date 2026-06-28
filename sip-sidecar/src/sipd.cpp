@@ -99,6 +99,7 @@ public:
     bool autoAnswer = false;
     bool dnd = false;
     bool callWaiting = true;
+    bool hideCallerId = false; // 발신자 번호 숨기기 (Privacy: id)
     explicit MyAccount(const std::string& id) : epId(id) {}
 
     virtual void onRegState(OnRegStateParam& prm) override {
@@ -189,6 +190,10 @@ static void cmdRegister(const json& ep) {
     std::string pass = ep.value("password", "");
     std::string disp = ep.value("displayName", "");
     std::string proxy = ep.value("proxy", "");
+    std::string domain = ep.value("domain", "");           // 도메인(미지정 시 server 사용)
+    if (domain.empty()) domain = server;
+    bool disableTimer = ep.value("disableSessionTimer", false);
+    bool publishPres = ep.value("publishPresence", true);
     int regExpiry = ep.value("regExpiry", 300);
     std::string srtp = ep.value("srtp", "disabled");
     bool iceEnabled = ep.value("iceEnabled", false);
@@ -204,7 +209,8 @@ static void cmdRegister(const json& ep) {
     std::string scheme = "sip";
     std::string tparam = transport == "tls" ? ";transport=tls" : transport == "tcp" ? ";transport=tcp" : "";
     AccountConfig acfg;
-    std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + server + ">";
+    // 계정 식별(AOR)은 도메인 기준, 등록은 SIP 서버(registrar) 기준
+    std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + domain + ">";
     acfg.idUri = idUri;
     acfg.regConfig.registrarUri = scheme + ":" + server + ":" + std::to_string(port) + tparam;
     if (regExpiry > 0) acfg.regConfig.timeoutSec = regExpiry;
@@ -212,6 +218,8 @@ static void cmdRegister(const json& ep) {
     AuthCredInfo cred("digest", "*", authId.empty() ? user : authId, 0, pass);
     acfg.sipConfig.authCreds.push_back(cred);
     acfg.callConfig.timerMinSESec = 90;
+    acfg.callConfig.timerUse = disableTimer ? PJSUA_SIP_TIMER_INACTIVE : PJSUA_SIP_TIMER_OPTIONAL; // 세션 타이머
+    acfg.presConfig.publishEnabled = publishPres; // 계정 상태(프레즌스 PUBLISH)
     acfg.mwiConfig.enabled = true; // 음성사서함(MWI) 구독
     if (keepAlive > 0) acfg.natConfig.udpKaIntervalSec = keepAlive; // UDP keep-alive(살아유지)
     // SRTP(미디어 암호화)
@@ -244,12 +252,14 @@ static void cmdRegister(const json& ep) {
             acc->autoAnswer = ep.value("autoAnswer", false);
             acc->dnd = ep.value("dnd", false);
             acc->callWaiting = ep.value("callWaiting", true);
+            acc->hideCallerId = ep.value("hideCallerId", false);
             acc->create(acfg);
             g_accounts[id] = acc;
         } else {
             it->second->autoAnswer = ep.value("autoAnswer", false);
             it->second->dnd = ep.value("dnd", false);
             it->second->callWaiting = ep.value("callWaiting", true);
+            it->second->hideCallerId = ep.value("hideCallerId", false);
             it->second->modify(acfg);
         }
         emitJson({{"ev","reg"},{"endpointId",id},{"reg","registering"}});
@@ -307,7 +317,13 @@ static void cmdCall(const std::string& id, const std::string& target) {
     std::string uri = toSipUri(it->second, target);
     MyCall* call = new MyCall(*it->second, id);
     g_calls[id] = call;
-    try { CallOpParam op(true); call->makeCall(uri, op); }
+    try {
+        CallOpParam op(true);
+        if (it->second->hideCallerId) { // 발신자 번호 숨기기 (RFC3323)
+            SipHeader h; h.hName = "Privacy"; h.hValue = "id"; op.txOption.headers.push_back(h);
+        }
+        call->makeCall(uri, op);
+    }
     catch (Error& e) { emitJson({{"ev","call"},{"endpointId",id},{"call","ended"},{"error",e.info()}}); g_calls.erase(id); delete call; }
 }
 

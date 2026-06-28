@@ -16,7 +16,8 @@ export const ALL_CODECS: { id: SipCodec; label: string }[] = [
 export type SipEndpoint = {
   id: string;
   label: string;
-  server: string;          // registrar/도메인 host
+  server: string;          // registrar host (SIP 서버)
+  domain?: string;         // 도메인(AOR) — 미지정 시 server 사용
   port: number;            // 5060
   transport: 'udp' | 'tcp' | 'tls';
   username: string;
@@ -24,6 +25,9 @@ export type SipEndpoint = {
   password: string;
   displayName?: string;
   proxy?: string;          // outbound proxy (선택)
+  hideCallerId?: boolean;  // 발신자 번호 숨기기 (Privacy)
+  disableSessionTimer?: boolean; // 세션 타이머 비활성화
+  publishPresence?: boolean;     // 계정 상태(프레즌스 PUBLISH), 기본 on
   codecs: SipCodec[];      // 우선순위 순서
   autoAnswer?: boolean;
   autoRegister?: boolean;  // 워크스페이스 진입(엔진 준비) 시 자동 등록 (기본 on)
@@ -101,12 +105,16 @@ function defaultEndpoint(n: number): SipEndpoint {
     id: uid('ep'),
     label: `단말 ${n}`,
     server: '',
+    domain: '',
     port: 5060,
     transport: 'udp',
     username: '',
     password: '',
     displayName: '',
     proxy: '',
+    hideCallerId: false,
+    disableSessionTimer: false,
+    publishPresence: true,
     codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
     autoAnswer: false,
     autoRegister: true,
@@ -941,6 +949,19 @@ const PhoneCard: React.FC<{
 const callBtn = (bg: string): React.CSSProperties => ({ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: bg, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' });
 
 // ───────────────────────── 설정 카드 ─────────────────────────
+// 접이식 섹션 (단말 설정 그룹화)
+const Section: React.FC<{ title: string; defaultOpen?: boolean; children: React.ReactNode }> = ({ title, defaultOpen, children }) => {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div style={{ borderTop: '1px solid var(--win-border, #30363d)', marginTop: 8, paddingTop: 8 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--win-text, #e6edf3)', fontSize: 12, fontWeight: 700, padding: '2px 0' }}>
+        <span style={{ fontSize: 10, width: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{open ? '▾' : '▸'}</span>{title}
+      </button>
+      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>{children}</div>}
+    </div>
+  );
+};
 const SettingsCard: React.FC<{
   ep: SipEndpoint; all: SipEndpoint[]; reg: RegState; idx: number; total: number;
   onChange: (p: Partial<SipEndpoint>) => void; onCopyFrom: (srcId: string) => void;
@@ -980,18 +1001,23 @@ const SettingsCard: React.FC<{
           <button onClick={onRemove} title="단말 삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
         </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {field('SIP 서버/도메인', <input value={ep.server} onChange={e => onChange({ server: e.target.value })} placeholder="sip.example.com" style={inp} />)}
-        {field('포트', <input type="number" value={ep.port} onChange={e => onChange({ port: Number(e.target.value) || 5060 })} style={inp} />)}
-        {field('전송', <select value={ep.transport} onChange={e => onChange({ transport: e.target.value as any })} style={inp}><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select>)}
+      {/* 📇 계정 */}
+      <Section title="📇 계정" defaultOpen>
+        {field('SIP 서버 (registrar)', <input value={ep.server} onChange={e => onChange({ server: e.target.value })} placeholder="sip.example.com" style={inp} />)}
+        {field('도메인 (미지정 시 서버와 동일)', <input value={ep.domain || ''} onChange={e => onChange({ domain: e.target.value })} placeholder="example.com" style={inp} />)}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {field('포트', <input type="number" value={ep.port} onChange={e => onChange({ port: Number(e.target.value) || 5060 })} style={inp} />)}
+          {field('전송', <select value={ep.transport} onChange={e => onChange({ transport: e.target.value as any })} style={inp}><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select>)}
+        </div>
         {field('사용자(번호)', <input value={ep.username} onChange={e => onChange({ username: e.target.value })} style={inp} />)}
-        {field('인증 ID(선택)', <input value={ep.authId || ''} onChange={e => onChange({ authId: e.target.value })} style={inp} />)}
+        {field('인증 ID(로그인, 선택)', <input value={ep.authId || ''} onChange={e => onChange({ authId: e.target.value })} style={inp} />)}
         {field('비밀번호', <input type="password" value={ep.password} onChange={e => onChange({ password: e.target.value })} style={inp} />)}
         {field('표시 이름(선택)', <input value={ep.displayName || ''} onChange={e => onChange({ displayName: e.target.value })} style={inp} />)}
         {field('아웃바운드 프록시(선택)', <input value={ep.proxy || ''} onChange={e => onChange({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)', marginBottom: 4 }}>코덱 (체크=사용, 위가 우선순위)</div>
+      </Section>
+
+      {/* 🎚 코덱 */}
+      <Section title="🎚 코덱 (체크=사용, 위가 우선순위)">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {ALL_CODECS.slice().sort((a, b) => {
             const ia = ep.codecs.indexOf(a.id), ib = ep.codecs.indexOf(b.id);
@@ -1010,7 +1036,38 @@ const SettingsCard: React.FC<{
             );
           })}
         </div>
-        <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+      </Section>
+
+      {/* 📞 등록 · NAT · 보안 */}
+      <Section title="📞 등록 · NAT · 보안">
+        <div style={{ display: 'flex', gap: 8 }}>
+          {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
+          {field('살아유지(초)', <input type="number" value={ep.keepAlive ?? 15} onChange={e => onChange({ keepAlive: Number(e.target.value) || 0 })} style={inp} />)}
+        </div>
+        {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.iceEnabled} onChange={e => onChange({ iceEnabled: e.target.checked })} /> ICE 사용
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.disableSessionTimer} onChange={e => onChange({ disableSessionTimer: e.target.checked })} /> 세션 타이머 비활성화
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={ep.publishPresence !== false} onChange={e => onChange({ publishPresence: e.target.checked })} /> 계정 상태 게시
+          </label>
+        </div>
+        {field('STUN 서버(host:port)', <input value={ep.stunServer || ''} onChange={e => onChange({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
+        {field('TURN 서버(host:port)', <input value={ep.turnServer || ''} onChange={e => onChange({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
+        {ep.turnServer ? field('TURN 사용자', <input value={ep.turnUser || ''} onChange={e => onChange({ turnUser: e.target.value })} style={inp} />) : null}
+        {ep.turnServer ? field('TURN 비밀번호', <input type="password" value={ep.turnPassword || ''} onChange={e => onChange({ turnPassword: e.target.value })} style={inp} />) : null}
+      </Section>
+
+      {/* ⚙ 통화 · 프로그램 */}
+      <Section title="⚙ 통화 · 프로그램">
+        {field('발신 prefix', <input value={ep.dialPrefix || ''} onChange={e => onChange({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
+        {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
+        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <input type="checkbox" checked={ep.autoRegister !== false} onChange={e => onChange({ autoRegister: e.target.checked })} /> 시작 시 등록
           </label>
@@ -1018,43 +1075,23 @@ const SettingsCard: React.FC<{
             <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
+            <input type="checkbox" checked={ep.callWaiting !== false} onChange={e => onChange({ callWaiting: e.target.checked })} /> 통화 중 대기
           </label>
-        </div>
-      </div>
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--win-text, #e6edf3)' }}>📇 계정 · 고급</div>
-        {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
-        {field('발신 prefix', <input value={ep.dialPrefix || ''} onChange={e => onChange({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
-          {field('살아유지(초)', <input type="number" value={ep.keepAlive ?? 15} onChange={e => onChange({ keepAlive: Number(e.target.value) || 0 })} style={inp} />)}
-        </div>
-        {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-          <input type="checkbox" checked={!!ep.iceEnabled} onChange={e => onChange({ iceEnabled: e.target.checked })} /> ICE 사용
-        </label>
-        {field('STUN 서버(host:port)', <input value={ep.stunServer || ''} onChange={e => onChange({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
-        {field('TURN 서버(host:port)', <input value={ep.turnServer || ''} onChange={e => onChange({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
-        {ep.turnServer ? field('TURN 사용자', <input value={ep.turnUser || ''} onChange={e => onChange({ turnUser: e.target.value })} style={inp} />) : null}
-        {ep.turnServer ? field('TURN 비밀번호', <input type="password" value={ep.turnPassword || ''} onChange={e => onChange({ turnPassword: e.target.value })} style={inp} />) : null}
-      </div>
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--win-border, #30363d)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--win-text, #e6edf3)' }}>⚙ 프로그램 설정</div>
-        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <input type="checkbox" checked={ep.ring !== false} onChange={e => onChange({ ring: e.target.checked })} /> 🔔 벨소리
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={ep.callWaiting !== false} onChange={e => onChange({ callWaiting: e.target.checked })} /> 통화 중 대기
+            <input type="checkbox" checked={!!ep.autoRecord} onChange={e => onChange({ autoRecord: e.target.checked })} /> ⏺ 자동 녹음
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.autoRecord} onChange={e => onChange({ autoRecord: e.target.checked })} /> ⏺ 자동 녹음
+            <input type="checkbox" checked={!!ep.hideCallerId} onChange={e => onChange({ hideCallerId: e.target.checked })} /> 발신번호 숨김
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!ep.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
           </label>
         </div>
         <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 마이크/스피커·음량은 상단 공통(전역) 설정을 사용합니다.</div>
-      </div>
+      </Section>
     </div>
   );
 };
