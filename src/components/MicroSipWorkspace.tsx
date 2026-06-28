@@ -290,7 +290,10 @@ export const MicroSipWorkspace: React.FC = () => {
 
   const rt = (id: string): EndpointRuntime => runtime[id] || { reg: engineReady === false ? 'no-engine' : 'unregistered', call: 'idle', dialed: '' };
   const setRt = (id: string, patch: Partial<EndpointRuntime>) =>
-    setRuntime(prev => ({ ...prev, [id]: { ...rt(id), ...patch } }));
+    setRuntime(prev => ({ ...prev, [id]: { ...(prev[id] || { reg: 'unregistered', call: 'idle', dialed: '' }), ...patch } }));
+  // 매크로처럼 길게 도는 비동기 루프에서 "현재" 런타임을 읽기 위한 ref (stale closure 방지)
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
 
   // ── 인입 벨소리 (WebAudio) ── 전역 마스터(ringEnabled) AND 단말별(ep.ring)
   const anyIncoming = endpoints.some(e => e.ring !== false && rt(e.id).call === 'incoming');
@@ -464,15 +467,22 @@ export const MicroSipWorkspace: React.FC = () => {
   // ── 매크로 ──
   const runMacro = async (macro: Macro, targetIds: string[]) => {
     const reps = Math.max(1, macro.repeat || 1);
-    // 선택된 단말들에서 "동시" 실행
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const liveCall = (id: string): CallState => runtimeRef.current[id]?.call || 'idle';
+    // 선택된 단말들에서 "동시" 실행. dialed 는 stale 상태(React) 대신 로컬 누적자 사용.
     await Promise.all(targetIds.map(async (epId) => {
+      let dialed = runtimeRef.current[epId]?.dialed || '';
       for (let i = 0; i < reps; i++) {
         for (const step of macro.steps) {
-          if (step.type === 'key') { pressKey(epId, step.key); await new Promise(r => setTimeout(r, 60)); }
-          else if (step.type === 'hold') { await new Promise(r => setTimeout(r, step.ms)); }
-          else if (step.type === 'call') { await makeCall(epId, step.target || rt(epId).dialed); }
+          if (step.type === 'key') {
+            // 통화 중이면 DTMF 전송, 아니면 번호 누적(+화면 표시)
+            if (liveCall(epId) === 'connected') { await sendDtmf(epId, step.key); }
+            else { dialed += step.key; setRt(epId, { dialed }); }
+            await sleep(150);
+          } else if (step.type === 'hold') { await sleep(step.ms); }
+          else if (step.type === 'call') { await makeCall(epId, step.target || dialed); }
           else if (step.type === 'answer') { await answer(epId); }
-          else if (step.type === 'hangup') { await hangup(epId); }
+          else if (step.type === 'hangup') { await hangup(epId); dialed = ''; }
         }
       }
     }));
