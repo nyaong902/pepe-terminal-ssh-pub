@@ -18,7 +18,8 @@
 #define EVS_SAMPLES     EVS_GLUE_FRAME      /* 320 */
 #define EVS_PCM_BYTES   (EVS_SAMPLES * 2)   /* 640 */
 #define EVS_CLOCK       EVS_GLUE_FS         /* 16000 */
-#define EVS_FRAME_BYTES 33                  /* 13.2 kbps → 264 bits → 33 bytes */
+#define EVS_SPEECH_BYTES 33                 /* 13.2 kbps → 264 bits → 33 bytes (음성부) */
+#define EVS_FRAME_BYTES  34                 /* header-full: ToC(1) + 33 = 34 bytes/frame */
 #define EVS_DEF_PT      96                  /* 동적 PT 기본값(SDP 협상 시 재배정) */
 
 PJ_DECL(pj_status_t) pjmedia_codec_evs_init(pjmedia_endpt *endpt);
@@ -222,23 +223,19 @@ static pj_status_t evs_codec_modify(pjmedia_codec *codec, const pjmedia_codec_pa
     return PJ_SUCCESS;
 }
 
-/* compact: 한 패킷에 33바이트 프레임들(보통 1개). 고정 크기로 분할. */
+/* EVS는 RTP 패킷당 1 프레임(ptime 20ms). 페이로드(ToC[+CMR]+음성)를 통째로 1프레임으로 전달
+ * → 디코더(evs_glue)가 헤더를 자동 스킵한다. (멀티프레임 패킷은 미사용) */
 static pj_status_t evs_codec_parse(pjmedia_codec *codec, void *pkt, pj_size_t pkt_size,
                                    const pj_timestamp *ts, unsigned *frame_cnt, pjmedia_frame frames[])
 {
-    unsigned cnt = 0;
     PJ_UNUSED_ARG(codec);
-    PJ_ASSERT_RETURN(frame_cnt, PJ_EINVAL);
-    while (pkt_size >= EVS_FRAME_BYTES && cnt < *frame_cnt) {
-        frames[cnt].type = PJMEDIA_FRAME_TYPE_AUDIO;
-        frames[cnt].buf = pkt;
-        frames[cnt].size = EVS_FRAME_BYTES;
-        frames[cnt].timestamp.u64 = ts->u64 + cnt * EVS_SAMPLES;
-        pkt = ((char *) pkt) + EVS_FRAME_BYTES;
-        pkt_size -= EVS_FRAME_BYTES;
-        ++cnt;
-    }
-    *frame_cnt = cnt;
+    PJ_ASSERT_RETURN(frame_cnt && *frame_cnt > 0, PJ_EINVAL);
+    if (pkt_size == 0) { *frame_cnt = 0; return PJ_SUCCESS; }
+    frames[0].type = PJMEDIA_FRAME_TYPE_AUDIO;
+    frames[0].buf = pkt;
+    frames[0].size = pkt_size;
+    frames[0].timestamp = *ts;
+    *frame_cnt = 1;
     return PJ_SUCCESS;
 }
 
@@ -274,7 +271,7 @@ static pj_status_t evs_codec_decode(pjmedia_codec *codec, const struct pjmedia_f
     int n;
     pj_assert(d && d->dec);
     PJ_ASSERT_RETURN(out_size >= EVS_PCM_BYTES, PJMEDIA_CODEC_EPCMTOOSHORT);
-    if (input->size < EVS_FRAME_BYTES) return PJMEDIA_CODEC_EFRMTOOSHORT;
+    if (input->size < EVS_SPEECH_BYTES) return PJMEDIA_CODEC_EFRMTOOSHORT;
 
     n = evs_glue_decode(d->dec, (const unsigned char *) input->buf, (int) input->size,
                         (short *) output->buf);
