@@ -4943,7 +4943,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
       try { if (!w.isDestroyed()) w.webContents.send('sip:event', payload); } catch {}
     }
   });
-  ipcMain.handle('sip:engine-status', () => sip.status());
+  ipcMain.handle('sip:engine-status', () => sip.ensureStarted());
   ipcMain.handle('sip:register', async (_e, args: { endpoint: any }) => sip.register(args?.endpoint));
   ipcMain.handle('sip:unregister', async (_e, args: { endpointId: string }) => sip.unregister(args?.endpointId));
   ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string }) => sip.call(args?.endpointId, args?.target));

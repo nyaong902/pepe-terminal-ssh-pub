@@ -42,6 +42,9 @@ class SipSidecar extends EventEmitter {
 
   status() { return { ready: this.ready, binary: resolveBinary(), error: this.startError }; }
 
+  /** 워크스페이스 진입 등에서 데몬을 미리 띄운다(지연 spawn 회피). 반환: 현재 상태. */
+  ensureStarted() { this.ensure(); return this.status(); }
+
   /** 데몬이 떠 있지 않으면 spawn. 반환: 사용 가능 여부. */
   private ensure(): boolean {
     if (this.proc && !this.proc.killed) return true;
@@ -64,14 +67,16 @@ class SipSidecar extends EventEmitter {
     this.proc.stdout.on('data', (chunk: string) => this.onStdout(chunk));
     this.proc.stderr.setEncoding('utf8');
     this.proc.stderr.on('data', (d: string) => { try { this.emit('event', { ev: 'log', level: 'stderr', text: String(d).trim() }); } catch {} });
-    this.proc.on('error', (err: any) => { this.startError = String(err?.message || err); this.ready = false; });
+    this.proc.on('error', (err: any) => { this.startError = String(err?.message || err); this.ready = false; try { this.emit('event', { ev: 'ready', ready: false }); } catch {} });
     this.proc.on('exit', (code) => {
       this.ready = false;
       this.proc = null;
       this.stdoutBuf = '';
+      try { this.emit('event', { ev: 'ready', ready: false }); } catch {}
       try { this.emit('event', { ev: 'log', level: 'info', text: `sipd 종료 (code=${code})` }); } catch {}
     });
     this.ready = true; // 프로세스 기동 성공 (개별 등록 상태는 reg 이벤트로)
+    try { this.emit('event', { ev: 'ready', ready: true }); } catch {} // 렌더러 엔진 표시 갱신
     return true;
   }
 
@@ -84,7 +89,7 @@ class SipSidecar extends EventEmitter {
       if (!line) continue;
       let msg: any;
       try { msg = JSON.parse(line); } catch { continue; }
-      if (msg?.ev === 'ready') { this.ready = true; continue; }
+      if (msg?.ev === 'ready') { this.ready = true; try { this.emit('event', { ev: 'ready', ready: true }); } catch {} continue; }
       if (msg?.ev) { try { this.emit('event', msg); } catch {} }
     }
   }

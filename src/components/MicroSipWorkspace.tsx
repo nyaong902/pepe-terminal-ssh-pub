@@ -225,6 +225,11 @@ export const MicroSipWorkspace: React.FC = () => {
     })();
     const off = api().onSipEvent?.((ev: any) => {
       if (!ev) return;
+      if (ev.ev === 'ready') {
+        setEngineReady(!!ev.ready);
+        if (ev.ready) { try { api().sipListAudioDevices?.(); } catch {} }
+        return;
+      }
       if (ev.ev === 'audio-devices') {
         setSipInputs(Array.isArray(ev.inputs) ? ev.inputs : []);
         setSipOutputs(Array.isArray(ev.outputs) ? ev.outputs : []);
@@ -685,7 +690,7 @@ const MicroSipHeader: React.FC<{
       {tab('settings', '⚙ 설정')}
       {tab('macros', '⚡ 매크로')}
       {tab('contacts', '👤 주소록')}
-      {tab('messages', '💬 메시지')}
+      {/* 메시지 탭 숨김 (요청에 따라 비표시) — {tab('messages', '💬 메시지')} */}
       {tab('log', '🗒 기록')}
       <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
