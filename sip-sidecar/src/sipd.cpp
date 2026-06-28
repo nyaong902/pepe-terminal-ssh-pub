@@ -24,6 +24,12 @@
 using namespace pj;
 using json = nlohmann::json;
 
+#ifdef PEPE_EVS
+/* EVS 커스텀 코덱 등록 (pjmedia_codec_evs.c) + pjsua 미디어 엔드포인트 획득 */
+extern "C" pj_status_t pjmedia_codec_evs_init(pjmedia_endpt *endpt);
+extern "C" pjmedia_endpt *pjsua_get_pjmedia_endpt(void);
+#endif
+
 static std::mutex g_out;
 static void emitJson(const json& j) {
     std::lock_guard<std::mutex> lk(g_out);
@@ -539,7 +545,15 @@ int main() {
         }
         g_ep.libInit(epcfg);
 
-        // EVS 등 커스텀 코덱은 여기서 등록:  pjmedia_codec_evs_init(g_ep.mediaEndpt());  (구현 시)
+#ifdef PEPE_EVS
+        // EVS(3GPP TS26.443) 커스텀 코덱 등록 — EVS/16000 이 코덱 매니저/SDP 에 노출됨
+        {
+            pjmedia_endpt *me = pjsua_get_pjmedia_endpt();
+            pj_status_t es = me ? pjmedia_codec_evs_init(me) : -1;
+            emitJson({{"ev","log"},{"level", es == PJ_SUCCESS ? "info" : "error"},
+                      {"text", std::string("EVS codec register: ") + (es == PJ_SUCCESS ? "ok" : "failed")}});
+        }
+#endif
 
         // 전송 — UDP/TCP/TLS 모두 준비 (계정이 transport param 으로 선택)
         { TransportConfig t; t.port = 0; try { g_ep.transportCreate(PJSIP_TRANSPORT_UDP, t); } catch (...) {} }

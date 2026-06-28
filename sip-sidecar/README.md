@@ -74,7 +74,22 @@ find build -name '*.o' -print0 | xargs -0 ar rcs libevs.a   # → libevs.a (~39M
 ```
 임베드 API: `init_encoder`/`evs_enc`/`destroy_encoder`(lib_enc), `init_decoder`/`evs_dec`/`destroy_decoder`(lib_dec).
 
-**남은 작업(대형)**: pjmedia EVS 코덱 래퍼 — factory + codec ops + **RTP 페이로드 포맷(RFC 8627 / TS 26.445 Annex A: compact·header-full, ToC, CMR)** + SDP fmtp(br/bw/ch-aw-recv). 참고: `github.com/traud/asterisk-evs`. 이후 sipd `libInit` 직후 `pjmedia_codec_evs_init` 등록 (codecPjId 의 evs→"EVS/16000" 매핑은 이미 있음). 검증은 실 SIP 서버 interop 필요.
+**래퍼 구현 완료 → EVS 코덱 등록됨**: `src/evs_glue.c`(EVS 헤더 격리 thin C API: init_encoder/evs_enc/indices_to_serial, init_decoder/read_indices_from_djb/evs_dec) + `src/pjmedia_codec_evs.c`(pjmedia factory/ops, EVS Primary **WB 13.2kbps**, 16kHz/20ms/33B compact, 동적 PT). sipd 가 `PEPE_EVS` 빌드 시 libInit 직후 `pjmedia_codec_evs_init` 호출 → 기동 로그 `EVS codec register: ok`, SDP 에 `EVS/16000` 노출.
+
+EVS 라이브러리 링크 시 AMR-WB/iLBC 와 **심볼 충돌**(enhancer/autocorr/dico*_isf/wb_vad 등 3GPP 공통명)이 나므로, libevs.a 를 단일 오브젝트로 합쳐 **9개 API 심볼만 global, 나머지 local화**한 `evs_local.o` 를 만들어 링크 맨 뒤에 둔다(+ CLI main 의 전역 `frame` 은 evs_glue.c 에서 정의):
+```sh
+cd evs-src/ccode/c-code
+ar d libevs.a encoder.o decoder.o                       # CLI main(중복 main/frame) 제거
+ld -r --whole-archive libevs.a --no-whole-archive -o evs_all.o
+objcopy --keep-global-symbol=init_encoder --keep-global-symbol=evs_enc \
+  --keep-global-symbol=reset_indices_enc --keep-global-symbol=indices_to_serial \
+  --keep-global-symbol=destroy_encoder --keep-global-symbol=init_decoder \
+  --keep-global-symbol=evs_dec --keep-global-symbol=read_indices_from_djb \
+  --keep-global-symbol=destroy_decoder  evs_all.o evs_local.o
+# sipd 링크: ... sipd.cpp evs_glue.o pjmedia_codec_evs.o $(PJ_LDFLAGS) -lpjsua2 $(PJ_LDLIBS) evs_local.o -Wl,--allow-multiple-definition -static ...
+# (전체: pepe-sip-build/sipd_new.mak)
+```
+**남은 검증/조정(실 SIP 서버 interop)**: SDP fmtp(br/bw 등) 게이트웨이 요구치 매칭, compact↔header-full 페이로드, 실제 양방향 음성 확인. 현재 고정 13.2kbps WB compact 로 시작.
 
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
