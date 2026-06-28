@@ -257,6 +257,10 @@ export const MicroSipWorkspace: React.FC = () => {
         ev.ev === 'error' ? `오류: ${ev.error || ''}` :
         ev.ev === 'log' ? String(ev.text || '') : '';
       if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev }, ...prev].slice(0, 200));
+      // 실패는 토스트로 표면화
+      if (ev.ev === 'reg' && ev.reg === 'failed') pushToast(`${labelOfEp(ev.endpointId)} 등록 실패 — ${ev.error || '서버 응답 없음'}`);
+      else if (ev.ev === 'call' && ev.call === 'ended' && ev.error) pushToast(`${labelOfEp(ev.endpointId)} 통화 실패 — ${ev.error}`);
+      else if (ev.ev === 'error' && ev.error) pushToast(String(ev.error));
       if (!ev.endpointId) return;
       // 등록 성공 시 자신의 프레즌스를 online 으로 게시
       if (ev.ev === 'reg' && ev.reg === 'registered') { try { api().sipSetPresence?.({ endpointId: ev.endpointId, online: true }); } catch {} }
@@ -302,6 +306,17 @@ export const MicroSipWorkspace: React.FC = () => {
   // 매크로처럼 길게 도는 비동기 루프에서 "현재" 런타임을 읽기 위한 ref (stale closure 방지)
   const runtimeRef = useRef(runtime);
   runtimeRef.current = runtime;
+  const endpointsRef = useRef(endpoints);
+  endpointsRef.current = endpoints;
+
+  // ── 토스트 알림 (등록/통화 실패 등) ──
+  const [toasts, setToasts] = useState<{ id: string; text: string; kind: 'error' | 'info' }[]>([]);
+  const pushToast = (text: string, kind: 'error' | 'info' = 'error') => {
+    const id = uid('t');
+    setToasts(p => [...p.slice(-4), { id, text, kind }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 6000);
+  };
+  const labelOfEp = (id: string) => endpointsRef.current.find(e => e.id === id)?.label || id;
 
   // ── 인입 벨소리 (WebAudio) ── 전역 마스터(ringEnabled) AND 단말별(ep.ring)
   const anyIncoming = endpoints.some(e => e.ring !== false && rt(e.id).call === 'incoming');
@@ -393,7 +408,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const register = async (e: SipEndpoint) => {
     setRt(e.id, { reg: 'registering', error: undefined });
     const r = await api().sipRegister?.({ endpoint: e }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
-    if (!r?.ok) setRt(e.id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error });
+    if (!r?.ok) { setRt(e.id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error }); pushToast(`${e.label} 등록 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
   };
   const unregister = async (id: string) => { await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' }); };
   const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
@@ -418,7 +433,7 @@ export const MicroSipWorkspace: React.FC = () => {
     if (!target) return;
     setRt(id, { call: 'calling', remote: target });
     const r = await api().sipCall?.({ endpointId: id, target }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
-    if (!r?.ok) setRt(id, { call: 'idle', error: r?.error });
+    if (!r?.ok) { setRt(id, { call: 'idle', error: r?.error }); pushToast(`${labelOfEp(id)} 통화 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
   };
   const hangup = async (id: string) => { await api().sipHangup?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle', muted: false }); };
   const answer = async (id: string) => { await api().sipAnswer?.({ endpointId: id }).catch(() => {}); };
@@ -497,7 +512,22 @@ export const MicroSipWorkspace: React.FC = () => {
   };
 
   return (
-    <div className="microsip-ws" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)' }}>
+    <div className="microsip-ws" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)' }}>
+      {/* 토스트 알림 (등록/통화 실패 등) */}
+      {toasts.length > 0 && (
+        <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+          {toasts.map(t => (
+            <div key={t.id} onClick={() => setToasts(p => p.filter(x => x.id !== t.id))}
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                background: t.kind === 'error' ? '#3d1518' : 'var(--win-surface-2, #21262d)', border: `1px solid ${t.kind === 'error' ? '#f85149' : 'var(--win-border, #30363d)'}`,
+                color: 'var(--win-text, #e6edf3)', fontSize: 12, boxShadow: '0 4px 14px rgba(0,0,0,0.4)' }}>
+              <span style={{ flex: '0 0 auto' }}>{t.kind === 'error' ? '⛔' : 'ℹ'}</span>
+              <span style={{ flex: 1, wordBreak: 'break-word' }}>{t.text}</span>
+              <span style={{ flex: '0 0 auto', color: 'var(--win-text-dim, #9aa7b3)' }}>✕</span>
+            </div>
+          ))}
+        </div>
+      )}
       <MicroSipHeader
         view={view} setView={setView}
         engineReady={engineReady}
