@@ -12,14 +12,15 @@
 #include <pj/pool.h>
 #include <pj/string.h>
 #include <pj/os.h>
+#include <pj/log.h>
 #include "evs_glue.h"
 
 #define EVS_PTIME       20
 #define EVS_SAMPLES     EVS_GLUE_FRAME      /* 320 */
 #define EVS_PCM_BYTES   (EVS_SAMPLES * 2)   /* 640 */
 #define EVS_CLOCK       EVS_GLUE_FS         /* 16000 */
-#define EVS_SPEECH_BYTES 33                 /* 13.2 kbps → 264 bits → 33 bytes (음성부) */
-#define EVS_FRAME_BYTES  34                 /* header-full: ToC(1) + 33 = 34 bytes/frame */
+#define EVS_ENC_BYTES    33                 /* 송신 고정 13.2kbps compact → 33 bytes/frame */
+#define EVS_MIN_BYTES    6                  /* 최소 유효 프레임(SID 2.4k=48bit=6B) */
 #define EVS_DEF_PT      96                  /* 동적 PT 기본값(SDP 협상 시 재배정) */
 
 PJ_DECL(pj_status_t) pjmedia_codec_evs_init(pjmedia_endpt *endpt);
@@ -249,7 +250,7 @@ static pj_status_t evs_codec_encode(pjmedia_codec *codec, const struct pjmedia_f
 
     pj_assert(d && d->enc);
     PJ_ASSERT_RETURN(in_size % EVS_PCM_BYTES == 0, PJMEDIA_CODEC_EPCMFRMINLEN);
-    PJ_ASSERT_RETURN(out_size >= EVS_FRAME_BYTES * (in_size / EVS_PCM_BYTES), PJMEDIA_CODEC_EFRMTOOSHORT);
+    PJ_ASSERT_RETURN(out_size >= EVS_ENC_BYTES * (in_size / EVS_PCM_BYTES), PJMEDIA_CODEC_EFRMTOOSHORT);
 
     while (in_size >= EVS_PCM_BYTES) {
         int n = evs_glue_encode(d->enc, pcm, (unsigned char *) output->buf + produced);
@@ -271,7 +272,20 @@ static pj_status_t evs_codec_decode(pjmedia_codec *codec, const struct pjmedia_f
     int n;
     pj_assert(d && d->dec);
     PJ_ASSERT_RETURN(out_size >= EVS_PCM_BYTES, PJMEDIA_CODEC_EPCMTOOSHORT);
-    if (input->size < EVS_SPEECH_BYTES) return PJMEDIA_CODEC_EFRMTOOSHORT;
+    /* 진단: 게이트웨이가 보내는 실제 페이로드 크기/선두바이트 (처음 20프레임만) */
+    {
+        static int dbg = 0;
+        if (dbg < 4) {
+            const unsigned char *b = (const unsigned char *) input->buf;
+            char hex[3 * 40 + 1]; unsigned n = (unsigned) input->size, j, p = 0;
+            if (n > 40) n = 40;
+            for (j = 0; j < n; j++) p += (unsigned) pj_ansi_snprintf(hex + p, sizeof(hex) - p, "%02x ", b[j]);
+            hex[p] = 0;
+            PJ_LOG(3, ("evs", "dec in=%u : %s", (unsigned) input->size, hex));
+            ++dbg;
+        }
+    }
+    if (input->size < EVS_MIN_BYTES) return PJMEDIA_CODEC_EFRMTOOSHORT;
 
     n = evs_glue_decode(d->dec, (const unsigned char *) input->buf, (int) input->size,
                         (short *) output->buf);

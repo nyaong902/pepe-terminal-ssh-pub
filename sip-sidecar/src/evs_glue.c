@@ -49,25 +49,17 @@ void *evs_glue_enc_create(void)
     return o;
 }
 
-/* RTP header-full ToC(EVS Primary 13.2kbps): H=0,F=0,FT=PRIMARY_13200(4) → 0x04.
- * fmtp 미지정 시 RFC8627 기본은 header-full(프레임마다 ToC) 이므로 ToC 를 붙인다. */
-#define EVS_TOC_13K2   0x04
-#define EVS_SPEECH_BYTES ((EVS_GLUE_BRATE / 50 + 7) / 8)  /* 13200/50=264bit → 33 */
-
+/* 게이트웨이(IMS)가 fmtp 없이 compact(헤더 없는 음성 비트만, 레이트는 페이로드 크기로 구분)를
+ * 쓰므로 우리도 compact 로 송신한다. 13.2kbps 고정 → 33바이트. */
 int evs_glue_encode(void *enc, const short *pcm, unsigned char *out)
 {
     evs_enc_obj *o = (evs_enc_obj *) enc;
-    unsigned char frame[EVS_GLUE_MAX_BYTES];
     short nbits = 0;
-    int fb;
     if (!o || !pcm || !out) return 0;
     reset_indices_enc(&o->st);
     evs_enc(&o->st, pcm, EVS_GLUE_FRAME);
-    indices_to_serial(&o->st, frame, &nbits);
-    fb = (nbits + 7) / 8;
-    out[0] = EVS_TOC_13K2;            /* ToC */
-    memcpy(out + 1, frame, (size_t) fb);
-    return fb + 1;                    /* header-full: 1(ToC) + 33 = 34 */
+    indices_to_serial(&o->st, out, &nbits);   /* compact: 순수 음성 비트(33B) */
+    return (nbits + 7) / 8;
 }
 
 void evs_glue_enc_destroy(void *enc)
@@ -106,14 +98,11 @@ int evs_glue_decode(void *dec, const unsigned char *in, int in_bytes, short *pcm
     evs_dec_obj *o = (evs_dec_obj *) dec;
     float synth[EVS_GLUE_FRAME];
     int i;
-    int off;
     if (!o || !in || !pcm || in_bytes <= 0) return 0;
-    o->st.total_brate = EVS_GLUE_BRATE; /* 고정 13.2k (rate 는 ToC/fmtp 가 아닌 고정값 사용) */
-    /* 헤더(ToC[+CMR]) 자동 스킵: 음성 프레임은 33바이트 고정 → 앞쪽 잉여를 헤더로 간주.
-     * compact(33)→off0, header-full(34: ToC+33)→off1, CMR+ToC(35)→off2. */
-    off = in_bytes - EVS_SPEECH_BYTES;
-    if (off < 0) off = 0;
-    read_indices_from_djb(&o->st, (unsigned char *) in + off, EVS_SPEECH_BYTES * 8, 0, 0);
+    /* compact: 페이로드 전체가 음성 비트. 레이트는 크기로 결정 → num_bits = in_bytes*8.
+     * read_indices_from_djb 내부에서 total_brate = num_bits*50 로 레이트/모드를 도출한다.
+     * (EVS Primary 전 레이트가 바이트 정렬: 2.8k=7B,13.2k=33B,SID=6B 등) */
+    read_indices_from_djb(&o->st, (unsigned char *) in, in_bytes * 8, 0, 0);
     evs_dec(&o->st, synth, FRAMEMODE_NORMAL);
     for (i = 0; i < EVS_GLUE_FRAME; i++) {
         float v = synth[i];
