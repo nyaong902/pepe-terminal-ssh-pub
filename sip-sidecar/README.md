@@ -57,7 +57,24 @@ printf '#define PJMEDIA_HAS_VIDEO 0\n#define PJSUA_MAX_ACC 32\n#define PJSUA_MAX
 ### 코덱 현황
 - **G.711 (ulaw/alaw)**: ✅ 동작 (pjproject 내장).
 - **AMR-NB / AMR-WB**: ✅ 동작 (opencore-amr + vo-amrwbenc, 위 절차로 빌드·임베드 확인).
-- **EVS**: ⛔ 3GPP TS 26.442/443 레퍼런스(라이선스) 필요. pjmedia 커스텀 코덱으로 래핑 후 `libInit` 직후 등록 — 자동 취득 불가, 수동 통합.
+- **EVS**: 🔶 진행 중. 3GPP TS 26.443 레퍼런스(floating-point) **라이브러리 빌드 완료**, pjmedia 래퍼는 미완.
+
+### EVS 빌드 (✅ 라이브러리까지 — `libevs.a`)
+3GPP EVS 레퍼런스는 라이선스상 리포에 커밋하지 않고 `pepe-sip-build/evs-src` 에서 외부 빌드한다.
+```sh
+# 1) ETSI 소스 (브라우저 UA 필수 — 기본 curl UA 는 403)
+curl -fSL -A "Mozilla/5.0" -e https://www.etsi.org/ -o ts_evs.zip \
+  https://www.etsi.org/deliver/etsi_ts/126400_126499/126443/16.01.00_60/ts_126443v160100p0.zip
+unzip ts_evs.zip && unzip 26443-*-ANSI-C_source_code.zip -d ccode   # → ccode/c-code (369 .c)
+# 2) MinGW 호환 패치: lib_com/typedef.h 의 __unix__ 분기에
+#    || defined(__MINGW32__) || defined(__MINGW64__) || defined(__GNUC__) 추가 (Word16 등 typedef)
+# 3) 빌드 → 오브젝트를 정적 라이브러리로 (EVS_cod/EVS_dec 실행파일 링크 실패는 무시 — ntohs/ntohl 은 sipd 가 -lws2_32 로 해결)
+cd ccode/c-code && make CC="gcc -std=gnu11 -fcommon -w"
+find build -name '*.o' -print0 | xargs -0 ar rcs libevs.a   # → libevs.a (~39MB)
+```
+임베드 API: `init_encoder`/`evs_enc`/`destroy_encoder`(lib_enc), `init_decoder`/`evs_dec`/`destroy_decoder`(lib_dec).
+
+**남은 작업(대형)**: pjmedia EVS 코덱 래퍼 — factory + codec ops + **RTP 페이로드 포맷(RFC 8627 / TS 26.445 Annex A: compact·header-full, ToC, CMR)** + SDP fmtp(br/bw/ch-aw-recv). 참고: `github.com/traud/asterisk-evs`. 이후 sipd `libInit` 직후 `pjmedia_codec_evs_init` 등록 (codecPjId 의 evs→"EVS/16000" 매핑은 이미 있음). 검증은 실 SIP 서버 interop 필요.
 
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
