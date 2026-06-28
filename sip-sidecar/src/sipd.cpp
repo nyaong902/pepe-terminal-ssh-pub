@@ -500,8 +500,18 @@ int main() {
     try {
         g_ep.libCreate();
         EpConfig epcfg;
-        epcfg.logConfig.level = 1;
-        epcfg.logConfig.consoleLevel = 0; // PJSIP 로그가 stdout(프로토콜) 을 오염시키지 않도록
+        // SIP 전체 트레이스를 파일로 — stdout(프로토콜)은 깨끗이 유지(consoleLevel=0).
+        // 경로: env PEPE_SIPD_LOG > %TEMP%\pepe-sipd.log > 현재 디렉터리.
+        epcfg.logConfig.level = 5;
+        epcfg.logConfig.consoleLevel = 0;
+        {
+            const char* envlog = getenv("PEPE_SIPD_LOG");
+            std::string logf;
+            if (envlog && *envlog) logf = envlog;
+            else { const char* tmp = getenv("TEMP"); logf = (tmp && *tmp ? std::string(tmp) : std::string(".")) + "\\pepe-sipd.log"; }
+            epcfg.logConfig.filename = logf;
+            emitJson({{"ev","log"},{"level","info"},{"text",std::string("sipd log → ") + logf}});
+        }
         g_ep.libInit(epcfg);
 
         // EVS 등 커스텀 코덱은 여기서 등록:  pjmedia_codec_evs_init(g_ep.mediaEndpt());  (구현 시)
@@ -512,6 +522,23 @@ int main() {
         { TransportConfig t; t.port = 0; try { g_ep.transportCreate(PJSIP_TRANSPORT_TLS, t); } catch (...) {} }
 
         g_ep.libStart();
+
+        // AMR octet-align=1 강제 — 대부분의 통신사/IMS 서버가 octet-align=1 을 요구한다.
+        // pjproject 기본은 octet-align=0(대역효율)이라, 우리 offer 에 fmtp 가 없으면
+        // 서버(octet-align=1)와 프레이밍이 달라 협상에서 AMR 이 제거되고 "No active media
+        // stream"(EINVALIDPT) 으로 통화가 즉시 끊긴다. dec_fmtp 에 넣어 offer 에 광고한다.
+        auto forceAmrOctetAlign = [](const char* codecId) {
+            try {
+                CodecParam prm = g_ep.codecGetParam(codecId);
+                bool found = false;
+                for (auto& f : prm.setting.decFmtp) if (f.name == "octet-align") { f.val = "1"; found = true; }
+                if (!found) { CodecFmtp f; f.name = "octet-align"; f.val = "1"; prm.setting.decFmtp.push_back(f); }
+                g_ep.codecSetParam(codecId, prm);
+            } catch (...) {}
+        };
+        forceAmrOctetAlign("AMR-WB/16000");
+        forceAmrOctetAlign("AMR/8000");
+
         emitJson({{"ev","ready"}});
         cmdListAudio(); // 기동 직후 오디오 장치 목록 1회 통지
     } catch (Error& e) {
