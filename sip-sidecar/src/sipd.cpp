@@ -164,19 +164,28 @@ static std::map<std::string, MyBuddy*> g_buddies;
 
 static Endpoint g_ep;
 
-static void setCodecPriorities(const json& codecs) {
-    // 먼저 전부 0(비활성) 후, endpoint.codecs 순서대로 높은 우선순위 부여
+static void setCodecPriorities(const json& codecs, const std::string& epId) {
+    // 등록된 코덱 목록 수집 + 먼저 전부 0(비활성)
+    std::vector<std::string> avail;
     try {
         const CodecInfoVector2 all = g_ep.codecEnum2();
-        for (auto& ci : all) g_ep.codecSetPriority(ci.codecId, 0);
+        for (auto& ci : all) { g_ep.codecSetPriority(ci.codecId, 0); avail.push_back(ci.codecId); }
     } catch (...) {}
     int prio = 254;
+    json unsupported = json::array();
     for (auto& c : codecs) {
-        std::string id = codecPjId(c.get<std::string>());
+        std::string cs = c.get<std::string>();
+        std::string id = codecPjId(cs);
         if (id.empty()) continue;
+        // 등록 여부 확인 (codecEnum2 의 id 는 "AMR-WB/16000/1" 처럼 접미사 가능 → prefix 비교)
+        bool found = false;
+        for (auto& a : avail) if (a.rfind(id, 0) == 0) { found = true; break; }
+        if (!found) { unsupported.push_back(cs); continue; } // 미등록 코덱(예: EVS 래퍼 미완) → 건너뛰고 경고
         try { g_ep.codecSetPriority(id, (pj_uint8_t)prio); } catch (...) {}
         if (prio > 1) prio -= 8;
     }
+    if (!unsupported.empty())
+        emitJson({{"ev","codec-warn"},{"endpointId",epId},{"unsupported",unsupported}});
 }
 
 static void cmdRegister(const json& ep) {
@@ -204,7 +213,7 @@ static void cmdRegister(const json& ep) {
     std::string turnPass = ep.value("turnPassword", "");
     g_dtmfMode[id] = ep.value("dtmfMode", std::string("rfc2833"));
 
-    if (ep.contains("codecs")) setCodecPriorities(ep["codecs"]);
+    if (ep.contains("codecs")) setCodecPriorities(ep["codecs"], id);
 
     std::string scheme = "sip";
     std::string tparam = transport == "tls" ? ";transport=tls" : transport == "tcp" ? ";transport=tcp" : "";

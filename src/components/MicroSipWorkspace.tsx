@@ -245,6 +245,11 @@ export const MicroSipWorkspace: React.FC = () => {
         if (ev.error) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `녹음 오류: ${ev.error}`, kind: 'error' }, ...prev].slice(0, 200));
         return;
       }
+      if (ev.ev === 'codec-warn') {
+        const list = (Array.isArray(ev.unsupported) ? ev.unsupported : []).map((c: string) => c.toUpperCase()).join(', ');
+        if (list) pushToast(`${labelOfEp(ev.endpointId)}: 미지원 코덱 ${list} — 무시됨 (AMR-WB 등 다른 코덱도 함께 선택하세요)`);
+        return;
+      }
       if (ev.ev === 'mwi') {
         if (ev.endpointId) setRuntime(prev => ({ ...prev, [ev.endpointId]: { ...(prev[ev.endpointId] || { reg: 'unregistered', call: 'idle', dialed: '' }), mwi: !!ev.waiting } }));
         setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `음성사서함 ${ev.waiting ? '도착' : '없음'}`, kind: 'reg' }, ...prev].slice(0, 200));
