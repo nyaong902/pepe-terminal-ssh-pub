@@ -62,14 +62,16 @@ export const VpnWorkspace: React.FC = () => {
   const [hasSavedCreds, setHasSavedCreds] = useState(false);
   // 모달 열릴 때마다 input 을 강제 재마운트하려는 키 (focus 끈적임 회피).
   const [authOpenCounter, setAuthOpenCounter] = useState(0);
+  const [authNotice, setAuthNotice] = useState('');
   // 외부 변경 ref (입력 유지용)
   const authPassRef = useRef<HTMLInputElement | null>(null);
   // 모달 열기 헬퍼.
   // 핵심: refocusWindow() 호출 — sudo-prompt UAC / confirm() 등 native 다이얼로그 후 BrowserWindow 가
   // OS 포커스를 잃은 상태로 남는 Windows 동작 회피. 윈도우 포커스 회복 후에야 안의 input 이 포커스 가능.
-  const openAuthPrompt = useCallback(() => {
+  const openAuthPrompt = useCallback((notice = '') => {
     try { api.refocusWindow?.(); } catch {}
     try { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); } catch {}
+    setAuthNotice(notice);
     setAuthOpenCounter(c => c + 1);
     setAuthPrompt(true);
   }, []);
@@ -102,7 +104,20 @@ export const VpnWorkspace: React.FC = () => {
       if (next.length > 5000) next.splice(0, next.length - 5000);
       return next;
     }));
-    return () => { offState?.(); offLog?.(); };
+    const offPasswordRequired = api.onVpnPasswordRequired?.((line: string) => {
+      setPassword('');
+      setAuthNotice(t('authRequiredNotice'));
+      openAuthPrompt(t('authRequiredNotice'));
+      console.warn('[vpn] password required:', line);
+    });
+    const offAuthFailed = api.onVpnAuthFailed?.((line: string) => {
+      setPassword('');
+      setState(prev => ({ ...prev, status: 'error', lastError: t('authFailedNotice') }));
+      setAuthNotice(t('authFailedNotice'));
+      openAuthPrompt(t('authFailedNotice'));
+      console.warn('[vpn] auth failed:', line);
+    });
+    return () => { offState?.(); offLog?.(); offPasswordRequired?.(); offAuthFailed?.(); };
   }, []);
 
   // 선택 변경 → localStorage 영속화 + 자격증명 prefill 준비.
@@ -176,10 +191,16 @@ export const VpnWorkspace: React.FC = () => {
     }
     const r = await api.vpnConnect?.(selectedConfig, useUser, usePass);
     if (!r?.ok && r?.reason) {
-      notifyError(t('connectFailed', { reason: r.reason }));
+      const isAuthish = /auth|credential|password|username/i.test(r.reason);
+      if (isAuthish) {
+        setPassword('');
+        openAuthPrompt(t('authFailedNotice'));
+      } else {
+        notifyError(t('connectFailed', { reason: r.reason }));
+      }
     }
-    if (withAuth) setAuthPrompt(false);
-  }, [selectedConfig, username, password, rememberCreds, hasSavedCreds]);
+    if (withAuth && r?.ok) setAuthPrompt(false);
+  }, [selectedConfig, username, password, rememberCreds, hasSavedCreds, openAuthPrompt]);
 
   const clearSavedCreds = useCallback(async () => {
     if (!selectedConfig) return;
@@ -306,7 +327,7 @@ export const VpnWorkspace: React.FC = () => {
                 </button>
                 <button
                   onMouseDown={e => e.preventDefault()}
-                  onClick={openAuthPrompt}
+                  onClick={() => openAuthPrompt()}
                   disabled={!selectedConfig || !avail?.ok}
                   style={{ padding: '6px 12px', fontSize: 11 }}>
                   {hasSavedCreds ? t('reauthAndConnect') : t('authAndConnect')}
@@ -354,6 +375,11 @@ export const VpnWorkspace: React.FC = () => {
         <div className="session-editor-backdrop">
           <div className="session-editor" onClick={e => e.stopPropagation()} style={{ width: 360, display: 'flex', flexDirection: 'column' }}>
             <h3>{t('authTitle')}</h3>
+            {authNotice && (
+              <div style={{ marginTop: 6, padding: '8px 10px', borderRadius: 6, background: '#2a1a1a', border: '1px solid #4a2a2a', color: '#f3b4b4', fontSize: 12, lineHeight: 1.4 }}>
+                {authNotice}
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
               <label style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)' }}>{t('username')}</label>
               {/* key 로 강제 재마운트 — 매 모달 open 마다 새 input → autoFocus + callback ref 가 확실히 발동 */}

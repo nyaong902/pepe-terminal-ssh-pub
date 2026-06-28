@@ -27,6 +27,8 @@
   "autoScroll": "Auto-scroll",
   "clearLogs": "Clear",
   "authTitle": "🔑 Authentication",
+  "authRequiredNotice": "OpenVPN is requesting a username and password. Please re-enter them.",
+  "authFailedNotice": "Authentication failed. Please re-enter the username and password.",
   "username": "Username",
   "password": "Password",
   "rememberCreds": "Remember (auto-fill next time — OS secure storage encrypted)",

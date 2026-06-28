@@ -539,6 +539,16 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('vpn:log', h);
     return () => ipcRenderer.removeListener('vpn:log', h);
   },
+  onVpnPasswordRequired: (cb: (line: string) => void) => {
+    const h = (_: any, line: string) => cb(line);
+    ipcRenderer.on('vpn:password-required', h);
+    return () => ipcRenderer.removeListener('vpn:password-required', h);
+  },
+  onVpnAuthFailed: (cb: (line: string) => void) => {
+    const h = (_: any, line: string) => cb(line);
+    ipcRenderer.on('vpn:auth-failed', h);
+    return () => ipcRenderer.removeListener('vpn:auth-failed', h);
+  },
 
   // 파일 비교 (CompareWorkspace)
   compareWalk: (mode: string, basePath: string, termId?: string, maxEntries?: number) =>

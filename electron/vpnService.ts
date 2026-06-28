@@ -33,6 +33,8 @@ class VpnService extends EventEmitter {
   private mgmtBuf = '';
   private pidFile: string | null = null;
   private logFile: string | null = null;
+  private logTailPos = 0;
+  private lastMgmtError: string | null = null;
   private logTailTimer: NodeJS.Timeout | null = null;
   private bytecountTimer: NodeJS.Timeout | null = null;
 
@@ -122,11 +124,20 @@ class VpnService extends EventEmitter {
     this.state = { ...this.state, ...patch };
     this.emit('state', this.state);
   }
+  private emitAuthFailure(line: string) {
+    const normalized = line.startsWith('[file] ') ? line.slice(7) : line;
+    if (!/SIGUSR1\[soft,auth-failure\]|AUTH_FAILED|authentication failed|TLS Error: Auth Username\/Password verification failed|could not read Auth username\/password\/ok\/string from management interface/i.test(normalized)) {
+      return;
+    }
+    this.setState({ status: 'error', lastError: '인증 실패: 사용자명/비밀번호를 다시 입력해 주세요.' });
+    this.emit('authFailed', normalized);
+  }
   private addLog(line: string) {
     // 메모리 보호 — 최대 5000 줄
     this.logs.push(line);
     if (this.logs.length > 5000) this.logs.splice(0, this.logs.length - 5000);
     this.emit('log', line);
+    this.emitAuthFailure(line);
   }
 
   // 사용 중 mgmt 포트 잡기
@@ -157,6 +168,9 @@ class VpnService extends EventEmitter {
     this.mgmtPort = await this.pickMgmtPort();
     this.pidFile = path.join(os.tmpdir(), `pepe-openvpn-${Date.now()}.pid`);
     this.logFile = path.join(os.tmpdir(), `pepe-openvpn-${Date.now()}.log`);
+    this.logTailPos = 0;
+    this.lastMgmtError = null;
+    try { if (this.logFile) fs.writeFileSync(this.logFile, ''); } catch {}
 
     // username/password 가 있으면 임시 파일 (admin 으로 spawn 되는 openvpn 이 읽음) — 메모리 only 가 이상적이지만 --auth-user-pass 가 파일을 요구
     let authFile: string | null = null;
@@ -174,19 +188,17 @@ class VpnService extends EventEmitter {
       // 응답을 추가로 기다려서 hang 됨. --auth-user-pass <file> 만으로 충분.
       '--writepid', this.pidFile,
       // --log 제거 — management 'log on all' 이 동일 로그 스트림 (중복 방지)
+      '--log-append', this.logFile,
       '--verb', '3',
       // 서버가 OpenVPN 2.7 미지원 syntax "route add ..." 로 push 하는 경우 — OpenVPN 2.7 이 parse 실패 후
       // TEST ROUTES 루프에 빠짐. 잘못된 라인을 미리 ignore 해서 stuck 회피.
       // (정상 syntax "route 1.2.3.0 255.255.255.0 [gw]" 는 영향 없음)
       '--pull-filter', 'ignore', 'route add',
     ];
-    // (한때 --route-method exe / --ip-win32 netsh 추가했으나 OpenVPN 2.7 의 ovpn-dco 드라이버와
-    //  충돌해 "NETSH: command failed" 발생. 제거 — DCO 가 자체 IP/라우팅 처리하도록 openvpn 기본값 사용.)
-    // OpenVPN 2.7 의 ovpn-dco 드라이버 명시 사용 — DHCP 거치지 않고 직접 IP 설정. TAP-Windows 의
-    // APIPA fallback 이슈 회피. .ovpn 에 `windows-driver wintun` 같은 명시가 없으면 DCO 우선.
-    if (process.platform === 'win32') {
-      argsArr.push('--windows-driver', 'ovpn-dco');
-    }
+    // Windows 드라이버 자동 감지 — OpenVPN 이 설치된 드라이버(TAP-Windows / ovpn-dco / wintun)를
+    // 자동 선택하도록 맡김. --windows-driver 를 강제하면 해당 드라이버가 없거나 서버 설정과
+    // 호환되지 않을 때 Connection reset 루프 발생.
+    // .ovpn 파일에 windows-driver 지시문이 있으면 그것이 우선됨.
     if (authFile) argsArr.push('--auth-user-pass', authFile);
 
     // sudo-prompt 로 admin 권한 spawn — 매 연결마다 UAC 1회. 단순/안정 우선.
@@ -225,6 +237,7 @@ class VpnService extends EventEmitter {
     });
 
     // openvpn 이 management 소켓 listen 할 때까지 폴링 (최대 90초)
+    this.startLogTail();
     setTimeout(() => this.connectMgmt(), 800);
     return { ok: true };
   }
@@ -238,9 +251,10 @@ class VpnService extends EventEmitter {
     if (retry > MAX_RETRY) {
       // 실패 원인 추정 — pidFile 존재 여부로 openvpn 이 실제 시작됐는지 판단
       const pidExists = this.pidFile && fs.existsSync(this.pidFile);
+      const mgmtHint = this.lastMgmtError ? ` (최근 management 오류: ${this.lastMgmtError})` : '';
       const reason = pidExists
-        ? `management 소켓 (127.0.0.1:${this.mgmtPort}) 연결 실패 — openvpn 은 떠 있는데 포트 응답 없음. 방화벽 확인.`
-        : `openvpn 프로세스가 시작되지 않음 — UAC 거부했거나 바이너리/드라이버 문제. 로그 패널 [exit] 항목 확인.`;
+        ? `management 소켓 (127.0.0.1:${this.mgmtPort}) 연결 실패 — openvpn 은 떠 있는데 포트 응답 없음. 방화벽/권한/관리 채널 설정 확인.${mgmtHint}`
+        : `openvpn 프로세스가 시작되지 않음 — UAC 거부했거나 바이너리/드라이버 문제. 로그 패널 [exit] 항목 확인.${mgmtHint}`;
       this.addLog(`[management] ${reason}`);
       this.setState({ status: 'error', lastError: reason });
       return;
@@ -254,6 +268,7 @@ class VpnService extends EventEmitter {
       resolved = true;
       this.mgmtSock = s;
       this.mgmtBuf = '';
+      this.lastMgmtError = null;
       if (retry > 0) this.addLog(`[management] 연결 성공 (시도 ${retry + 1})`);
       // 순서 중요: subscriptions 먼저 설정 → 마지막에 hold release. 명령마다 약간 지연 (2.7 RC 가 동시 처리 약함)
       const cmds = ['state on', 'log on all', 'bytecount 2', 'hold release'];
@@ -275,12 +290,41 @@ class VpnService extends EventEmitter {
     s.on('close', () => {
       if (this.mgmtSock === s) this.mgmtSock = null;
     });
-    s.on('error', () => {
+    s.on('error', (err: NodeJS.ErrnoException) => {
+      const detail = err?.code ? `${err.code}: ${err.message || ''}`.trim() : (err?.message || 'unknown error');
+      this.lastMgmtError = detail;
       if (resolved) return; // 이미 연결 후 끊김은 별도
       // 진행 상황 가끔 알려줌 (스팸 방지)
-      if (retry > 0 && retry % 20 === 0) this.addLog(`[management] 연결 대기 중... (${retry * delayMs / 1000}초 경과)`);
+      if (retry === 0 || retry % 20 === 0) this.addLog(`[management] 연결 실패 시도 ${retry + 1}: ${detail}`);
+      else if (retry > 0 && retry % 20 === 0) this.addLog(`[management] 연결 대기 중... (${retry * delayMs / 1000}초 경과)`);
       setTimeout(() => this.connectMgmt(retry + 1), delayMs);
     });
+  }
+
+  private startLogTail() {
+    if (!this.logFile) return;
+    if (this.logTailTimer) { clearInterval(this.logTailTimer); this.logTailTimer = null; }
+    this.logTailPos = 0;
+    this.logTailTimer = setInterval(() => {
+      try {
+        if (!this.logFile || !fs.existsSync(this.logFile)) return;
+        const st = fs.statSync(this.logFile);
+        if (st.size < this.logTailPos) this.logTailPos = 0;
+        if (st.size <= this.logTailPos) return;
+        const fd = fs.openSync(this.logFile, 'r');
+        try {
+          const buf = Buffer.allocUnsafe(st.size - this.logTailPos);
+          const bytesRead = fs.readSync(fd, buf, 0, buf.length, this.logTailPos);
+          this.logTailPos = st.size;
+          const text = buf.toString('utf-8', 0, bytesRead);
+          for (const line of text.split(/\r?\n/)) {
+            if (line) this.addLog(`[file] ${line}`);
+          }
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch {}
+    }, 1000);
   }
 
   private send(cmd: string) {
@@ -344,6 +388,7 @@ class VpnService extends EventEmitter {
       this.addLog(`[mgmt-resp] ${line}`);
     } else if (line.startsWith('>FATAL:')) {
       this.setState({ status: 'error', lastError: line.slice(7) });
+      this.emitAuthFailure(line);
     }
   }
 
@@ -356,6 +401,7 @@ class VpnService extends EventEmitter {
     if (this.logFile && fs.existsSync(this.logFile)) try { fs.unlinkSync(this.logFile); } catch {}
     this.pidFile = null;
     this.logFile = null;
+    this.logTailPos = 0;
   }
 
   async disconnect(): Promise<{ ok: boolean }> {

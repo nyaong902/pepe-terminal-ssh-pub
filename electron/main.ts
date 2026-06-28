@@ -5479,6 +5479,8 @@ const safeSend = (channel: string, payload: any) => {
 };
 vpn.on('state', (st: any) => safeSend('vpn:state', st));
 vpn.on('log', (line: string) => safeSend('vpn:log', line));
+vpn.on('passwordRequired', (line: string) => safeSend('vpn:password-required', line));
+vpn.on('authFailed', (line: string) => safeSend('vpn:auth-failed', line));
 // 앱 종료 시 VPN 정리 — management SIGTERM 보내서 elevated openvpn.exe 가 스스로 깔끔히 종료하도록
 app.on('before-quit', () => {
   try { vpn.disconnect(); } catch {}

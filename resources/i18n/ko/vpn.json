@@ -27,6 +27,8 @@
   "autoScroll": "자동 스크롤",
   "clearLogs": "지우기",
   "authTitle": "🔑 사용자 인증",
+  "authRequiredNotice": "OpenVPN 이 사용자명/비밀번호를 요구합니다. 다시 입력해 주세요.",
+  "authFailedNotice": "인증 실패. 사용자명/비밀번호를 다시 입력해 주세요.",
   "username": "사용자명",
   "password": "비밀번호",
   "rememberCreds": "기억하기 (다음부터 자동 사용 — OS 안전 저장소 암호화)",
