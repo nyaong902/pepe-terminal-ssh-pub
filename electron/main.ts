@@ -395,11 +395,14 @@ function cleanupStaleTempFiles() {
       /^pepe-icons-batch-\d+/, /^pepe-shellicon-\d+/, /^pepe-icon-\d+/,
       /^pepe-mermaid-src\.txt$/, /^pepe-autotrack-/, /^pepe-pwd-/, /^pepe-mcp-\d+/,
       /^gemini-prompt-\d+/, /^gemini-mcp-\d+/, /^claude-mcp-\d+/,
+      /^pepe-sipd\.log$/, // SIP 사이드카 파일 로그 제거 (env 설정 안 했을 때 잔존 정리)
     ];
     for (const name of fs.readdirSync(dir)) {
       if (!patterns.some(re => re.test(name))) continue;
       const full = path.join(dir, name);
       try {
+        // pepe-sipd.log 는 더 이상 사용하지 않으므로 즉시 삭제 (mtime 무관)
+        if (name === 'pepe-sipd.log') { try { fs.rmSync(full, { force: true }); } catch {} continue; }
         const st = fs.statSync(full);
         if (now - st.mtimeMs < MAX_AGE) continue; // 최근 것은 보존
         fs.rmSync(full, { recursive: true, force: true });

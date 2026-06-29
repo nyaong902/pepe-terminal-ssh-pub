@@ -143,6 +143,23 @@ public final class Handlers {
     try {
       if (c.isClosed()) { conns.remove(connId); out.put("connected", false); return out; }
     } catch (Exception ignore) { out.put("connected", false); return out; }
+    // isValid(2s) — IP 만 살아있고 실제 세션이 깨진(서버 timeout/version mismatch 등) 경우 가짜 connected 방지.
+    // isValid 미지원 드라이버 (일부 Altibase 등) 는 SELECT 1 폴백.
+    try {
+      if (!c.isValid(2)) { conns.remove(connId); out.put("connected", false); return out; }
+    } catch (AbstractMethodError ame) {
+      try (java.sql.Statement st = c.createStatement()) {
+        st.setQueryTimeout(2);
+        try (java.sql.ResultSet rs = st.executeQuery("SELECT 1 FROM DUAL")) { /* drop */ }
+      } catch (Exception e) {
+        try (java.sql.Statement st = c.createStatement()) {
+          st.setQueryTimeout(2);
+          try (java.sql.ResultSet rs = st.executeQuery("SELECT 1")) { /* drop */ }
+        } catch (Exception e2) { conns.remove(connId); out.put("connected", false); out.put("reason", e2.getMessage()); return out; }
+      }
+    } catch (Exception e) {
+      conns.remove(connId); out.put("connected", false); out.put("reason", e.getMessage()); return out;
+    }
     out.put("connected", true);
     Map<String, Object> info = new LinkedHashMap<>();
     try {

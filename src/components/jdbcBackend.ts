@@ -167,6 +167,20 @@ export class JdbcBackend {
     if (!r?.success) return { ok: false, error: r?.error || 'connect failed' };
     this._connected = true;
     this._info = r.result || {};
+    // post-connect 검증 — IP 핸드셰이크는 성공해도 driver/version mismatch 등으로 query 가 안 되는
+    // 경우 가짜 connected 방지. 가벼운 ping 한 번 실패하면 disconnect 처리.
+    try {
+      const v = await api.jdbcExec?.({ connectionId: this.connectionId, sql: this.pingSql(), maxRows: 1 });
+      if (!v?.success) {
+        this._connected = false;
+        try { await api.jdbcDisconnect?.(this.connectionId); } catch {}
+        return { ok: false, error: v?.error || 'connection validation failed' };
+      }
+    } catch (e: any) {
+      this._connected = false;
+      try { await api.jdbcDisconnect?.(this.connectionId); } catch {}
+      return { ok: false, error: String(e?.message || e) };
+    }
     return { ok: true };
   }
 

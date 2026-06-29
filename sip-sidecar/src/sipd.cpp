@@ -93,6 +93,84 @@ static std::string codecPjId(const std::string& c) {
     return "";
 }
 
+// endpointId → AOR(user@domain) 매핑 — SIP 메시지에서 어느 단말 트래픽인지 매칭하는 데 사용.
+// (cmdRegister 에서 채워지고, cmdUnregister 에서 정리됨)
+static std::map<std::string, std::string> g_accountAor;
+// 지정한 헤더(From:/To:) 의 sip URI 에서 user@host 부분 추출. 포트/파라미터 제외.
+// 본문은 CRLF/줄바꿈 혼재 가능 — case-insensitive 헤더 매칭.
+static std::string extractHeaderAor(const std::string& body, const char* hdrName, const char* hdrShort) {
+    size_t hlen = std::strlen(hdrName);
+    size_t slen = std::strlen(hdrShort);
+    std::string line;
+    for (size_t pos = 0; pos < body.size(); ) {
+        size_t end = body.find('\n', pos);
+        if (end == std::string::npos) end = body.size();
+        size_t lineLen = end - pos;
+        // strip \r
+        if (lineLen > 0 && body[pos + lineLen - 1] == '\r') lineLen--;
+        bool match = false;
+        if (lineLen > hlen && strncasecmp(body.c_str() + pos, hdrName, hlen) == 0 && (body[pos + hlen] == ':' || body[pos + hlen] == ' ')) match = true;
+        else if (lineLen > slen && strncasecmp(body.c_str() + pos, hdrShort, slen) == 0 && (body[pos + slen] == ':' || body[pos + slen] == ' ')) match = true;
+        if (match) { line.assign(body.c_str() + pos, lineLen); break; }
+        pos = end + 1;
+    }
+    if (line.empty()) return "";
+    size_t s = line.find("sip:");
+    if (s == std::string::npos) s = line.find("sips:");
+    if (s == std::string::npos) return "";
+    s = line.find(':', s) + 1;
+    size_t e = s;
+    while (e < line.size() && line[e] != '>' && line[e] != ';' && line[e] != ' ' && line[e] != ',' && line[e] != '?') e++;
+    std::string aor = line.substr(s, e - s);
+    size_t colon = aor.find(':');
+    if (colon != std::string::npos) aor = aor.substr(0, colon);
+    return aor;
+}
+// SIP 메시지 캡처 — PJSIP 모듈 콜백으로 RX/TX 양방향 가로채기. pjsip_msg_print 로 전체
+// 헤더+본문을 텍스트화해 UI 콜로그에 emit.
+static void emitSipMsg(const char* dir, pjsip_msg* msg) {
+    if (!msg) return;
+    char buf[16384];
+    int n = pjsip_msg_print(msg, buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    buf[n] = 0;
+    std::string body(buf, (size_t)n);
+    size_t end = body.find('\n');
+    std::string first = body.substr(0, end == std::string::npos ? body.size() : end);
+    while (!first.empty() && (first.back() == '\r' || first.back() == ' ')) first.pop_back();
+    while (!body.empty() && (body.back() == '\n' || body.back() == '\r' || body.back() == ' ')) body.pop_back();
+    if (first.empty()) return;
+    // 우리 쪽 단말 식별 — TX 는 From 헤더(보낸이=우리), RX 는 To 헤더(받는이=우리).
+    // 두 단말이 서로 통화하면 From/To 둘 다 우리 단말이라 본문 substring 매칭으론 잘못된 단말이 잡힘.
+    bool isOut = (std::string(dir) == "out");
+    std::string ourAor = extractHeaderAor(body, isOut ? "From" : "To", isOut ? "f" : "t");
+    std::string epId;
+    if (!ourAor.empty()) {
+        for (const auto& p : g_accountAor) {
+            if (p.second == ourAor) { epId = p.first; break; }
+        }
+    }
+    // fallback — From/To 매칭 실패 시 본문 어디든 매칭되는 단말 (단일 단말 케이스용).
+    if (epId.empty()) {
+        for (const auto& p : g_accountAor) {
+            if (!p.second.empty() && body.find(p.second) != std::string::npos) { epId = p.first; break; }
+        }
+    }
+    emitJson({{"ev","sip"},{"dir", dir},{"summary", first},{"body", body},{"endpointId", epId}});
+}
+extern "C" pj_bool_t pepe_on_rx_request(pjsip_rx_data* rdata) { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg); return PJ_FALSE; }
+extern "C" pj_bool_t pepe_on_rx_response(pjsip_rx_data* rdata) { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg); return PJ_FALSE; }
+extern "C" pj_status_t pepe_on_tx_request(pjsip_tx_data* tdata) { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg); return PJ_SUCCESS; }
+extern "C" pj_status_t pepe_on_tx_response(pjsip_tx_data* tdata) { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg); return PJ_SUCCESS; }
+static pjsip_module g_sipMsgMod = {
+    NULL, NULL, { (char*)"pepe-sip-log", 12 }, -1,
+    (int)(PJSIP_MOD_PRIORITY_TRANSPORT_LAYER - 1),
+    NULL, NULL, NULL, NULL,
+    &pepe_on_rx_request, &pepe_on_rx_response,
+    &pepe_on_tx_request, &pepe_on_tx_response,
+    NULL
+};
+
 class MyCall;
 class MyAccount;
 
@@ -120,7 +198,15 @@ public:
             case PJSIP_INV_STATE_DISCONNECTED: st = "ended"; break;
             default: break;
         }
-        emitJson({{"ev","call"},{"endpointId",epId},{"call",st},{"remote",ci.remoteUri}});
+        json ev = {{"ev","call"},{"endpointId",epId},{"call",st},{"remote",ci.remoteUri}};
+        // 통화가 비정상 종료된 경우(SIP 4xx/5xx/6xx 또는 미디어 거절 등) 상세 사유를 함께 전달.
+        // 488 Not Acceptable Here = 코덱 불일치, 486 Busy, 480 Unavailable 등.
+        if (ci.state == PJSIP_INV_STATE_DISCONNECTED && ci.lastStatusCode >= 300) {
+            std::string reason = std::to_string((int)ci.lastStatusCode) + " " + ci.lastReason;
+            if (ci.lastStatusCode == 488) reason += " (사용 가능한 코덱 없음 — 설정에서 코덱 활성화 확인)";
+            ev["error"] = reason;
+        }
+        emitJson(ev);
         if (ci.state == PJSIP_INV_STATE_DISCONNECTED) {
             // 녹음 중이면 종료
             auto r = g_recorders.find(epId);
@@ -280,6 +366,7 @@ static void cmdRegister(const json& ep) {
     // 계정 식별(AOR)은 도메인 기준, 등록은 SIP 서버(registrar) 기준
     std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + domain + ">";
     acfg.idUri = idUri;
+    g_accountAor[id] = user + "@" + domain;
     acfg.regConfig.registrarUri = scheme + ":" + server + portSuffix + tparam;
     if (regExpiry > 0) acfg.regConfig.timeoutSec = regExpiry;
     if (!proxy.empty()) {
@@ -335,6 +422,16 @@ static void cmdRegister(const json& ep) {
             it->second->callWaiting = ep.value("callWaiting", true);
             it->second->hideCallerId = ep.value("hideCallerId", false);
             it->second->modify(acfg);
+            // modify() 후 PJSUA2 가 onRegState 를 호출하지 않을 수 있어, 현재 등록 상태를
+            // 명시 emit. 활성 등록이 유지되면 'registered' 를 다시 알려 UI 의 버튼/표시가
+            // 'registering' 에 멈춰있지 않도록 한다.
+            try {
+                AccountInfo ai = it->second->getInfo();
+                if (ai.regIsActive) {
+                    emitJson({{"ev","reg"},{"endpointId",id},{"reg","registered"}});
+                    return;
+                }
+            } catch (...) {}
         }
         emitJson({{"ev","reg"},{"endpointId",id},{"reg","registering"}});
     } catch (Error& e) {
@@ -351,6 +448,7 @@ static void cmdUnregister(const std::string& id) {
     delete it->second;
     g_accounts.erase(it);
     g_dtmfMode.erase(id);
+    g_accountAor.erase(id);
     // 이 계정의 버디 정리
     for (auto bit = g_buddies.begin(); bit != g_buddies.end(); ) {
         if (bit->first.rfind(id + "|", 0) == 0) { try { delete bit->second; } catch (...) {} bit = g_buddies.erase(bit); }
@@ -600,23 +698,23 @@ int main() {
         // INVITE 를 즉시 끊어 통화 실패. UDP 단편화 허용해 그대로 송신하도록 함.
         pjsip_cfg()->endpt.disable_tcp_switch = PJ_TRUE;
         EpConfig epcfg;
-        // SIP 전체 트레이스를 파일로 — stdout(프로토콜)은 깨끗이 유지(consoleLevel=0).
-        // 경로: env PEPE_SIPD_LOG > %TEMP%\pepe-sipd.log > 현재 디렉터리.
-        epcfg.logConfig.level = 5;
+        // SIP 트레이스 — 파일 로그는 기본 OFF (env PEPE_SIPD_LOG 가 있을 때만 파일로 남김).
+        // 대신 SIP 프로토콜 메시지 라인을 LogWriter 로 캡처해 'sip' 이벤트로 emit → UI 콜로그에 표시.
+        epcfg.logConfig.level = 4;       // 4 = SIP request/response 메시지 레벨
         epcfg.logConfig.consoleLevel = 0;
-        // UDP MTU 초과 시 TCP fallback 임계치를 더 크게 — SDP 안에 text 미디어/여러 코덱 포함되면
-        // 기본 1300 을 넘기 쉽다. 일부 SIP 서버(SKBroadband 등) 는 TCP INVITE 를 즉시 끊어버려
-        // 통화가 실패함. 1500 (이더넷 MTU) 까지 UDP 로 보내도록 한다.
         epcfg.uaConfig.userAgent = "PePe-MicroSIP/1.0";
         {
             const char* envlog = getenv("PEPE_SIPD_LOG");
-            std::string logf;
-            if (envlog && *envlog) logf = envlog;
-            else { const char* tmp = getenv("TEMP"); logf = (tmp && *tmp ? std::string(tmp) : std::string(".")) + "\\pepe-sipd.log"; }
-            epcfg.logConfig.filename = logf;
-            emitJson({{"ev","log"},{"level","info"},{"text",std::string("sipd log → ") + logf}});
+            if (envlog && *envlog) { epcfg.logConfig.filename = envlog; }
+            // else: filename 미설정 → 파일 로그 안 남김.
         }
         g_ep.libInit(epcfg);
+        // SIP 메시지 캡처 모듈 등록 — libInit 후 pjsua_get_pjsip_endpt() 가능.
+        // RX/TX 양방향 onMsg 콜백 → 헤더+SDP 전체를 'sip' 이벤트로 IPC emit.
+        {
+            pjsip_endpoint* pe = pjsua_get_pjsip_endpt();
+            if (pe) pjsip_endpt_register_module(pe, &g_sipMsgMod);
+        }
 
 #ifdef PEPE_EVS
         // EVS(3GPP TS26.443) 커스텀 코덱 등록 — EVS/16000 이 코덱 매니저/SDP 에 노출됨

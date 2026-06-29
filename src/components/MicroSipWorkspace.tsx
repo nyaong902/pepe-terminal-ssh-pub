@@ -176,7 +176,7 @@ function defaultEndpoint(n: number): SipEndpoint {
 
 export const MicroSipWorkspace: React.FC = () => {
   const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'>('phones');
-  const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string }[]>([]);
+  const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string; body?: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
   const [runtime, setRuntime] = useState<Record<string, EndpointRuntime>>({});
@@ -298,13 +298,14 @@ export const MicroSipWorkspace: React.FC = () => {
         setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: `음성사서함 ${ev.waiting ? '도착' : '없음'}`, kind: 'reg' }, ...prev].slice(0, 200));
         return;
       }
-      // 활동 로그 적재 (reg/call/error/log)
+      // 활동 로그 적재 (reg/call/error/log/sip)
       const txt =
         ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
         ev.ev === 'call' ? `통화: ${ev.call}${ev.remote ? ` ${ev.remote}` : ''}${ev.error ? ` (${ev.error})` : ''}` :
         ev.ev === 'error' ? `오류: ${ev.error || ''}` :
-        ev.ev === 'log' ? String(ev.text || '') : '';
-      if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev }, ...prev].slice(0, 200));
+        ev.ev === 'log' ? String(ev.text || '') :
+        ev.ev === 'sip' ? `${ev.dir === 'out' ? '↗' : '↙'} ${ev.summary || ''}` : '';
+      if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev, body: ev.ev === 'sip' ? String(ev.body || '') : undefined }, ...prev].slice(0, 500));
       // 실패는 토스트로 표면화
       if (ev.ev === 'reg' && ev.reg === 'failed') pushToast(`${labelOfEp(ev.endpointId)} 등록 실패 — ${ev.error || '서버 응답 없음'}`);
       else if (ev.ev === 'call' && ev.call === 'ended' && ev.error) pushToast(`${labelOfEp(ev.endpointId)} 통화 실패 — ${ev.error}`);
@@ -334,11 +335,18 @@ export const MicroSipWorkspace: React.FC = () => {
           }
         }
       }
+      // in-flight 인 상태에서 일시 'unregistered' 가 오면 'registering' 으로 가림.
+      // 'registered'/'failed' 가 오면 in-flight 해제.
+      let regEv: RegState | undefined = ev.reg;
+      if (regEv && reRegInFlightRef.current.has(ev.endpointId)) {
+        if (regEv === 'unregistered') regEv = 'registering';
+        else if (regEv === 'registered' || regEv === 'failed') reRegInFlightRef.current.delete(ev.endpointId);
+      }
       setRuntime(prev => ({
         ...prev,
         [ev.endpointId]: {
           ...(prev[ev.endpointId] || { reg: 'unregistered', call: 'idle', dialed: '' }),
-          ...(ev.reg ? { reg: ev.reg } : {}),
+          ...(regEv ? { reg: regEv } : {}),
           ...(ev.call ? { call: ev.call } : {}),
           ...(ev.remote !== undefined ? { remote: ev.remote } : {}),
           ...(ev.error !== undefined ? { error: ev.error } : {}),
@@ -359,6 +367,9 @@ export const MicroSipWorkspace: React.FC = () => {
   // 설정 변경 시 자동 재등록(디바운스) — 등록된 단말의 등록관련 설정이 바뀌면 unregister 없이 register 재적용
   const reRegTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const lastRegCfgRef = useRef<Record<string, string>>({});
+  // 코덱/설정 변경으로 우리가 직접 재등록을 트리거한 경우 사이드카의 일시 'unregistered'
+  // 이벤트를 'registering' 으로 가려 UI 깜빡임 방지.
+  const reRegInFlightRef = useRef<Set<string>>(new Set());
 
   // ── 토스트 알림 (등록/통화 실패 등) ──
   const [toasts, setToasts] = useState<{ id: string; text: string; kind: 'error' | 'info' }[]>([]);
@@ -463,13 +474,45 @@ export const MicroSipWorkspace: React.FC = () => {
   // ── SIP 제어 ──
   const register = async (e: SipEndpoint) => {
     lastRegCfgRef.current[e.id] = cfgKey(e); // 자동 재등록 기준값 갱신
-    setRt(e.id, { reg: 'registering', error: undefined });
+    // in-flight (자동 재등록) 인 경우엔 'registering' 으로 강제 전환하지 않음 — 서버 등록은 살아있음.
+    if (!reRegInFlightRef.current.has(e.id)) {
+      setRt(e.id, { reg: 'registering', error: undefined });
+    }
     const r = await api().sipRegister?.({ endpoint: e }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) { setRt(e.id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error }); pushToast(`${e.label} 등록 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
+  };
+  // 설정 카드 "저장" 전용 — draft commit 후 즉시 재등록 결과 반환.
+  const saveEndpointDraft = async (id: string, draft: Partial<SipEndpoint>): Promise<{ ok: boolean; error?: string }> => {
+    const cur = endpointsRef.current.find(e => e.id === id);
+    if (!cur) return { ok: false, error: '단말을 찾을 수 없습니다' };
+    const merged: SipEndpoint = { ...cur, ...draft };
+    setEndpoints(prev => prev.map(e => e.id === id ? merged : e));
+    if (!merged.server.trim() || !merged.username.trim()) return { ok: true };
+    if (reRegTimers.current[id]) { clearTimeout(reRegTimers.current[id]); delete reRegTimers.current[id]; }
+    reRegInFlightRef.current.delete(id);
+    lastRegCfgRef.current[id] = cfgKey(merged);
+    setRt(id, { reg: 'registering', error: undefined });
+    const r = await api().sipRegister?.({ endpoint: merged }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
+    if (!r?.ok) {
+      setRt(id, { reg: engineReady === false ? 'no-engine' : 'failed', error: r?.error });
+      return { ok: false, error: r?.error || 'SIP 엔진 미가용' };
+    }
+    return await new Promise<{ ok: boolean; error?: string }>(resolve => {
+      let done = false;
+      const finish = (ok: boolean, error?: string) => { if (done) return; done = true; clearInterval(poll); clearTimeout(to); resolve({ ok, error }); };
+      const poll = window.setInterval(() => {
+        const rt2 = runtimeRef.current[id];
+        if (!rt2) return;
+        if (rt2.reg === 'registered') finish(true);
+        else if (rt2.reg === 'failed') finish(false, rt2.error || '등록 실패');
+      }, 150);
+      const to = window.setTimeout(() => finish(false, '서버 응답 시간 초과(5초)'), 5000);
+    });
   };
   const unregister = async (id: string) => {
     if (reRegTimers.current[id]) { clearTimeout(reRegTimers.current[id]); delete reRegTimers.current[id]; }
     delete lastRegCfgRef.current[id];
+    reRegInFlightRef.current.delete(id);
     await api().sipUnregister?.({ endpointId: id }).catch(() => {}); setRt(id, { reg: 'unregistered', call: 'idle' });
   };
   const registerAll = () => endpoints.filter(e => e.server.trim() && e.username.trim()).forEach(e => register(e));
@@ -492,7 +535,17 @@ export const MicroSipWorkspace: React.FC = () => {
   const makeCall = async (id: string, number: string) => {
     const target = applyDialPrefix(id, number);
     if (!target) return;
-    setRt(id, { call: 'calling', remote: target });
+    // 사전 검증 — 단말 설정에 활성 코덱이 하나도 없으면 INVITE 가 488 로 거절될 게 뻔하므로
+    // 미리 안내. 사용자가 코덱 체크박스를 모두 끈 케이스.
+    const ep = endpointsRef.current.find(e => e.id === id);
+    if (ep && (!ep.codecs || ep.codecs.length === 0)) {
+      const msg = '활성 코덱이 없습니다 — 설정에서 최소 1개 이상의 코덱을 활성화하세요 (예: G.711 ulaw/alaw)';
+      setRt(id, { call: 'idle', error: msg });
+      setActivity(prev => [{ ts: Date.now(), epId: id, text: msg, kind: 'error' }, ...prev].slice(0, 200));
+      pushToast(`${labelOfEp(id)} 통화 실패 — ${msg}`);
+      return;
+    }
+    setRt(id, { call: 'calling', remote: target, error: undefined });
     const r = await api().sipCall?.({ endpointId: id, target }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) { setRt(id, { call: 'idle', error: r?.error }); pushToast(`${labelOfEp(id)} 통화 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
   };
@@ -555,7 +608,12 @@ export const MicroSipWorkspace: React.FC = () => {
       reRegTimers.current[ep.id] = setTimeout(() => {
         const cur = endpointsRef.current.find(e => e.id === ep.id);
         const r = runtimeRef.current[ep.id]?.reg;
-        if (cur && (r === 'registered' || r === 'registering')) void register(cur); // register 가 기준값 갱신
+        if (cur && (r === 'registered' || r === 'registering')) {
+          reRegInFlightRef.current.add(ep.id); // 일시 unregistered 가림
+          void register(cur);
+          // 안전망 — confirm 이벤트가 안 오면 5초 후 강제 해제
+          setTimeout(() => reRegInFlightRef.current.delete(ep.id), 5000);
+        }
       }, 1000);
     });
     /* eslint-disable-next-line */
@@ -624,7 +682,7 @@ export const MicroSipWorkspace: React.FC = () => {
         epCount={endpoints.length}
       />
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {endpoints.length === 0 && (
           <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 24, textAlign: 'center' }}>
             단말이 없습니다. 우측 상단 <b>+ 단말</b> 으로 추가하세요 (최대 {MAX_ENDPOINTS}대).
@@ -632,31 +690,41 @@ export const MicroSipWorkspace: React.FC = () => {
         )}
 
         {view === 'phones' && (
-          <div style={cardGrid}>
-            {endpoints.map(e => (
-              <PhoneCard key={e.id} ep={e} rt={rt(e.id)}
-                onKey={(k) => pressKey(e.id, k)}
-                onBackspace={() => setRt(e.id, { dialed: (rt(e.id).dialed || '').slice(0, -1) })}
-                onCall={() => makeCall(e.id, rt(e.id).dialed)}
-                onHangup={() => hangup(e.id)}
-                onClear={() => setRt(e.id, { dialed: '' })}
-                onAnswer={() => answer(e.id)}
-                onReject={() => reject(e.id)}
-                onToggleMute={() => toggleMute(e.id)}
-                onToggleHold={() => toggleHold(e.id)}
-                onTransfer={() => transfer(e.id)}
-                onToggleRecord={() => toggleRecord(e.id)}
-                onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
-                onRegister={() => register(e)}
-                onUnregister={() => unregister(e.id)}
-                onSetDialed={(s) => setRt(e.id, { dialed: s })}
-              />
-            ))}
-          </div>
+          // 단말이 많아지면 콜로그가 화면 밖으로 밀려나지 않도록 — 단말 영역(스크롤) + 콜로그(고정) 분리.
+          <>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+              <div style={cardGrid}>
+                {endpoints.map(e => (
+                  <PhoneCard key={e.id} ep={e} rt={rt(e.id)}
+                    onKey={(k) => pressKey(e.id, k)}
+                    onBackspace={() => setRt(e.id, { dialed: (rt(e.id).dialed || '').slice(0, -1) })}
+                    onCall={() => makeCall(e.id, rt(e.id).dialed)}
+                    onHangup={() => hangup(e.id)}
+                    onClear={() => setRt(e.id, { dialed: '' })}
+                    onAnswer={() => answer(e.id)}
+                    onReject={() => reject(e.id)}
+                    onToggleMute={() => toggleMute(e.id)}
+                    onToggleHold={() => toggleHold(e.id)}
+                    onTransfer={() => transfer(e.id)}
+                    onToggleRecord={() => toggleRecord(e.id)}
+                    onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
+                    onRegister={() => register(e)}
+                    onUnregister={() => unregister(e.id)}
+                    onSetDialed={(s) => setRt(e.id, { dialed: s })}
+                  />
+                ))}
+              </div>
+            </div>
+            {endpoints.length > 0 && (
+              <div style={{ flexShrink: 0, padding: '0 12px 12px' }}>
+                <CallLogPanel activity={activity} endpoints={endpoints} onClear={() => setActivity([])} />
+              </div>
+            )}
+          </>
         )}
 
         {view === 'settings' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
               <button onClick={exportConfig} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(true)}>⬇ 내보내기</button>
@@ -676,6 +744,7 @@ export const MicroSipWorkspace: React.FC = () => {
                   onRegister={() => register(e)}
                   onUnregister={() => unregister(e.id)}
                   onRemove={() => removeEndpoint(e.id)}
+                  onSave={(draft) => saveEndpointDraft(e.id, draft)}
                 />
               ))}
             </div>
@@ -683,23 +752,28 @@ export const MicroSipWorkspace: React.FC = () => {
         )}
 
         {view === 'macros' && (
-          <MacrosView macros={macros} setMacros={setMacros} endpoints={endpoints} onRun={runMacro} />
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+            <MacrosView macros={macros} setMacros={setMacros} endpoints={endpoints} onRun={runMacro} />
+          </div>
         )}
 
         {view === 'contacts' && (
-          <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial}
-            presence={presence} onSubscribe={toggleSubscribe} />
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+            <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial}
+              presence={presence} onSubscribe={toggleSubscribe} />
+          </div>
         )}
 
         {view === 'messages' && (
-          <MessagesView conversations={conversations} endpoints={endpoints} presence={presence}
-            onSend={sendIm} onClear={(key) => setConversations(prev => { const n = { ...prev }; delete n[key]; return n; })} />
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+            <MessagesView conversations={conversations} endpoints={endpoints} presence={presence}
+              onSend={sendIm} onClear={(key) => setConversations(prev => { const n = { ...prev }; delete n[key]; return n; })} />
+          </div>
         )}
 
         {view === 'log' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
             <CallHistory history={callHistory} endpoints={endpoints} onRedial={redial} onClear={() => setCallHistory([])} />
-            <ActivityLog activity={activity} endpoints={endpoints} onClear={() => setActivity([])} />
           </div>
         )}
       </div>
@@ -952,33 +1026,281 @@ const CallHistory: React.FC<{
   );
 };
 
-// ───────────────────────── 활동 로그 ─────────────────────────
-const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e', im: '#a371f7' };
-const ActivityLog: React.FC<{
-  activity: { ts: number; epId: string; text: string; kind: string }[];
+// 활동 로그 색상 — 전화 탭 콜로그 패널에서 공통 사용
+const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e', im: '#a371f7', sip: '#d29922' };
+
+// ───────────────────────── 폴드 가능 콜로그(전화 탭 하단) ─────────────────────────
+// sessionStorage 에 펼침 여부 저장 — 새로 시작할 때마다 fold 기본.
+const CALL_LOG_FOLD_KEY = 'pepe-microsip-callog-open';
+const CallLogPanel: React.FC<{
+  activity: { ts: number; epId: string; text: string; kind: string; body?: string }[];
   endpoints: SipEndpoint[]; onClear: () => void;
 }> = ({ activity, endpoints, onClear }) => {
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return sessionStorage.getItem(CALL_LOG_FOLD_KEY) === '1'; } catch { return false; }
+  });
+  // 클릭으로 펼친 행의 인덱스 집합 (recent slice 기준)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggleExpand = (i: number) => setExpanded(prev => {
+    const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n;
+  });
   const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id || '시스템';
+  const toggle = () => setOpen(v => {
+    const n = !v;
+    try { sessionStorage.setItem(CALL_LOG_FOLD_KEY, n ? '1' : '0'); } catch {}
+    return n;
+  });
+  // 패널 높이 — 드래그로 조절. sessionStorage 보관.
+  const [panelHeight, setPanelHeight] = useState<number>(() => {
+    try { const v = parseInt(sessionStorage.getItem('pepe-microsip-callog-h') || '', 10); return isFinite(v) && v >= 120 ? v : 280; } catch { return 280; }
+  });
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = panelHeight;
+    const onMove = (ev: MouseEvent) => {
+      // 위로 드래그 = 패널 커짐. 아래로 = 작아짐. 범위 120~window.innerHeight*0.8.
+      const dy = startY - ev.clientY;
+      const next = Math.max(120, Math.min(Math.round(window.innerHeight * 0.8), startH + dy));
+      setPanelHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try { sessionStorage.setItem('pepe-microsip-callog-h', String(panelHeightRef.current)); } catch {}
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+  const panelHeightRef = useRef(panelHeight);
+  panelHeightRef.current = panelHeight;
+  const [viewMode, setViewMode] = useState<'list' | 'seq'>(() => {
+    try { return (sessionStorage.getItem('pepe-microsip-callog-mode') as any) || 'list'; } catch { return 'list'; }
+  });
+  const setMode = (m: 'list' | 'seq') => { setViewMode(m); try { sessionStorage.setItem('pepe-microsip-callog-mode', m); } catch {} };
+  // SIP 상세 메시지 표시 토글 — 끄면 목록에서 SIP 패킷 라인을 숨김(통화/등록 이벤트만 표시).
+  const [showSip, setShowSip] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('pepe-microsip-callog-sip') !== '0'; } catch { return true; }
+  });
+  const toggleSip = () => setShowSip(v => {
+    const n = !v;
+    try { sessionStorage.setItem('pepe-microsip-callog-sip', n ? '1' : '0'); } catch {}
+    return n;
+  });
+  // 최근 콜/에러 우선 필터 — 통화/등록 실패 같은 항목이 위로. showSip=false 면 sip 제외.
+  const recent = activity.filter(a => showSip || a.kind !== 'sip').slice(0, 30);
+  // 시퀀스 뷰는 sip 메시지만, 오래된 순 (위→아래로 시간 흐름)
+  const sipSeq = activity.filter(a => a.kind === 'sip').slice(0, 60).reverse();
+  const errorCount = activity.filter(a => a.kind === 'error').length;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 760 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <b style={{ fontSize: 13 }}>🗒 활동 기록</b>
-        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>최근 {activity.length}건</span>
-        <button onClick={onClear} disabled={activity.length === 0} style={{ ...miniBtn(activity.length > 0), marginLeft: 'auto' }}>지우기</button>
-      </div>
-      {activity.length === 0 && (
-        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>아직 기록이 없습니다. 등록·통화 이벤트가 여기에 표시됩니다.</div>
+    <div style={{
+      marginTop: 8, border: '1px solid var(--win-border, #30363d)', borderRadius: 8,
+      background: 'var(--win-surface, #161b22)', overflow: 'hidden',
+      display: 'flex', flexDirection: 'column',
+      ...(open ? { height: panelHeight } : {}),
+    }}>
+      {open && (
+        <div onMouseDown={startResize}
+          title="드래그해서 콜로그 크기 조절"
+          style={{
+            height: 5, cursor: 'ns-resize', background: 'var(--win-border, #30363d)',
+            flexShrink: 0,
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--win-accent, #2b6b9b)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--win-border, #30363d)')}
+        />
       )}
-      {activity.map((a, i) => (
-        <div key={`${a.ts}-${i}`} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 8px', borderRadius: 6, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', fontSize: 12 }}>
-          <span style={{ fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>
-            {new Date(a.ts).toLocaleTimeString()}
-          </span>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: logKindColor[a.kind] || '#8b949e', flex: '0 0 auto', alignSelf: 'center' }} />
-          <b style={{ fontSize: 11, color: 'var(--win-text, #e6edf3)', whiteSpace: 'nowrap' }}>{labelOf(a.epId)}</b>
-          <span style={{ color: 'var(--win-text-dim, #c9d1d9)' }}>{a.text}</span>
+      <div style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+        padding: '8px 12px', background: 'var(--win-surface-2, #21262d)',
+        color: 'var(--win-text, #e6edf3)', fontSize: 12, fontWeight: 600,
+      }}>
+        <div onClick={toggle} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', flex: 1 }}>
+          <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{open ? '▼' : '▶'}</span>
+          <span>📋 콜로그 · 최근 활동</span>
+          <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>({activity.length}건{errorCount > 0 ? ` · 오류 ${errorCount}` : ''})</span>
         </div>
-      ))}
+        {open && (
+          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <button onClick={() => setMode('list')}
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: viewMode === 'list' ? 'var(--win-accent, #2b6b9b)' : 'transparent', color: '#fff' }}>
+              📃 목록
+            </button>
+            <button onClick={() => setMode('seq')}
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: viewMode === 'seq' ? 'var(--win-accent, #2b6b9b)' : 'transparent', color: '#fff' }}>
+              🔀 시퀀스
+            </button>
+            {viewMode === 'list' && (
+              <button onClick={toggleSip}
+                title={showSip ? 'SIP 상세 메시지 숨김' : 'SIP 상세 메시지 표시'}
+                style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: showSip ? 'rgba(210,153,34,0.3)' : 'transparent', color: showSip ? '#fff' : 'var(--win-text-dim, #9aa7b3)' }}>
+                {showSip ? '🟡 SIP 상세' : '⚪ SIP 상세'}
+              </button>
+            )}
+            <button onClick={onClear} disabled={activity.length === 0}
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text-dim, #9aa7b3)', cursor: activity.length > 0 ? 'pointer' : 'not-allowed', opacity: activity.length > 0 ? 1 : 0.4 }}>
+              지우기
+            </button>
+          </span>
+        )}
+      </div>
+      {open && viewMode === 'seq' && (() => {
+        // 활동 중인 endpoint 만 lifeline 컬럼으로 (등록 시도 / 메시지 발생 단말).
+        // 모든 endpoint 를 다 보여주면 컬럼이 너무 많아짐. seq 에 등장한 endpointId 만.
+        const eps = endpoints.filter(e => sipSeq.some(a => a.epId === e.id));
+        const usedEps = eps.length > 0 ? eps : endpoints.slice(0, 1); // 비어 있어도 최소 1열
+        const colCount = usedEps.length + 1; // +1 = 원격 컬럼
+        const headerW = 70;
+        return (
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* sticky 헤더 — 단말 1...N + 원격 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', padding: '6px 8px', gap: 8,
+              position: 'sticky', top: 0, background: 'var(--win-surface-2, #21262d)',
+              borderBottom: '1px solid var(--win-border, #30363d)', zIndex: 1,
+            }}>
+              <span style={{ flex: `0 0 ${headerW}px`, fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>시간</span>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+                {usedEps.map(e => (
+                  <div key={e.id} style={{ flex: 1, textAlign: 'center' }}>
+                    <b style={{ fontSize: 11, color: '#58a6ff' }}>📱 {e.label}</b>
+                  </div>
+                ))}
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <b style={{ fontSize: 11, color: '#3fb950' }}>🌐 원격 (서버/피어)</b>
+                </div>
+              </div>
+            </div>
+            {sipSeq.length === 0 && (
+              <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 20, textAlign: 'center', fontSize: 11 }}>
+                SIP 메시지가 아직 없습니다. 등록/통화 시도 시 REGISTER · INVITE · 200 OK 등이 여기 시퀀스로 표시됩니다.
+              </div>
+            )}
+            {sipSeq.map((a, i) => {
+              const isOut = a.text.startsWith('↗');
+              const msg = a.text.replace(/^[↗↙]\s*/, '');
+              const isOpen = expanded.has(i + 10000);
+              const arrowColor = isOut ? '#58a6ff' : '#3fb950';
+              // 어떤 단말 컬럼에 속하는지 — endpointId 매칭. 없으면 첫 컬럼.
+              let epIdx = usedEps.findIndex(e => e.id === a.epId);
+              if (epIdx < 0) epIdx = 0;
+              const remoteIdx = usedEps.length; // 원격 = 맨 오른쪽
+              // 화살표 시작/끝 컬럼 인덱스
+              const fromIdx = isOut ? epIdx : remoteIdx;
+              const toIdx = isOut ? remoteIdx : epIdx;
+              const leftIdx = Math.min(fromIdx, toIdx);
+              const rightIdx = Math.max(fromIdx, toIdx);
+              // 컬럼 중심의 % 위치 (전체 콜로그 영역 기준)
+              const colCenter = (idx: number) => (idx + 0.5) * (100 / colCount);
+              const arrowLeft = colCenter(leftIdx);
+              const arrowRight = 100 - colCenter(rightIdx);
+              return (
+                <div key={`s${a.ts}-${i}`} style={{ flexShrink: 0, borderBottom: '1px dashed rgba(255,255,255,0.06)' }}>
+                  <div onClick={a.body ? () => toggleExpand(i + 10000) : undefined}
+                    style={{
+                      display: 'flex', alignItems: 'center', padding: '4px 8px', gap: 8,
+                      cursor: a.body ? 'pointer' : 'default',
+                      background: isOpen ? 'rgba(255,255,255,0.03)' : 'transparent',
+                    }}>
+                    <span style={{ flex: `0 0 ${headerW}px`, fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>
+                      {new Date(a.ts).toLocaleTimeString()}
+                    </span>
+                    {/* lifeline 영역 — 각 컬럼 중심에 세로선, 화살표는 left→right 범위만 */}
+                    <div style={{ position: 'relative', flex: 1, height: 28 }}>
+                      {/* 각 컬럼의 lifeline */}
+                      {Array.from({ length: colCount }).map((_, idx) => (
+                        <div key={idx} style={{
+                          position: 'absolute', left: `${colCenter(idx)}%`, top: 0, bottom: 0, width: 1,
+                          background: idx === colCount - 1 ? 'rgba(63,185,80,0.4)' : 'rgba(88,166,255,0.4)',
+                        }} />
+                      ))}
+                      {/* 화살표 라인 */}
+                      <div style={{
+                        position: 'absolute', left: `${arrowLeft}%`, right: `${arrowRight}%`,
+                        top: 13, height: 1, background: arrowColor, opacity: 0.85,
+                      }} />
+                      {/* 화살표 head */}
+                      <div style={{
+                        position: 'absolute', top: 8,
+                        [isOut ? 'right' : 'left' as any]: `${isOut ? arrowRight : arrowLeft}%`,
+                        marginRight: isOut ? -3 : 0, marginLeft: isOut ? 0 : -3,
+                        width: 0, height: 0, borderTop: '4px solid transparent', borderBottom: '4px solid transparent',
+                        [isOut ? 'borderLeft' : 'borderRight' as any]: `6px solid ${arrowColor}`,
+                      }} />
+                      {/* 메시지 라벨 */}
+                      <div style={{
+                        position: 'absolute', left: `${arrowLeft + 1}%`, right: `${arrowRight + 1}%`,
+                        top: 0, textAlign: 'center', fontSize: 11, color: '#e6edf3',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        lineHeight: '12px', background: 'var(--win-surface, #161b22)', padding: '0 6px',
+                      }} title={msg}>{msg}</div>
+                    </div>
+                    {a.body && (
+                      <span style={{ flex: '0 0 14px', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>
+                        {isOpen ? '▼' : '▶'}
+                      </span>
+                    )}
+                  </div>
+                  {isOpen && a.body && (
+                    <pre style={{
+                      margin: 0, padding: '8px 12px', borderTop: '1px dashed var(--win-border, #30363d)',
+                      background: 'rgba(0,0,0,0.3)', color: '#c9d1d9',
+                      fontFamily: 'Consolas, monospace', fontSize: 10, lineHeight: 1.4,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 300, overflow: 'auto',
+                    }}>{a.body}</pre>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+      {open && viewMode === 'list' && (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {recent.length === 0 && (
+            <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 12, textAlign: 'center', fontSize: 11 }}>
+              아직 기록이 없습니다. 등록·통화·오류 이벤트가 여기에 표시됩니다.
+            </div>
+          )}
+          {recent.map((a, i) => {
+            const hasDetail = !!a.body;
+            const isOpen = expanded.has(i);
+            return (
+              <div key={`${a.ts}-${i}`} style={{
+                borderRadius: 4, flexShrink: 0,
+                background: a.kind === 'error' ? 'rgba(248,81,73,0.08)' : 'var(--win-bg, #0d1117)',
+                border: `1px solid ${a.kind === 'error' ? 'rgba(248,81,73,0.3)' : 'var(--win-border, #30363d)'}`,
+                overflow: 'hidden',
+              }}>
+                <div onClick={hasDetail ? () => toggleExpand(i) : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', fontSize: 12,
+                    lineHeight: 1.4, minHeight: 22,
+                    cursor: hasDetail ? 'pointer' : 'default',
+                  }}>
+                  <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flex: '0 0 12px', textAlign: 'center' }}>
+                    {hasDetail ? (isOpen ? '▼' : '▶') : ''}
+                  </span>
+                  <span style={{ fontFamily: 'Consolas, monospace', fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                    {new Date(a.ts).toLocaleTimeString()}
+                  </span>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: logKindColor[a.kind] || '#8b949e', flex: '0 0 auto' }} />
+                  <b style={{ fontSize: 11, color: 'var(--win-text, #e6edf3)', whiteSpace: 'nowrap', flex: '0 0 auto' }}>{labelOf(a.epId)}</b>
+                  <span style={{ color: a.kind === 'error' ? '#f85149' : 'var(--win-text-dim, #c9d1d9)', wordBreak: 'break-word', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.text}>{a.text}</span>
+                </div>
+                {isOpen && hasDetail && (
+                  <pre style={{
+                    margin: 0, padding: '8px 10px', borderTop: '1px dashed var(--win-border, #30363d)',
+                    background: 'rgba(0,0,0,0.25)', color: '#c9d1d9',
+                    fontFamily: 'Consolas, monospace', fontSize: 10, lineHeight: 1.4,
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 300, overflow: 'auto',
+                  }}>{a.body}</pre>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -1120,7 +1442,27 @@ const SettingsCard: React.FC<{
   onChange: (p: Partial<SipEndpoint>) => void; onCopyFrom: (srcId: string) => void;
   onDnd: (on: boolean) => void; onMove: (dir: -1 | 1) => void;
   onRegister: () => void; onUnregister: () => void; onRemove: () => void;
-}> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove }) => {
+  onSave: (draft: Partial<SipEndpoint>) => Promise<{ ok: boolean; error?: string }>;
+}> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove, onSave }) => {
+  // draft — 사용자가 입력한 변경분. 저장(register 성공) 시에만 ep 에 commit.
+  const [draft, setDraft] = useState<Partial<SipEndpoint>>({});
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string>('');
+  const cur: SipEndpoint = { ...ep, ...draft };
+  const dirty = Object.keys(draft).length > 0;
+  const patch = (p: Partial<SipEndpoint>) => { setSaveErr(''); setDraft(prev => ({ ...prev, ...p })); };
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true); setSaveErr('');
+    const r = await onSave(draft);
+    setSaving(false);
+    if (r.ok) setDraft({});
+    else setSaveErr(r.error || '저장/등록 실패');
+  };
+  const cancel = () => { if (saving) return; setDraft({}); setSaveErr(''); };
+  // 외부에서 들어오는 변경(설정 복사 등)은 onChange (parent endpoint 직접 변경) — 카드 내 입력은 patch.
+  void onChange;
+  const onChangeLocal = patch;
   const field = (label: string, node: React.ReactNode) => (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
       <span>{label}</span>{node}
@@ -1128,22 +1470,22 @@ const SettingsCard: React.FC<{
   );
   const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 };
   const toggleCodec = (c: SipCodec) => {
-    const has = ep.codecs.includes(c);
-    onChange({ codecs: has ? ep.codecs.filter(x => x !== c) : [...ep.codecs, c] });
+    const has = cur.codecs.includes(c);
+    onChangeLocal({ codecs: has ? cur.codecs.filter(x => x !== c) : [...cur.codecs, c] });
   };
   const moveCodec = (c: SipCodec, dir: -1 | 1) => {
-    const i = ep.codecs.indexOf(c); if (i < 0) return;
-    const j = i + dir; if (j < 0 || j >= ep.codecs.length) return;
-    const next = [...ep.codecs];[next[i], next[j]] = [next[j], next[i]]; onChange({ codecs: next });
+    const i = cur.codecs.indexOf(c); if (i < 0) return;
+    const j = i + dir; if (j < 0 || j >= cur.codecs.length) return;
+    const next = [...cur.codecs];[next[i], next[j]] = [next[j], next[i]]; onChangeLocal({ codecs: next });
   };
   return (
     <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[reg] }} title={reg} />
-        <input value={ep.label} onChange={e => onChange({ label: e.target.value })} style={{ ...inp, fontWeight: 700, fontSize: 13, minWidth: 120 }} />
+        <input value={cur.label} onChange={e => onChangeLocal({ label: e.target.value })} style={{ ...inp, fontWeight: 700, fontSize: 13, minWidth: 120 }} />
         <select defaultValue="" onChange={e => { if (e.target.value) { onCopyFrom(e.target.value); e.target.value = ''; } }} title="다른 단말 설정 복사" style={inp}>
           <option value="">설정 복사 ←</option>
-          {all.filter(x => x.id !== ep.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
+          {all.filter(x => x.id !== cur.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
         </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => onMove(-1)} disabled={idx === 0} title="위로" style={{ ...inp, cursor: idx === 0 ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.4 : 1, padding: '6px 8px' }}>▲</button>
@@ -1156,27 +1498,27 @@ const SettingsCard: React.FC<{
       </div>
       {/* 📇 계정 */}
       <Section title="📇 계정" defaultOpen>
-        {field('SIP 서버 (registrar)', <input value={ep.server} onChange={e => onChange({ server: e.target.value })} placeholder="sip.example.com" style={inp} />)}
-        {field('도메인 (미지정 시 서버와 동일)', <input value={ep.domain || ''} onChange={e => onChange({ domain: e.target.value })} placeholder="example.com" style={inp} />)}
+        {field('SIP 서버 (registrar)', <input value={cur.server} onChange={e => onChangeLocal({ server: e.target.value })} placeholder="sip.example.com" style={inp} />)}
+        {field('도메인 (미지정 시 서버와 동일)', <input value={cur.domain || ''} onChange={e => onChangeLocal({ domain: e.target.value })} placeholder="example.com" style={inp} />)}
         <div style={{ display: 'flex', gap: 8 }}>
-          {field('포트', <input type="number" value={ep.port} onChange={e => onChange({ port: Number(e.target.value) || 5060 })} style={inp} />)}
-          {field('전송', <select value={ep.transport} onChange={e => onChange({ transport: e.target.value as any })} style={inp}><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select>)}
+          {field('포트', <input type="number" value={cur.port} onChange={e => onChangeLocal({ port: Number(e.target.value) || 5060 })} style={inp} />)}
+          {field('전송', <select value={cur.transport} onChange={e => onChangeLocal({ transport: e.target.value as any })} style={inp}><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select>)}
         </div>
-        {field('사용자(번호)', <input value={ep.username} onChange={e => onChange({ username: e.target.value })} style={inp} />)}
-        {field('인증 ID(로그인, 선택)', <input value={ep.authId || ''} onChange={e => onChange({ authId: e.target.value })} style={inp} />)}
-        {field('비밀번호', <input type="password" value={ep.password} onChange={e => onChange({ password: e.target.value })} style={inp} />)}
-        {field('표시 이름(선택)', <input value={ep.displayName || ''} onChange={e => onChange({ displayName: e.target.value })} style={inp} />)}
-        {field('아웃바운드 프록시(선택)', <input value={ep.proxy || ''} onChange={e => onChange({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
+        {field('사용자(번호)', <input value={cur.username} onChange={e => onChangeLocal({ username: e.target.value })} style={inp} />)}
+        {field('인증 ID(로그인, 선택)', <input value={cur.authId || ''} onChange={e => onChangeLocal({ authId: e.target.value })} style={inp} />)}
+        {field('비밀번호', <input type="password" value={cur.password} onChange={e => onChangeLocal({ password: e.target.value })} style={inp} />)}
+        {field('표시 이름(선택)', <input value={cur.displayName || ''} onChange={e => onChangeLocal({ displayName: e.target.value })} style={inp} />)}
+        {field('아웃바운드 프록시(선택)', <input value={cur.proxy || ''} onChange={e => onChangeLocal({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
       </Section>
 
       {/* 🎚 코덱 */}
       <Section title="🎚 코덱 (체크=사용, 위가 우선순위)">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {ALL_CODECS.slice().sort((a, b) => {
-            const ia = ep.codecs.indexOf(a.id), ib = ep.codecs.indexOf(b.id);
+            const ia = cur.codecs.indexOf(a.id), ib = cur.codecs.indexOf(b.id);
             if (ia < 0 && ib < 0) return 0; if (ia < 0) return 1; if (ib < 0) return -1; return ia - ib;
           }).map(c => {
-            const on = ep.codecs.includes(c.id);
+            const on = cur.codecs.includes(c.id);
             return (
               <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                 <input type="checkbox" checked={on} onChange={() => toggleCodec(c.id)} />
@@ -1194,57 +1536,87 @@ const SettingsCard: React.FC<{
       {/* 📞 등록 · NAT · 보안 */}
       <Section title="📞 등록 · NAT · 보안">
         <div style={{ display: 'flex', gap: 8 }}>
-          {field('등록 만료(초)', <input type="number" value={ep.regExpiry ?? 300} onChange={e => onChange({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
-          {field('살아유지(초)', <input type="number" value={ep.keepAlive ?? 15} onChange={e => onChange({ keepAlive: Number(e.target.value) || 0 })} style={inp} />)}
+          {field('등록 만료(초)', <input type="number" value={cur.regExpiry ?? 300} onChange={e => onChangeLocal({ regExpiry: Number(e.target.value) || 300 })} style={inp} />)}
+          {field('살아유지(초)', <input type="number" value={cur.keepAlive ?? 15} onChange={e => onChangeLocal({ keepAlive: Number(e.target.value) || 0 })} style={inp} />)}
         </div>
-        {field('미디어 암호화(SRTP)', <select value={ep.srtp || 'disabled'} onChange={e => onChange({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
+        {field('미디어 암호화(SRTP)', <select value={cur.srtp || 'disabled'} onChange={e => onChangeLocal({ srtp: e.target.value as any })} style={inp}><option value="disabled">사용 안 함</option><option value="optional">선택(optional)</option><option value="mandatory">필수(mandatory)</option></select>)}
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.iceEnabled} onChange={e => onChange({ iceEnabled: e.target.checked })} /> ICE 사용
+            <input type="checkbox" checked={!!cur.iceEnabled} onChange={e => onChangeLocal({ iceEnabled: e.target.checked })} /> ICE 사용
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.disableSessionTimer} onChange={e => onChange({ disableSessionTimer: e.target.checked })} /> 세션 타이머 비활성화
+            <input type="checkbox" checked={!!cur.disableSessionTimer} onChange={e => onChangeLocal({ disableSessionTimer: e.target.checked })} /> 세션 타이머 비활성화
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={ep.publishPresence !== false} onChange={e => onChange({ publishPresence: e.target.checked })} /> 계정 상태 게시
+            <input type="checkbox" checked={cur.publishPresence !== false} onChange={e => onChangeLocal({ publishPresence: e.target.checked })} /> 계정 상태 게시
           </label>
         </div>
-        {field('STUN 서버(host:port)', <input value={ep.stunServer || ''} onChange={e => onChange({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
-        {field('TURN 서버(host:port)', <input value={ep.turnServer || ''} onChange={e => onChange({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
-        {ep.turnServer ? field('TURN 사용자', <input value={ep.turnUser || ''} onChange={e => onChange({ turnUser: e.target.value })} style={inp} />) : null}
-        {ep.turnServer ? field('TURN 비밀번호', <input type="password" value={ep.turnPassword || ''} onChange={e => onChange({ turnPassword: e.target.value })} style={inp} />) : null}
+        {field('STUN 서버(host:port)', <input value={cur.stunServer || ''} onChange={e => onChangeLocal({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
+        {field('TURN 서버(host:port)', <input value={cur.turnServer || ''} onChange={e => onChangeLocal({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
+        {cur.turnServer ? field('TURN 사용자', <input value={cur.turnUser || ''} onChange={e => onChangeLocal({ turnUser: e.target.value })} style={inp} />) : null}
+        {cur.turnServer ? field('TURN 비밀번호', <input type="password" value={cur.turnPassword || ''} onChange={e => onChangeLocal({ turnPassword: e.target.value })} style={inp} />) : null}
       </Section>
 
       {/* ⚙ 통화 · 프로그램 */}
       <Section title="⚙ 통화 · 프로그램">
-        {field('발신 prefix', <input value={ep.dialPrefix || ''} onChange={e => onChange({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
-        {field('음성사서함 번호', <input value={ep.voicemailNumber || ''} onChange={e => onChange({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
-        {field('DTMF 방식', <select value={ep.dtmfMode || 'rfc2833'} onChange={e => onChange({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
+        {field('발신 prefix', <input value={cur.dialPrefix || ''} onChange={e => onChangeLocal({ dialPrefix: e.target.value })} placeholder="예: 9 (외부 회선)" style={inp} />)}
+        {field('음성사서함 번호', <input value={cur.voicemailNumber || ''} onChange={e => onChangeLocal({ voicemailNumber: e.target.value })} placeholder="*97" style={inp} />)}
+        {field('DTMF 방식', <select value={cur.dtmfMode || 'rfc2833'} onChange={e => onChangeLocal({ dtmfMode: e.target.value as any })} style={inp}><option value="rfc2833">RFC 2833</option><option value="info">SIP INFO</option><option value="inband">In-band</option></select>)}
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={ep.autoRegister !== false} onChange={e => onChange({ autoRegister: e.target.checked })} /> 시작 시 등록
+            <input type="checkbox" checked={cur.autoRegister !== false} onChange={e => onChangeLocal({ autoRegister: e.target.checked })} /> 시작 시 등록
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.autoAnswer} onChange={e => onChange({ autoAnswer: e.target.checked })} /> 자동 응답
+            <input type="checkbox" checked={!!cur.autoAnswer} onChange={e => onChangeLocal({ autoAnswer: e.target.checked })} /> 자동 응답
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={ep.callWaiting !== false} onChange={e => onChange({ callWaiting: e.target.checked })} /> 통화 중 대기
+            <input type="checkbox" checked={cur.callWaiting !== false} onChange={e => onChangeLocal({ callWaiting: e.target.checked })} /> 통화 중 대기
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={ep.ring !== false} onChange={e => onChange({ ring: e.target.checked })} /> 🔔 벨소리
+            <input type="checkbox" checked={cur.ring !== false} onChange={e => onChangeLocal({ ring: e.target.checked })} /> 🔔 벨소리
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.autoRecord} onChange={e => onChange({ autoRecord: e.target.checked })} /> ⏺ 자동 녹음
+            <input type="checkbox" checked={!!cur.autoRecord} onChange={e => onChangeLocal({ autoRecord: e.target.checked })} /> ⏺ 자동 녹음
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.hideCallerId} onChange={e => onChange({ hideCallerId: e.target.checked })} /> 발신번호 숨김
+            <input type="checkbox" checked={!!cur.hideCallerId} onChange={e => onChangeLocal({ hideCallerId: e.target.checked })} /> 발신번호 숨김
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <input type="checkbox" checked={!!ep.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
+            <input type="checkbox" checked={!!cur.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
           </label>
         </div>
         <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 마이크/스피커·음량은 상단 공통(전역) 설정을 사용합니다.</div>
       </Section>
+      {/* 저장 / 취소 액션 바 — 변경분(draft) 이 있을 때만 활성. 저장 시 재등록 후 결과 확인. */}
+      <div style={{
+        marginTop: 12, padding: '10px 12px', borderTop: '1px solid var(--win-border, #30363d)',
+        display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        background: dirty ? 'rgba(217,153,34,0.08)' : 'transparent', borderRadius: 6,
+      }}>
+        {saveErr && (
+          <span style={{ flex: 1, fontSize: 11, color: '#f85149' }}>⚠ {saveErr}</span>
+        )}
+        {!saveErr && dirty && (
+          <span style={{ flex: 1, fontSize: 11, color: '#d29922' }}>● 저장되지 않은 변경분이 있습니다</span>
+        )}
+        {!saveErr && !dirty && (
+          <span style={{ flex: 1, fontSize: 11, color: 'var(--win-text-dim, #6e7681)' }}>변경 사항 없음</span>
+        )}
+        <button onClick={cancel} disabled={!dirty || saving}
+          style={{ ...inp, cursor: (!dirty || saving) ? 'not-allowed' : 'pointer', opacity: (!dirty || saving) ? 0.5 : 1 }}>
+          취소
+        </button>
+        <button onClick={save} disabled={!dirty || saving}
+          style={{
+            ...inp,
+            cursor: (!dirty || saving) ? 'not-allowed' : 'pointer',
+            background: dirty && !saving ? 'var(--win-accent, #2b6b9b)' : 'var(--win-surface-2, #21262d)',
+            color: '#fff', border: 'none', fontWeight: 700,
+            opacity: (!dirty || saving) ? 0.6 : 1,
+          }}>
+          {saving ? '저장 중...' : '저장'}
+        </button>
+      </div>
     </div>
   );
 };
