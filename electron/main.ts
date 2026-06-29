@@ -8249,6 +8249,21 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
       '',
     ].join('\n') + '\n';
     const fullPrompt = sysPrefix + userPrompt;
+    // agy 가 ~/.gemini/antigravity-cli/log/cli-*.log 를 자동 생성·누적 → 1시간 이상 된 것 정리.
+    try {
+      const agyLogDir = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'log');
+      if (fs.existsSync(agyLogDir)) {
+        const cutoff = Date.now() - 60 * 60 * 1000;
+        for (const fn of fs.readdirSync(agyLogDir)) {
+          if (!/^cli-\d+_\d+\.log$/.test(fn)) continue;
+          try {
+            const fp = path.join(agyLogDir, fn);
+            const st = fs.statSync(fp);
+            if (st.mtimeMs < cutoff) fs.unlinkSync(fp);
+          } catch {}
+        }
+      }
+    } catch {}
     const agyLogPath = path.join(os.tmpdir(), `pepe-agy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`);
     const args: string[] = ['--print', fullPrompt, '--print-timeout', '5m', '--log-file', agyLogPath];
     if (model) args.push('--model', model);
