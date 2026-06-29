@@ -491,6 +491,8 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   // 현재 편집 중인 셀 — "row,col" 또는 null
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  // AI 생성 스트리밍 진행 표시 — 실시간 누적 텍스트 + 도구 호출 라벨.
+  const [genStream, setGenStream] = useState<{ text: string; tools: string[]; agent: string; requestId: string }>({ text: '', tools: [], agent: '', requestId: '' });
   // Monaco editor + monaco namespace 참조 — 텍스트영역 대체
   const monacoEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
@@ -1358,10 +1360,12 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   };
 
   // 편집창 내용을 Claude agent 에 전달해 SQL 생성 → 편집창 하단부에 추가
-  const onAutoGenerate = useCallback(async () => {
+  const onAutoGenerate = useCallback(async (agentOverride?: SqlAgent) => {
     const userText = sql.trim();
     if (!userText) { flashHint(tr('wsWriteRequestFirst')); return; }
     if (generating) return;
+    // 메뉴에서 직접 호출 시 setSelectedAgent 가 비동기라 stale 값 사용 — 명시 override 우선.
+    const agent: SqlAgent = agentOverride || selectedAgent;
     // 이전 리스너 잔여 정리
     try { generateDisposeRef.current?.(); } catch {}
     generateDisposeRef.current = null;
@@ -1372,6 +1376,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     const claudeSessionId = `sqltool-${sessionId}`;
     let collected = '';
     let finalized = false;
+    setGenStream({ text: '', tools: [], agent, requestId });
 
     const tableHint = tables.length > 0
       ? tr('wsAiTableHint', { count: tables.length, tables: tables.slice(0, 80).join(', ') })
@@ -1384,14 +1389,15 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
       const msg = p.message;
       if (!msg) return;
       if (msg.type === 'assistant' && msg.message?.content) {
-        const texts = (msg.message.content as any[])
-          .filter(c => c?.type === 'text')
-          .map(c => c.text || '')
-          .join('');
-        if (texts) collected += texts;
+        const arr = msg.message.content as any[];
+        const texts = arr.filter(c => c?.type === 'text').map(c => c.text || '').join('');
+        if (texts) { collected += texts; setGenStream(prev => ({ ...prev, text: prev.text + texts })); }
+        // 도구 호출 라벨 표시 (mcp__pepe_ssh__ssh_exec, Read, Edit 등)
+        const toolUses = arr.filter(c => c?.type === 'tool_use').map(c => String(c.name || ''));
+        if (toolUses.length > 0) setGenStream(prev => ({ ...prev, tools: [...prev.tools, ...toolUses].slice(-8) }));
       } else if (msg.type === 'text' && typeof msg.text === 'string') {
-        // 비-JSON 라인 fallback (드물게)
         collected += msg.text;
+        setGenStream(prev => ({ ...prev, text: prev.text + msg.text }));
       } else if (msg.type === 'error' && !finalized) {
         finalized = true;
         flashHint(tr('wsAiGenError', { error: (msg.text || '').slice(0, 80) }));
@@ -1432,12 +1438,17 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
 
     try {
       let r: any;
-      if (selectedAgent === 'gemini') {
-        r = await (window as any).api?.geminiSend?.(claudeSessionId, prompt, requestId, undefined, true);
-      } else if (selectedAgent === 'codex') {
-        r = await (window as any).api?.codexSend?.(claudeSessionId, prompt, requestId, undefined, 'full-auto');
+      const api: any = (window as any).api;
+      if (agent === 'gemini') {
+        r = await api?.geminiSend?.(claudeSessionId, prompt, requestId, undefined, true);
+      } else if (agent === 'codex') {
+        r = await api?.codexSend?.(claudeSessionId, prompt, requestId, undefined, 'full-auto');
+      } else if (agent === 'antigravity') {
+        r = await api?.antigravitySend?.(claudeSessionId, prompt, requestId, undefined, true);
+      } else if (agent === 'custom') {
+        r = await api?.customSend?.(claudeSessionId, [{ role: 'user', content: prompt }], requestId);
       } else {
-        r = await (window as any).api?.claudeSend?.(
+        r = await api?.claudeSend?.(
           claudeSessionId, prompt, undefined, true, undefined, null, 'bypassPermissions', undefined, false, requestId,
         );
       }
@@ -2359,7 +2370,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
           {/* AI 자동 생성 — LogAnalyzer 와 동일 스타일 (teal/blue + 에이전트 dropdown) */}
           <div style={{ display: 'inline-flex', alignItems: 'stretch', borderRadius: 3, position: 'relative' }}>
             <button
-              onClick={onAutoGenerate}
+              onClick={() => onAutoGenerate()}
               disabled={generating || !sql.trim()}
               title={tr('wsAiGenBtnTitle', { agent: selectedAgent })}
               style={{
@@ -2399,7 +2410,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
                     const Ico = AGENT_ICON[opt.id];
                     return (
                       <button key={opt.id}
-                        onClick={() => { setSelectedAgent(opt.id); setAgentMenuOpen(false); onAutoGenerate(); }}
+                        onClick={() => { setSelectedAgent(opt.id); setAgentMenuOpen(false); onAutoGenerate(opt.id); }}
                         onMouseEnter={e => (e.currentTarget.style.background = opt.color + '22')}
                         onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                         style={{
@@ -3514,6 +3525,66 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
               <button onClick={() => setNameModal(null)} style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>{tr('wsCancel')}</button>
               <button onClick={confirmNameModal} disabled={!nameModal.value.trim()} style={{ background: nameModal.value.trim() ? '#0e639c' : '#555', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: nameModal.value.trim() ? 'pointer' : 'not-allowed', fontSize: 12 }}>{tr('wsConfirm')}</button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* AI 자동 생성 스트리밍 진행 패널 — 우측 하단 floating */}
+      {(generating || genStream.text) && (
+        <div style={{
+          position: 'fixed', right: 16, bottom: 36, zIndex: 99997,
+          width: 380, maxHeight: 320, display: 'flex', flexDirection: 'column',
+          background: '#1a1a2e', border: '1px solid #3a3a5a', borderRadius: 8,
+          boxShadow: '0 8px 28px rgba(0,0,0,0.55)', overflow: 'hidden',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#222237', borderBottom: '1px solid #3a3a5a' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#d0d0e0' }}>
+              🤖 {genStream.agent || 'AI'} {generating ? tr('wsGenerating') : tr('wsAiQueryAppended')}
+            </span>
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+              {generating && (
+                <button
+                  onClick={async () => {
+                    const sid = `sqltool-${sessionId}`;
+                    const rid = genStream.requestId;
+                    try {
+                      const api: any = (window as any).api;
+                      if (genStream.agent === 'gemini') await api?.geminiStop?.(sid, rid);
+                      else if (genStream.agent === 'codex') await api?.codexStop?.(sid, rid);
+                      else if (genStream.agent === 'antigravity') await api?.antigravityStop?.(sid, rid);
+                      else if (genStream.agent === 'custom') await api?.customStop?.(sid, rid);
+                      else await api?.claudeStop?.(sid, rid);
+                    } catch {}
+                    // 로컬 상태도 즉시 정리 — stop 후 done 이벤트가 안 올 수도 있어서.
+                    try { generateDisposeRef.current?.(); } catch {}
+                    generateDisposeRef.current = null;
+                    setGenerating(false);
+                    setGenStream({ text: '', tools: [], agent: '', requestId: '' });
+                  }}
+                  title="중단"
+                  style={{ background: '#5a2424', color: '#fff', border: '1px solid #844', borderRadius: 3, padding: '2px 8px', fontSize: 10, cursor: 'pointer' }}
+                >⏹ 중단</button>
+              )}
+              <button
+                onClick={() => {
+                  // 생성 중이어도 패널은 강제 닫기 — 사용자 의도. 백그라운드 진행은 끊지 않음.
+                  setGenStream({ text: '', tools: [], agent: '', requestId: '' });
+                  setGenerating(false);
+                }}
+                title="닫기"
+                style={{ background: 'transparent', color: '#aaa', border: 'none', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
+              >×</button>
+            </span>
+          </div>
+          {genStream.tools.length > 0 && (
+            <div style={{ padding: '4px 10px', background: '#1f1f33', borderBottom: '1px solid #2a2a44', fontSize: 10, color: '#9090b0', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {genStream.tools.slice(-6).map((t, i) => (
+                <span key={i} style={{ background: '#2a2a44', padding: '1px 6px', borderRadius: 3 }}>{t.replace(/^mcp__pepe_ssh__/, '')}</span>
+              ))}
+            </div>
+          )}
+          <div style={{ padding: '8px 10px', overflow: 'auto', fontSize: 11, lineHeight: 1.45, color: '#d0d0e0', fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', flex: 1 }}>
+            {genStream.text || (generating ? '...' : '')}
+            {generating && <span style={{ color: '#7a7aff' }}>▋</span>}
           </div>
         </div>
       )}
