@@ -61,4 +61,8 @@ resources/x11-server.zip
 java-sidecar/lib/
 
 # MicroSIP 네이티브 데몬 빌드 산출물 (로컬 빌드; 배포는 extraResources 로)
-sip-sidecar/bin/
+# sipd.exe 는 릴리스 번들에 필요해 커밋한다. 그 외 산출물(.new/.old 등)은 무시.
+sip-sidecar/bin/*
+!sip-sidecar/bin/win-x64
+sip-sidecar/bin/win-x64/*
+!sip-sidecar/bin/win-x64/sipd.exe
