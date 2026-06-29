@@ -396,13 +396,21 @@ function cleanupStaleTempFiles() {
       /^pepe-mermaid-src\.txt$/, /^pepe-autotrack-/, /^pepe-pwd-/, /^pepe-mcp-\d+/,
       /^gemini-prompt-\d+/, /^gemini-mcp-\d+/, /^claude-mcp-\d+/,
       /^pepe-sipd\.log$/, // SIP 사이드카 파일 로그 제거 (env 설정 안 했을 때 잔존 정리)
+      /^pepe-agy-\d+/,    // Antigravity CLI 로그/리포트 (정상 종료 시 본인이 지우지만 비정상 종료 잔존)
+      /^pepe-agy-report-\d+/, /^pepe-agy-cont-\d+/,
+      /^pepe-mcp-ssh-server\.cjs$/, /^pepe-claude-hook\.cjs$/, /^pepe-claude-hook-wrap\.cmd$/, // 매 기동 시 재생성되는 정적 스크립트
+    ];
+    // 매 기동 시 재생성되는 파일은 mtime 무관하게 즉시 삭제 — 가동 중 잠겨있지 않음 (스크립트 생성 전 단계).
+    const forceDeletePatterns = [
+      /^pepe-sipd\.log$/,
+      /^pepe-mcp-ssh-server\.cjs$/, /^pepe-claude-hook\.cjs$/, /^pepe-claude-hook-wrap\.cmd$/,
     ];
     for (const name of fs.readdirSync(dir)) {
       if (!patterns.some(re => re.test(name))) continue;
       const full = path.join(dir, name);
       try {
-        // pepe-sipd.log 는 더 이상 사용하지 않으므로 즉시 삭제 (mtime 무관)
-        if (name === 'pepe-sipd.log') { try { fs.rmSync(full, { force: true }); } catch {} continue; }
+        // forceDelete 패턴은 mtime 무관 즉시 삭제 (정적 이름 또는 사용 안 함)
+        if (forceDeletePatterns.some(re => re.test(name))) { try { fs.rmSync(full, { force: true }); } catch {} continue; }
         const st = fs.statSync(full);
         if (now - st.mtimeMs < MAX_AGE) continue; // 최근 것은 보존
         fs.rmSync(full, { recursive: true, force: true });
@@ -567,6 +575,12 @@ app.on('before-quit', () => {
   try { getSipSidecar().dispose(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}
+  // 매 기동 시 재생성되는 정적 임시 스크립트 정리 — %TEMP% 에 남아 있는 것 즉시 삭제.
+  try {
+    for (const name of ['pepe-mcp-ssh-server.cjs', 'pepe-claude-hook.cjs', 'pepe-claude-hook-wrap.cmd', 'pepe-sipd.log']) {
+      try { fs.rmSync(path.join(os.tmpdir(), name), { force: true }); } catch {}
+    }
+  } catch {}
 });
 
 // 앱 시작 5초 후 비동기로 과거 session-* 폴더 정리 (현재 더 이상 안 만드는데 기존 orphan 잔존 가능)
