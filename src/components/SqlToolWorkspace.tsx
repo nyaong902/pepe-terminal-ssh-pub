@@ -447,8 +447,11 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   // 좌측 사이드바 폭 (드래그 리사이즈) — localStorage 비활성, 메모리 보존.
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(() => sqlStateCache.get(sessionId + ':leftW') as any || 260);
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(() => sqlStateCache.get(sessionId + ':rightW') as any || 280);
-  // 히스토리 패널 핀 상태 (unpin 시 collapsed bar 만 표시)
-  const [historyPinned, setHistoryPinned] = useState<boolean>(() => (sqlStateCache.get(sessionId + ':hPin') as any) !== false);
+  // 히스토리 패널 핀 상태 (unpin 시 collapsed bar 만 표시). 기본 fold(=false).
+  const [historyPinned, setHistoryPinned] = useState<boolean>(() => {
+    const v = sqlStateCache.get(sessionId + ':hPin') as any;
+    return v === true; // 명시적으로 true 일 때만 펼침
+  });
   // 결과 패널 높이 (px) — DBeaver Sash 와 동등. 드래그로 조절, ▲▼ 로 접기/펼치기.
   const [resultPaneHeight, setResultPaneHeight] = useState<number>(() => (sqlStateCache.get(sessionId + ':resH') as any) || 300);
   // ResultSet fetch size — DBeaver 의 "Custom row count" 와 동일. SELECT 시 최대 가져올 행 수.
