@@ -94,6 +94,39 @@ type CallHistEntry = {
 
 const MAX_ENDPOINTS = 10;
 const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
+
+// DTMF 톤 주파수 — RFC 4733 / ITU-T Q.23 표준
+const DTMF_FREQ: Record<string, [number, number]> = {
+  '1': [697, 1209], '2': [697, 1336], '3': [697, 1477],
+  '4': [770, 1209], '5': [770, 1336], '6': [770, 1477],
+  '7': [852, 1209], '8': [852, 1336], '9': [852, 1477],
+  '*': [941, 1209], '0': [941, 1336], '#': [941, 1477],
+};
+let _audioCtx: AudioContext | null = null;
+function playDtmfTone(key: string) {
+  const f = DTMF_FREQ[key];
+  if (!f) return;
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const ctx = _audioCtx;
+    if (ctx.state === 'suspended') { void ctx.resume(); }
+    const t0 = ctx.currentTime;
+    const dur = 0.08; // 80ms
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(0.18, t0 + 0.005);
+    gain.gain.linearRampToValueAtTime(0, t0 + dur);
+    gain.connect(ctx.destination);
+    for (const freq of f) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      osc.start(t0);
+      osc.stop(t0 + dur);
+    }
+  } catch {}
+}
 // 단말/설정 카드 공통 최소 폭 — 둘 중 더 넓은(설정) 기준으로 맞춰 동일 grid 컬럼 폭 사용
 const CARD_MIN = 300;
 const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN}px, 1fr))`, gap: 12, alignItems: 'start' };
@@ -493,6 +526,7 @@ export const MicroSipWorkspace: React.FC = () => {
   const sendDtmf = async (id: string, digit: string) => { await api().sipSendDtmf?.({ endpointId: id, digit }).catch(() => {}); };
   const pressKey = (id: string, key: string) => {
     const cur = rt(id);
+    playDtmfTone(key);
     if (cur.call === 'connected') { void sendDtmf(id, key); }
     else setRt(id, { dialed: (cur.dialed || '') + key });
   };
@@ -613,6 +647,9 @@ export const MicroSipWorkspace: React.FC = () => {
                 onTransfer={() => transfer(e.id)}
                 onToggleRecord={() => toggleRecord(e.id)}
                 onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
+                onRegister={() => register(e)}
+                onUnregister={() => unregister(e.id)}
+                onSetDialed={(s) => setRt(e.id, { dialed: s })}
               />
             ))}
           </div>
@@ -952,7 +989,26 @@ const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
   onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void; onVoicemail: () => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail }) => {
+  onRegister: () => void; onUnregister: () => void;
+  onSetDialed: (s: string) => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed }) => {
+  // 재다이얼용 마지막 발신 번호 — sessionStorage 로 endpoint 별 영속 (앱 재시작 시 초기화)
+  const lastDialedKey = `pepe-sip-last-${ep.id}`;
+  const [lastDialed, setLastDialed] = useState<string>(() => {
+    try { return sessionStorage.getItem(lastDialedKey) || ''; } catch { return ''; }
+  });
+  const callAndRemember = () => {
+    if (rt.dialed && rt.dialed.trim()) {
+      try { sessionStorage.setItem(lastDialedKey, rt.dialed.trim()); } catch {}
+      setLastDialed(rt.dialed.trim());
+    }
+    onCall();
+  };
+  const redial = () => {
+    if (!lastDialed) return;
+    onSetDialed(lastDialed);
+    setTimeout(() => onCall(), 50);
+  };
   const inCall = rt.call === 'connected' || rt.call === 'calling' || rt.call === 'ringing' || rt.call === 'held';
   const incoming = rt.call === 'incoming';
   // 통화 시간 타이머 (connected/held 동안)
@@ -980,11 +1036,30 @@ const PhoneCard: React.FC<{
         {ep.dnd && <span title="방해 금지" style={{ fontSize: 11 }}>🌙</span>}
         {rt.mwi && <button onClick={onVoicemail} title={ep.voicemailNumber ? '음성사서함 듣기' : '음성사서함 도착'} disabled={!ep.voicemailNumber}
           style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 12, padding: 0 }}>📨</button>}
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{ep.username || '미설정'}@{ep.server || '—'}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={`${ep.username || '미설정'}@${ep.server || '—'}`}>{ep.username || '미설정'}@{ep.server || '—'}</span>
+        {rt.reg === 'registered'
+          ? <button onClick={onUnregister} title="이 단말 등록 해제"
+              style={{ padding: '2px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', flexShrink: 0 }}>해제</button>
+          : <button onClick={onRegister} title="이 단말 등록" disabled={!ep.server.trim() || !ep.username.trim()}
+              style={{ padding: '2px 8px', fontSize: 10, borderRadius: 4, border: 'none', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: (ep.server.trim() && ep.username.trim()) ? 'pointer' : 'not-allowed', opacity: (ep.server.trim() && ep.username.trim()) ? 1 : 0.5, flexShrink: 0 }}>등록</button>}
       </div>
-      <div style={{ minHeight: 26, padding: '4px 8px', borderRadius: 6, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 12, letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(inCall || incoming) ? (rt.remote || '') : (rt.dialed || '')}</span>
-        <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flexShrink: 0, marginLeft: 6 }}>
+      <div style={{ minHeight: 26, padding: '2px 4px 2px 8px', borderRadius: 6, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', display: 'flex', alignItems: 'center', gap: 4 }}>
+        {(inCall || incoming) ? (
+          <span style={{ flex: 1, fontFamily: 'Consolas, monospace', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rt.remote || ''}</span>
+        ) : (
+          <input
+            value={rt.dialed || ''}
+            onChange={e => onSetDialed(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') callAndRemember(); }}
+            placeholder="번호 또는 sip:..."
+            style={{ flex: 1, padding: 0, background: 'transparent', color: 'var(--win-text, #e6edf3)', border: 'none', outline: 'none', fontFamily: 'Consolas, monospace', fontSize: 12, letterSpacing: 0.5, minWidth: 0 }}
+          />
+        )}
+        {!inCall && !incoming && lastDialed && (
+          <button onClick={redial} title={`재다이얼: ${lastDialed}`}
+            style={{ padding: '1px 6px', fontSize: 10, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text-dim, #9aa7b3)', cursor: 'pointer', flexShrink: 0 }}>↻</button>
+        )}
+        <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flexShrink: 0 }}>
           {(rt.call === 'connected' || rt.call === 'held') ? mmss : (rt.call !== 'idle' ? rt.call : '')}
         </span>
       </div>
@@ -1013,7 +1088,9 @@ const PhoneCard: React.FC<{
         </div>
       ) : (
         <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={onCall} style={callBtn('#238636')}>📞 통화</button>
+          <button onClick={callAndRemember} style={callBtn('#238636')}>📞 통화</button>
+          <button onClick={redial} disabled={!lastDialed} title={lastDialed ? `재다이얼: ${lastDialed}` : '재다이얼 (이전 발신 없음)'}
+            style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)', opacity: lastDialed ? 1 : 0.4, cursor: lastDialed ? 'pointer' : 'not-allowed' }}>↻</button>
           <button onClick={onBackspace} title="지우기" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>⌫</button>
           <button onClick={onClear} title="초기화" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>C</button>
         </div>
