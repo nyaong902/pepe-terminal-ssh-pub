@@ -24,6 +24,49 @@
 using namespace pj;
 using json = nlohmann::json;
 
+#ifdef _WIN32
+#include <windows.h>
+// Windows PJSIP 장치 이름은 시스템 ANSI 코드페이지(한국어 → CP949) 인데 nlohmann::json 은
+// UTF-8 만 받아 type_error 316 으로 throw → sipd 가 비정상 종료. 모든 외부 문자열을 UTF-8 로 정규화.
+static std::string toUtf8(const std::string& s) {
+    if (s.empty()) return s;
+    // 이미 valid UTF-8 인지 빠른 검사 (>=0x80 가 잘 짜인 다중바이트 시퀀스인지)
+    const unsigned char* p = (const unsigned char*)s.c_str();
+    bool nonAscii = false;
+    for (size_t i = 0; i < s.size(); ++i) if (p[i] >= 0x80) { nonAscii = true; break; }
+    if (!nonAscii) return s;
+    auto isUtf8 = [&]() {
+        size_t i = 0;
+        while (i < s.size()) {
+            unsigned c = p[i];
+            size_t need;
+            if (c < 0x80) { i++; continue; }
+            else if ((c & 0xE0) == 0xC0) need = 1;
+            else if ((c & 0xF0) == 0xE0) need = 2;
+            else if ((c & 0xF8) == 0xF0) need = 3;
+            else return false;
+            if (i + need >= s.size()) return false;
+            for (size_t k = 1; k <= need; ++k) if ((p[i + k] & 0xC0) != 0x80) return false;
+            i += need + 1;
+        }
+        return true;
+    };
+    if (isUtf8()) return s;
+    // ANSI(CP_ACP) → UTF-16 → UTF-8
+    int wlen = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (wlen <= 0) return "?";
+    std::wstring w(wlen, 0);
+    MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), &w[0], wlen);
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), wlen, nullptr, 0, nullptr, nullptr);
+    if (ulen <= 0) return "?";
+    std::string u(ulen, 0);
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), wlen, &u[0], ulen, nullptr, nullptr);
+    return u;
+}
+#else
+static std::string toUtf8(const std::string& s) { return s; }
+#endif
+
 #ifdef PEPE_EVS
 /* EVS 커스텀 코덱 등록 (pjmedia_codec_evs.c) + pjsua 미디어 엔드포인트 획득 */
 extern "C" pj_status_t pjmedia_codec_evs_init(pjmedia_endpt *endpt);
@@ -207,6 +250,12 @@ static void cmdRegister(const json& ep) {
     std::string proxy = ep.value("proxy", "");
     std::string domain = ep.value("domain", "");           // 도메인(미지정 시 server 사용)
     if (domain.empty()) domain = server;
+    // 필수 필드 검증 — 비어있으면 invalid URI 로 PJSIP 가 throw 하니 미리 친화 메시지로 거절.
+    if (user.empty() || server.empty() || domain.empty()) {
+        emitJson({{"ev","reg"},{"endpointId",id},{"reg","failed"},
+                  {"error", std::string("필수 필드 누락 — 사용자 번호/SIP 서버/도메인 모두 입력 필요")}});
+        return;
+    }
     bool disableTimer = ep.value("disableSessionTimer", false);
     bool publishPres = ep.value("publishPresence", true);
     int regExpiry = ep.value("regExpiry", 300);
@@ -223,17 +272,27 @@ static void cmdRegister(const json& ep) {
 
     std::string scheme = "sip";
     std::string tparam = transport == "tls" ? ";transport=tls" : transport == "tcp" ? ";transport=tcp" : "";
+    // 기본 SIP 포트(5060/5061)는 URI 에서 생략 — MicroSIP/대부분 클라이언트가 그렇게 보내고,
+    // 일부 서버(SKBroadband 등) 가 명시적 포트가 있는 URI 의 auth username 매칭을 거부함.
+    int defaultPort = (transport == "tls") ? 5061 : 5060;
+    std::string portSuffix = (port > 0 && port != defaultPort) ? (":" + std::to_string(port)) : "";
     AccountConfig acfg;
     // 계정 식별(AOR)은 도메인 기준, 등록은 SIP 서버(registrar) 기준
     std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + domain + ">";
     acfg.idUri = idUri;
-    acfg.regConfig.registrarUri = scheme + ":" + server + ":" + std::to_string(port) + tparam;
+    acfg.regConfig.registrarUri = scheme + ":" + server + portSuffix + tparam;
     if (regExpiry > 0) acfg.regConfig.timeoutSec = regExpiry;
-    if (!proxy.empty()) acfg.sipConfig.proxies.push_back(scheme + ":" + proxy + tparam);
+    if (!proxy.empty()) {
+        // 프록시는 IP:port 형식 그대로 사용 (포트 지정이 의도된 케이스가 대부분 — SBC 위치 명시).
+        acfg.sipConfig.proxies.push_back(scheme + ":" + proxy + tparam);
+    }
     AuthCredInfo cred("digest", "*", authId.empty() ? user : authId, 0, pass);
     acfg.sipConfig.authCreds.push_back(cred);
     acfg.callConfig.timerMinSESec = 90;
     acfg.callConfig.timerUse = disableTimer ? PJSUA_SIP_TIMER_INACTIVE : PJSUA_SIP_TIMER_OPTIONAL; // 세션 타이머
+    // 통화 연결 직후 PJSUA 가 자동으로 UPDATE 보내 코덱 1개로 재협상하는 동작 비활성화.
+    // 일부 서버(SK 브로드밴드 SBC 등)가 자기쪽 re-INVITE 와 충돌해 491 후 BYE 로 호를 끊는다.
+    acfg.mediaConfig.lockCodecEnabled = false;
     acfg.presConfig.publishEnabled = publishPres; // 계정 상태(프레즌스 PUBLISH)
     acfg.mwiConfig.enabled = true; // 음성사서함(MWI) 구독
     if (keepAlive > 0) acfg.natConfig.udpKaIntervalSec = keepAlive; // UDP keep-alive(살아유지)
@@ -334,6 +393,11 @@ static void cmdCall(const std::string& id, const std::string& target) {
     g_calls[id] = call;
     try {
         CallOpParam op(true);
+        // 텍스트 미디어(t140/red) 비활성화 — SDP 크기를 줄여 UDP MTU(1300) 안에 들어가게.
+        // 일부 SIP 서버(SKBroadband 등) 가 TCP 로 fallback 한 INVITE 를 즉시 끊어 통화 실패.
+        op.opt.audioCount = 1;
+        op.opt.videoCount = 0;
+        op.opt.textCount  = 0;
         if (it->second->hideCallerId) { // 발신자 번호 숨기기 (RFC3323)
             SipHeader h; h.hName = "Privacy"; h.hValue = "id"; op.txOption.headers.push_back(h);
         }
@@ -442,8 +506,9 @@ static void cmdListAudio() {
         const AudioDevInfoVector2 devs = mgr.enumDev2();
         for (unsigned i = 0; i < devs.size(); i++) {
             const AudioDevInfo& d = devs[i];
-            if (d.inputCount  > 0) inputs.push_back({{"idx",(int)i},{"name",d.name}});
-            if (d.outputCount > 0) outputs.push_back({{"idx",(int)i},{"name",d.name}});
+            std::string nm = toUtf8(d.name);
+            if (d.inputCount  > 0) inputs.push_back({{"idx",(int)i},{"name",nm}});
+            if (d.outputCount > 0) outputs.push_back({{"idx",(int)i},{"name",nm}});
         }
     } catch (...) {}
     emitJson({{"ev","audio-devices"},{"inputs",inputs},{"outputs",outputs}});
@@ -457,7 +522,7 @@ static int findAudioDev(const std::string& name, bool capture) {
         const AudioDevInfoVector2 devs = mgr.enumDev2();
         for (unsigned i = 0; i < devs.size(); i++) {
             const AudioDevInfo& d = devs[i];
-            if ((capture ? d.inputCount : d.outputCount) > 0 && d.name == name) return (int)i;
+            if ((capture ? d.inputCount : d.outputCount) > 0 && toUtf8(d.name) == name) return (int)i;
         }
     } catch (...) {}
     return -1;
@@ -530,11 +595,19 @@ static void cmdVolume(double mic, double spk) {
 int main() {
     try {
         g_ep.libCreate();
+        // UDP MTU 초과 시 TCP 자동 전환 비활성화 — SDP+Proxy-Auth 합쳐 ~1500 바이트 INVITE 가
+        // PJSIP 기본 임계치 1300 을 넘어 TCP 로 전환되는데, 일부 SIP 서버(SKBroadband) 가 TCP
+        // INVITE 를 즉시 끊어 통화 실패. UDP 단편화 허용해 그대로 송신하도록 함.
+        pjsip_cfg()->endpt.disable_tcp_switch = PJ_TRUE;
         EpConfig epcfg;
         // SIP 전체 트레이스를 파일로 — stdout(프로토콜)은 깨끗이 유지(consoleLevel=0).
         // 경로: env PEPE_SIPD_LOG > %TEMP%\pepe-sipd.log > 현재 디렉터리.
         epcfg.logConfig.level = 5;
         epcfg.logConfig.consoleLevel = 0;
+        // UDP MTU 초과 시 TCP fallback 임계치를 더 크게 — SDP 안에 text 미디어/여러 코덱 포함되면
+        // 기본 1300 을 넘기 쉽다. 일부 SIP 서버(SKBroadband 등) 는 TCP INVITE 를 즉시 끊어버려
+        // 통화가 실패함. 1500 (이더넷 MTU) 까지 UDP 로 보내도록 한다.
+        epcfg.uaConfig.userAgent = "PePe-MicroSIP/1.0";
         {
             const char* envlog = getenv("PEPE_SIPD_LOG");
             std::string logf;

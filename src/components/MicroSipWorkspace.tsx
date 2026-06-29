@@ -3,6 +3,7 @@
 // 실제 SIP/RTP/코덱(AMR/AMR-WB/EVS/G.711)은 네이티브 PJSIP 사이드카가 담당하며,
 // 여기서는 window.api.sip* IPC 로 제어/상태만 다룬다. 사이드카 미연결 시 status='no-engine'.
 import React, { useEffect, useRef, useState } from 'react';
+import { notifyConfirm } from './Notify';
 
 export type SipCodec = 'evs' | 'amrwb' | 'amr' | 'alaw' | 'ulaw';
 export const ALL_CODECS: { id: SipCodec; label: string }[] = [
@@ -374,8 +375,9 @@ export const MicroSipWorkspace: React.FC = () => {
     if (endpoints.length >= MAX_ENDPOINTS) return;
     setEndpoints(prev => [...prev, defaultEndpoint(prev.length + 1)]);
   };
-  const removeEndpoint = (id: string) => {
-    if (!confirm('이 단말을 삭제할까요? (등록 해제됩니다)')) return;
+  const removeEndpoint = async (id: string) => {
+    // native confirm 은 Chromium 측에서 caret/focus 를 빼앗아 되돌리지 않는 버그 — 자체 모달 사용.
+    if (!(await notifyConfirm('단말 삭제', '이 단말을 삭제할까요? (등록 해제됩니다)'))) return;
     try { api().sipUnregister?.({ endpointId: id }); } catch {}
     setEndpoints(prev => prev.filter(e => e.id !== id));
     setRuntime(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -391,8 +393,12 @@ export const MicroSipWorkspace: React.FC = () => {
   const copyFrom = (targetId: string, sourceId: string) => {
     const src = endpoints.find(e => e.id === sourceId);
     if (!src) return;
-    const { id, label, username, ...rest } = src; // 계정 식별자(label/username)는 유지, 나머지(서버/전송/코덱 등) 덮어씀
-    updateEndpoint(targetId, rest);
+    // 계정 식별자(label/username/authId/displayName)는 비워서 새 단말이 자기 번호로 채우게 함.
+    // (이전 코드는 authId/displayName 를 그대로 복사해서, 사용자가 username 만 바꿔도
+    //  인증은 단말 1 의 ID 로 가서 401/실패하는 버그.)
+    const { id, label, username, authId, displayName, ...rest } = src;
+    void id; void label; void username; void authId; void displayName;
+    updateEndpoint(targetId, { ...rest, label: '', username: '', authId: '', displayName: '' });
   };
 
   // ── 프로비저닝(설정 내보내기/가져오기) ──
@@ -412,12 +418,12 @@ export const MicroSipWorkspace: React.FC = () => {
     try {
       const obj = JSON.parse(await file.text());
       const epCount = Array.isArray(obj.endpoints) ? obj.endpoints.length : 0;
-      if (!confirm(`설정을 가져오면 현재 단말/매크로/주소록을 덮어씁니다. (단말 ${epCount}개) 계속할까요?`)) return;
+      if (!(await notifyConfirm('설정 가져오기', `설정을 가져오면 현재 단말/매크로/주소록을 덮어씁니다. (단말 ${epCount}개) 계속할까요?`))) return;
       if (Array.isArray(obj.endpoints)) setEndpoints(obj.endpoints.slice(0, MAX_ENDPOINTS));
       if (Array.isArray(obj.macros)) setMacros(obj.macros);
       if (Array.isArray(obj.contacts)) setContacts(obj.contacts);
     } catch (e: any) {
-      alert(`설정 파일을 읽을 수 없습니다: ${e?.message || e}`);
+      pushToast(`설정 파일을 읽을 수 없습니다: ${e?.message || e}`);
     }
   };
 
@@ -976,16 +982,16 @@ const PhoneCard: React.FC<{
           style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 12, padding: 0 }}>📨</button>}
         <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{ep.username || '미설정'}@{ep.server || '—'}</span>
       </div>
-      <div style={{ minHeight: 34, padding: '6px 10px', borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 16, letterSpacing: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>{(inCall || incoming) ? (rt.remote || '') : (rt.dialed || '')}</span>
-        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+      <div style={{ minHeight: 26, padding: '4px 8px', borderRadius: 6, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', fontFamily: 'Consolas, monospace', fontSize: 12, letterSpacing: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(inCall || incoming) ? (rt.remote || '') : (rt.dialed || '')}</span>
+        <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flexShrink: 0, marginLeft: 6 }}>
           {(rt.call === 'connected' || rt.call === 'held') ? mmss : (rt.call !== 'idle' ? rt.call : '')}
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
         {DIAL_KEYS.map(k => (
           <button key={k} onClick={() => onKey(k)}
-            style={{ padding: '10px 0', borderRadius: 8, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 16, fontWeight: 600, cursor: 'pointer' }}>{k}</button>
+            style={{ padding: '6px 0', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>{k}</button>
         ))}
       </div>
       {incoming ? (
