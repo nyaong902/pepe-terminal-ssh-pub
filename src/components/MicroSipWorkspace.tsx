@@ -305,7 +305,7 @@ export const MicroSipWorkspace: React.FC = () => {
         ev.ev === 'error' ? `오류: ${ev.error || ''}` :
         ev.ev === 'log' ? String(ev.text || '') :
         ev.ev === 'sip' ? `${ev.dir === 'out' ? '↗' : '↙'} ${ev.summary || ''}` : '';
-      if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev, body: ev.ev === 'sip' ? String(ev.body || '') : undefined }, ...prev].slice(0, 500));
+      if (txt) setActivity(prev => [{ ts: Date.now(), epId: ev.endpointId || '', text: txt, kind: ev.ev, body: ev.ev === 'sip' ? String(ev.body || '') : undefined, remote: ev.ev === 'sip' ? String(ev.remote || '') : undefined, remoteName: ev.ev === 'sip' ? String(ev.remoteName || '') : undefined }, ...prev].slice(0, 500));
       // 실패는 토스트로 표면화
       if (ev.ev === 'reg' && ev.reg === 'failed') pushToast(`${labelOfEp(ev.endpointId)} 등록 실패 — ${ev.error || '서버 응답 없음'}`);
       else if (ev.ev === 'call' && ev.call === 'ended' && ev.error) pushToast(`${labelOfEp(ev.endpointId)} 통화 실패 — ${ev.error}`);
@@ -1033,7 +1033,7 @@ const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', 
 // sessionStorage 에 펼침 여부 저장 — 새로 시작할 때마다 fold 기본.
 const CALL_LOG_FOLD_KEY = 'pepe-microsip-callog-open';
 const CallLogPanel: React.FC<{
-  activity: { ts: number; epId: string; text: string; kind: string; body?: string }[];
+  activity: { ts: number; epId: string; text: string; kind: string; body?: string; remote?: string; remoteName?: string }[];
   endpoints: SipEndpoint[]; onClear: () => void;
 }> = ({ activity, endpoints, onClear }) => {
   const [open, setOpen] = useState<boolean>(() => {
@@ -1145,11 +1145,33 @@ const CallLogPanel: React.FC<{
         )}
       </div>
       {open && viewMode === 'seq' && (() => {
-        // 활동 중인 endpoint 만 lifeline 컬럼으로 (등록 시도 / 메시지 발생 단말).
-        // 모든 endpoint 를 다 보여주면 컬럼이 너무 많아짐. seq 에 등장한 endpointId 만.
-        const eps = endpoints.filter(e => sipSeq.some(a => a.epId === e.id));
-        const usedEps = eps.length > 0 ? eps : endpoints.slice(0, 1); // 비어 있어도 최소 1열
-        const colCount = usedEps.length + 1; // +1 = 원격 컬럼
+        // 통화 관련 메시지(INVITE/ACK/BYE/CANCEL/PRACK/UPDATE/REFER/INFO + 그에 대한 응답)에
+        // 등장한 endpoint 만 lifeline 컬럼으로. REGISTER/SUBSCRIBE/NOTIFY 만 있는 단말은 숨김.
+        // 통화 응답(SIP/2.0 NNN) 은 그 직전 다이얼로그의 epId 와 같아 자연스럽게 포함됨.
+        const isCallMethod = (s: string) => /^(INVITE|ACK|BYE|CANCEL|PRACK|UPDATE|REFER|INFO)\b/.test(s.replace(/^[↗↙]\s*/, ''));
+        const callEpIds = new Set<string>();
+        for (const a of sipSeq) {
+          if (a.epId && isCallMethod(a.text)) callEpIds.add(a.epId);
+        }
+        // 통화 응답(SIP/2.0 200 OK 등) 도 같이 포함 — 같은 다이얼로그라 같은 epId.
+        // 통화 메시지가 하나라도 있는 단말 = 활성 통화 참여 단말.
+        let usedEps = endpoints.filter(e => callEpIds.has(e.id));
+        // 통화 메시지가 전혀 없으면(등록만 있는 케이스) 기존 동작으로 fallback.
+        if (usedEps.length === 0) usedEps = endpoints.filter(e => sipSeq.some(a => a.epId === e.id));
+        if (usedEps.length === 0) usedEps = endpoints.slice(0, 1);
+        // sipSeq 도 표시 대상으로 필터 — 컬럼에 없는 단말의 REGISTER 등은 시퀀스에서 숨김.
+        const visibleSeq = callEpIds.size > 0
+          ? sipSeq.filter(a => usedEps.some(e => e.id === a.epId))
+          : sipSeq;
+        // 원격 컬럼 — 각 메시지의 remote(IP) 별로 분리. remoteName(호스트명) 도 함께 저장.
+        const usedRemotes: { ip: string; name: string }[] = [];
+        for (const a of visibleSeq) {
+          const ip = a.remote || '';
+          const name = a.remoteName || '';
+          if (!usedRemotes.some(r => r.ip === ip)) usedRemotes.push({ ip, name });
+        }
+        if (usedRemotes.length === 0) usedRemotes.push({ ip: '', name: '' });
+        const colCount = usedEps.length + usedRemotes.length;
         const headerW = 70;
         return (
           <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 0, display: 'flex', flexDirection: 'column' }}>
@@ -1166,17 +1188,22 @@ const CallLogPanel: React.FC<{
                     <b style={{ fontSize: 11, color: '#58a6ff' }}>📱 {e.label}</b>
                   </div>
                 ))}
-                <div style={{ flex: 1, textAlign: 'center' }}>
-                  <b style={{ fontSize: 11, color: '#3fb950' }}>🌐 원격 (서버/피어)</b>
-                </div>
+                {usedRemotes.map((r, i) => {
+                  const label = r.ip && r.name ? `${r.ip} (${r.name})` : (r.ip || r.name || '원격');
+                  return (
+                    <div key={`rem-${i}`} style={{ flex: 1, textAlign: 'center', padding: '0 4px', overflow: 'hidden' }}>
+                      <b style={{ fontSize: 11, color: '#3fb950', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: '100%' }} title={label}>🌐 {label}</b>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            {sipSeq.length === 0 && (
+            {visibleSeq.length === 0 && (
               <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 20, textAlign: 'center', fontSize: 11 }}>
                 SIP 메시지가 아직 없습니다. 등록/통화 시도 시 REGISTER · INVITE · 200 OK 등이 여기 시퀀스로 표시됩니다.
               </div>
             )}
-            {sipSeq.map((a, i) => {
+            {visibleSeq.map((a, i) => {
               const isOut = a.text.startsWith('↗');
               const msg = a.text.replace(/^[↗↙]\s*/, '');
               const isOpen = expanded.has(i + 10000);
@@ -1184,7 +1211,10 @@ const CallLogPanel: React.FC<{
               // 어떤 단말 컬럼에 속하는지 — endpointId 매칭. 없으면 첫 컬럼.
               let epIdx = usedEps.findIndex(e => e.id === a.epId);
               if (epIdx < 0) epIdx = 0;
-              const remoteIdx = usedEps.length; // 원격 = 맨 오른쪽
+              // 어떤 원격 컬럼에 속하는지 — remote IP 매칭. 없으면 첫 원격 컬럼.
+              let remoteIdx = usedRemotes.findIndex(r => r.ip === (a.remote || ''));
+              if (remoteIdx < 0) remoteIdx = 0;
+              remoteIdx = usedEps.length + remoteIdx; // offset by endpoint columns
               // 화살표 시작/끝 컬럼 인덱스
               const fromIdx = isOut ? epIdx : remoteIdx;
               const toIdx = isOut ? remoteIdx : epIdx;
@@ -1211,7 +1241,7 @@ const CallLogPanel: React.FC<{
                       {Array.from({ length: colCount }).map((_, idx) => (
                         <div key={idx} style={{
                           position: 'absolute', left: `${colCenter(idx)}%`, top: 0, bottom: 0, width: 1,
-                          background: idx === colCount - 1 ? 'rgba(63,185,80,0.4)' : 'rgba(88,166,255,0.4)',
+                          background: idx >= usedEps.length ? 'rgba(63,185,80,0.4)' : 'rgba(88,166,255,0.4)',
                         }} />
                       ))}
                       {/* 화살표 라인 */}

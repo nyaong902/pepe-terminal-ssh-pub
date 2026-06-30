@@ -74,10 +74,46 @@ extern "C" pjmedia_endpt *pjsua_get_pjmedia_endpt(void);
 #endif
 
 static std::mutex g_out;
+// 비-UTF-8 바이트(예: SIP 본문 안의 CP949 한글, 바이너리) → '?'  로 치환해 nlohmann::json
+// 검증 실패(throw) 방지. ASCII < 0x80 은 그대로.
+static std::string sanitizeUtf8(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) { out.push_back((char)c); i++; continue; }
+        // multi-byte: validate
+        int need = 0;
+        if ((c & 0xE0) == 0xC0) need = 1;
+        else if ((c & 0xF0) == 0xE0) need = 2;
+        else if ((c & 0xF8) == 0xF0) need = 3;
+        else { out.push_back('?'); i++; continue; }
+        if (i + need >= s.size()) { out.push_back('?'); i++; continue; }
+        bool ok = true;
+        for (int k = 1; k <= need; k++) if (((unsigned char)s[i + k] & 0xC0) != 0x80) { ok = false; break; }
+        if (ok) { out.append(s, i, need + 1); i += need + 1; }
+        else { out.push_back('?'); i++; }
+    }
+    return out;
+}
+static json sanitizeJson(json j) {
+    if (j.is_string()) j = sanitizeUtf8(j.get<std::string>());
+    else if (j.is_object()) for (auto& it : j.items()) it.value() = sanitizeJson(it.value());
+    else if (j.is_array()) for (auto& el : j) el = sanitizeJson(el);
+    return j;
+}
 static void emitJson(const json& j) {
     std::lock_guard<std::mutex> lk(g_out);
-    std::cout << j.dump() << "\n";
-    std::cout.flush();
+    try {
+        std::cout << j.dump() << "\n";
+        std::cout.flush();
+    } catch (...) {
+        // 비-UTF-8 으로 dump 실패 — 모든 문자열 sanitize 후 재시도. 그래도 실패면 포기.
+        try {
+            std::cout << sanitizeJson(j).dump() << "\n";
+            std::cout.flush();
+        } catch (...) {}
+    }
 }
 static void emitLog(const std::string& level, const std::string& text) {
     emitJson({{"ev", "log"}, {"level", level}, {"text", text}});
@@ -96,6 +132,26 @@ static std::string codecPjId(const std::string& c) {
 // endpointId → AOR(user@domain) 매핑 — SIP 메시지에서 어느 단말 트래픽인지 매칭하는 데 사용.
 // (cmdRegister 에서 채워지고, cmdUnregister 에서 정리됨)
 static std::map<std::string, std::string> g_accountAor;
+// endpointId → server (등록 registrar host) — 시퀀스 뷰의 "원격" 컬럼 그룹화에 사용.
+static std::map<std::string, std::string> g_accountServer;
+// Request-URI (요청 메시지 첫 줄) 의 sip URI 에서 user@host 추출.
+// 응답(SIP/2.0 ...) 면 빈 문자열.
+static std::string extractRequestUriAor(const std::string& body) {
+    size_t e = body.find('\n');
+    std::string first = body.substr(0, e == std::string::npos ? body.size() : e);
+    while (!first.empty() && first.back() == '\r') first.pop_back();
+    if (first.compare(0, 7, "SIP/2.0") == 0) return ""; // response
+    size_t s = first.find("sip:");
+    if (s == std::string::npos) s = first.find("sips:");
+    if (s == std::string::npos) return "";
+    s = first.find(':', s) + 1;
+    size_t end = s;
+    while (end < first.size() && first[end] != ';' && first[end] != ' ' && first[end] != ',' && first[end] != '?' && first[end] != '>') end++;
+    std::string aor = first.substr(s, end - s);
+    size_t colon = aor.find(':');
+    if (colon != std::string::npos) aor = aor.substr(0, colon);
+    return aor;
+}
 // 지정한 헤더(From:/To:) 의 sip URI 에서 user@host 부분 추출. 포트/파라미터 제외.
 // 본문은 CRLF/줄바꿈 혼재 가능 — case-insensitive 헤더 매칭.
 static std::string extractHeaderAor(const std::string& body, const char* hdrName, const char* hdrShort) {
@@ -126,9 +182,12 @@ static std::string extractHeaderAor(const std::string& body, const char* hdrName
     if (colon != std::string::npos) aor = aor.substr(0, colon);
     return aor;
 }
+// pjsua_acc_id → epId 변환. g_accounts 의 MyAccount->getId() 가 pjsua_acc_id 와 동일.
+static std::string lookupEpIdByAccId(int accId);
 // SIP 메시지 캡처 — PJSIP 모듈 콜백으로 RX/TX 양방향 가로채기. pjsip_msg_print 로 전체
 // 헤더+본문을 텍스트화해 UI 콜로그에 emit.
-static void emitSipMsg(const char* dir, pjsip_msg* msg) {
+// peer_ip — RX 면 src_addr (보낸 측), TX 면 dst (받는 측) — 시퀀스 뷰의 원격 컬럼 그룹화에 사용.
+static void emitSipMsg(const char* dir, pjsip_msg* msg, int acc_id_hint = -1, const std::string& peer_ip = "") {
     if (!msg) return;
     char buf[16384];
     int n = pjsip_msg_print(msg, buf, sizeof(buf) - 1);
@@ -140,28 +199,100 @@ static void emitSipMsg(const char* dir, pjsip_msg* msg) {
     while (!first.empty() && (first.back() == '\r' || first.back() == ' ')) first.pop_back();
     while (!body.empty() && (body.back() == '\n' || body.back() == '\r' || body.back() == ' ')) body.pop_back();
     if (first.empty()) return;
-    // 우리 쪽 단말 식별 — TX 는 From 헤더(보낸이=우리), RX 는 To 헤더(받는이=우리).
-    // 두 단말이 서로 통화하면 From/To 둘 다 우리 단말이라 본문 substring 매칭으론 잘못된 단말이 잡힘.
-    bool isOut = (std::string(dir) == "out");
-    std::string ourAor = extractHeaderAor(body, isOut ? "From" : "To", isOut ? "f" : "t");
     std::string epId;
-    if (!ourAor.empty()) {
-        for (const auto& p : g_accountAor) {
-            if (p.second == ourAor) { epId = p.first; break; }
-        }
+    bool isOut = (std::string(dir) == "out");
+    bool isResponse = (first.compare(0, 7, "SIP/2.0") == 0);
+    // 매칭 — 우리 쪽 단말이 어느 헤더에 들어있는지는 메시지 종류에 따라 다름:
+    //  TX request (보낸 요청):       From = 우리(요청자)
+    //  TX response (보낸 응답):      To   = 우리(응답자)
+    //  RX request (받은 요청):       To/RURI = 우리(피호출자)
+    //  RX response (받은 응답):      From = 우리(원래 요청자)
+    auto tryMatch = [&](const std::string& aor) {
+        if (aor.empty()) return false;
+        for (const auto& p : g_accountAor) if (p.second == aor) { epId = p.first; return true; }
+        return false;
+    };
+    if (isOut && !isResponse) {
+        tryMatch(extractHeaderAor(body, "From", "f"))
+        || tryMatch(extractRequestUriAor(body))
+        || tryMatch(extractHeaderAor(body, "Contact", "m"));
+    } else if (isOut && isResponse) {
+        tryMatch(extractHeaderAor(body, "To", "t"))
+        || tryMatch(extractHeaderAor(body, "Contact", "m"));
+    } else if (!isOut && !isResponse) {
+        tryMatch(extractRequestUriAor(body))
+        || tryMatch(extractHeaderAor(body, "To", "t"))
+        || tryMatch(extractHeaderAor(body, "Contact", "m"));
+    } else { // RX response
+        tryMatch(extractHeaderAor(body, "From", "f"))
+        || tryMatch(extractHeaderAor(body, "Contact", "m"));
     }
-    // fallback — From/To 매칭 실패 시 본문 어디든 매칭되는 단말 (단일 단말 케이스용).
+    // 최종 fallback — 우리 쪽 헤더에서만 user-part 매칭 (SBC 가 도메인 재작성하는 경우 대비).
     if (epId.empty()) {
-        for (const auto& p : g_accountAor) {
-            if (!p.second.empty() && body.find(p.second) != std::string::npos) { epId = p.first; break; }
+        std::string ourHdr;
+        if (isOut && !isResponse)      ourHdr = extractHeaderAor(body, "From", "f");
+        else if (isOut && isResponse)  ourHdr = extractHeaderAor(body, "To", "t");
+        else if (!isOut && !isResponse) {
+            ourHdr = extractRequestUriAor(body);
+            if (ourHdr.empty()) ourHdr = extractHeaderAor(body, "To", "t");
+        } else                          ourHdr = extractHeaderAor(body, "From", "f");
+        size_t at = ourHdr.find('@');
+        std::string userPart = at != std::string::npos ? ourHdr.substr(0, at) : "";
+        if (!userPart.empty()) {
+            for (const auto& p : g_accountAor) {
+                size_t at2 = p.second.find('@');
+                if (at2 == std::string::npos || at2 == 0) continue;
+                if (p.second.substr(0, at2) == userPart) { epId = p.first; break; }
+            }
         }
     }
-    emitJson({{"ev","sip"},{"dir", dir},{"summary", first},{"body", body},{"endpointId", epId}});
+    // 원격 — IP (peer_ip, 전송 계층 가장 정확) + 호스트명(등록된 server). 프런트가 둘 다 표시.
+    std::string remoteIp = peer_ip;
+    std::string remoteName;
+    if (!epId.empty()) {
+        auto it = g_accountServer.find(epId);
+        if (it != g_accountServer.end()) remoteName = it->second;
+    }
+    if (remoteIp.empty() && remoteName.empty()) {
+        std::string uri = isOut ? extractRequestUriAor(body) : extractHeaderAor(body, "From", "f");
+        size_t at = uri.find('@');
+        if (at != std::string::npos) remoteName = uri.substr(at + 1);
+    }
+    (void)acc_id_hint;
+    // remote = IP 우선 (시퀀스 그룹화 키), remoteName = 호스트명 (라벨 보조 표시)
+    emitJson({{"ev","sip"},{"dir", dir},{"summary", first},{"body", body},{"endpointId", epId},
+              {"remote", !remoteIp.empty() ? remoteIp : remoteName}, {"remoteName", remoteName}});
 }
-extern "C" pj_bool_t pepe_on_rx_request(pjsip_rx_data* rdata) { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg); return PJ_FALSE; }
-extern "C" pj_bool_t pepe_on_rx_response(pjsip_rx_data* rdata) { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg); return PJ_FALSE; }
-extern "C" pj_status_t pepe_on_tx_request(pjsip_tx_data* tdata) { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg); return PJ_SUCCESS; }
-extern "C" pj_status_t pepe_on_tx_response(pjsip_tx_data* tdata) { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg); return PJ_SUCCESS; }
+// 모든 콜백을 try/catch — 절대로 C++ 예외가 PJSIP C 코드로 전파되지 않도록.
+static std::string rxPeerIp(pjsip_rx_data* rdata) {
+    if (!rdata) return "";
+    try { return std::string(rdata->pkt_info.src_name); } catch (...) { return ""; }
+}
+static std::string txPeerIp(pjsip_tx_data* tdata) {
+    if (!tdata) return "";
+    try {
+        // tp_info.dst_name 은 char[] — 라우팅 후 채워짐. 미설정이면 빈 문자열.
+        const char* s = tdata->tp_info.dst_name;
+        if (s && *s) return std::string(s);
+    } catch (...) {}
+    return "";
+}
+extern "C" pj_bool_t pepe_on_rx_request(pjsip_rx_data* rdata) {
+    try { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg, -1, rxPeerIp(rdata)); } catch (...) {}
+    return PJ_FALSE;
+}
+extern "C" pj_bool_t pepe_on_rx_response(pjsip_rx_data* rdata) {
+    try { if (rdata && rdata->msg_info.msg) emitSipMsg("in", rdata->msg_info.msg, -1, rxPeerIp(rdata)); } catch (...) {}
+    return PJ_FALSE;
+}
+extern "C" pj_status_t pepe_on_tx_request(pjsip_tx_data* tdata) {
+    try { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg, -1, txPeerIp(tdata)); } catch (...) {}
+    return PJ_SUCCESS;
+}
+extern "C" pj_status_t pepe_on_tx_response(pjsip_tx_data* tdata) {
+    try { if (tdata && tdata->msg) emitSipMsg("out", tdata->msg, -1, txPeerIp(tdata)); } catch (...) {}
+    return PJ_SUCCESS;
+}
 static pjsip_module g_sipMsgMod = {
     NULL, NULL, { (char*)"pepe-sip-log", 12 }, -1,
     (int)(PJSIP_MOD_PRIORITY_TRANSPORT_LAYER - 1),
@@ -281,6 +412,15 @@ public:
     }
 };
 
+// pjsua_acc_id 로 우리 단말 id 역참조 — SIP 메시지 캡처 시 사용.
+static std::string lookupEpIdByAccId(int accId) {
+    if (accId < 0) return "";
+    for (const auto& p : g_accounts) {
+        try { if (p.second && p.second->getId() == accId) return p.first; } catch (...) {}
+    }
+    return "";
+}
+
 // 프레즌스 버디 — 상태 변경을 이벤트로 전달
 class MyBuddy : public Buddy {
 public:
@@ -367,6 +507,7 @@ static void cmdRegister(const json& ep) {
     std::string idUri = (disp.empty() ? std::string() : ("\"" + disp + "\" ")) + "<" + scheme + ":" + user + "@" + domain + ">";
     acfg.idUri = idUri;
     g_accountAor[id] = user + "@" + domain;
+    g_accountServer[id] = server;
     acfg.regConfig.registrarUri = scheme + ":" + server + portSuffix + tparam;
     if (regExpiry > 0) acfg.regConfig.timeoutSec = regExpiry;
     if (!proxy.empty()) {
@@ -449,6 +590,7 @@ static void cmdUnregister(const std::string& id) {
     g_accounts.erase(it);
     g_dtmfMode.erase(id);
     g_accountAor.erase(id);
+    g_accountServer.erase(id);
     // 이 계정의 버디 정리
     for (auto bit = g_buddies.begin(); bit != g_buddies.end(); ) {
         if (bit->first.rfind(id + "|", 0) == 0) { try { delete bit->second; } catch (...) {} bit = g_buddies.erase(bit); }
