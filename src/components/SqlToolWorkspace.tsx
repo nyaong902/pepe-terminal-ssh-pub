@@ -837,7 +837,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
       clearTimeout(absTimer);
       if (runIdRef.current === myRunId) setRunning(false);
     }
-  }, [session, connected, sessionId, backend]);
+  }, [session, connected, sessionId, backend, fetchSize]);
 
   // 특정 테이블의 컬럼 메타 lazy fetch — 사이드카의 DatabaseMetaData.getColumns 사용.
   const loadColumns = useCallback(async (table: string): Promise<ColumnInfo[]> => {
@@ -2641,34 +2641,51 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
             }}
           />
         </div>)}
-        {/* 결과/상단 패널 사이 Sash — DBeaver 스타일 (드래그 리사이즈 + ▲▼ 접기/펼치기) */}
+        {/* 결과/상단 패널 사이 — 드래그 리사이즈용 슬림 핸들 + 펼침 토글 헤더 (MicroSip 콜로그 패널 스타일) */}
         {!(activeTab?.kind === 'object' && !result) && (
-          <div style={{ flexShrink: 0, height: 6, background: '#252526', borderTop: '1px solid #333', borderBottom: '1px solid #333', cursor: 'row-resize', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'visible', zIndex: 4 }}
-            onMouseDown={(e) => {
-              if ((e.target as HTMLElement).dataset?.role === 'sash-btn') return;
-              e.preventDefault();
-              const startY = e.clientY;
-              const startH = resultPaneCollapsed ? 0 : resultPaneHeight;
-              const onMove = (ev: MouseEvent) => {
-                const h = Math.max(0, Math.min(window.innerHeight - 200, startH - (ev.clientY - startY)));
-                setResultPaneCollapsed(h < 30);
-                if (h >= 30) setResultPaneHeight(h);
-                setResultPaneMaximized(false);
-              };
-              const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
-            }}
-            title={tr('wsDragResultPane')}
-          >
-            <div style={{ position: 'absolute', top: -7, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 0, background: '#1e1e1e', border: '1px solid #3f3f46', borderRadius: 3, height: 16, padding: '0 1px', zIndex: 5 }}>
-              <span data-role="sash-btn" title={resultPaneMaximized ? tr('wsRestoreResultPane') : tr('wsMaximizeResultPane')} onMouseDown={e => e.stopPropagation()} onClick={() => { setResultPaneMaximized(v => !v); setResultPaneCollapsed(false); }}
-                style={{ cursor: 'pointer', color: '#9cdcfe', fontSize: 10, lineHeight: '14px', padding: '0 6px', userSelect: 'none', display: 'inline-flex', alignItems: 'center' }}>▲</span>
-              <span style={{ width: 1, height: 10, background: '#444' }} />
-              <span data-role="sash-btn" title={resultPaneCollapsed ? tr('wsExpandResultPane') : tr('wsCollapseResultPane')} onMouseDown={e => e.stopPropagation()} onClick={() => { setResultPaneCollapsed(v => !v); setResultPaneMaximized(false); }}
-                style={{ cursor: 'pointer', color: '#9cdcfe', fontSize: 10, lineHeight: '14px', padding: '0 6px', userSelect: 'none', display: 'inline-flex', alignItems: 'center' }}>▼</span>
+          <>
+            {/* 드래그 핸들 — 펼친 상태일 때만 표시 (접힌 상태에선 헤더로 펼침) */}
+            {!resultPaneCollapsed && !resultPaneMaximized && (
+              <div style={{ flexShrink: 0, height: 4, background: '#333', cursor: 'row-resize' }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const startY = e.clientY;
+                  const startH = resultPaneHeight;
+                  const onMove = (ev: MouseEvent) => {
+                    const h = Math.max(60, Math.min(window.innerHeight - 200, startH - (ev.clientY - startY)));
+                    setResultPaneHeight(h);
+                  };
+                  const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+                  window.addEventListener('mousemove', onMove);
+                  window.addEventListener('mouseup', onUp);
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#0e639c')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#333')}
+                title={tr('wsDragResultPane')}
+              />
+            )}
+            {/* 토글 헤더 — 항상 보임. 클릭해서 접기/펼치기. */}
+            <div style={{
+              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px',
+              background: '#252526', borderTop: '1px solid #333', borderBottom: resultPaneCollapsed ? 'none' : '1px solid #333',
+              fontSize: 11, fontWeight: 600, color: '#cccccc',
+            }}>
+              <div onClick={() => { setResultPaneCollapsed(v => !v); setResultPaneMaximized(false); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', flex: 1 }}>
+                <span style={{ fontSize: 9, color: '#9cdcfe' }}>{resultPaneCollapsed ? '▶' : '▼'}</span>
+                <span>📊 결과</span>
+                <span style={{ fontSize: 10, color: '#888' }}>
+                  {result ? `(${result.rows.length}행${result.columns?.length ? ` · ${result.columns.length}열` : ''})` : '(없음)'}
+                  {pinnedSnapshots.length > 0 ? ` · 핀 ${pinnedSnapshots.length}` : ''}
+                </span>
+              </div>
+              <button onClick={() => { setResultPaneMaximized(v => !v); setResultPaneCollapsed(false); }}
+                title={resultPaneMaximized ? tr('wsRestoreResultPane') : tr('wsMaximizeResultPane')}
+                style={{ fontSize: 10, padding: '1px 8px', borderRadius: 3, border: '1px solid #3f3f46', background: resultPaneMaximized ? '#0e639c' : 'transparent', color: '#9cdcfe', cursor: 'pointer' }}>
+                {resultPaneMaximized ? '⤡ 복원' : '⤢ 최대'}
+              </button>
             </div>
-          </div>
+          </>
         )}
         {/* 결과 영역 — 객체 탭일 때는 결과가 있을 때만 표시 (객체 패널에 공간 양보). 높이는 Sash 로 조절. */}
         <div style={{
