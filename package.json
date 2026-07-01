@@ -177,6 +177,7 @@
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
+      "unicode": true,
       "include": "build/installer.nsh",
       "shortcutName": "PePe Terminal(SSH)",
       "artifactName": "PePe-Terminal-SSH-Setup-${version}.${ext}"
