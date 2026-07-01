@@ -1014,19 +1014,22 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     return m.getOffsetAt(pos);
   };
 
+  // Monaco 는 debounced state 라 sql 상태보다 편집기의 실제 값이 더 최신일 수 있음. 실행 시엔 편집기 값을 우선.
+  const currentSql = () => monacoEditorRef.current?.getValue() ?? sql;
   // 현재 커서 위치의 statement (선택 영역이 있으면 선택부) 실행
   const runCurrent = () => {
     const sel = getSelectionText();
     if (sel.trim()) { runSql(sel); return; }
-    if (!monacoEditorRef.current) { runSql(sql); return; }
-    const stmts = splitSqlStatements(sql);
+    const cur = currentSql();
+    if (!monacoEditorRef.current) { runSql(cur); return; }
+    const stmts = splitSqlStatements(cur);
     if (stmts.length === 0) return;
-    const cur = findStatementAt(stmts, getCursorOffset());
-    if (cur) runSql(cur.sql);
+    const stmt = findStatementAt(stmts, getCursorOffset());
+    if (stmt) runSql(stmt.sql);
   };
   // 전체 statement 를 순차 실행 — 마지막 결과만 그리드에 표시 (간이 구현)
   const runAll = () => {
-    const stmts = splitSqlStatements(sql);
+    const stmts = splitSqlStatements(currentSql());
     if (stmts.length === 0) return;
     if (stmts.length === 1) { runSql(stmts[0].sql); return; }
     // 여러 개면 세미콜론 join 으로 묶어서 전달 — JDBC backend.exec 는 단일 statement 만 처리하므로
@@ -1116,13 +1119,32 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
           ed.executeEdits('format', [{ range: fullRange, text: formatted }]);
         }
       } else {
-        setSql(formatted);
+        setSqlAndEditor(formatted);
       }
     } catch (e: any) { flashHint(tr('wsFormatFailed', { error: e?.message || e })); }
   };
 
   // Monaco mount — 자동완성 provider + 단축키 액션 등록 (provider 는 1회만 등록)
   const completionDisposeRef = useRef<Monaco.IDisposable | null>(null);
+  // Monaco 는 defaultValue 로 uncontrolled 사용 — 매 키스트로크가 부모 re-render 를 트리거해
+  // 결과 그리드(수천 셀) 를 다시 그리면서 키가 삼켜지던 문제 해소. 실제 sql state 는 debounced 로만 반영.
+  const sqlDebounceRef = useRef<number | null>(null);
+  const onSqlEditorChange = useCallback((v: string | undefined) => {
+    const val = v ?? '';
+    if (sqlDebounceRef.current) window.clearTimeout(sqlDebounceRef.current);
+    sqlDebounceRef.current = window.setTimeout(() => { setSql(val); }, 250);
+  }, [setSql]);
+  useEffect(() => () => { if (sqlDebounceRef.current) window.clearTimeout(sqlDebounceRef.current); }, []);
+  // 외부(포맷/즐겨찾기/히스토리 로드/드롭 등) 에서 sql 을 programmatic 하게 바꾸면 편집기에도 반영.
+  // 편집기가 이미 그 값이면(사용자 타이핑 유래) skip.
+  const setSqlAndEditor = useCallback((next: string | ((s: string) => string)) => {
+    setSql(prev => {
+      const val = typeof next === 'function' ? (next as (s: string) => string)(prev) : next;
+      const ed = monacoEditorRef.current;
+      if (ed && ed.getValue() !== val) ed.setValue(val);
+      return val;
+    });
+  }, [setSql]);
   const handleEditorMount: OnMount = (editor, monaco) => {
     monacoEditorRef.current = editor;
     monacoRef.current = monaco;
@@ -1426,7 +1448,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
         if (!extracted) {
           flashHint(tr('wsAiEmptyResponse'));
         } else {
-          setSql(s => {
+          setSqlAndEditor(s => {
             const sep = s.length === 0 ? '' : (s.endsWith('\n\n') ? '' : s.endsWith('\n') ? '\n' : '\n\n');
             return s + sep + extracted + (extracted.endsWith(';') ? '\n' : '');
           });
@@ -2350,7 +2372,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
                   <div key={f.id} style={{ padding: 8, borderBottom: '1px solid #333', display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontWeight: 600, fontSize: 12, color: '#9cdcfe', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                      <button onClick={() => { setSql(() => f.sql); setFavPanelOpen(false); }} title={tr('wsLoadToEditor')} style={{ background: '#0e639c', color: '#fff', border: 0, padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>{tr('wsLoad')}</button>
+                      <button onClick={() => { setSqlAndEditor(() => f.sql); setFavPanelOpen(false); }} title={tr('wsLoadToEditor')} style={{ background: '#0e639c', color: '#fff', border: 0, padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>{tr('wsLoad')}</button>
                       <button onClick={() => setNameModal({ mode: 'rename', value: f.name, id: f.id })} title={tr('wsRename')} style={{ background: '#444', color: '#ddd', border: 0, padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>✎</button>
                       <button onClick={() => setConfirmModal({ title: tr('wsDeleteFavTitle'), message: tr('wsDeleteFavConfirm', { name: f.name }), onOk: () => setFavorites(prev => prev.filter(x => x.id !== f.id)) })} title={tr('wsDelete')} style={{ background: '#5a1d1d', color: '#fff', border: 0, padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>×</button>
                     </div>
@@ -2619,11 +2641,12 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
           }}
         >
           <Editor
+            key={activeTab?.id || 'default'}
             height="100%"
             language="sql"
             theme="vs-dark"
-            value={sql}
-            onChange={v => setSql(v ?? '')}
+            defaultValue={sql}
+            onChange={onSqlEditorChange}
             onMount={handleEditorMount}
             options={{
               minimap: { enabled: false },
@@ -2635,9 +2658,10 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
               automaticLayout: true,
               wordWrap: 'on',
               tabSize: 2,
-              quickSuggestions: { other: true, comments: false, strings: false },
+              quickSuggestions: false,
               suggestOnTriggerCharacters: true,
-              acceptSuggestionOnEnter: 'on',
+              acceptSuggestionOnEnter: 'off',
+              tabCompletion: 'off',
             }}
           />
         </div>)}
@@ -3009,7 +3033,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
               if (!pasted.length) return;
               setNewRows(prev => [...prev, ...pasted]);
             }}
-            style={{ flex: 1, overflow: 'auto', minHeight: 0, minWidth: 0, position: 'relative', outline: 'none' }}>
+            style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', minHeight: 0, minWidth: 0, maxWidth: '100%', position: 'relative', outline: 'none' }}>
           {displayedResultError && (
             <div style={{ background: '#5a1d1d', color: '#fcc', padding: 8, fontSize: 12, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{displayedResultError}</div>
           )}
@@ -3471,7 +3495,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
           {filteredHistory.length === 0 && <div style={{ color: '#666', padding: 4 }}>{tr('wsNone')}</div>}
           {filteredHistory.map((h, i) => (
             <div key={i}
-              onClick={() => setSql(h.sql)}
+              onClick={() => setSqlAndEditor(h.sql)}
               title={tr('wsClickLoadEditor')}
               style={{ padding: 6, marginBottom: 4, background: h.error ? '#3a1d1d' : '#252525', borderRadius: 3, cursor: 'pointer', border: '1px solid #333' }}
             >
