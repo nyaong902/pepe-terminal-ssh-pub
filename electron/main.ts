@@ -2713,10 +2713,21 @@ if ($ok -and $folder) {
 });
 
 // ── 파일 비교 (CompareWorkspace) ──
+const COMPARE_BINARY_EXTS = new Set([
+  '.a', '.o', '.obj', '.lib', '.dll', '.exe', '.so', '.dylib', '.class', '.jar', '.war', '.ear',
+  '.zip', '.7z', '.gz', '.bz2', '.xz', '.rar', '.iso', '.pdf', '.png', '.jpg', '.jpeg', '.gif',
+  '.bmp', '.webp', '.ico', '.mp3', '.mp4', '.mov', '.mkv', '.avi', '.wav', '.woff', '.woff2',
+  '.ttf', '.otf', '.eot', '.psd', '.sqlite', '.db', '.bin',
+]);
+function isBinaryComparePath(relPath: string): boolean {
+  const leaf = String(relPath || '').replace(/\\/g, '/').split('/').pop() || '';
+  const ext = leaf.includes('.') ? leaf.slice(leaf.lastIndexOf('.')).toLowerCase() : '';
+  return COMPARE_BINARY_EXTS.has(ext);
+}
 // 재귀 walk — 한 번의 IPC 로 폴더 전체 트리를 평탄화해서 반환. 대용량 폴더에서 N번 round-trip 회피.
 // 결과는 [{ relPath, isDir, size, mtime }] flat 배열. 상한 옵션으로 walk 폭주 방지.
 const COMPARE_WALK_MAX_ENTRIES = 50000;
-ipcMain.handle('compare:walk', async (_e, { mode, termId, basePath, maxEntries }: { mode: string; termId?: string; basePath: string; maxEntries?: number }) => {
+ipcMain.handle('compare:walk', async (_e, { mode, termId, basePath, maxEntries, ignoreBinaryFiles }: { mode: string; termId?: string; basePath: string; maxEntries?: number; ignoreBinaryFiles?: boolean }) => {
   const cap = Math.min(maxEntries || COMPARE_WALK_MAX_ENTRIES, COMPARE_WALK_MAX_ENTRIES);
   const out: { relPath: string; isDir: boolean; size: number; mtime: number }[] = [];
   let truncated = false;
@@ -2737,6 +2748,7 @@ ipcMain.handle('compare:walk', async (_e, { mode, termId, basePath, maxEntries }
         if (e.name === '.' || e.name === '..') continue;
         if (out.length >= cap) { truncated = true; return; }
         const childRel = rel ? rel + '/' + e.name : e.name;
+        if (!e.isDir && ignoreBinaryFiles && isBinaryComparePath(childRel)) continue;
         out.push({ relPath: childRel, isDir: e.isDir, size: e.size ?? 0, mtime: e.mtime ?? 0 });
         if (e.isDir) await walk(join(cur, e.name), childRel);
       }

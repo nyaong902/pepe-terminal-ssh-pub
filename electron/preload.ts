@@ -551,8 +551,8 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // 파일 비교 (CompareWorkspace)
-  compareWalk: (mode: string, basePath: string, termId?: string, maxEntries?: number) =>
-    ipcRenderer.invoke('compare:walk', { mode, termId, basePath, maxEntries }),
+  compareWalk: (mode: string, basePath: string, termId?: string, maxEntries?: number, ignoreBinaryFiles?: boolean) =>
+    ipcRenderer.invoke('compare:walk', { mode, termId, basePath, maxEntries, ignoreBinaryFiles }),
   compareHash: (mode: string, filePath: string, termId?: string, maxBytes?: number, wsMode?: string) =>
     ipcRenderer.invoke('compare:hash', { mode, termId, filePath, maxBytes, wsMode }),
   compareDownload: (defaultName: string, content: string, encoding?: string) =>

@@ -43,8 +43,22 @@ type Props = {
     leftEol?: string; rightEol?: string; leftEnc?: string; rightEnc?: string;
     compareMode?: 'dir' | 'file';
     leftDirSrc?: any; rightDirSrc?: any; leftFileSrc?: any; rightFileSrc?: any;
+    ignoreBinaryFiles?: boolean;
+    expandedDirs?: string[];
   } | null;
   onStateChange?: (state: any) => void;
+};
+
+type TreeNode = {
+  path: string;
+  name: string;
+  isDir: boolean;
+  row?: DiffRow;
+  children: TreeNode[];
+  depth: number;
+  visible?: boolean;
+  hasDiff?: boolean;
+  displayStatus?: DiffStatus;
 };
 
 const ROW_H = 22;
@@ -82,6 +96,26 @@ function formatSize(n: number | undefined): string {
   return (n / 1024 / 1024).toFixed(1) + 'M';
 }
 
+const splitRelPath = (relPath: string): string[] => String(relPath || '').split('/').filter(Boolean);
+const ancestorPaths = (relPath: string): string[] => {
+  const parts = splitRelPath(relPath);
+  const out: string[] = [];
+  for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('/'));
+  return out;
+};
+const defaultExpandedFromRows = (rows: DiffRow[]): Set<string> => {
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (!row.isDir) continue;
+    if (splitRelPath(row.relPath).length <= 1) out.add(row.relPath);
+  }
+  return out;
+};
+const pruneExpanded = (expanded: Set<string>, rows: DiffRow[]): Set<string> => {
+  const valid = new Set(rows.filter(r => r.isDir).map(r => r.relPath));
+  return new Set([...expanded].filter(p => valid.has(p)));
+};
+
 export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onStateChange }) => {
   const { t } = useTranslation('compare');
 
@@ -95,6 +129,8 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const [filterStatus, setFilterStatus] = useState<'' | DiffStatus>('');
   const [sortBy, setSortBy] = useState<'path' | 'status' | 'leftSize' | 'rightSize'>('path');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [ignoreBinaryFiles, setIgnoreBinaryFiles] = useState(initialState?.ignoreBinaryFiles ?? true);
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set(initialState?.expandedDirs || []));
 
   const [selectedRel, setSelectedRel] = useState<string | null>(initialState?.selectedRel ?? null);
   const [leftContent, setLeftContent] = useState<string>(initialState?.leftContent || '');
@@ -162,12 +198,13 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
         leftEol, rightEol, leftEnc, rightEnc,
         compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc,
+        ignoreBinaryFiles, expandedDirs: [...expandedDirs].sort(),
       });
     } catch {}
   }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired,
       rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
       leftEol, rightEol, leftEnc, rightEnc,
-      compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc, onStateChange]);
+      compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc, ignoreBinaryFiles, expandedDirs, onStateChange]);
   // 현재 모드에 따른 활성 소스 (읽기 전용 — 쓰기는 updateSrc 사용)
   const leftSrc  = compareMode === 'dir' ? leftDirSrc  : leftFileSrc;
   const rightSrc = compareMode === 'dir' ? rightDirSrc : rightFileSrc;
@@ -250,25 +287,113 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     return opts;
   }, [sessions.map(s => s.termId).join(',')]);
 
-  const filteredRows = useMemo(() => {
+  const visibleRows = useMemo(() => {
     const statusOrder: Record<DiffStatus, number> = { changed: 0, 'left-only': 1, 'right-only': 2, same: 3 };
-    const arr = rows.filter(r => {
-      if (hideSame && r.status === 'same') return false;
-      if (hideUnpaired && (r.status === 'left-only' || r.status === 'right-only')) return false;
-      if (filterStatus && r.status !== filterStatus) return false;
-      if (filterText && !r.relPath.toLowerCase().includes(filterText.toLowerCase())) return false;
+    const nodeByPath = new Map<string, TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }>();
+    const root: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus } = {
+      path: '', name: '', isDir: true, children: [], depth: 0,
+    };
+    nodeByPath.set('', root);
+
+    const getNode = (path: string, name: string, isDir: boolean, depth: number) => {
+      const existing = nodeByPath.get(path);
+      if (existing) {
+        existing.isDir = existing.isDir || isDir;
+        if (name && !existing.name) existing.name = name;
+        return existing;
+      }
+      const next: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus } = {
+        path, name, isDir, children: [], depth,
+      };
+      nodeByPath.set(path, next);
+      return next;
+    };
+
+    for (const row of rows) {
+      const parts = splitRelPath(row.relPath);
+      let curPath = '';
+      for (let i = 0; i < parts.length; i++) {
+        const parentPath = curPath;
+        curPath = i === 0 ? parts[0] : `${curPath}/${parts[i]}`;
+        const isLast = i === parts.length - 1;
+        const node = getNode(curPath, parts[i], isLast ? row.isDir : true, i + 1);
+        const parent = nodeByPath.get(parentPath);
+        if (parent && !parent.children.includes(node)) parent.children.push(node);
+        if (isLast) {
+          node.row = row;
+          node.isDir = row.isDir;
+        }
+      }
+    }
+
+    const rowMatches = (row: DiffRow) => {
+      if (hideSame && row.status === 'same') return false;
+      if (hideUnpaired && (row.status === 'left-only' || row.status === 'right-only')) return false;
+      if (filterStatus && row.status !== filterStatus) return false;
+      if (filterText && !row.relPath.toLowerCase().includes(filterText.toLowerCase())) return false;
       return true;
-    });
-    arr.sort((a, b) => {
+    };
+
+    const childCompare = (a: TreeNode & { displayStatus?: DiffStatus }, b: TreeNode & { displayStatus?: DiffStatus }) => {
       let cmp = 0;
-      if      (sortBy === 'path')      cmp = a.relPath.localeCompare(b.relPath);
-      else if (sortBy === 'status')    cmp = (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
-      else if (sortBy === 'leftSize')  cmp = (a.leftSize  ?? -1) - (b.leftSize  ?? -1);
-      else if (sortBy === 'rightSize') cmp = (a.rightSize ?? -1) - (b.rightSize ?? -1);
+      if (sortBy === 'path') {
+        cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      } else if (sortBy === 'status') {
+        const sa = statusOrder[a.displayStatus || a.row?.status || 'same'] ?? 0;
+        const sb = statusOrder[b.displayStatus || b.row?.status || 'same'] ?? 0;
+        cmp = sa - sb;
+      } else if (sortBy === 'leftSize') {
+        cmp = (a.row?.leftSize ?? -1) - (b.row?.leftSize ?? -1);
+      } else if (sortBy === 'rightSize') {
+        cmp = (a.row?.rightSize ?? -1) - (b.row?.rightSize ?? -1);
+      }
+      if (cmp === 0) {
+        if (a.isDir !== b.isDir) cmp = a.isDir ? -1 : 1;
+        else cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
       return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return arr;
-  }, [rows, hideSame, hideUnpaired, filterStatus, filterText, sortBy, sortDir]);
+    };
+
+    const decorate = (node: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }): { visible: boolean; hasDiff: boolean } => {
+      node.children.sort(childCompare);
+      let childVisible = false;
+      let childHasDiff = false;
+      for (const child of node.children) {
+        const res = decorate(child as any);
+        childVisible = childVisible || res.visible;
+        childHasDiff = childHasDiff || res.hasDiff;
+      }
+      const row = node.row;
+      const selfMatches = row ? rowMatches(row) : false;
+      const selfHasDiff = !!row && row.status !== 'same';
+      const visible = node.path === ''
+        ? childVisible
+        : (row?.isDir ? (selfMatches || childVisible) : selfMatches);
+      const hasDiff = selfHasDiff || childHasDiff;
+      node.visible = visible;
+      node.hasDiff = hasDiff;
+      node.displayStatus = row?.status === 'left-only' || row?.status === 'right-only'
+        ? row.status
+        : (hasDiff ? 'changed' : 'same');
+      return { visible, hasDiff };
+    };
+    decorate(root);
+
+    const out: Array<{ node: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }; depth: number; isOpen: boolean; isSelected: boolean; isAncestorSelected: boolean; hasChildren: boolean }> = [];
+    const collect = (node: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }, depth: number) => {
+      for (const child of node.children as Array<TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }>) {
+        if (!child.visible) continue;
+        const hasChildren = child.children.some(c => !!c.visible);
+        const isOpen = !child.isDir || expandedDirs.has(child.path);
+        const isSelected = !!selectedRel && selectedRel === child.path;
+        const isAncestorSelected = !!selectedRel && child.isDir && (selectedRel === child.path || selectedRel.startsWith(child.path + '/'));
+        out.push({ node: child, depth, isOpen, isSelected, isAncestorSelected, hasChildren });
+        if (child.isDir && isOpen) collect(child, depth + 1);
+      }
+    };
+    collect(root, 0);
+    return out;
+  }, [rows, hideSame, hideUnpaired, filterStatus, filterText, sortBy, sortDir, expandedDirs, selectedRel]);
 
   const toggleSort = useCallback((col: 'path' | 'status' | 'leftSize' | 'rightSize') => {
     setSortBy(prev => {
@@ -290,8 +415,8 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     setScanning(true);
     try {
       const [lRes, rRes] = await Promise.all([
-        api.compareWalk?.(leftSrc.mode, leftSrc.basePath, leftSrc.termId),
-        api.compareWalk?.(rightSrc.mode, rightSrc.basePath, rightSrc.termId),
+        api.compareWalk?.(leftSrc.mode, leftSrc.basePath, leftSrc.termId, undefined, ignoreBinaryFiles),
+        api.compareWalk?.(rightSrc.mode, rightSrc.basePath, rightSrc.termId, undefined, ignoreBinaryFiles),
       ]);
       if (lRes?.error) throw new Error(t('sourceErrorPrefix', { error: lRes.error }));
       if (rRes?.error) throw new Error(t('targetErrorPrefix', { error: rRes.error }));
@@ -328,6 +453,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
       }
       merged.sort((a, b) => a.relPath.localeCompare(b.relPath));
       setRows(merged);
+      setExpandedDirs(defaultExpandedFromRows(merged));
       // 2차 검증: 크기 차이로 changed 로 분류된 작은 파일들은 EOL/BOM 정규화 해시로 재확인
       // (양쪽 모두 ≤ 256KB 면 hash 비교, 같으면 same 으로 강등)
       const HASH_CAP = 256 * 1024;
@@ -392,7 +518,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     } finally {
       setScanning(false);
     }
-  }, [leftSrc, rightSrc]);
+  }, [leftSrc, rightSrc, ignoreBinaryFiles, wsMode, t]);
 
   const detectEol = (raw: string): string => {
     if (!raw) return '';
@@ -419,6 +545,14 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     setLeftFilePath('');
     setRightFilePath('');
     if (row.isDir) return; // 폴더는 diff 의미 없음
+    const ancestors = ancestorPaths(row.relPath);
+    if (ancestors.length > 0) {
+      setExpandedDirs(prev => {
+        const next = new Set(prev);
+        ancestors.forEach(a => next.add(a));
+        return next;
+      });
+    }
     setContentLoading(true);
     try {
       const sep = (m: SourceMode) => m === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
@@ -867,13 +1001,13 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const listVlistRef = useRef<any>(null);
   const listAtBottomRef = useRef(false);
   useEffect(() => {
-    if (!listVlistRef.current || filteredRows.length === 0) return;
+    if (!listVlistRef.current || visibleRows.length === 0) return;
     try {
-      const selIdx = selectedRel ? filteredRows.findIndex(r => r.relPath === selectedRel) : -1;
+      const selIdx = selectedRel ? visibleRows.findIndex(r => r.node.path === selectedRel) : -1;
       if (selIdx >= 0) {
         listVlistRef.current.scrollToItem(selIdx, 'smart');
       } else if (listAtBottomRef.current) {
-        listVlistRef.current.scrollToItem(filteredRows.length - 1, 'end');
+        listVlistRef.current.scrollToItem(visibleRows.length - 1, 'end');
       }
     } catch {}
   }, [listHeight]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -886,13 +1020,18 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
 
   const counts = useMemo(() => {
     let c = 0, l = 0, r = 0, s = 0;
-    for (const x of rows) {
-      if (x.status === 'changed') c++;
-      else if (x.status === 'left-only') l++;
-      else if (x.status === 'right-only') r++;
+    for (const x of visibleRows) {
+      const status = x.node.displayStatus || x.node.row?.status;
+      if (status === 'changed') c++;
+      else if (status === 'left-only') l++;
+      else if (status === 'right-only') r++;
       else s++;
     }
     return { c, l, r, s };
+  }, [visibleRows]);
+
+  useEffect(() => {
+    setExpandedDirs(prev => pruneExpanded(prev, rows));
   }, [rows]);
 
   return (
@@ -974,7 +1113,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               {/* 비교 옵션 — Araxis Merge 스타일 */}
               <button
                 ref={wsMenuButtonRef}
-                className={`compare-options-button ${wsMode !== 'significant' || showEol || !collapseUnchanged ? 'active' : ''}`}
+                className={`compare-options-button ${wsMode !== 'significant' || showEol || !collapseUnchanged || ignoreBinaryFiles ? 'active' : ''}`}
                 onClick={() => {
                   const rect = wsMenuButtonRef.current?.getBoundingClientRect();
                   if (rect) {
@@ -1015,6 +1154,10 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   <label className="compare-options-row">
                     <input type="checkbox" checked={collapseUnchanged} onChange={e => setCollapseUnchanged(e.target.checked)} />
                     <span>{t('options.collapseUnchanged')}</span>
+                  </label>
+                  <label className="compare-options-row">
+                    <input type="checkbox" checked={ignoreBinaryFiles} onChange={e => setIgnoreBinaryFiles(e.target.checked)} />
+                    <span>{t('options.ignoreBinaryFiles')}</span>
                   </label>
                 </div>,
                 document.body,
@@ -1149,58 +1292,89 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
           <VList
             ref={listVlistRef}
             height={Math.max(0, (showList ? listHeight : 0) - LIST_HEADER_H)}
-            width="100%" itemCount={filteredRows.length} itemSize={ROW_H} overscanCount={12}
+            width="100%" itemCount={visibleRows.length} itemSize={ROW_H} overscanCount={12}
             onScroll={({ scrollOffset }: { scrollOffset: number }) => {
-              const max = filteredRows.length * ROW_H - Math.max(0, listHeight - LIST_HEADER_H);
+              const max = visibleRows.length * ROW_H - Math.max(0, listHeight - LIST_HEADER_H);
               listAtBottomRef.current = scrollOffset >= max - 4;
             }}
           >
             {({ index, style }: ListChildComponentProps) => {
-              const row = filteredRows[index];
+              const entry = visibleRows[index];
+              const row = entry?.node?.row;
+              const node = entry?.node;
+              if (!node) return null;
               if (!row) return null;
-              const sel = row.relPath === selectedRel;
+              const sel = !!selectedRel && (selectedRel === node.path || (node.isDir && selectedRel.startsWith(node.path + '/')));
+              const status = entry.node.displayStatus || row.status;
               return (
                 <div
-                  key={row.relPath}
+                  key={node.path}
                   style={{
                     ...style,
                     display: 'flex',
                     alignItems: 'center',
                     padding: '0 10px',
                     fontSize: 12,
-                    cursor: row.isDir ? 'default' : 'pointer',
-                    background: statusBg(row.status, sel),
+                    cursor: node.isDir ? 'pointer' : 'pointer',
+                    background: statusBg(status, sel),
                     color: sel ? '#fff' : 'var(--win-text, #ccc)',
                     boxSizing: 'border-box',
                   }}
                   onClick={() => {
-                    if (row.isDir) return;
-                    setSelectedRel(row.relPath);
+                    if (node.isDir) {
+                      setExpandedDirs(prev => {
+                        const next = new Set(prev);
+                        if (next.has(node.path)) next.delete(node.path);
+                        else next.add(node.path);
+                        return next;
+                      });
+                      return;
+                    }
+                    setSelectedRel(node.path);
                     loadDiff(row);
                   }}
                 >
                   {/* Status badge */}
-                  <span style={{ width: 70, color: statusColor(row.status), fontSize: 11, flexShrink: 0 }}>{statusLabel(row.status, t)}</span>
+                  <span style={{ width: 70, color: statusColor(status), fontSize: 11, flexShrink: 0 }}>{statusLabel(status, t)}</span>
                   {/* Source side */}
                   <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', minWidth: 0, opacity: row.status === 'right-only' ? 0.25 : 1 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                      {row.status === 'right-only' ? '' : `${row.isDir ? '📁' : '📄'} ${row.relPath}`}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingLeft: node.depth * 14 }}>
+                      {node.isDir && (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedDirs(prev => {
+                              const next = new Set(prev);
+                              if (next.has(node.path)) next.delete(node.path);
+                              else next.add(node.path);
+                              return next;
+                            });
+                          }}
+                          style={{ display: 'inline-flex', width: 14, marginLeft: -14, marginRight: 2, cursor: 'pointer', color: node.isDir ? '#8bbcff' : 'inherit' }}
+                          title={entry.isOpen ? t('collapse') : t('expandFolder')}
+                        >
+                          {entry.isOpen ? '▾' : '▸'}
+                        </span>
+                      )}
+                      <span style={{ color: node.isDir ? (entry.isAncestorSelected ? '#fff' : '#9bd1ff') : 'inherit' }}>
+                        {row.status === 'right-only' ? '' : `${node.isDir ? '📁' : '📄'} ${node.path}`}
+                      </span>
                     </span>
                     <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
-                      {row.status !== 'right-only' ? formatSize(row.leftSize) : ''}
+                      {node.isDir || row.status === 'right-only' ? '' : formatSize(row.leftSize)}
                     </span>
                   </span>
                   {/* Center: Δ Lines */}
                   <span style={{ width: 70, textAlign: 'center', color: row.changes && row.changes > 0 ? '#d8b556' : '#666', fontVariantNumeric: 'tabular-nums', flexShrink: 0, fontSize: 11 }}>
-                    {row.changesPending ? '…' : (typeof row.changes === 'number' ? row.changes.toLocaleString() : (row.status === 'changed' ? '?' : ''))}
+                    {node.isDir ? '' : (row.changesPending ? '…' : (typeof row.changes === 'number' ? row.changes.toLocaleString() : (row.status === 'changed' ? '?' : '')))}
                   </span>
                   {/* Target side */}
                   <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', minWidth: 0, opacity: row.status === 'left-only' ? 0.25 : 1 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                      {row.status === 'left-only' ? '' : `${row.isDir ? '📁' : '📄'} ${row.relPath}`}
+                      {row.status === 'left-only' ? '' : `${node.isDir ? '📁' : '📄'} ${node.path}`}
                     </span>
                     <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
-                      {row.status !== 'left-only' ? formatSize(row.rightSize) : ''}
+                      {node.isDir || row.status === 'left-only' ? '' : formatSize(row.rightSize)}
                     </span>
                   </span>
                 </div>

@@ -68,7 +68,8 @@
     "ignoreConsecutive": "忽略连续空白",
     "ignoreAll": "忽略所有空白",
     "showEol": "显示行尾符",
-    "collapseUnchanged": "折叠未更改区域"
+    "collapseUnchanged": "折叠未更改区域",
+    "ignoreBinaryFiles": "忽略二进制文件"
   },
   "filePathPlaceholderLocal": "文件路径...",
   "filePathPlaceholderRemote": "远程文件路径...",
@@ -92,6 +93,7 @@
   "downloadOk": "✓ 已下载：{{path}}",
   "downloadFailed": "✕ 下载失败：{{error}}",
   "collapse": "折叠",
+  "expandFolder": "展开",
   "expandFullScreen": "展开至全屏",
   "allMatchTitle": "全部匹配 — 两个文件完全相同",
   "allMatchDesc": "未发现差异。",

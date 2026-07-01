@@ -3886,6 +3886,10 @@ body.popout-options .session-editor h3:first-child {
 .tl-row-group.active {
   background: rgba(43, 107, 155, 0.13);
 }
+.tl-row-group.preparing {
+  background: rgba(43, 107, 155, 0.05);
+  color: var(--win-text-dim, #9ab);
+}
 .tl-row-file {
   font-size: 10.5px;
   color: var(--win-text-dim, #bbb);
@@ -8067,20 +8071,20 @@ mark.claude-search-hit.current {
   gap: 5px;
   min-height: 28px;
   padding: 4px 11px;
-  border: 1px solid #547587;
-  border-radius: 5px;
-  background: linear-gradient(180deg, #263a45, #182830);
-  color: #e7f2f6;
+  border: 1px solid var(--win-border, #39424a);
+  border-radius: 6px;
+  background: var(--win-surface-2, rgba(28, 34, 42, 0.92));
+  color: var(--win-text, #dbe8f4);
   font-size: 12px;
   font-weight: 700;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 2px 5px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 2px 8px rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
 
 .compare-options-button:hover,
 .compare-options-button.active {
-  border-color: #69bad3;
-  background: linear-gradient(180deg, #275a70, #1b4152);
+  border-color: var(--win-accent, #4b90c5);
+  background: linear-gradient(180deg, rgba(56, 95, 128, 0.95), rgba(32, 47, 62, 0.95));
   color: var(--win-text, #fff);
 }
 
@@ -8091,23 +8095,27 @@ mark.claude-search-hit.current {
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   padding: 12px;
-  border: 1px solid #557584;
-  border-radius: 9px;
-  background: linear-gradient(155deg, #1d2c34, #111a20);
-  color: #dbe8ed;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.62), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  border: 1px solid var(--win-border, rgba(89, 104, 120, 0.85));
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(34, 42, 52, 0.98), rgba(18, 23, 30, 0.98));
+  color: var(--win-text, #dbe8ed);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  backdrop-filter: blur(14px);
 }
 
 .compare-options-menu-title {
   margin-bottom: 11px;
-  color: #f4fbfd;
+  color: var(--win-text, #f4fbfd);
   font-size: 14px;
   font-weight: 800;
 }
 
 .compare-options-section-title {
   margin: 3px 5px 6px;
-  color: #7fa7b6;
+  color: var(--win-text-dim, #7fa7b6);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.8px;
@@ -8122,25 +8130,25 @@ mark.claude-search-hit.current {
   padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: 6px;
-  color: #cedde3;
+  color: var(--win-text, #cedde3);
   font-size: 12px;
   cursor: pointer;
 }
 
 .compare-options-row:hover,
 .compare-options-row.selected {
-  border-color: rgba(89, 169, 196, 0.34);
-  background: rgba(55, 132, 158, 0.2);
+  border-color: rgba(82, 142, 196, 0.38);
+  background: rgba(51, 92, 131, 0.22);
   color: var(--win-text, #fff);
 }
 
 .compare-options-row input {
   flex-shrink: 0;
-  accent-color: #5db5d1;
+  accent-color: var(--win-accent, #5db5d1);
 }
 
 .compare-options-divider {
   height: 1px;
   margin: 9px 3px;
-  background: #31434b;
+  background: var(--win-border, #31434b);
 }
