@@ -167,20 +167,10 @@ export class JdbcBackend {
     if (!r?.success) return { ok: false, error: r?.error || 'connect failed' };
     this._connected = true;
     this._info = r.result || {};
-    // post-connect 검증 — IP 핸드셰이크는 성공해도 driver/version mismatch 등으로 query 가 안 되는
-    // 경우 가짜 connected 방지. 가벼운 ping 한 번 실패하면 disconnect 처리.
-    try {
-      const v = await api.jdbcExec?.({ connectionId: this.connectionId, sql: this.pingSql(), maxRows: 1 });
-      if (!v?.success) {
-        this._connected = false;
-        try { await api.jdbcDisconnect?.(this.connectionId); } catch {}
-        return { ok: false, error: v?.error || 'connection validation failed' };
-      }
-    } catch (e: any) {
-      this._connected = false;
-      try { await api.jdbcDisconnect?.(this.connectionId); } catch {}
-      return { ok: false, error: String(e?.message || e) };
-    }
+    // post-connect 검증(ping) — 실패해도 fatal 로 처리하지 않음. loadDriver+connect 가 성공하면
+    // 세션은 서있으니, 초기 ping 이 네트워크/RPC 지연으로 타임아웃돼도 connected 로 유지.
+    // (검증 실패면 실제 쿼리에서 자연스럽게 실패하고 keepAlive/exec 재시도 로직이 처리.)
+    api.jdbcExec?.({ connectionId: this.connectionId, sql: this.pingSql(), maxRows: 1 }).catch(() => {});
     return { ok: true };
   }
 

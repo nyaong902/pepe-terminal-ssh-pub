@@ -314,6 +314,7 @@ static std::map<std::string, AudioMediaRecorder*> g_recorders; // endpointId →
 class MyCall : public Call {
     std::string epId;
 public:
+    bool isIncomingCall = false; // onIncomingCall 에서 true — 우리가 받는(응답 대기) 호
     MyCall(Account& acc, const std::string& id, int callId = PJSUA_INVALID_ID)
         : Call(acc, callId), epId(id) {}
 
@@ -324,7 +325,11 @@ public:
             case PJSIP_INV_STATE_CALLING:    st = "calling"; break;
             case PJSIP_INV_STATE_INCOMING:   st = "incoming"; break;
             case PJSIP_INV_STATE_EARLY:
-            case PJSIP_INV_STATE_CONNECTING: st = "ringing"; break;
+            case PJSIP_INV_STATE_CONNECTING:
+                // 인입 호는 180 을 보낸 뒤에도 사용자가 아직 답 안 한 상태 → UI 는 계속 'incoming'
+                // (받기/거절 버튼 유지). 발신 호만 'ringing' 표시.
+                st = isIncomingCall ? "incoming" : "ringing";
+                break;
             case PJSIP_INV_STATE_CONFIRMED:  st = "connected"; break;
             case PJSIP_INV_STATE_DISCONNECTED: st = "ended"; break;
             default: break;
@@ -379,6 +384,7 @@ public:
     virtual void onIncomingCall(OnIncomingCallParam& prm) override {
         bool busy = (g_calls.find(epId) != g_calls.end()); // 이미 통화 중인 호가 있나
         MyCall* call = new MyCall(*this, epId, prm.callId);
+        call->isIncomingCall = true;
         CallInfo ci = call->getInfo();
         // 방해 금지 또는 (통화중대기 off + 이미 통화중) → 486 Busy 자동 거절
         if (dnd || (!callWaiting && busy)) {
@@ -389,6 +395,11 @@ public:
         }
         g_calls[epId] = call;
         emitJson({{"ev","call"},{"endpointId",epId},{"call","incoming"},{"remote",ci.remoteUri}});
+        // 180 Ringing 즉시 응답 — 발신측이 링백톤을 재생하도록. autoAnswer=on 이면 200 OK 로 바로 진행.
+        if (!autoAnswer) {
+            CallOpParam ring; ring.statusCode = PJSIP_SC_RINGING;
+            try { call->answer(ring); } catch (...) {}
+        }
         if (autoAnswer) {
             CallOpParam op; op.statusCode = PJSIP_SC_OK;
             try { call->answer(op); } catch (...) {}
