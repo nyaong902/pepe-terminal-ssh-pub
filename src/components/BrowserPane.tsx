@@ -41,6 +41,31 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   // 복원된 URL 이 있으면 그걸로 시작.
   const startUrl = (initialState?.editUrl && initialState.editUrl.trim()) ? initialState.editUrl : initialUrl;
   const initialSrcRef = useRef(startUrl);
+  // ── 내부 탭 관리 — 링크가 새 창으로 열릴 때 새 탭으로 처리. ──
+  type BrowserTab = { id: string; url: string; title: string };
+  const newTabId = () => `t${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const [tabs, setTabs] = useState<BrowserTab[]>(() => [{ id: newTabId(), url: startUrl, title: '' }]);
+  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
+  const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+  const setTabUrl = (id: string, url: string) => setTabs(prev => prev.map(t => t.id === id ? { ...t, url } : t));
+  const setTabTitle = (id: string, title: string) => setTabs(prev => prev.map(t => t.id === id ? { ...t, title } : t));
+  const openInNewTab = (url: string) => {
+    const t: BrowserTab = { id: newTabId(), url, title: '' };
+    setTabs(prev => [...prev, t]);
+    setActiveTabId(t.id);
+  };
+  const closeTab = (id: string) => {
+    setTabs(prev => {
+      if (prev.length <= 1) return prev; // 최소 1개 유지
+      const idx = prev.findIndex(t => t.id === id);
+      const next = prev.filter(t => t.id !== id);
+      if (id === activeTabId) {
+        const newActive = next[Math.max(0, idx - 1)] || next[0];
+        setActiveTabId(newActive.id);
+      }
+      return next;
+    });
+  };
   const [editUrl, setEditUrl] = useState(startUrl);
   const [canBack, setCanBack] = useState(false);
   const [canFwd, setCanFwd] = useState(false);
@@ -337,16 +362,45 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetPanelId, proxyState, sshTargets]);
 
+  // activeTab 변경 시 그 탭의 URL 로 로드 — 기존 webview 재사용.
+  const lastLoadedTabRef = useRef<string>(activeTabId);
+  useEffect(() => {
+    if (activeTabId === lastLoadedTabRef.current) return;
+    lastLoadedTabRef.current = activeTabId;
+    const wv: any = webviewRef.current;
+    if (!wv) return;
+    const url = activeTab.url;
+    if (!url) return;
+    setEditUrl(url);
+    try { wv.loadURL(resolveBrowserUrl(url)).catch(() => {}); } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
     const onNav = () => {
-      try { setEditUrl(wv.getURL()); } catch {}
+      try { const u = wv.getURL(); setEditUrl(u); setTabUrl(activeTabId, u); } catch {}
       try { setCanBack(wv.canGoBack()); setCanFwd(wv.canGoForward()); } catch {}
     };
     const onStart = () => setLoading(true);
     const onStop = () => { setLoading(false); onNav(); };
-    const onTitle = (e: any) => onTitleChange?.(e.title || '');
+    const onTitle = (e: any) => { onTitleChange?.(e.title || ''); setTabTitle(activeTabId, e.title || ''); };
+    // 링크 클릭이 새 창을 요청하면 새 탭으로 열기.
+    // Electron 25+ 에서 <webview> 의 new-window preventDefault 가 무시되므로
+    // main process 의 setWindowOpenHandler 가 URL 을 IPC 로 전달 → 여기서 새 탭으로.
+    const onNewWindow = (e: any) => {
+      try { e.preventDefault?.(); } catch {}
+      const url = String(e?.url || '');
+      if (url) openInNewTab(url);
+    };
+    const offBrowserNewWindow = (window as any).api?.onBrowserWebviewNewWindow?.((p: { guestId: number; url: string }) => {
+      if (!p?.url) return;
+      let currentGuestId: number | undefined;
+      try { currentGuestId = wv.getWebContentsId?.(); } catch {}
+      // guestId 매칭 — 다른 브라우저 워크스페이스 인스턴스와 충돌 방지.
+      if (currentGuestId != null && p.guestId !== currentGuestId) return;
+      openInNewTab(p.url);
+    });
     const onFail = (e: any) => {
       if (e?.isMainFrame === false) return;
       if (e?.errorCode === -3) return;
@@ -363,6 +417,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     wv.addEventListener('did-stop-loading', onStop);
     wv.addEventListener('page-title-updated', onTitle);
     wv.addEventListener('did-fail-load', onFail);
+    wv.addEventListener('new-window', onNewWindow);
     return () => {
       try {
         wv.removeEventListener('did-navigate', onNav);
@@ -371,20 +426,23 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         wv.removeEventListener('did-stop-loading', onStop);
         wv.removeEventListener('page-title-updated', onTitle);
         wv.removeEventListener('did-fail-load', onFail);
+        wv.removeEventListener('new-window', onNewWindow);
       } catch {}
+      try { offBrowserNewWindow?.(); } catch {}
     };
-  }, [onTitleChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onTitleChange, activeTabId]);
 
   const resolveBrowserUrl = (target: string) => {
     let t = target.trim();
     if (!t) return '';
-    if (!/^[a-z]+:\/\//i.test(t)) {
-      // URL 형태가 아니면 (공백 또는 점이 없으면) 구글 검색으로 폴백
-      if (!t.includes('.') && !t.includes(':')) {
-        t = 'https://www.google.com/search?q=' + encodeURIComponent(t);
-      } else {
-        t = 'https://' + t;
-      }
+    // 이미 스킴 있는 URL 은 그대로 (about:blank, chrome://, file://, data:, mailto: 등 포함)
+    if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return t;
+    // 스킴 없음 — 검색어(공백/점 없음) 이면 구글, 그 외엔 https:// 프리픽스
+    if (!t.includes('.') && !t.includes(':')) {
+      t = 'https://www.google.com/search?q=' + encodeURIComponent(t);
+    } else {
+      t = 'https://' + t;
     }
     return t;
   };
@@ -496,12 +554,75 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       else if (e.key === '-' || e.key === '_') { applyZoom(zoom - 0.1); e.preventDefault?.(); }
       else if (e.key === '0') { applyZoom(1.0); e.preventDefault?.(); }
     };
+    // Ctrl+휠 줌 — webview 내부 페이지가 wheel 을 소비하므로 페이지에 리스너 주입.
+    // preload 없이도 동작하도록 console-message 채널 사용 (console.log → host 수신).
+    const injectWheelZoom = () => {
+      try {
+        wv.executeJavaScript(`
+          if (!window.__pepeWheelZoomInjected) {
+            window.__pepeWheelZoomInjected = true;
+            document.addEventListener('wheel', function(e) {
+              if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                console.log('__PEPE_ZOOM__:' + (e.deltaY < 0 ? '+' : '-'));
+              }
+            }, { passive: false, capture: true });
+          }
+        `);
+      } catch {}
+    };
+    const onConsole = (e: any) => {
+      const m = String(e?.message || '');
+      if (m.startsWith('__PEPE_ZOOM__:')) {
+        const dir = m.substring(14);
+        applyZoom(zoom + (dir === '+' ? 0.1 : -0.1));
+      }
+    };
     try { wv.addEventListener('before-input-event', onInput); } catch {}
-    return () => { try { wv.removeEventListener('before-input-event', onInput); } catch {} };
+    try { wv.addEventListener('dom-ready', injectWheelZoom); } catch {}
+    try { wv.addEventListener('did-navigate', injectWheelZoom); } catch {}
+    try { wv.addEventListener('console-message', onConsole); } catch {}
+    return () => {
+      try { wv.removeEventListener('before-input-event', onInput); } catch {}
+      try { wv.removeEventListener('dom-ready', injectWheelZoom); } catch {}
+      try { wv.removeEventListener('did-navigate', injectWheelZoom); } catch {}
+      try { wv.removeEventListener('console-message', onConsole); } catch {}
+    };
   }, [zoom]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#1a1a1a' }}>
+      {/* 탭 바 — 링크가 새 창을 요청하면 새 탭으로 열림. + 로 빈 탭 추가. */}
+      <div style={{ display: 'flex', alignItems: 'stretch', background: '#1e1e1e', borderBottom: '1px solid #333', overflowX: 'auto', minHeight: 28 }}>
+        {tabs.map(tab => {
+          const isActive = tab.id === activeTabId;
+          const label = (tab.title || tab.url || '새 탭').slice(0, 32);
+          return (
+            <div key={tab.id}
+              onClick={() => setActiveTabId(tab.id)}
+              onAuxClick={e => { if (e.button === 1) closeTab(tab.id); }}
+              title={tab.url}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px',
+                fontSize: 11, color: isActive ? '#ddd' : '#888',
+                background: isActive ? '#2a2a2a' : 'transparent',
+                borderRight: '1px solid #333', cursor: 'pointer', maxWidth: 220, minWidth: 80,
+                borderTop: isActive ? '2px solid #0e639c' : '2px solid transparent',
+              }}>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+              {tabs.length > 1 && (
+                <span onClick={e => { e.stopPropagation(); closeTab(tab.id); }}
+                  style={{ color: '#888', padding: '0 4px', borderRadius: 2, cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#444')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>×</span>
+              )}
+            </div>
+          );
+        })}
+        <button onClick={() => openInNewTab('about:blank')}
+          title="새 탭"
+          style={{ background: 'transparent', color: '#888', border: 'none', padding: '0 12px', cursor: 'pointer', fontSize: 14 }}>+</button>
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', background: '#222', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
         <button className="panel-btn" disabled={!canBack} onClick={() => webviewRef.current?.goBack()} title={t('back')}>◀</button>
         <button className="panel-btn" disabled={!canFwd} onClick={() => webviewRef.current?.goForward()} title={t('forward')}>▶</button>
@@ -563,7 +684,9 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         ref={webviewRef as any}
         src={initialSrcRef.current}
         partition={partitionName as any}
-        style={{ flex: 1, width: '100%', display: 'flex' } as any}
+        // display: flex 는 webview 렌더링과 호환성 문제 (내부 페이지 스크롤/포커스 안 됨).
+        // inline-flex 또는 명시적 flex:1 + width/height 100% 로 처리.
+        style={{ flex: '1 1 auto', width: '100%', minHeight: 0, display: 'inline-flex' } as any}
         allowpopups={'true' as any}
       />
     </div>

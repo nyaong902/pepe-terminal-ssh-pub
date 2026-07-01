@@ -380,6 +380,31 @@ app.on('certificate-error', (event, _webContents, url, error, _certificate, call
   callback(true);
 });
 
+// 브라우저 워크스페이스의 <webview> 에서 window.open / target="_blank" 로 팝업이 뜨는 경우
+// 새 BrowserWindow 대신 host 렌더러로 URL 을 알려 새 탭으로 처리.
+app.on('web-contents-created', (_e, contents) => {
+  try {
+    if (contents.getType() !== 'webview') return;
+    contents.setWindowOpenHandler(({ url }) => {
+      // hostWebContents 가 undefined 인 케이스 대비 — 모든 BrowserWindow 에 브로드캐스트.
+      // 렌더러 측이 자신의 webview guestId 와 매칭해 자신 것만 처리.
+      try {
+        const host = (contents as any).hostWebContents as Electron.WebContents | undefined;
+        if (host && !host.isDestroyed()) {
+          host.send('browser-webview:new-window', { guestId: contents.id, url });
+        } else {
+          BrowserWindow.getAllWindows().forEach(w => {
+            try { if (!w.isDestroyed()) w.webContents.send('browser-webview:new-window', { guestId: contents.id, url }); } catch {}
+          });
+        }
+      } catch {}
+      return { action: 'deny' };
+    });
+  } catch (e) {
+    console.warn('[web-contents-created] webview open handler wire failed', e);
+  }
+});
+
 // 시작 시 %TEMP% 의 오래된 잔여 임시파일 정리 — 작업마다 timestamp 로 생성되어 누적되는 것들.
 // 30분 이상 된 것만 삭제 (동시 실행 중인 다른 인스턴스의 활성 파일 보호).
 function cleanupStaleTempFiles() {

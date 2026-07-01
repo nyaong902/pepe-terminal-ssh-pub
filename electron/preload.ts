@@ -173,6 +173,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sip:event', handler);
     return () => ipcRenderer.removeListener('sip:event', handler);
   },
+  onBrowserWebviewNewWindow: (cb: (p: { guestId: number; url: string }) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('browser-webview:new-window', handler);
+    return () => ipcRenderer.removeListener('browser-webview:new-window', handler);
+  },
   sshTestWebTarget: (args: { panelId: string; url: string }) => ipcRenderer.invoke('ssh:test-web-target', args),
   sshGetShellCwd: (args: { termId: string }) => ipcRenderer.invoke('ssh:get-shell-cwd', args),
   saveTextFile: (args: { defaultName?: string; content: string; filters?: { name: string; extensions: string[] }[] }) =>

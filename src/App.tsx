@@ -30,7 +30,7 @@ import { marked } from 'marked';
 import manualMd from '../docs/MANUAL.md?raw';
 import { getClaudeFontFamily, getClaudeFontSize, setClaudeFontFamily, setClaudeFontSize, applyClaudeFontVars } from './utils/claudeFont';
 import { getTerminalSettings, saveTerminalSettings, TerminalSettings } from './utils/terminalSettings';
-import { loadKeybindings, matchKeybinding, getKeybindings, DEFAULT_KEYBINDINGS, KEYBINDING_LABELS, keyEventToCombo, setKeybindingListening } from './utils/keybindings';
+import { loadKeybindings, matchKeybinding, getKeybindings, getKeybinding, DEFAULT_KEYBINDINGS, KEYBINDING_LABELS, keyEventToCombo, setKeybindingListening } from './utils/keybindings';
 import { getThemeList } from './utils/terminalThemes';
 import { getWindowThemeList, getCurrentWindowThemeId, applyWindowTheme } from './utils/windowThemes';
 import { setLanguage, getCurrentLanguage } from './i18n';
@@ -368,6 +368,8 @@ function App() {
           loadKeybindings(prefs.keybindings);
           setKeybindingsState(prefs.keybindings);
         }
+        if (Array.isArray(prefs?.quickCmds)) setQuickCmds(prefs.quickCmds);
+        quickCmdsLoadedRef.current = true;
         if (typeof prefs?.claudeChatWidth === 'number' && prefs.claudeChatWidth >= 280 && prefs.claudeChatWidth <= 1200) {
           setClaudeChatWidth(prefs.claudeChatWidth);
         }
@@ -449,6 +451,16 @@ function App() {
   const [broadcastAppendNewline, setBroadcastAppendNewline] = useState(true);
   const [broadcastScope, setBroadcastScope] = useState<'current' | 'visible' | 'connected'>('visible');
   const [broadcastShowHistory, setBroadcastShowHistory] = useState(false);
+  // 빠른 명령 버튼 — 사용자가 미리 정의한 명령을 원클릭으로 전송. UI prefs 에 영속.
+  type QuickCmd = { id: string; label: string; cmd: string };
+  const [quickCmds, setQuickCmds] = useState<QuickCmd[]>([]);
+  const [quickCmdEditor, setQuickCmdEditor] = useState<QuickCmd | null>(null);
+  const [quickCmdMenuOpen, setQuickCmdMenuOpen] = useState(false);
+  const quickCmdsLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!quickCmdsLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ quickCmds }); } catch {}
+  }, [quickCmds]);
   // 일괄 파일 전송 모달
   const [showBcastFileXfer, setShowBcastFileXfer] = useState(false);
   const [bcastXferPath, setBcastXferPath] = useState(''); // 비우면 세션별 현재 경로 사용
@@ -1937,20 +1949,26 @@ function App() {
         return;
       }
       // 입력 가능한 요소(프롬프트 textarea, input, contenteditable)에 포커스가 있으면
-      // 터미널 텍스트 조작 단축키(전체선택/복사/붙여넣기/클리어)는 건너뜀 → 네이티브 동작 보장
+      // 터미널 텍스트 조작 단축키(전체선택/복사/붙여넣기)는 건너뜀 → 네이티브 동작 보장.
+      // 단, xterm 이 렌더링하는 hidden textarea (터미널 포커스) 는 제외 — clear* 등 터미널 단축키는
+      // 여기서 처리해야 함. xterm 의 textarea 는 .xterm-helper-textarea 클래스로 식별.
       const ae = document.activeElement as HTMLElement | null;
-      const isEditable = !!ae && (
+      const isTermTextarea = !!ae && ae.classList?.contains('xterm-helper-textarea');
+      const isEditable = !!ae && !isTermTextarea && (
         ae.tagName === 'INPUT' ||
         ae.tagName === 'TEXTAREA' ||
         ae.isContentEditable
       );
-      if (isEditable) return;
       const termId = getActiveTermId();
+      // clear* 는 터미널 포커스에서도 동작해야 함 — isEditable 체크보다 먼저 처리.
+      if (termId) {
+        if (matchKeybinding(e, 'clearScrollback')) { e.preventDefault(); clearScrollbackInTerm(termId); return; }
+        else if (matchKeybinding(e, 'clearScreen')) { e.preventDefault(); clearScreenInTerm(termId); return; }
+        else if (matchKeybinding(e, 'clearAll')) { e.preventDefault(); clearAllInTerm(termId); return; }
+      }
+      if (isEditable) return;
       if (!termId) return;
-      if (matchKeybinding(e, 'clearScrollback')) { e.preventDefault(); clearScrollbackInTerm(termId); }
-      else if (matchKeybinding(e, 'clearScreen')) { e.preventDefault(); clearScreenInTerm(termId); }
-      else if (matchKeybinding(e, 'clearAll')) { e.preventDefault(); clearAllInTerm(termId); }
-      else if (matchKeybinding(e, 'copy')) {
+      if (matchKeybinding(e, 'copy')) {
         const sel = getSelectionFromTerm(termId);
         if (sel) { e.preventDefault(); navigator.clipboard.writeText(sel).catch(() => {}); }
       }
@@ -3282,10 +3300,10 @@ function App() {
     {
       label: tMenu('edit.title'),
       items: [
-        { label: tMenu('edit.copy'), shortcut: 'Ctrl+Shift+C', action: () => document.execCommand('copy') },
-        { label: tMenu('edit.paste'), shortcut: 'Ctrl+Shift+V', action: () => { navigator.clipboard.readText().then(text => { const tid = getActiveTermId(); if (!tid) return; pasteToTerm(tid, text); }); } },
+        { label: tMenu('edit.copy'), shortcut: getKeybinding('copy'), action: () => document.execCommand('copy') },
+        { label: tMenu('edit.paste'), shortcut: getKeybinding('paste'), action: () => { navigator.clipboard.readText().then(text => { const tid = getActiveTermId(); if (!tid) return; pasteToTerm(tid, text); }); } },
         { separator: true, label: '' },
-        { label: tMenu('edit.find'), shortcut: 'Ctrl+Shift+F', action: () => setShowSearch(true) },
+        { label: tMenu('edit.find'), shortcut: getKeybinding('find'), action: () => setShowSearch(true) },
       ],
     },
     {
@@ -3323,9 +3341,9 @@ function App() {
         { label: tMenu('window.splitV'), action: () => { if (activeTab && selectedPanelId) openSplitSessionPicker('column', selectedPanelId); }, disabled: !selectedPanelId },
         { label: tMenu('window.splitH'), action: () => { if (activeTab && selectedPanelId) openSplitSessionPicker('row', selectedPanelId); }, disabled: !selectedPanelId },
         { separator: true, label: '' },
-        { label: tMenu('window.clearScreen'), shortcut: 'Ctrl+Shift+L', action: () => { const tid = getActiveTermId(); if (tid) clearScreenInTerm(tid); } },
-        { label: tMenu('window.clearScrollback'), shortcut: 'Ctrl+Shift+B', action: () => { const tid = getActiveTermId(); if (tid) clearScrollbackInTerm(tid); } },
-        { label: tMenu('window.clearAll'), shortcut: 'Ctrl+Shift+A', action: () => { const tid = getActiveTermId(); if (tid) clearAllInTerm(tid); } },
+        { label: tMenu('window.clearScreen'), shortcut: getKeybinding('clearScreen'), action: () => { const tid = getActiveTermId(); if (tid) clearScreenInTerm(tid); } },
+        { label: tMenu('window.clearScrollback'), shortcut: getKeybinding('clearScrollback'), action: () => { const tid = getActiveTermId(); if (tid) clearScrollbackInTerm(tid); } },
+        { label: tMenu('window.clearAll'), shortcut: getKeybinding('clearAll'), action: () => { const tid = getActiveTermId(); if (tid) clearAllInTerm(tid); } },
       ],
     },
     {
@@ -4739,9 +4757,106 @@ function App() {
           <button className="broadcast-btn ctrl" onClick={() => sendBroadcast(broadcastScope, { raw: '\x1b[B', label: '↓' })} title={tApp('broadcast.arrowDownTooltip')}>↓</button>
           <button className="broadcast-btn ctrl" onClick={() => sendBroadcast(broadcastScope, { raw: '\x03', label: '^C' })} title={tApp('broadcast.sigintTooltip')}>^C</button>
           <button className="broadcast-btn ctrl" onClick={() => sendBroadcast(broadcastScope, { raw: '\x04', label: '^D' })} title={tApp('broadcast.eofTooltip')}>^D</button>
+          {/* 빠른 명령 — 드롭다운 하나로 모아 보관. 클릭 시 broadcastScope 대로 전송. */}
+          <span style={{ width: 1, height: 18, background: '#333', margin: '0 2px' }} />
+          <div style={{ position: 'relative' }}>
+            <button className="broadcast-btn"
+              onClick={() => setQuickCmdMenuOpen(v => !v)}
+              title={quickCmds.length > 0 ? `빠른 명령 (${quickCmds.length}개)` : '빠른 명령 추가·관리'}
+              style={{ background: '#2a4a6a', color: '#e0eaf5' }}>
+              🚀 빠른 명령 {quickCmds.length > 0 ? `(${quickCmds.length})` : ''} ▾
+            </button>
+            {quickCmdMenuOpen && (
+              <>
+                <div onClick={() => setQuickCmdMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9990 }} />
+                <div style={{
+                  position: 'absolute', bottom: '100%', right: 0, marginBottom: 4,
+                  background: '#252526', border: '1px solid #444', borderRadius: 4,
+                  minWidth: 280, maxHeight: 400, overflowY: 'auto',
+                  boxShadow: '0 -4px 20px rgba(0,0,0,0.5)', zIndex: 9991,
+                }}>
+                  {quickCmds.length === 0 && (
+                    <div style={{ padding: '10px 12px', color: '#888', fontSize: 11 }}>
+                      아직 빠른 명령이 없습니다. 아래 "+ 새 명령 추가" 로 만들어 보세요.
+                    </div>
+                  )}
+                  {quickCmds.map(qc => (
+                    <div key={qc.id}
+                      onClick={() => {
+                        sendBroadcast(broadcastScope, { raw: (qc.cmd.endsWith('\n') ? qc.cmd : qc.cmd + '\n'), label: qc.label });
+                        setQuickCmdMenuOpen(false);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', borderBottom: '1px solid #333' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#2d2d2d')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: '#9cdcfe', fontWeight: 600 }}>{qc.label}</div>
+                        <div style={{ fontSize: 10, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{qc.cmd}</div>
+                      </div>
+                      <button onClick={e => { e.stopPropagation(); setQuickCmdMenuOpen(false); setQuickCmdEditor(qc); }}
+                        title="편집"
+                        style={{ background: 'transparent', border: '1px solid #444', color: '#9cdcfe', cursor: 'pointer', padding: '2px 6px', borderRadius: 3, fontSize: 10 }}>✎</button>
+                    </div>
+                  ))}
+                  <div onClick={() => { setQuickCmdMenuOpen(false); setQuickCmdEditor({ id: '', label: '', cmd: '' }); }}
+                    style={{ padding: '8px 10px', cursor: 'pointer', color: '#3fb950', fontSize: 12, fontWeight: 600, textAlign: 'center' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#2d2d2d')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    + 새 명령 추가
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
           {broadcastNotice && (
             <span className={`broadcast-notice ${broadcastNotice.kind}`}>{broadcastNotice.text}</span>
           )}
+        </div>
+      )}
+      {/* 빠른 명령 편집 모달 */}
+      {quickCmdEditor && (
+        <div onClick={() => setQuickCmdEditor(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: '#252526', border: '1px solid #444', borderRadius: 6, padding: 20, minWidth: 360, boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
+            <h3 style={{ margin: '0 0 12px', color: '#e0e0e0', fontSize: 14 }}>{quickCmdEditor.id ? '빠른 명령 편집' : '빠른 명령 추가'}</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <label style={{ fontSize: 11, color: '#aaa' }}>
+                라벨 (버튼 표시)
+                <input value={quickCmdEditor.label}
+                  onChange={e => setQuickCmdEditor(q => q ? { ...q, label: e.target.value } : q)}
+                  autoFocus maxLength={30}
+                  style={{ width: '100%', marginTop: 4, padding: '4px 8px', background: '#1e1e1e', color: '#eee', border: '1px solid #444', borderRadius: 3, fontSize: 12 }} />
+              </label>
+              <label style={{ fontSize: 11, color: '#aaa' }}>
+                명령
+                <textarea value={quickCmdEditor.cmd}
+                  onChange={e => setQuickCmdEditor(q => q ? { ...q, cmd: e.target.value } : q)}
+                  rows={3}
+                  style={{ width: '100%', marginTop: 4, padding: '4px 8px', background: '#1e1e1e', color: '#eee', border: '1px solid #444', borderRadius: 3, fontSize: 12, fontFamily: 'monospace', resize: 'vertical' }} />
+                <span style={{ fontSize: 10, color: '#666' }}>※ 자동으로 개행 추가됨. 여러 줄 스크립트 가능.</span>
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              {quickCmdEditor.id && (
+                <button onClick={() => { setQuickCmds(prev => prev.filter(q => q.id !== quickCmdEditor.id)); setQuickCmdEditor(null); }}
+                  style={{ background: '#7a3a3a', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12, marginRight: 'auto' }}>삭제</button>
+              )}
+              <button onClick={() => setQuickCmdEditor(null)}
+                style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>취소</button>
+              <button onClick={() => {
+                if (!quickCmdEditor.label.trim() || !quickCmdEditor.cmd) return;
+                if (quickCmdEditor.id) {
+                  setQuickCmds(prev => prev.map(q => q.id === quickCmdEditor.id ? quickCmdEditor : q));
+                } else {
+                  setQuickCmds(prev => [...prev, { ...quickCmdEditor, id: `qc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }]);
+                }
+                setQuickCmdEditor(null);
+              }}
+                disabled={!quickCmdEditor.label.trim() || !quickCmdEditor.cmd}
+                style={{ background: '#0e639c', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>저장</button>
+            </div>
+          </div>
         </div>
       )}
 
