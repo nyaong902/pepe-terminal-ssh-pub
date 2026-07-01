@@ -1310,6 +1310,43 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     return idxs;
   }, [displayedResult, colFilters, sortState, cellValue]);
 
+  // ── 가상 스크롤 — 결과 행이 많아지면 (수백~수천) 모든 <tr>/<td> 를 렌더하면 메모리/CPU 폭증.
+  // 화면에 보이는 창만 렌더하고 위/아래는 spacer <tr> 로 채워 스크롤 지오메트리 유지.
+  const ROW_HEIGHT = 26; // 실제 렌더된 tr 최소 높이와 맞춤 (fontSize 12 + padding).
+  const OVERSCAN = 15;
+  const gridScrollRef = useRef<HTMLDivElement | null>(null);
+  const [gridScrollTop, setGridScrollTop] = useState(0);
+  const [gridViewportH, setGridViewportH] = useState<number>(() => 400);
+  const onGridScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setGridScrollTop(e.currentTarget.scrollTop);
+  }, []);
+  useEffect(() => {
+    const el = gridScrollRef.current;
+    if (!el) return;
+    const update = () => setGridViewportH(el.clientHeight || 400);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [displayedResult]);
+  // viewRowIndices 가 바뀌면 (새 쿼리, 정렬, 필터) 스크롤 위치 리셋.
+  useEffect(() => {
+    const el = gridScrollRef.current;
+    if (el) el.scrollTop = 0;
+    setGridScrollTop(0);
+  }, [displayedResult, sortState, colFilters]);
+  const visibleWindow = useMemo(() => {
+    const total = viewRowIndices.length;
+    if (total === 0) return { start: 0, end: 0, topPad: 0, bottomPad: 0 };
+    const start = Math.max(0, Math.floor(gridScrollTop / ROW_HEIGHT) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((gridScrollTop + gridViewportH) / ROW_HEIGHT) + OVERSCAN);
+    return {
+      start, end,
+      topPad: start * ROW_HEIGHT,
+      bottomPad: Math.max(0, (total - end) * ROW_HEIGHT),
+    };
+  }, [gridScrollTop, gridViewportH, viewRowIndices.length]);
+
   const flashHint = (msg: string) => { setCopyHint(msg); setTimeout(() => setCopyHint(''), 1800); };
 
   // onSaveCsv / onSaveJson / onCopyClipboard 는 결과 영역의 "↥ 데이터 추출" 메뉴에 통합되어 제거됨.
@@ -3006,7 +3043,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
             );
           })()}
           <div
+            ref={gridScrollRef}
             tabIndex={0}
+            onScroll={onGridScroll}
             onPaste={(e) => {
               // 스냅샷 뷰는 읽기전용 — 붙여넣기 차단
               if (isPinnedView || !displayedResult) return;
@@ -3273,7 +3312,11 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
                   </tr>
                 </thead>
                 <tbody>
-                  {viewRowIndices.map((i, displayIdx) => {
+                  {visibleWindow.topPad > 0 && (
+                    <tr aria-hidden="true" style={{ height: visibleWindow.topPad }}><td /></tr>
+                  )}
+                  {viewRowIndices.slice(visibleWindow.start, visibleWindow.end).map((i, sliceIdx) => {
+                    const displayIdx = visibleWindow.start + sliceIdx;
                     const row = displayedResult.rows[i];
                     const isDeleted = !isPinnedView && deletedRowIdxs.has(i);
                     return (
@@ -3449,6 +3492,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
                       })}
                     </tr>
                   ))}
+                  {visibleWindow.bottomPad > 0 && (
+                    <tr aria-hidden="true" style={{ height: visibleWindow.bottomPad }}><td /></tr>
+                  )}
                 </tbody>
               </table>
             </>
