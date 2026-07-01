@@ -21,6 +21,11 @@ type Props = {
   onReorderTabs?: (fromId: string, toId: string) => void;
   onDetachTab?: (id: string, screenX?: number, screenY?: number) => void;
   onSetTabColor?: (id: string, color: TabColor) => void;
+  // 우측 분할 관련 — 활성 탭 옆에 다른 워크스페이스 탭 표시
+  splitRightTabId?: string | null;
+  onSplitRight?: (id: string) => void;
+  onUnsplitRight?: () => void;
+  canSplitType?: (type: any) => boolean;
   hasSession?: Record<string, boolean>;
   themeName?: string;
   themeList?: string[];
@@ -28,7 +33,7 @@ type Props = {
   availableShells?: ShellInfo[];
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -174,6 +179,20 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           items={[
             { icon: '✏️', label: tc('rename'), onClick: () => startRename(contextMenu.tabId) },
             ...(onDetachTab ? [{ icon: '🪟', label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
+            ...((() => {
+              const target = tabs.find(t2 => t2.id === contextMenu.tabId);
+              if (!target || !onSplitRight || !onUnsplitRight) return [];
+              const isRight = splitRightTabId === target.id;
+              const eligible = canSplitType ? canSplitType(target.type) : false;
+              const isActive = activeTabId === target.id;
+              if (isRight) {
+                return [{ icon: '↔', label: '분할 해제', onClick: () => onUnsplitRight() }];
+              }
+              if (eligible && !isActive) {
+                return [{ icon: '↔', label: '우측에 함께 보기', onClick: () => onSplitRight(target.id) }];
+              }
+              return [];
+            })()),
             ...(onSetTabColor ? [{
               icon: '🎨',
               label: t('colorSetting'),

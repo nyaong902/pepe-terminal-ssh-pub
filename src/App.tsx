@@ -105,6 +105,31 @@ function App() {
   const tabsRef = useRef(tabs);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   const [activeTabId, setActiveTabId] = useState<TabId>(IS_DETACHED_WINDOW ? '' : 'tab-1');
+  // 우측 분할로 함께 볼 워크스페이스 탭 — 특수 워크스페이스(브라우저·SQL·비교·로그·VPN·MicroSip·i18n) 만.
+  // 터미널 탭은 activeTab 캡처 IIFE 구조라 이번 단계에선 제외 (2차 단계에서 처리).
+  const [splitRightTabId, setSplitRightTabId] = useState<TabId | null>(null);
+  const [splitRatio, setSplitRatio] = useState<number>(0.5); // 좌 비율 0.2~0.8
+  // 1차: 특수 워크스페이스만 지원. 터미널 (undefined / 'terminal') 은 별도 세션에서 IIFE 를
+  // 함수로 추출한 뒤 확장 예정.
+  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'fileExplorer', 'fileEditor'];
+  const canSplit = (tab: Tab | undefined) => !!tab && SPLITTABLE_TYPES.includes(tab.type);
+  const splitRightTab = tabs.find(t => t.id === splitRightTabId) || null;
+  // 활성 탭 자체를 분할 대상으로 설정 못 하게 — 자동 해제
+  useEffect(() => {
+    if (splitRightTabId && splitRightTabId === activeTabId) setSplitRightTabId(null);
+    if (splitRightTabId && !tabs.find(t => t.id === splitRightTabId)) setSplitRightTabId(null);
+  }, [activeTabId, splitRightTabId, tabs]);
+  // 각 워크스페이스 탭 컨테이너의 display / order / flex 계산 헬퍼.
+  const tabSlotStyle = (t: Tab): React.CSSProperties => {
+    const isActive = activeTab?.id === t.id;
+    const isRight = splitRightTabId === t.id && canSplit(t) && canSplit(activeTab);
+    if (!isActive && !isRight) return { display: 'none' };
+    if (isRight && !isActive) {
+      return { display: 'flex', flex: `${(1 - splitRatio) * 100} 1 0`, order: 2, minHeight: 0, minWidth: 0 };
+    }
+    // active
+    return { display: 'flex', flex: splitRightTab ? `${splitRatio * 100} 1 0` : '1 1 0', order: 0, minHeight: 0, minWidth: 0 };
+  };
   const activeTabIdRef = useRef(activeTabId);
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
   // 탭별로 선택된 패널 ID 기억
@@ -3877,6 +3902,10 @@ function App() {
           }}
           onDetachTab={detachTabToNewWindow}
           onSetTabColor={(id, color) => setTabs(prev => prev.map(t => t.id === id ? { ...t, color } : t))}
+          splitRightTabId={splitRightTabId}
+          onSplitRight={(id) => setSplitRightTabId(id)}
+          onUnsplitRight={() => setSplitRightTabId(null)}
+          canSplitType={(type: any) => SPLITTABLE_TYPES.includes(type)}
           hasSession={tabs.reduce((acc, t) => { acc[t.id] = collectAllSessions(t.layout).length > 0; return acc; }, {} as Record<string, boolean>)}
           availableShells={availableShells}
         />
@@ -4165,9 +4194,12 @@ function App() {
           />
         )}
 
+        {/* 워크스페이스 슬롯 — split 활성 시 activeTab / splitRightTab 이 좌우로 배치.
+            각 탭의 display 는 flex/none, order 로 왼→오 순서 강제. */}
+        <div className="workspace-row" style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, minWidth: 0 }}>
         {/* FileExplorer — 탭마다 독립 인스턴스, 비활성 시 CSS 숨김 */}
         {tabs.filter(t => t.type === 'fileExplorer').map(t => (
-          <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <FileExplorer
               sessions={(() => {
                 const live = tabs.filter(x => x.type !== 'fileExplorer')
@@ -4246,7 +4278,7 @@ function App() {
             if (remoteTreeHoverShowTimer.current) { clearTimeout(remoteTreeHoverShowTimer.current); remoteTreeHoverShowTimer.current = null; }
           };
           return (
-            <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', flexDirection: 'row', position: 'relative' }}>
+            <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden', flexDirection: 'row', position: 'relative' }}>
               {showFileTree && !remoteTreePinned && (
                 <div
                   className="workspace-file-tree-trigger"
@@ -4328,7 +4360,7 @@ function App() {
 
         {/* 특수 워크스페이스 탭들 — ErrorBoundary 로 격리 (한 컴포넌트 크래시가 전체 앱 죽이지 않도록) */}
         {tabs.filter(t => t.type === 'browser').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.browser')}>
               <BrowserPane
                 initialUrl="https://www.google.com"
@@ -4341,7 +4373,7 @@ function App() {
           </div>
         ))}
         {tabs.filter(t => t.type === 'compare').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
                 sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
@@ -4352,7 +4384,7 @@ function App() {
           </div>
         ))}
         {tabs.filter(t => t.type === 'logAnalyzer').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
                 sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
@@ -4363,21 +4395,21 @@ function App() {
           </div>
         ))}
         {tabs.filter(t => t.type === 'vpn').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="VPN">
               <VpnWorkspace />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'microsip').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="MicroSIP">
               <MicroSipWorkspace />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'i18nEditor').map(t => (
-          <div key={t.id} style={{ flex: 1, minHeight: 0, display: activeTab?.id === t.id ? 'flex' : 'none' }}>
+          <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.i18nEditor')}>
               <TranslationEditor />
             </ErrorBoundary>
@@ -4390,7 +4422,7 @@ function App() {
             hydrateSqlSession(t.sqlTool.sessionId, t.workspaceState);
           }
           return (
-            <div key={t.id} style={{ display: activeTab?.id === t.id ? 'flex' : 'none', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+            <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden' }}>
               <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
                 <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
               </ErrorBoundary>
@@ -4668,6 +4700,31 @@ function App() {
             </div>
           );
         })()}
+        {/* 분할 divider — 우측 분할 활성 시 activeTab 과 splitRightTab 사이에 배치 (flex order 로 위치 강제). */}
+        {splitRightTab && canSplit(activeTab) && (
+          <div
+            style={{ flex: '0 0 4px', order: 1, background: '#333', cursor: 'col-resize', zIndex: 5 }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#0e639c')}
+            onMouseLeave={e => (e.currentTarget.style.background = '#333')}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const wrap = (e.currentTarget.parentElement as HTMLElement | null);
+              const w = wrap?.getBoundingClientRect().width || 800;
+              const startRatio = splitRatio;
+              const onMove = (ev: MouseEvent) => {
+                const dx = ev.clientX - startX;
+                const next = Math.max(0.2, Math.min(0.8, startRatio + dx / w));
+                setSplitRatio(next);
+              };
+              const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+            title="드래그로 좌우 비율 조절"
+          />
+        )}
+        </div>{/* /workspace-row */}
         </div>
       </div>
 
