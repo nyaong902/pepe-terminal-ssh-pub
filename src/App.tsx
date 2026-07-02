@@ -109,10 +109,9 @@ function App() {
   // 터미널 탭은 activeTab 캡처 IIFE 구조라 이번 단계에선 제외 (2차 단계에서 처리).
   const [splitRightTabId, setSplitRightTabId] = useState<TabId | null>(null);
   const [splitRatio, setSplitRatio] = useState<number>(0.5); // 좌 비율 0.2~0.8
-  // 1차: 특수 워크스페이스만 지원. 터미널 (undefined / 'terminal') 은 별도 세션에서 IIFE 를
-  // 함수로 추출한 뒤 확장 예정.
-  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'fileExplorer', 'fileEditor'];
-  const canSplit = (tab: Tab | undefined) => !!tab && SPLITTABLE_TYPES.includes(tab.type);
+  // 지원 대상: 특수 워크스페이스 전체 + 터미널 (type undefined / 'terminal').
+  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'fileExplorer', 'fileEditor', undefined];
+  const canSplit = (tab: Tab | undefined) => !!tab && (tab.type === undefined || SPLITTABLE_TYPES.includes(tab.type));
   const splitRightTab = tabs.find(t => t.id === splitRightTabId) || null;
   // 활성 탭 자체를 분할 대상으로 설정 못 하게 — 자동 해제
   useEffect(() => {
@@ -792,6 +791,68 @@ function App() {
       window.removeEventListener('resize', measure);
       mo.disconnect();
     };
+  }, []);
+  // 파일트리 패널의 top 오프셋 — 세션 사이드바(pinned)와 픽셀 단위로 정확히 맞추기 위해
+  // "타이틀바(.tab-bar-row) 바로 아래" 위치를 직접 측정해서 사용 (CSS padding/margin 계산에 의존하지 않음).
+  const [fileTreePanelTop, setFileTreePanelTop] = useState<number>(40);
+  useEffect(() => {
+    const measure = () => {
+      const el = document.querySelector('.tab-bar-row') as HTMLElement | null;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setFileTreePanelTop(r.bottom);
+      }
+    };
+    measure();
+    const t1 = setTimeout(measure, 100);
+    const t2 = setTimeout(measure, 500);
+    window.addEventListener('resize', measure);
+    const mo = new MutationObserver(measure);
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    return () => {
+      clearTimeout(t1); clearTimeout(t2);
+      window.removeEventListener('resize', measure);
+      mo.disconnect();
+    };
+  }, []);
+  // 파일트리 패널의 left 오프셋 — 트리거의 실제 오른쪽 끝(getBoundingClientRect().right)을 측정.
+  // 세션 사이드바가 pinned(실제 폭 차지)면 트리거가 그만큼 오른쪽에 있으므로, 하드코딩된 22px 로는
+  // 안 맞음 — 트리거 우측 끝을 그대로 패널의 left 로 사용해서 항상 트리거 바로 오른쪽에서 열리게 함.
+  const [fileTreePanelLeft, setFileTreePanelLeft] = useState<number>(22);
+  useEffect(() => {
+    const measure = () => {
+      const el = document.querySelector('.global-file-tree-wrap .workspace-file-tree-trigger') as HTMLElement | null;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setFileTreePanelLeft(r.right);
+      }
+    };
+    measure();
+    const t1 = setTimeout(measure, 100);
+    const t2 = setTimeout(measure, 500);
+    window.addEventListener('resize', measure);
+    const mo = new MutationObserver(measure);
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    return () => {
+      clearTimeout(t1); clearTimeout(t2);
+      window.removeEventListener('resize', measure);
+      mo.disconnect();
+    };
+  }, []);
+  // 세션 사이드바가 unpinned(auto-hide, 접힘) 상태인지 감지 — 접혀 있을 땐 파일트리 트리거를
+  // 세션 트리거 바로 아래 같은 컬럼(x=0)에 세로로 스택시켜야 함 (세션 사이드바 pin 상태는
+  // SessionList 내부 로컬 state 라 App 에서 직접 접근 불가 → DOM 감지).
+  const [sessionSidebarUnpinned, setSessionSidebarUnpinned] = useState<boolean>(false);
+  useEffect(() => {
+    const measure = () => {
+      setSessionSidebarUnpinned(!!document.querySelector('.session-sidebar-inner.auto-hide'));
+    };
+    measure();
+    const t1 = setTimeout(measure, 100);
+    const t2 = setTimeout(measure, 500);
+    const mo = new MutationObserver(measure);
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    return () => { clearTimeout(t1); clearTimeout(t2); mo.disconnect(); };
   }, []);
   useEffect(() => {
     if (!remoteTreePinnedLoadedRef.current) return;
@@ -3637,6 +3698,138 @@ function App() {
     },
   ];
 
+  // ── 파일 트리 — app-root 레벨에서 세션 사이드바 옆에 통합 렌더링 (세션 사이드바와 동일한 동작 패턴). ──
+  // 우선순위: activeTab 이 터미널이면 그 탭, 아니면 splitRightTab 이 터미널이면 그 탭.
+  const buildGlobalFileTree = (): React.ReactNode => {
+    const isTerm = (t: Tab | undefined | null): boolean => !!t && (t.type === undefined || t.type === 'terminal');
+    let primaryTab: Tab | null = null;
+    let primaryPanelId: string | null = null;
+    if (isTerm(activeTab)) {
+      primaryTab = activeTab!;
+      primaryPanelId = selectedPanelId;
+    } else if (splitRightTab && isTerm(splitRightTab)) {
+      primaryTab = splitRightTab;
+      primaryPanelId = selectedPanelByTab[splitRightTab.id] ?? null;
+    }
+    if (!primaryTab) return null;
+    const findLeaf = (n: any, id: string): any => {
+      if (n.type === 'leaf') return n.id === id ? n : null;
+      for (const c of n.children) { const r = findLeaf(c, id); if (r) return r; }
+      return null;
+    };
+    const leaf = primaryPanelId ? findLeaf(primaryTab.layout, primaryPanelId) : null;
+    const sess = leaf?.panel?.sessions[leaf.panel.activeIdx];
+    const sessInfo = sess ? getTermSessionInfo(sess.termId) : null;
+    const hasFileTree = !!(sess && (((sess.sessionId || sessInfo?.quickSession) && isTermConnected(sess.termId)) || isTermPty(sess.termId)));
+    const onClickTrigger = () => {
+      if (remoteTreePinned) return;
+      if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
+      if (remoteTreeHoverShowTimer.current) { clearTimeout(remoteTreeHoverShowTimer.current); remoteTreeHoverShowTimer.current = null; }
+      setRemoteTreeVisible(v => !v);
+      setTopPanel('filetree');
+    };
+    const onEnterTrigger = () => {
+      if (remoteTreePinned) return;
+      if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
+      if (remoteTreeHoverShowTimer.current) clearTimeout(remoteTreeHoverShowTimer.current);
+      remoteTreeHoverShowTimer.current = setTimeout(() => { setRemoteTreeVisible(true); setTopPanel('filetree'); }, 2500);
+    };
+    const onEnterTree = () => {
+      if (remoteTreePinned) return;
+      if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
+      setTopPanel('filetree');
+    };
+    const onLeaveTree = () => {
+      if (remoteTreePinned) return;
+      if (remoteTreeHideTimer.current) clearTimeout(remoteTreeHideTimer.current);
+      remoteTreeHideTimer.current = setTimeout(() => setRemoteTreeVisible(false), 500);
+    };
+    const onLeaveTrigger = () => {
+      if (remoteTreePinned) return;
+      if (remoteTreeHoverShowTimer.current) { clearTimeout(remoteTreeHoverShowTimer.current); remoteTreeHoverShowTimer.current = null; }
+    };
+    const togglePin = () => {
+      setRemoteTreePinned(p => !p);
+      [50, 200, 500].forEach(ms => setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); }, ms));
+    };
+    return (
+      <div className="global-file-tree-wrap">
+        {!remoteTreePinned && (
+          <div
+            className="workspace-file-tree-trigger"
+            style={
+              sessionSidebarUnpinned
+                ? { position: 'fixed', top: fileTreeTriggerTop, left: 0, bottom: 24, margin: 0, zIndex: 2000 }
+                : { position: 'static', marginTop: fileTreePanelTop, marginBottom: 24 }
+            }
+          >
+            <div className="workspace-file-tree-trigger-top" onClick={onClickTrigger} onMouseEnter={onEnterTrigger} onMouseLeave={onLeaveTrigger} style={{ cursor: 'pointer' }} title={tApp('fileTree.triggerTooltip')}>
+              <span className="workspace-file-tree-trigger-text">{tApp('fileTree.triggerLabel')}</span>
+            </div>
+            <div className="workspace-file-tree-trigger-bottom" />
+          </div>
+        )}
+        <div
+          className={`workspace-file-tree ${!remoteTreePinned ? 'auto-hide' : ''} ${!remoteTreePinned && !remoteTreeVisible ? 'hidden' : ''} ${topPanel === 'filetree' ? 'top' : ''}`}
+          style={remoteTreePinned ? { width: `${remoteTreeWidth}px`, flexShrink: 0 } : { width: `${remoteTreeWidth}px`, flexShrink: 0, left: fileTreePanelLeft }}
+          onMouseEnter={onEnterTree}
+          onMouseLeave={onLeaveTree}
+        >
+          <div className="workspace-file-tree-toolbar">
+            <button
+              className={`workspace-file-tree-pin ${remoteTreePinned ? 'pinned' : ''}`}
+              onClick={togglePin}
+              title={remoteTreePinned ? tApp('fileTree.unpinTooltip') : tApp('fileTree.pinTooltip')}
+            >📌</button>
+          </div>
+          {hasFileTree ? (
+            <RemoteFileTree
+              key={sess.termId}
+              termId={sess.termId}
+              sessionName={sess.sessionName}
+              sessionId={sess.sessionId}
+              initialPath={getCurrentPwdForTerm(sess.termId)}
+              onOpenFile={handleOpenRemoteFile}
+              onAttachToClaude={handleAttachToClaude}
+            />
+          ) : (
+            <div style={{ padding: 16, color: 'var(--win-text-dim)', fontSize: 12, flex: 1 }}>
+              {tApp('fileTree.noSession', { defaultValue: '연결된 세션이 없습니다.' })}
+            </div>
+          )}
+          <div
+            className="workspace-file-tree-resizer"
+            title={tApp('fileTree.resizeTooltip2')}
+            onMouseDown={e => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startWidth = remoteTreeWidth;
+              const onMove = (ev: MouseEvent) => {
+                const w = Math.max(160, Math.min(800, startWidth + (ev.clientX - startX)));
+                setRemoteTreeWidth(w);
+              };
+              const onUp = () => {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                setRemoteTreeWidth(curW => {
+                  if (remoteTreeWidthLoadedRef.current) { try { (window as any).api?.setUIPrefs?.({ remoteTreeWidth: curW }); } catch {} }
+                  return curW;
+                });
+                window.dispatchEvent(new Event('resize'));
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+            onDoubleClick={() => {
+              setRemoteTreeWidth(240);
+              try { (window as any).api?.setUIPrefs?.({ remoteTreeWidth: 240 }); } catch {}
+            }}
+          />
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
       className={`app-root${showBroadcast ? ' has-broadcast' : ''}${showQuickConnect ? ' has-quickconnect' : ''}${(showQuickConnect || (showToolbar && toolbarSlot !== 'top')) ? ' has-topbar' : ''}${(showToolbar && toolbarSlot === 'top') ? ' has-toptoolbar' : ''}${fullscreenTermId ? ' term-fullscreen' : ''}${showClaudeChat && claudeChatPinned ? ' has-claude-pinned' : ''}${showClaudeChat && !claudeChatPinned ? ' has-claude-autohide' : ''}${showClaudeChat && !claudeChatPinned && claudeChatVisible ? ' has-claude-visible' : ''}${topPanel ? ' top-panel-' + topPanel : ''}`}
@@ -3657,6 +3850,7 @@ function App() {
         onConnect={(sid, name, panelId, sessTheme, ff, fs, sb) => handleConnectSession(sid, name, panelId, sessTheme, ff, fs, sb)}
         workspaceTabs={tabs.map(t => ({ id: t.id, title: t.title }))}
         activeTabId={activeTabId}
+        onSetTopPanel={setTopPanel}
         onMultiConnect={(sessList, mode, opts) => {
           if (sessList.length === 0) return;
           let targetTabId = '';
@@ -3877,7 +4071,8 @@ function App() {
           }
         }}
       />
-      {/* 파일 트리는 이제 각 TerminalPanel 내부에서 mini-tab 별로 렌더링됨 (Ctrl+Shift+E 로 토글). */}
+      {/* 통합 파일트리 — SessionList 옆(app-root) 에서 세션 사이드바와 동일한 패턴으로 항상 창 좌측에 렌더링. 좌우 분할 여부 무관. */}
+      {buildGlobalFileTree()}
       <div className="app-main">
         <div className="tab-bar-row">
           <MenuBar menus={menuDefs} />
@@ -4430,119 +4625,13 @@ function App() {
           );
         })}
 
-        {activeTab && activeTab.type !== 'fileExplorer' && activeTab.type !== 'fileEditor' && activeTab.type !== 'browser' && activeTab.type !== 'compare' && activeTab.type !== 'logAnalyzer' && activeTab.type !== 'vpn' && activeTab.type !== 'i18nEditor' && activeTab.type !== 'sqlTool' && activeTab.type !== 'microsip' && (() => {
-          // 워크스페이스 레벨 파일 트리 — 선택된 패널의 활성 세션이 SSH 연결이면 표시
-          let fileTreeNode: React.ReactNode = null;
-          if (selectedPanelId) {
-            const findLeaf = (n: any, id: string): any => {
-              if (n.type === 'leaf') return n.id === id ? n : null;
-              for (const c of n.children) { const r = findLeaf(c, id); if (r) return r; }
-              return null;
-            };
-            const leaf = findLeaf(activeTab.layout, selectedPanelId);
-            const sess = leaf?.panel?.sessions[leaf.panel.activeIdx];
-            const sessInfo = sess ? getTermSessionInfo(sess.termId) : null;
-            // SSH 연결된 세션 또는 로컬 PTY 활성 세션이면 파일트리 표시
-            if (sess && (((sess.sessionId || sessInfo?.quickSession) && isTermConnected(sess.termId)) || isTermPty(sess.termId))) {
-              const onClickTrigger = () => {
-                if (remoteTreePinned) return;
-                if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
-                if (remoteTreeHoverShowTimer.current) { clearTimeout(remoteTreeHoverShowTimer.current); remoteTreeHoverShowTimer.current = null; }
-                setRemoteTreeVisible(v => !v);
-                setTopPanel('filetree');
-              };
-              const onEnterTrigger = () => {
-                if (remoteTreePinned) return;
-                if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
-                if (remoteTreeHoverShowTimer.current) clearTimeout(remoteTreeHoverShowTimer.current);
-                // 2.5 초 hover 시 자동 열림 (Claude 트리거 패턴)
-                remoteTreeHoverShowTimer.current = setTimeout(() => { setRemoteTreeVisible(true); setTopPanel('filetree'); }, 2500);
-              };
-              const onEnterTree = () => {
-                if (remoteTreePinned) return;
-                if (remoteTreeHideTimer.current) { clearTimeout(remoteTreeHideTimer.current); remoteTreeHideTimer.current = null; }
-                setTopPanel('filetree');
-              };
-              const onLeaveTree = () => {
-                if (remoteTreePinned) return;
-                if (remoteTreeHideTimer.current) clearTimeout(remoteTreeHideTimer.current);
-                remoteTreeHideTimer.current = setTimeout(() => setRemoteTreeVisible(false), 500);
-              };
-              const onLeaveTrigger = () => {
-                if (remoteTreePinned) return;
-                if (remoteTreeHoverShowTimer.current) { clearTimeout(remoteTreeHoverShowTimer.current); remoteTreeHoverShowTimer.current = null; }
-              };
-              fileTreeNode = (
-                <>
-                  {!remoteTreePinned && (
-                    <div
-                      className="workspace-file-tree-trigger"
-                      style={{ ['--file-tree-trigger-top' as any]: `${fileTreeTriggerTop}px` }}
-                    >
-                      <div className="workspace-file-tree-trigger-top" onClick={onClickTrigger} onMouseEnter={onEnterTrigger} onMouseLeave={onLeaveTrigger} style={{ cursor: 'pointer' }} title={tApp('fileTree.triggerTooltip')}>
-                        <span className="workspace-file-tree-trigger-text">{tApp('fileTree.triggerLabel')}</span>
-                      </div>
-                      <div className="workspace-file-tree-trigger-bottom" />
-                    </div>
-                  )}
-                  <div
-                    className={`workspace-file-tree ${!remoteTreePinned ? 'auto-hide' : ''} ${!remoteTreePinned && !remoteTreeVisible ? 'hidden' : ''} ${topPanel === 'filetree' ? 'top' : ''}`}
-                    style={{ width: `${remoteTreeWidth}px`, flexShrink: 0 }}
-                    onMouseEnter={onEnterTree}
-                    onMouseLeave={onLeaveTree}
-                  >
-                    <div className="workspace-file-tree-toolbar">
-                      <button
-                        className={`workspace-file-tree-pin ${remoteTreePinned ? 'pinned' : ''}`}
-                        onClick={() => setRemoteTreePinned(p => !p)}
-                        title={remoteTreePinned ? tApp('fileTree.unpinTooltip') : tApp('fileTree.pinTooltip')}
-                      >📌</button>
-                    </div>
-                    <RemoteFileTree
-                      key={sess.termId}
-                      termId={sess.termId}
-                      sessionName={sess.sessionName}
-                      sessionId={sess.sessionId}
-                      initialPath={getCurrentPwdForTerm(sess.termId)}
-                      onOpenFile={handleOpenRemoteFile}
-                      onAttachToClaude={handleAttachToClaude}
-                    />
-                    <div
-                      className="workspace-file-tree-resizer"
-                      title={tApp('fileTree.resizeTooltip2')}
-                      onMouseDown={e => {
-                        e.preventDefault();
-                        const startX = e.clientX;
-                        const startWidth = remoteTreeWidth;
-                        const onMove = (ev: MouseEvent) => {
-                          const w = Math.max(160, Math.min(800, startWidth + (ev.clientX - startX)));
-                          setRemoteTreeWidth(w);
-                        };
-                        const onUp = () => {
-                          window.removeEventListener('mousemove', onMove);
-                          window.removeEventListener('mouseup', onUp);
-                          setRemoteTreeWidth(curW => {
-                            if (remoteTreeWidthLoadedRef.current) { try { (window as any).api?.setUIPrefs?.({ remoteTreeWidth: curW }); } catch {} }
-                            return curW;
-                          });
-                          window.dispatchEvent(new Event('resize'));
-                        };
-                        window.addEventListener('mousemove', onMove);
-                        window.addEventListener('mouseup', onUp);
-                      }}
-                      onDoubleClick={() => {
-                        setRemoteTreeWidth(240);
-                        try { (window as any).api?.setUIPrefs?.({ remoteTreeWidth: 240 }); } catch {}
-                      }}
-                    />
-                  </div>
-                </>
-              );
-            }
-          }
+        {(() => {
+          // 터미널 워크스페이스 렌더 — activeTab / splitRightTab 이 터미널이면 각각 호출.
+          const renderTerminalTab = (tab: Tab, panelId: string | null, setPanelId: (id: string) => void, opts?: { showFileTree?: boolean; splitRightSlot?: boolean }) => {
+          const splitRightSlot = !!opts?.splitRightSlot;
+          // 파일트리는 app-root 레벨(buildGlobalFileTree)에서 세션 사이드바 옆에 통합 렌더링됨.
           return (
-            <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-              {fileTreeNode}
+            <div className={splitRightSlot ? 'split-right-terminal-slot' : undefined} style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative', ['--file-tree-trigger-top' as any]: `${fileTreeTriggerTop}px` }}>
               <div className="workspace-content-row" style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
               <div className="workspace-content-col" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'row', position: 'relative' }}>
                 {!terminalPinned && (() => {
@@ -4555,12 +4644,12 @@ function App() {
                       node.children.forEach(walkLeaves);
                     }
                   };
-                  walkLeaves(activeTab.layout);
+                  walkLeaves(tab.layout);
                   const openPanel = (nodeId: string) => {
                     if (!nodeId) return;
                     if (terminalHideTimer.current) { clearTimeout(terminalHideTimer.current); terminalHideTimer.current = null; }
                     if (terminalHoverShowTimer.current) { clearTimeout(terminalHoverShowTimer.current); terminalHoverShowTimer.current = null; }
-                    setSelectedPanelId(nodeId);
+                    setPanelId(nodeId);
                     setTerminalVisible(true);
                     setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); }, 80);
                   };
@@ -4604,7 +4693,7 @@ function App() {
                       {leaves.map(leaf => (
                         <div
                           key={leaf.nodeId}
-                          className={`terminal-sidebar-trigger-tab${selectedPanelId === leaf.nodeId ? ' active' : ''}`}
+                          className={`terminal-sidebar-trigger-tab${panelId === leaf.nodeId ? ' active' : ''}`}
                           title={leaf.name}
                           onClick={() => openPanel(leaf.nodeId)}
                         >
@@ -4630,14 +4719,14 @@ function App() {
                   }}
                 >
                   {/* shellPrefsLoaded 전에 마운트되면 shellPath=undefined 로 PowerShell 폴백되므로 지연 렌더 */}
-                  {shellPrefsLoaded && <Layout root={activeTab.layout}
-                    selectedPanelId={selectedPanelId}
+                  {shellPrefsLoaded && <Layout root={tab.layout}
+                    selectedPanelId={panelId}
                     onSplit={(nodeId, dir) => openSplitSessionPicker(dir, nodeId)}
                     onSplitWithPicker={(nodeId, dir) => openSplitSessionPickerWithPrompt(dir, nodeId)}
-                    onClose={nodeId => closePanel(activeTab.id, nodeId)}
+                    onClose={nodeId => closePanel(tab.id, nodeId)}
                     onContainerResize={(nodeId, sizes) => {
                       // 컨테이너 노드의 sizes 를 트리에 저장 — 워크스페이스 전환 후 복원
-                      updateLayout(activeTab.id, root => {
+                      updateLayout(tab.id, root => {
                         const walk = (node: any): any => {
                           if (node.id === nodeId && (node.type === 'row' || node.type === 'column')) {
                             return { ...node, sizes: [...sizes] };
@@ -4659,7 +4748,7 @@ function App() {
                       setFloatingPanelId(prev => prev === nodeId ? null : nodeId);
                       setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); }, 120);
                     }}
-                    onSelectPanel={id => setSelectedPanelId(id)}
+                    onSelectPanel={id => setPanelId(id)}
                     onMovePanel={movePanel}
                     onSwitchSession={handleSwitchSession}
                     onCloseSession={handleCloseSession}
@@ -4667,7 +4756,7 @@ function App() {
                     onDuplicateSessionToNewWindow={duplicateSessionToNewWindow}
                     onSetSessionColor={(nodeId, termId, color) => {
                       if (!activeTab) return;
-                      updateLayout(activeTab.id, layout => {
+                      updateLayout(tab.id, layout => {
                         const walk = (n: LayoutNode): LayoutNode => {
                           if (n.type === 'leaf') {
                             if (n.id !== nodeId) return n;
@@ -4699,6 +4788,27 @@ function App() {
               </div>
             </div>
           );
+          }; // end renderTerminalTab
+          const isTerm = (t: Tab | null | undefined) => !!t && (t.type === undefined || t.type === 'terminal');
+          const setPanelForTab = (tabId: string) => (id: string) => {
+            setSelectedPanelByTab(prev => ({ ...prev, [tabId]: id }));
+          };
+          const nodes: React.ReactNode[] = [];
+          if (isTerm(activeTab)) {
+            nodes.push(
+              <div key={activeTab!.id + '-slot'} style={tabSlotStyle(activeTab!)}>
+                {renderTerminalTab(activeTab!, selectedPanelId, setSelectedPanelId)}
+              </div>
+            );
+          }
+          if (splitRightTab && isTerm(splitRightTab) && canSplit(activeTab)) {
+            nodes.push(
+              <div key={splitRightTab.id + '-slot'} style={tabSlotStyle(splitRightTab)}>
+                {renderTerminalTab(splitRightTab, selectedPanelByTab[splitRightTab.id] ?? null, setPanelForTab(splitRightTab.id), { splitRightSlot: true })}
+              </div>
+            );
+          }
+          return <>{nodes}</>;
         })()}
         {/* 분할 divider — 우측 분할 활성 시 activeTab 과 splitRightTab 사이에 배치 (flex order 로 위치 강제). */}
         {splitRightTab && canSplit(activeTab) && (

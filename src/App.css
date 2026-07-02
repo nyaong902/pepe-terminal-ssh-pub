@@ -979,7 +979,10 @@ body.popout-options .session-editor h3:first-child {
   display: flex;
   align-items: stretch;
   position: relative;
-
+  pointer-events: none; /* 전체높이 투명 박스가 z-index 상승 시 클릭을 가로채지 않도록 — 실제 자식들에서만 복원 */
+}
+.session-sidebar > * {
+  pointer-events: auto;
 }
 
 .session-sidebar-trigger {
@@ -4781,6 +4784,63 @@ body.popout-options .session-editor h3:first-child {
   opacity: 1;
   transform: rotate(0deg);
   color: #ffb347;
+}
+
+/* ── 통합 파일트리 wrap (app-root 레벨, 세션 사이드바 옆) — 세션 사이드바(.session-sidebar-inner)와
+   완전히 동일한 선택자 값을 공유해서 항상 동일하게 동작하도록 함. ── */
+.global-file-tree-wrap,
+.session-sidebar {
+  z-index: 1999; /* .tab-bar-row(1500) 등 앱 내부 fixed 요소보다 항상 위 — wrap 자체가 로컬 스태킹 컨텍스트라 내부 패널 z-index 는 이 값 안에서만 유효함 */
+}
+.global-file-tree-wrap {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-self: stretch;
+  pointer-events: none; /* 전체높이 투명 박스가 z-index 상승 시 클릭을 가로채지 않도록 — 실제 자식들에서만 복원 */
+}
+.global-file-tree-wrap > * {
+  pointer-events: auto;
+}
+.global-file-tree-wrap .workspace-file-tree-trigger {
+  z-index: 3;
+}
+/* 세션/파일트리 중 어느 쪽이 topPanel 인지에 따라 wrap 자체의 z-index 를 서로 바꿔서
+   위/아래 관계를 결정 (내부 패널의 1350/1410/1420 은 각 wrap 내부에서만 유효하므로,
+   두 패널을 실제로 비교하려면 wrap 레벨에서 순서를 정해야 함). */
+.app-root.top-panel-session .session-sidebar { z-index: 2001 !important; }
+.app-root.top-panel-session .global-file-tree-wrap { z-index: 2000 !important; }
+.app-root.top-panel-filetree .global-file-tree-wrap { z-index: 2001 !important; }
+.app-root.top-panel-filetree .session-sidebar { z-index: 2000 !important; }
+/* pinned 상태 — .session-sidebar-inner 와 동일한 값(정적 flex, padding-top:48). */
+.session-sidebar-inner,
+.global-file-tree-wrap .workspace-file-tree:not(.auto-hide) {
+  padding-top: 48px;
+}
+.app-root.has-broadcast .session-sidebar-inner:not(.auto-hide),
+.app-root.has-broadcast .global-file-tree-wrap .workspace-file-tree:not(.auto-hide) {
+  padding-bottom: 64px; /* broadcast 36 + status 24 + 4 여백 */
+}
+/* unpinned(auto-hide) 상태 — .session-sidebar-inner.auto-hide 와 동일한 값(position:fixed, left:22px 고정). */
+.session-sidebar-inner.auto-hide,
+.global-file-tree-wrap .workspace-file-tree.auto-hide {
+  position: fixed;
+  top: 40px;
+  left: 22px;
+  bottom: 24px;
+}
+.app-root.has-quickconnect .session-sidebar-inner.auto-hide,
+.app-root.has-quickconnect .global-file-tree-wrap .workspace-file-tree.auto-hide {
+  top: 68px;
+}
+.app-root.has-broadcast .session-sidebar-inner.auto-hide,
+.app-root.has-broadcast .global-file-tree-wrap .workspace-file-tree.auto-hide {
+  bottom: 60px;
+}
+/* hidden 상태 — .session-sidebar-inner.auto-hide.hidden 과 동일하게 display:none. */
+.session-sidebar-inner.auto-hide.hidden,
+.global-file-tree-wrap .workspace-file-tree.auto-hide.hidden {
+  display: none;
 }
 
 .remote-file-tree-container {

@@ -66,9 +66,10 @@ type Props = {
   targetPanelId?: string | null;
   workspaceTabs?: { id: string; title: string }[];
   activeTabId?: string;
+  onSetTopPanel?: (panel: 'session' | 'filetree') => void;
 };
 
-export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, onOpenSqlTool, targetPanelId, workspaceTabs = [], activeTabId }) => {
+export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, onOpenSqlTool, targetPanelId, workspaceTabs = [], activeTabId, onSetTopPanel }) => {
   const { t } = useTranslation('sessionList');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -691,6 +692,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
     if (hoverShowTimer.current) { clearTimeout(hoverShowTimer.current); hoverShowTimer.current = null; }
     setVisible(v => !v);
+    onSetTopPanel?.('session');
   };
 
   const handleMouseEnterTrigger = () => {
@@ -698,7 +700,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
     if (hoverShowTimer.current) clearTimeout(hoverShowTimer.current);
     // 2.5 초 hover 시 자동 열림 (Claude 트리거와 동일 UX)
-    hoverShowTimer.current = setTimeout(() => setVisible(true), 2500);
+    hoverShowTimer.current = setTimeout(() => { setVisible(true); onSetTopPanel?.('session'); }, 2500);
   };
 
   const handleMouseLeaveSidebar = () => {
@@ -712,6 +714,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   const handleMouseEnterSidebar = () => {
     mouseInsideRef.current = true;
     if (pinned) return;
+    onSetTopPanel?.('session');
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
   };
 
