@@ -4866,12 +4866,33 @@ function App() {
               const wrap = (e.currentTarget.parentElement as HTMLElement | null);
               const w = wrap?.getBoundingClientRect().width || 800;
               const startRatio = splitRatio;
+              // 드래그 중엔 React state 를 매 픽셀마다 갱신하지 않고(터미널/브라우저 전체 리렌더로 버벅임)
+              // 양쪽 슬롯 엘리먼트의 flex 스타일을 직접 DOM 으로 조작. 놓을 때만 state 커밋.
+              // wrap 안엔 열려있는 모든 탭의 슬롯 div 가 들어있고 display:none 으로 숨겨져 있을 뿐이라
+              // DOM 인덱스로는 좌/우 슬롯을 특정할 수 없음 — tabSlotStyle 이 부여하는 order(0=좌, 2=우) 로 식별.
+              const kids = wrap ? (Array.from(wrap.children) as HTMLElement[]) : [];
+              const leftEl = kids.find(k => getComputedStyle(k).order === '0');
+              const rightEl = kids.find(k => getComputedStyle(k).order === '2');
+              let latest = startRatio;
+              let raf = 0;
               const onMove = (ev: MouseEvent) => {
                 const dx = ev.clientX - startX;
-                const next = Math.max(0.2, Math.min(0.8, startRatio + dx / w));
-                setSplitRatio(next);
+                latest = Math.max(0.2, Math.min(0.8, startRatio + dx / w));
+                if (raf) return;
+                raf = requestAnimationFrame(() => {
+                  raf = 0;
+                  if (leftEl) leftEl.style.flex = `${latest * 100} 1 0`;
+                  if (rightEl) rightEl.style.flex = `${(1 - latest) * 100} 1 0`;
+                });
               };
-              const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+              const onUp = () => {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                if (raf) cancelAnimationFrame(raf);
+                setSplitRatio(latest);
+                window.dispatchEvent(new Event('resize'));
+                refitAllTerms();
+              };
               window.addEventListener('mousemove', onMove);
               window.addEventListener('mouseup', onUp);
             }}
