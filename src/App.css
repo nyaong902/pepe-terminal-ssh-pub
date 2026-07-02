@@ -2393,6 +2393,10 @@ body.popout-options .session-editor h3:first-child {
   pointer-events: none;
   z-index: 100;
 }
+/* 좌우 분할 시 실제 포커스가 없는 쪽은 초록 테두리 대신 회색으로 — 어느 쪽이 활성인지 구분 */
+.split-side-unfocused .layout-leaf-inner.selected::after {
+  border-color: rgba(150, 150, 150, 0.45);
+}
 
 .layout-container {
   flex: 1 1 0;

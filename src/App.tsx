@@ -137,6 +137,26 @@ function App() {
   const setSelectedPanelId = useCallback((id: string | null) => {
     setSelectedPanelByTab(prev => ({ ...prev, [activeTabId]: id }));
   }, [activeTabId]);
+  // 좌우 분할된 워크스페이스(activeTab / splitRightTab) 어느 쪽이든 정확한 탭에 선택 패널을 기록.
+  const setSelectedPanelForTab = useCallback((tabId: TabId, id: string | null) => {
+    setSelectedPanelByTab(prev => ({ ...prev, [tabId]: id }));
+  }, []);
+  // 좌우 분할 상태에서 사용자가 마지막으로 클릭/포커스한 쪽의 터미널 탭 — 세션 더블클릭 연결 시
+  // activeTab(좌측) 이 아니라 실제 커서가 있던 쪽으로 연결하기 위해 추적. state 로 둬서
+  // 포커스된 쪽만 활성 테두리 색으로 표시하는 UI 갱신도 함께 반영.
+  const [lastFocusedTerminalTabId, setLastFocusedTerminalTabId] = useState<TabId | null>(null);
+  const lastFocusedTerminalTabIdRef = useRef<TabId | null>(null);
+  const markFocusedTerminalTab = useCallback((tabId: TabId) => {
+    lastFocusedTerminalTabIdRef.current = tabId;
+    setLastFocusedTerminalTabId(prev => prev === tabId ? prev : tabId);
+  }, []);
+  // 탭바에서 탭을 클릭해 활성화할 때 — 그 탭이 이미 splitRightTab 으로 우측에 떠서 화면에
+  // 보이고 있으면, 좌우 배치를 건드리지 않고 그대로 둠 (분할 해제도 안 되고, 좌우가 바뀌지도 않음).
+  // 화면에 없는 다른 탭을 클릭했을 때만 activeTab 을 그 탭으로 전환.
+  const switchActiveTab = useCallback((tabId: TabId) => {
+    if (splitRightTabId === tabId) return;
+    setActiveTabId(tabId);
+  }, [splitRightTabId]);
 
   // 파일 전송 탭 생성 시 현재 활성 termId 를 즉시 읽는 헬퍼 (getActiveTermId 는 아래 정의)
   // — getActiveTermId 는 activeTab(tabs state) + selectedPanelId + panel.activeIdx 를 참조하므로
@@ -704,6 +724,7 @@ function App() {
     folders: { id: string; name: string; parentId?: string }[];
     srcTermId?: string;
     targetNodeId: string;
+    targetTabId: TabId;
   } | null>(null);
   const [splitPickerCollapsed, setSplitPickerCollapsed] = useState<Set<string>>(new Set());
 
@@ -2179,11 +2200,23 @@ function App() {
       } catch {}
     }
     setTabs(prev => { const f = prev.filter(t => t.id !== id); return f.length === 0 ? prev : f; });
+    // 닫히는 탭이 우측 분할 탭 자신이면 분할도 같은 배치에서 즉시 해제.
+    if (splitRightTabId === id) setSplitRightTabId(null);
     setActiveTabId(prev => {
       if (prev !== id) return prev;
       const r = tabs.filter(t => t.id !== id);
-      return r.length > 0 ? r[0].id : prev;
+      if (r.length === 0) return prev;
+      // 우측 분할 탭과 같은 걸 activeTab 으로 고르면 분할 자동해제 useEffect 가 (한 박자 늦게) 발동해서
+      // 그 사이 같은 탭이 좌/우 슬롯에 동시에 렌더링되며 xterm DOM 이 고아가 되는 문제가 있었음 —
+      // 여기서 같은 배치에 splitRightTabId 도 즉시 비워서 중간 상태 없이 한 번에 정리.
+      const nonSplitRight = r.find(t => t.id !== splitRightTabId);
+      const nextActiveId = (nonSplitRight ?? r[0]).id;
+      if (nextActiveId === splitRightTabId) setSplitRightTabId(null);
+      return nextActiveId;
     });
+    // 분할되어 있던 탭이 닫히면서 남은 탭 하나가 전체 화면을 차지하게 될 때, 그 안의 터미널이
+    // 포커스를 못 받아 입력이 안 먹는 경우가 있어 레이아웃 정리 후 다시 포커스.
+    setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); restoreTerminalFocus(); }, 100);
   };
 
   const updateLayout = (tabId: TabId, fn: (layout: LayoutNode) => LayoutNode) => {
@@ -2487,15 +2520,17 @@ function App() {
   // 현재 활성 세션의 folderId 기준으로 같은 폴더 세션들을 picker 로 띄운다.
   // 픽커에서 선택된 세션을 새 termId 로 연결해서 targetNodeId 패널을 분할해 배치.
   // 활성 세션이 없거나 folder 내 다른 세션이 없으면 그냥 빈 분할.
-  const openSplitSessionPicker = async (dir: 'row' | 'column', targetNodeId: string) => {
+  const openSplitSessionPicker = async (dir: 'row' | 'column', targetNodeId: string, tabId?: TabId) => {
     // 세션 픽커 없이 바로 빈 분할 (로컬 쉘 패널 자동 생성)
-    if (!activeTab) return;
-    splitPanel(activeTab.id, targetNodeId, dir);
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
+    splitPanel(tid, targetNodeId, dir);
   };
 
   // 세션 선택 팝업 — 파일트리 형식 (폴더 + 세션 계층 구조)
-  const openSplitSessionPickerWithPrompt = async (dir: 'row' | 'column', targetNodeId: string) => {
-    if (!activeTab) return;
+  const openSplitSessionPickerWithPrompt = async (dir: 'row' | 'column', targetNodeId: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
     const curTid = getActiveTermId();
     try {
       const data: any = await (window as any).api?.listSessions?.();
@@ -2507,16 +2542,16 @@ function App() {
       }));
       const folderItems = folders.map((f: any) => ({ id: f.id, name: f.name, parentId: f.parentId }));
       if (sessionItems.length === 0) {
-        splitPanel(activeTab.id, targetNodeId, dir);
+        splitPanel(tid, targetNodeId, dir);
         return;
       }
       setSplitPickerCollapsed(new Set());
       setSplitSessionPicker({
         dir, sessions: sessionItems, folders: folderItems,
-        srcTermId: curTid || undefined, targetNodeId,
+        srcTermId: curTid || undefined, targetNodeId, targetTabId: tid,
       });
     } catch {
-      splitPanel(activeTab.id, targetNodeId, dir);
+      splitPanel(tid, targetNodeId, dir);
     }
   };
 
@@ -2526,8 +2561,8 @@ function App() {
   };
 
   const handleSplitSessionSelect = async (target: { sessionId: string; sessionName: string; host: string; termId: string }) => {
-    if (!activeTab || !splitSessionPicker) return;
-    const { dir, targetNodeId } = splitSessionPicker;
+    if (!splitSessionPicker) return;
+    const { dir, targetNodeId, targetTabId } = splitSessionPicker;
     const newTermId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const splitName = makeUniqueDisplayName(target.sessionId, target.sessionName);
     const newSess: PanelSession = { termId: newTermId, sessionId: target.sessionId, sessionName: splitName };
@@ -2538,7 +2573,10 @@ function App() {
       const all: any[] = data?.sessions ?? data ?? [];
       fullSess = all.find((s: any) => s.id === target.sessionId);
     } catch {}
-    updateLayout(activeTab.id, layout => splitNodeWithSessions(layout, targetNodeId, dir, [newSess], false));
+    updateLayout(targetTabId, layout => splitNodeWithSessions(layout, targetNodeId, dir, [newSess], false));
+    // 다른 연결 세션과 마운트 순서를 맞추기 위해 auto-connect 를 억제하고 여기서만 명시적으로 연결.
+    markSuppressAutoConnect(newTermId);
+    registerTermSession(newTermId, target.sessionId, splitName, target.host);
     setTimeout(async () => {
       // 세션 설정 적용 (theme / fontFamily / fontSize / scrollback)
       if (fullSess?.scrollback) applyScrollbackToTerm(newTermId, fullSess.scrollback);
@@ -2547,10 +2585,16 @@ function App() {
         if (fullSess?.fontFamily || fullSess?.fontSize) applyFontToTerm(newTermId, fullSess?.fontFamily, fullSess?.fontSize);
       }, 200);
       try {
+        // 분할로 새 leaf 가 생기는 경우(레이아웃 트리 재구성) 기존 패널에 추가하는 경우보다 실제
+        // 터미널 컴포넌트 마운트(termStore 등록)가 늦을 수 있음 — 마운트될 때까지 잠깐 대기 후 연결
+        // (promptPasswordAndConnect 는 termStore 에 없으면 조용히 아무 것도 안 하고 리턴함).
+        for (let i = 0; i < 20 && !termStore.get(newTermId); i++) {
+          await new Promise(res => setTimeout(res, 30));
+        }
         const r = await (window as any).api.connectSSH(newTermId, target.sessionId);
         if (r === 'need-password') promptPasswordAndConnect(newTermId, target.sessionId);
       } catch {}
-      registerTermSession(newTermId, target.sessionId, splitName, target.host);
+      clearSuppressAutoConnect(newTermId);
       setTimeout(() => { refitAllTerms(); focusTerm(newTermId); }, 100);
     }, 100);
     setSplitSessionPicker(null);
@@ -2574,8 +2618,9 @@ function App() {
     updateLayout(tabId, layout => removeLeafNode(layout, targetNodeId));
   };
 
-  const handleSwitchSession = (nodeId: string, idx: number) => {
-    if (!activeTab) return;
+  const handleSwitchSession = (nodeId: string, idx: number, tabId?: TabId) => {
+    const targetTab = tabId ? tabs.find(t => t.id === tabId) : activeTab;
+    if (!targetTab) return;
     // 동일 idx 면 layout 변경 안함 — 더블클릭 시 onClick × 2 가 동일 idx 로 호출되어 React 재렌더 cascade 발생하던 문제 회피
     let alreadySame = false;
     const findActive = (node: any): void => {
@@ -2586,14 +2631,15 @@ function App() {
       }
       if (node.type !== 'leaf') node.children.forEach(findActive);
     };
-    findActive(activeTab.layout);
+    findActive(targetTab.layout);
     if (alreadySame) return;
-    updateLayout(activeTab.id, layout => switchPanelSession(layout, nodeId, idx));
+    updateLayout(targetTab.id, layout => switchPanelSession(layout, nodeId, idx));
   };
 
-  const handleReorderSession = (nodeId: string, fromIdx: number, toIdx: number) => {
-    if (!activeTab || fromIdx === toIdx) return;
-    updateLayout(activeTab.id, layout => reorderPanelSession(layout, nodeId, fromIdx, toIdx));
+  const handleReorderSession = (nodeId: string, fromIdx: number, toIdx: number, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid || fromIdx === toIdx) return;
+    updateLayout(tid, layout => reorderPanelSession(layout, nodeId, fromIdx, toIdx));
   };
 
   // 세션 제거 후 빈 패널 정리 (leaf가 1개뿐이면 유지)
@@ -2607,8 +2653,9 @@ function App() {
   };
 
   // 세션(터미널)을 다른 워크스페이스로 통째로 이동 — 단일 상태 업데이트로 termId 유지하며 옮김
-  const handleMoveSessionToWorkspace = (fromNodeId: string, termId: string, targetTabId: string) => {
-    if (!activeTab) return;
+  const handleMoveSessionToWorkspace = (fromNodeId: string, termId: string, targetTabId: string, sourceTabId?: TabId) => {
+    const fromTabId = sourceTabId ?? activeTab?.id;
+    if (!fromTabId) return;
     // 새 워크스페이스 생성 옵션
     if (targetTabId === '__new__') {
       const newId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -2622,12 +2669,12 @@ function App() {
       const newTab = { id: newId, title: `Workspace ${tabs.length + 1}`, layout: emptyLayout } as any;
       setTabs(prev => [...prev, newTab]);
       // 다음 tick 에 이동 진행
-      setTimeout(() => handleMoveSessionToWorkspace(fromNodeId, termId, newId), 30);
+      setTimeout(() => handleMoveSessionToWorkspace(fromNodeId, termId, newId, fromTabId), 30);
       return;
     }
-    if (activeTab.id === targetTabId) return;
+    if (fromTabId === targetTabId) return;
     setTabs(prev => {
-      const fromTab = prev.find(t => t.id === activeTab.id);
+      const fromTab = prev.find(t => t.id === fromTabId);
       const toTab = prev.find(t => t.id === targetTabId);
       if (!fromTab || !toTab) return prev;
       // 세션 객체 추출
@@ -2655,9 +2702,10 @@ function App() {
     setActiveTabId(targetTabId);
   };
 
-  const handleMoveSession = (fromNodeId: string, termId: string, toNodeId: string) => {
-    if (!activeTab) return;
-    updateLayout(activeTab.id, layout => {
+  const handleMoveSession = (fromNodeId: string, termId: string, toNodeId: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
+    updateLayout(tid, layout => {
       const findSess = (node: LayoutNode): PanelSession | null => {
         if (node.type === 'leaf' && node.id === fromNodeId) return node.panel.sessions.find(s => s.termId === termId) ?? null;
         if (node.type !== 'leaf') for (const c of node.children) { const r = findSess(c); if (r) return r; }
@@ -2670,13 +2718,14 @@ function App() {
       updated = cleanEmptyLeaf(updated, fromNodeId);
       return updated;
     });
-    setSelectedPanelId(toNodeId);
+    setSelectedPanelForTab(tid, toNodeId);
   };
 
   // 미니탭을 다른 패널 가장자리에 드롭 → 분할 + 세션 이동
-  const handleSplitMoveSession = (fromNodeId: string, termId: string, toNodeId: string, zone: 'left' | 'right' | 'top' | 'bottom') => {
-    if (!activeTab) return;
-    updateLayout(activeTab.id, layout => {
+  const handleSplitMoveSession = (fromNodeId: string, termId: string, toNodeId: string, zone: 'left' | 'right' | 'top' | 'bottom', tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
+    updateLayout(tid, layout => {
       const findSess = (node: LayoutNode): PanelSession | null => {
         if (node.type === 'leaf' && node.id === fromNodeId) return node.panel.sessions.find(s => s.termId === termId) ?? null;
         if (node.type !== 'leaf') for (const c of node.children) { const r = findSess(c); if (r) return r; }
@@ -2691,27 +2740,29 @@ function App() {
       updated = splitNodeWithSessions(updated, toNodeId, direction, [sess], insertBefore);
       return updated;
     });
-    setSelectedPanelId(toNodeId);
+    setSelectedPanelForTab(tid, toNodeId);
     setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
   };
 
-  const handleAddSession = (nodeId: string, shellName?: string, shellPath?: string) => {
-    if (!activeTab) return;
+  const handleAddSession = (nodeId: string, shellName?: string, shellPath?: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
     const termId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sess: PanelSession = { termId, sessionId: '', sessionName: shellName || defaultShell.name, shellPath: shellPath || defaultShell.path };
-    updateLayout(activeTab.id, layout => appendSessionsToPanel(layout, nodeId, [sess], true));
-    setSelectedPanelId(nodeId);
+    updateLayout(tid, layout => appendSessionsToPanel(layout, nodeId, [sess], true));
+    setSelectedPanelForTab(tid, nodeId);
   };
 
-  const handleDuplicateSession = (nodeId: string, termId: string) => {
-    if (!activeTab) return;
+  const handleDuplicateSession = (nodeId: string, termId: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
     const info = getTermSessionInfo(termId);
     if (!info) return;
     const newTermId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sess: PanelSession = { termId: newTermId, sessionId: info.sessionId || '', sessionName: info.sessionName || 'New Tab' };
     // 생성 전에 스타일(테마/폰트/불투명도)을 복제 → 새 터미널 생성 시 바로 반영됨
     cloneTermStyle(termId, newTermId);
-    updateLayout(activeTab.id, layout => appendSessionsToPanel(layout, nodeId, [sess], true));
+    updateLayout(tid, layout => appendSessionsToPanel(layout, nodeId, [sess], true));
     registerTermSession(newTermId, info.sessionId || '', info.sessionName, info.host, info.quickSession);
     // 복제 대상이 quick connect 세션이면 PTY 스폰 차단 표식
     if (!info.sessionId && info.quickSession) markQuickConnectPending(newTermId);
@@ -2787,9 +2838,10 @@ function App() {
     }, 50);
   };
 
-  const handleRenameSession = (nodeId: string, termId: string, name: string) => {
-    if (!activeTab) return;
-    updateLayout(activeTab.id, layout => {
+  const handleRenameSession = (nodeId: string, termId: string, name: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
+    updateLayout(tid, layout => {
       function walk(node: LayoutNode): LayoutNode {
         if (node.type === 'leaf' && node.id === nodeId) {
           const sessions = node.panel.sessions.map(s => s.termId === termId ? { ...s, sessionName: name } : s);
@@ -2823,8 +2875,10 @@ function App() {
     return `${root} #${n}`;
   };
 
-  const handleConnectDrop = (nodeId: string, sessionId: string) => {
-    if (!activeTab) return;
+  const handleConnectDrop = (nodeId: string, sessionId: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    const targetTab = tabId ? tabs.find(t => t.id === tabId) : activeTab;
+    if (!tid || !targetTab) return;
     const doConnect = async () => {
       try {
         const data = await (window as any).api.listSessions();
@@ -2843,12 +2897,12 @@ function App() {
           if (node.type !== 'leaf') for (const c of node.children) { const r = findEmpty(c); if (r) return r; }
           return null;
         };
-        const emptySess = findEmpty(activeTab.layout);
+        const emptySess = findEmpty(targetTab.layout);
 
         if (emptySess) {
           // 빈 미니탭 → 세션 정보 교체 후 연결
           resetTermConnectState(emptySess.termId);
-          updateLayout(activeTab.id, layout => {
+          updateLayout(tid, layout => {
             function walk(node: LayoutNode): LayoutNode {
               if (node.type === 'leaf' && node.id === nodeId) {
                 const sessions = node.panel.sessions.map((s, i) =>
@@ -2870,7 +2924,7 @@ function App() {
           registerTermSession(emptySess.termId, sessionId, displayName, session.host ?? '');
         } else {
           // 빈 미니탭 없으면 기존 흐름
-          setSelectedPanelId(nodeId);
+          setSelectedPanelForTab(tid, nodeId);
           handleConnectSession(session.id, session.name, null, session.theme, session.fontFamily, session.fontSize, session.scrollback);
         }
       } catch {}
@@ -2878,11 +2932,12 @@ function App() {
     doConnect();
   };
 
-  const handleCloseSession = (nodeId: string, termId: string) => {
-    if (!activeTab) return;
+  const handleCloseSession = (nodeId: string, termId: string, tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
     // 미니탭 X 버튼 — 해당 session 의 백엔드 리소스도 즉시 해제
     if (termId) releaseTermResources(termId);
-    updateLayout(activeTab.id, layout => {
+    updateLayout(tid, layout => {
       let updated = removeSessionFromPanel(layout, nodeId, termId);
       updated = cleanEmptyLeaf(updated, nodeId);
       return updated;
@@ -2953,9 +3008,10 @@ function App() {
     updateLayout(tab.id, l => cleanEmptyLeaf(removeSessionFromPanel(l, nodeId, termId), nodeId));
   }, [activeTabId]);
 
-  const movePanel = useCallback((fromPanelId: string, toPanelId: string | null, position: 'before' | 'after' | 'inside' = 'after') => {
-    if (!activeTab) return;
-    updateLayout(activeTab.id, layout => {
+  const movePanel = useCallback((fromPanelId: string, toPanelId: string | null, position: 'before' | 'after' | 'inside' = 'after', tabId?: TabId) => {
+    const tid = tabId ?? activeTab?.id;
+    if (!tid) return;
+    updateLayout(tid, layout => {
       const rr = removeLeafFromTree(layout, fromPanelId);
       if (!rr.removed) return layout;
       if (!toPanelId || position === 'inside') return replaceLeaf(rr.root, toPanelId ?? fromPanelId, rr.removed);
@@ -2985,13 +3041,24 @@ function App() {
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
     const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip'];
+    const isTermTabType = (t: TabType | undefined) => t === undefined || t === 'terminal';
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
+      // 이미 우측 분할에 터미널 워크스페이스가 떠 있으면 — activeTab 을 전환하지 않고
+      // (분할이 풀리거나 좌우가 바뀌지 않게) 그 터미널에 바로 연결.
+      if (splitRightTab && isTermTabType(splitRightTab.type)) {
+        const panelId = selectedPanelByTab[splitRightTab.id] ?? findFirstLeafId(splitRightTab.layout);
+        if (panelId) setSelectedPanelForTab(splitRightTab.id, panelId);
+        connectSessionToTerminal(splitRightTab, panelId, sessionId, sessionName, sessionTheme, sessionFontFamily, sessionFontSize, sessionScrollback);
+        return;
+      }
       // 터미널 탭은 type 미지정 또는 'terminal' (실제로 type 필드 없는 게 일반적)
       let termTab = tabs.find(t => !t.type || t.type === 'terminal');
       let targetLeafId: string | null = null;
+      let targetTabId: TabId;
       if (termTab) {
         setActiveTabId(termTab.id);
         targetLeafId = findFirstLeafId(termTab.layout);
+        targetTabId = termTab.id;
       } else {
         // 터미널 탭이 하나도 없으면 새로 생성
         const id = `tab-${Date.now()}`;
@@ -2999,9 +3066,10 @@ function App() {
         setTabs(prev => [...prev, { id, title: `Workspace ${prev.length + 1}`, layout }]);
         setActiveTabId(id);
         targetLeafId = findFirstLeafId(layout);
+        targetTabId = id;
       }
-      // 새 layout 의 leaf 로 selectedPanelId 갱신 — 옛 패널 ID 가 새 layout 에 없어서 연결 실패하던 문제 회피
-      if (targetLeafId) setSelectedPanelId(targetLeafId);
+      // 새 layout 의 leaf 로 선택 패널 갱신 — 옛 패널 ID 가 새 layout 에 없어서 연결 실패하던 문제 회피
+      if (targetLeafId) setSelectedPanelForTab(targetTabId, targetLeafId);
       // setActiveTabId/setTabs 적용 후 최신 closure 의 handleConnectSession 을 호출하기 위해 ref 경유.
       // 직접 재귀 호출은 옛 activeTab 을 캡쳐한 stale closure 라 무한루프 발생.
       setTimeout(() => handleConnectSessionRef.current?.(sessionId, sessionName, _targetPanelId, sessionTheme, sessionFontFamily, sessionFontSize, sessionScrollback), 50);
@@ -3033,6 +3101,22 @@ function App() {
       })();
       return;
     }
+    // activeTab(좌측) 과 splitRightTab(우측) 둘 다 터미널 워크스페이스인 경우 — 마지막으로
+    // 커서/포커스가 있던 쪽에 연결 (항상 좌측이 아니라, 실제 사용자가 보고 있던 쪽).
+    if (splitRightTab && isTermTabType(splitRightTab.type) && lastFocusedTerminalTabIdRef.current === splitRightTab.id) {
+      const panelId = selectedPanelByTab[splitRightTab.id] ?? findFirstLeafId(splitRightTab.layout);
+      connectSessionToTerminal(splitRightTab, panelId, sessionId, sessionName, sessionTheme, sessionFontFamily, sessionFontSize, sessionScrollback);
+      return;
+    }
+    connectSessionToTerminal(activeTab, selectedPanelId, sessionId, sessionName, sessionTheme, sessionFontFamily, sessionFontSize, sessionScrollback);
+  };
+
+  // handleConnectSession 의 실제 연결 로직 — 대상 탭/패널을 명시적으로 받아서, 좌우 분할된
+  // 워크스페이스 중 activeTab 이 아닌 splitRightTab 에도 activeTab 전환 없이 연결할 수 있게 분리.
+  const connectSessionToTerminal = (
+    tab: Tab, panelId: string | null, sessionId: string, sessionName: string,
+    sessionTheme?: string, sessionFontFamily?: string, sessionFontSize?: number, sessionScrollback?: number,
+  ) => {
     const applySessionTheme = (termId: string) => {
       if (sessionScrollback) applyScrollbackToTerm(termId, sessionScrollback);
       // backspace/delete 키 시퀀스 모드 — 즉시 + 세션 fetch 후 한 번 더 적용 (연결 직후 vi 등에서 바로 동작하도록)
@@ -3082,12 +3166,12 @@ function App() {
     const displayName = makeUniqueDisplayName(sessionId, sessionName);
 
     // 선택된 패널의 활성 미니탭 확인
-    if (selectedPanelId) {
-      const activeSess = findDisconnectedActiveSession(activeTab.layout, selectedPanelId);
+    if (panelId) {
+      const activeSess = findDisconnectedActiveSession(tab.layout, panelId);
       if (!activeSess) {
         // 활성 세션 없거나 PTY 실행 중 → 선택된 패널에 새 미니탭으로 추가
-        const { layout, termId } = addSessionToPanel(activeTab.layout, selectedPanelId, sessionId, displayName);
-        setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, layout } : t));
+        const { layout, termId } = addSessionToPanel(tab.layout, panelId, sessionId, displayName);
+        setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, layout } : t));
         setTimeout(async () => {
           const r = await (window as any).api.connectSSH(termId, sessionId);
           if (r === 'need-password') {
@@ -3105,8 +3189,8 @@ function App() {
           const connecting = isTermConnecting(activeSess.termId);
           if (connected || connecting) {
             // 연결 중이면 → 같은 패널에 새 미니탭으로 추가
-            const { layout, termId } = addSessionToPanel(activeTab.layout, selectedPanelId!, sessionId, displayName);
-            setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, layout } : t));
+            const { layout, termId } = addSessionToPanel(tab.layout, panelId!, sessionId, displayName);
+            setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, layout } : t));
             setTimeout(async () => {
               const r = await (window as any).api.connectSSH(termId, sessionId);
               if (r === 'need-password') {
@@ -3121,9 +3205,9 @@ function App() {
               ? activeSess.sessionName
               : displayName;
             resetTermConnectState(activeSess.termId);
-            updateLayout(activeTab.id, layout => {
+            updateLayout(tab.id, layout => {
               function walk(node: LayoutNode): LayoutNode {
-                if (node.type === 'leaf' && node.id === selectedPanelId) {
+                if (node.type === 'leaf' && node.id === panelId) {
                   const sessions = node.panel.sessions.map((s, i) =>
                     i === node.panel.activeIdx ? { ...s, sessionId, sessionName: reuseName } : s
                   );
@@ -3148,22 +3232,22 @@ function App() {
       }
     }
 
-    const emptyLeafId = findEmptyLeafId(activeTab.layout);
+    const emptyLeafId = findEmptyLeafId(tab.layout);
 
     if (emptyLeafId) {
-      const { layout, termId } = addSessionToPanel(activeTab.layout, emptyLeafId, sessionId, displayName);
-      setSelectedPanelId(emptyLeafId);
-      setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, layout } : t));
+      const { layout, termId } = addSessionToPanel(tab.layout, emptyLeafId, sessionId, displayName);
+      setSelectedPanelForTab(tab.id, emptyLeafId);
+      setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, layout } : t));
       setTimeout(() => window.api?.connectSSH?.(termId, sessionId), 0);
       applySessionTheme(termId); registerTerm(termId);
       return;
     }
 
     // 빈 패널 없으면 첫 번째 패널에 미니탭으로 추가
-    const firstLeafId = findFirstLeafId(activeTab.layout);
+    const firstLeafId = findFirstLeafId(tab.layout);
     if (firstLeafId) {
-      const { layout, termId } = addSessionToPanel(activeTab.layout, firstLeafId, sessionId, displayName);
-      setTabs(prev => prev.map(t => t.id === activeTab.id ? { ...t, layout } : t));
+      const { layout, termId } = addSessionToPanel(tab.layout, firstLeafId, sessionId, displayName);
+      setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, layout } : t));
       setTimeout(() => window.api?.connectSSH?.(termId, sessionId), 0);
       applySessionTheme(termId); registerTerm(termId);
     }
@@ -4076,7 +4160,7 @@ function App() {
       <div className="app-main">
         <div className="tab-bar-row">
           <MenuBar menus={menuDefs} />
-          <TabBar tabs={tabs} activeTabId={activeTabId} onChange={setActiveTabId} onAddTab={addTab}
+          <TabBar tabs={tabs} activeTabId={activeTabId} onChange={switchActiveTab} onAddTab={addTab}
           onAddBrowserTab={addBrowserTab}
           onAddCompareTab={addCompareTab}
           onAddLogAnalyzerTab={addLogAnalyzerTab}
@@ -4630,8 +4714,14 @@ function App() {
           const renderTerminalTab = (tab: Tab, panelId: string | null, setPanelId: (id: string) => void, opts?: { showFileTree?: boolean; splitRightSlot?: boolean }) => {
           const splitRightSlot = !!opts?.splitRightSlot;
           // 파일트리는 app-root 레벨(buildGlobalFileTree)에서 세션 사이드바 옆에 통합 렌더링됨.
+          const isUnfocusedSplitSide = !!splitRightTab && lastFocusedTerminalTabId !== null && lastFocusedTerminalTabId !== tab.id;
           return (
-            <div className={splitRightSlot ? 'split-right-terminal-slot' : undefined} style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative', ['--file-tree-trigger-top' as any]: `${fileTreeTriggerTop}px` }}>
+            <div
+              className={[splitRightSlot ? 'split-right-terminal-slot' : null, isUnfocusedSplitSide ? 'split-side-unfocused' : null].filter(Boolean).join(' ') || undefined}
+              style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative', ['--file-tree-trigger-top' as any]: `${fileTreeTriggerTop}px` }}
+              onMouseDownCapture={() => markFocusedTerminalTab(tab.id)}
+              onFocusCapture={() => markFocusedTerminalTab(tab.id)}
+            >
               <div className="workspace-content-row" style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
               <div className="workspace-content-col" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'row', position: 'relative' }}>
                 {!terminalPinned && (() => {
@@ -4721,8 +4811,8 @@ function App() {
                   {/* shellPrefsLoaded 전에 마운트되면 shellPath=undefined 로 PowerShell 폴백되므로 지연 렌더 */}
                   {shellPrefsLoaded && <Layout root={tab.layout}
                     selectedPanelId={panelId}
-                    onSplit={(nodeId, dir) => openSplitSessionPicker(dir, nodeId)}
-                    onSplitWithPicker={(nodeId, dir) => openSplitSessionPickerWithPrompt(dir, nodeId)}
+                    onSplit={(nodeId, dir) => openSplitSessionPicker(dir, nodeId, tab.id)}
+                    onSplitWithPicker={(nodeId, dir) => openSplitSessionPickerWithPrompt(dir, nodeId, tab.id)}
                     onClose={nodeId => closePanel(tab.id, nodeId)}
                     onContainerResize={(nodeId, sizes) => {
                       // 컨테이너 노드의 sizes 를 트리에 저장 — 워크스페이스 전환 후 복원
@@ -4742,20 +4832,19 @@ function App() {
                     floatingPanelId={floatingPanelId}
                     fullscreenTermId={fullscreenTermId}
                     workspaceList={tabs.filter(t => !t.type || t.type === 'terminal').map(t => ({ id: t.id, title: t.title }))}
-                    currentWorkspaceId={activeTab?.id}
-                    onMoveSessionToWorkspace={handleMoveSessionToWorkspace}
+                    currentWorkspaceId={tab.id}
+                    onMoveSessionToWorkspace={(fromNodeId, termId, targetTabId) => handleMoveSessionToWorkspace(fromNodeId, termId, targetTabId, tab.id)}
                     onToggleFloat={nodeId => {
                       setFloatingPanelId(prev => prev === nodeId ? null : nodeId);
                       setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); }, 120);
                     }}
                     onSelectPanel={id => setPanelId(id)}
-                    onMovePanel={movePanel}
-                    onSwitchSession={handleSwitchSession}
-                    onCloseSession={handleCloseSession}
+                    onMovePanel={(fromPanelId, toPanelId, position) => movePanel(fromPanelId, toPanelId, position, tab.id)}
+                    onSwitchSession={(nodeId, idx) => handleSwitchSession(nodeId, idx, tab.id)}
+                    onCloseSession={(nodeId, termId) => handleCloseSession(nodeId, termId, tab.id)}
                     onDetachSession={detachSessionToNewWindow}
                     onDuplicateSessionToNewWindow={duplicateSessionToNewWindow}
                     onSetSessionColor={(nodeId, termId, color) => {
-                      if (!activeTab) return;
                       updateLayout(tab.id, layout => {
                         const walk = (n: LayoutNode): LayoutNode => {
                           if (n.type === 'leaf') {
@@ -4767,13 +4856,13 @@ function App() {
                         return walk(layout);
                       });
                     }}
-                    onMoveSession={handleMoveSession}
-                    onSplitMoveSession={handleSplitMoveSession}
-                    onReorderSession={handleReorderSession}
-                    onAddSession={handleAddSession}
-                    onRenameSession={handleRenameSession}
-                    onConnectDrop={handleConnectDrop}
-                    onDuplicateSession={handleDuplicateSession}
+                    onMoveSession={(fromNodeId, termId, toNodeId) => handleMoveSession(fromNodeId, termId, toNodeId, tab.id)}
+                    onSplitMoveSession={(fromNodeId, termId, toNodeId, zone) => handleSplitMoveSession(fromNodeId, termId, toNodeId, zone, tab.id)}
+                    onReorderSession={(nodeId, fromIdx, toIdx) => handleReorderSession(nodeId, fromIdx, toIdx, tab.id)}
+                    onAddSession={(nodeId, shellName, shellPath) => handleAddSession(nodeId, shellName, shellPath, tab.id)}
+                    onRenameSession={(nodeId, termId, name) => handleRenameSession(nodeId, termId, name, tab.id)}
+                    onConnectDrop={(nodeId, sessionId) => handleConnectDrop(nodeId, sessionId, tab.id)}
+                    onDuplicateSession={(nodeId, termId) => handleDuplicateSession(nodeId, termId, tab.id)}
                     availableShells={availableShells}
                     treeWidth={remoteTreeWidth}
                     onTreeWidthChange={w => {
@@ -4795,15 +4884,18 @@ function App() {
           };
           const nodes: React.ReactNode[] = [];
           if (isTerm(activeTab)) {
+            // 키에 '-left' 를 포함 — 같은 탭이 splitRightSlot(-right) 이었다가 좌측 primary 슬롯으로
+            // 전환되면(예: 우측에 분할되어 있던 탭이 유일하게 남는 경우) 강제로 remount 시켜서
+            // xterm DOM 이 새 컨테이너에 제대로 재부착되게 함 (안 그러면 입력이 먹통이 되는 문제).
             nodes.push(
-              <div key={activeTab!.id + '-slot'} style={tabSlotStyle(activeTab!)}>
+              <div key={activeTab!.id + '-slot-left'} style={tabSlotStyle(activeTab!)}>
                 {renderTerminalTab(activeTab!, selectedPanelId, setSelectedPanelId)}
               </div>
             );
           }
           if (splitRightTab && isTerm(splitRightTab) && canSplit(activeTab)) {
             nodes.push(
-              <div key={splitRightTab.id + '-slot'} style={tabSlotStyle(splitRightTab)}>
+              <div key={splitRightTab.id + '-slot-right'} style={tabSlotStyle(splitRightTab)}>
                 {renderTerminalTab(splitRightTab, selectedPanelByTab[splitRightTab.id] ?? null, setPanelForTab(splitRightTab.id), { splitRightSlot: true })}
               </div>
             );
@@ -6282,6 +6374,20 @@ function App() {
             if (!matchedItem) {
               for (const it of validPrompts) {
                 const lf = findLeafContainingTermId(activeTab.layout, it.termId);
+                if (lf) {
+                  const activeOfLeaf = lf.panel.sessions[lf.panel.activeIdx]?.termId;
+                  if (activeOfLeaf === it.termId) { activeTid = it.termId; break; }
+                }
+              }
+            }
+          }
+          // activeTab 에서 못 찾았으면 좌우 분할된 splitRightTab 도 확인 — 우측 터미널에서
+          // 세션 선택 분할 등으로 비밀번호 프롬프트가 뜬 경우 activeTab 이 브라우저 등이라 위에서
+          // 못 찾을 수 있음.
+          if (!activeTid || !validPrompts.find(x => x.termId === activeTid)) {
+            if (splitRightTab) {
+              for (const it of validPrompts) {
+                const lf = findLeafContainingTermId(splitRightTab.layout, it.termId);
                 if (lf) {
                   const activeOfLeaf = lf.panel.sessions[lf.panel.activeIdx]?.termId;
                   if (activeOfLeaf === it.termId) { activeTid = it.termId; break; }
