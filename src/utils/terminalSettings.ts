@@ -26,7 +26,7 @@ const DEFAULTS: TerminalSettings = {
   multiLinePasteAccumulate: false,
   rightClickAction: 'menu',
   middleClickAction: 'none',
-  scrollback: 10000,
+  scrollback: 5000,
   aiAgent: 'claude',
 };
 

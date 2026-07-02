@@ -793,87 +793,39 @@ function App() {
   const remoteTreeHoverShowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 세션 트리거 top 버튼 하단 y 좌표 (파일 트리 트리거의 top 위치 맞추기용)
   const [fileTreeTriggerTop, setFileTreeTriggerTop] = useState<number>(135);
-  useEffect(() => {
-    const measure = () => {
-      const el = document.querySelector('.session-sidebar-trigger-top') as HTMLElement | null;
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setFileTreeTriggerTop(r.bottom);
-      }
-    };
-    measure();
-    const t1 = setTimeout(measure, 100);
-    const t2 = setTimeout(measure, 500);
-    window.addEventListener('resize', measure);
-    const mo = new MutationObserver(measure);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    return () => {
-      clearTimeout(t1); clearTimeout(t2);
-      window.removeEventListener('resize', measure);
-      mo.disconnect();
-    };
-  }, []);
   // 파일트리 패널의 top 오프셋 — 세션 사이드바(pinned)와 픽셀 단위로 정확히 맞추기 위해
   // "타이틀바(.tab-bar-row) 바로 아래" 위치를 직접 측정해서 사용 (CSS padding/margin 계산에 의존하지 않음).
   const [fileTreePanelTop, setFileTreePanelTop] = useState<number>(40);
-  useEffect(() => {
-    const measure = () => {
-      const el = document.querySelector('.tab-bar-row') as HTMLElement | null;
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setFileTreePanelTop(r.bottom);
-      }
-    };
-    measure();
-    const t1 = setTimeout(measure, 100);
-    const t2 = setTimeout(measure, 500);
-    window.addEventListener('resize', measure);
-    const mo = new MutationObserver(measure);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    return () => {
-      clearTimeout(t1); clearTimeout(t2);
-      window.removeEventListener('resize', measure);
-      mo.disconnect();
-    };
-  }, []);
   // 파일트리 패널의 left 오프셋 — 트리거의 실제 오른쪽 끝(getBoundingClientRect().right)을 측정.
   // 세션 사이드바가 pinned(실제 폭 차지)면 트리거가 그만큼 오른쪽에 있으므로, 하드코딩된 22px 로는
   // 안 맞음 — 트리거 우측 끝을 그대로 패널의 left 로 사용해서 항상 트리거 바로 오른쪽에서 열리게 함.
   const [fileTreePanelLeft, setFileTreePanelLeft] = useState<number>(22);
-  useEffect(() => {
-    const measure = () => {
-      const el = document.querySelector('.global-file-tree-wrap .workspace-file-tree-trigger') as HTMLElement | null;
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setFileTreePanelLeft(r.right);
-      }
-    };
-    measure();
-    const t1 = setTimeout(measure, 100);
-    const t2 = setTimeout(measure, 500);
-    window.addEventListener('resize', measure);
-    const mo = new MutationObserver(measure);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    return () => {
-      clearTimeout(t1); clearTimeout(t2);
-      window.removeEventListener('resize', measure);
-      mo.disconnect();
-    };
-  }, []);
   // 세션 사이드바가 unpinned(auto-hide, 접힘) 상태인지 감지 — 접혀 있을 땐 파일트리 트리거를
   // 세션 트리거 바로 아래 같은 컬럼(x=0)에 세로로 스택시켜야 함 (세션 사이드바 pin 상태는
   // SessionList 내부 로컬 state 라 App 에서 직접 접근 불가 → DOM 감지).
   const [sessionSidebarUnpinned, setSessionSidebarUnpinned] = useState<boolean>(false);
+  // 위 4개 측정을 body 를 각자 감시하는 MutationObserver 4개 대신 하나로 묶어서 오버헤드를 줄임.
   useEffect(() => {
     const measure = () => {
+      const triggerEl = document.querySelector('.session-sidebar-trigger-top') as HTMLElement | null;
+      if (triggerEl) setFileTreeTriggerTop(triggerEl.getBoundingClientRect().bottom);
+      const tabBarEl = document.querySelector('.tab-bar-row') as HTMLElement | null;
+      if (tabBarEl) setFileTreePanelTop(tabBarEl.getBoundingClientRect().bottom);
+      const fileTreeTriggerEl = document.querySelector('.global-file-tree-wrap .workspace-file-tree-trigger') as HTMLElement | null;
+      if (fileTreeTriggerEl) setFileTreePanelLeft(fileTreeTriggerEl.getBoundingClientRect().right);
       setSessionSidebarUnpinned(!!document.querySelector('.session-sidebar-inner.auto-hide'));
     };
     measure();
     const t1 = setTimeout(measure, 100);
     const t2 = setTimeout(measure, 500);
+    window.addEventListener('resize', measure);
     const mo = new MutationObserver(measure);
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    return () => { clearTimeout(t1); clearTimeout(t2); mo.disconnect(); };
+    return () => {
+      clearTimeout(t1); clearTimeout(t2);
+      window.removeEventListener('resize', measure);
+      mo.disconnect();
+    };
   }, []);
   useEffect(() => {
     if (!remoteTreePinnedLoadedRef.current) return;

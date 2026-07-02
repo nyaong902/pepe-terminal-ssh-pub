@@ -218,7 +218,8 @@ function createWindow() {
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
   if (!app.isPackaged && devServerUrl) {
     mainWindow.loadURL(devServerUrl);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    // DevTools 자동 오픈 제거 — detach 창이 항상 300MB+ 를 추가로 잡아먹음.
+    // 필요하면 Ctrl+Shift+I (또는 F12) 로 수동으로 열 수 있음.
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
@@ -4773,12 +4774,6 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
     snapshotOnly: payload?.snapshotOnly,
   }));
   win.once('ready-to-show', () => { try { win.show(); win.focus(); } catch {} });
-  // 디버깅: 복제→새 창 분리 시 cd 자동 명령 추적용 — 분리 창 DevTools 자동 오픈.
-  if (Array.isArray(payload?.connectAfterAdopt) && payload.connectAfterAdopt.some((it: any) => it?.cdAfterConnect)) {
-    win.webContents.once('did-finish-load', () => {
-      try { win.webContents.openDevTools({ mode: 'detach' }); } catch {}
-    });
-  }
   // closed 시점엔 win.webContents 가 이미 destroy 됐을 수 있으므로 id 를 미리 캡처.
   // 핸들러 내부 throw 가 같은 'closed' 의 다른 리스너(onMainWindowClosed) 호출을 막지 않게 try 로 감싼다.
   const wcId = win.webContents.id;

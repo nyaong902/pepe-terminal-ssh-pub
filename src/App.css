@@ -315,7 +315,9 @@ html, body {
   right: 0;
   height: 40px;
   -webkit-app-region: drag;
-  z-index: 1500;
+  /* .session-sidebar / .global-file-tree-wrap 가 2001 까지 올라가므로 그보다 위에 있어야
+     메뉴 드롭다운(.menu-dropdown, z-index:3100) 이 로컬 스태킹 컨텍스트에 갇히지 않고 제대로 뜸. */
+  z-index: 2200;
   background: var(--win-surface, #1a1a2e);
 }
 
