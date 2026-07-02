@@ -4864,13 +4864,22 @@ function App() {
               e.preventDefault();
               const startX = e.clientX;
               const wrap = (e.currentTarget.parentElement as HTMLElement | null);
-              const w = wrap?.getBoundingClientRect().width || 800;
+              const wrapRect = wrap?.getBoundingClientRect();
+              const w = wrapRect?.width || 800;
               const startRatio = splitRatio;
-              // 드래그 중엔 React state 를 매 픽셀마다 갱신하지 않고(터미널/브라우저 전체 리렌더로 버벅임)
-              // 양쪽 슬롯 엘리먼트의 flex 스타일을 직접 DOM 으로 조작. 놓을 때만 state 커밋.
-              // wrap 안엔 열려있는 모든 탭의 슬롯 div 가 들어있고 display:none 으로 숨겨져 있을 뿐이라
-              // DOM 인덱스로는 좌/우 슬롯을 특정할 수 없음 — tabSlotStyle 이 부여하는 order(0=좌, 2=우) 로 식별.
-              const kids = wrap ? (Array.from(wrap.children) as HTMLElement[]) : [];
+              // <webview> 는 별도 렌더러 프로세스라 그 위로 마우스가 지나가면 mousemove/mouseup 이
+              // 이 창의 window 로 전달되지 않아 드래그가 끊기거나 "눌린 채로 고정"되는 문제가 있음 —
+              // 드래그 중엔 전체 화면을 덮는 투명 오버레이로 모든 마우스 이벤트를 여기서 가로챔.
+              const overlay = document.createElement('div');
+              overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;cursor:col-resize;';
+              document.body.appendChild(overlay);
+              // 실시간 미리보기 — 양쪽 슬롯의 flex 를 직접 DOM 으로 조작(React state 는 매 프레임
+              // 갱신하지 않아 리렌더 비용 없음). wrap 안엔 숨겨진(display:none) 다른 탭들도 있고
+              // 그것들은 order 기본값이 0이라 order 만으로는 혼동될 수 있어 display:none 이 아닌
+              // 것만 대상으로 order(0=좌, 2=우) 로 식별.
+              const kids = wrap
+                ? (Array.from(wrap.children) as HTMLElement[]).filter(k => getComputedStyle(k).display !== 'none')
+                : [];
               const leftEl = kids.find(k => getComputedStyle(k).order === '0');
               const rightEl = kids.find(k => getComputedStyle(k).order === '2');
               let latest = startRatio;
@@ -4886,15 +4895,18 @@ function App() {
                 });
               };
               const onUp = () => {
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
+                overlay.removeEventListener('mousemove', onMove);
+                overlay.removeEventListener('mouseup', onUp);
+                overlay.removeEventListener('mouseleave', onUp);
+                overlay.remove();
                 if (raf) cancelAnimationFrame(raf);
                 setSplitRatio(latest);
                 window.dispatchEvent(new Event('resize'));
                 refitAllTerms();
               };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
+              overlay.addEventListener('mousemove', onMove);
+              overlay.addEventListener('mouseup', onUp);
+              overlay.addEventListener('mouseleave', onUp);
             }}
             title="드래그로 좌우 비율 조절"
           />
