@@ -6350,6 +6350,128 @@ ipcMain.handle('vpn:has-creds', (_e, { configPath }: { configPath: string }) => 
   credsLog(`has 요청: configPath="${configPath}" → ${has}`);
   return { has };
 });
+
+type BrowserCredRecord = {
+  siteKey: string;
+  username: string;
+  password: string;
+  updatedAt: number;
+};
+
+function browserCredsFile(): string { return path.join(app.getPath('userData'), 'browser-credentials.json'); }
+function browserCredsLog(msg: string) {
+  console.log('[browser-creds]', msg);
+  try { mainWindow?.webContents.send('debug:log', `[browser-creds] ${msg}`); } catch {}
+}
+function loadBrowserCredsMap(): Record<string, BrowserCredRecord> {
+  try {
+    const p = browserCredsFile();
+    if (!fs.existsSync(p)) return {};
+    const raw = fs.readFileSync(p, 'utf8');
+    if (!raw.trim()) return {};
+    if (!safeStorage.isEncryptionAvailable()) {
+      browserCredsLog('safeStorage unavailable, refusing to read browser creds file');
+      return {};
+    }
+    const dec = safeStorage.decryptString(Buffer.from(raw, 'base64'));
+    const parsed = JSON.parse(dec) || {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err: any) {
+    browserCredsLog(`load failed: ${err?.message || err}`);
+    return {};
+  }
+}
+function saveBrowserCredsMap(m: Record<string, BrowserCredRecord>) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('OS 안전 저장소 사용 불가');
+  const text = JSON.stringify(m, null, 2);
+  const enc = safeStorage.encryptString(text).toString('base64');
+  fs.writeFileSync(browserCredsFile(), enc, 'utf8');
+}
+function browserSiteCandidates(input: string): string[] {
+  let host = '';
+  try {
+    const u = new URL(input);
+    host = u.hostname.toLowerCase();
+    if (u.port && u.port !== '80' && u.port !== '443') host = `${host}:${u.port}`;
+  } catch {
+    host = String(input || '').trim().toLowerCase();
+  }
+  if (!host) return [];
+  const out = new Set<string>();
+  const colonIdx = host.indexOf(':');
+  const baseHost = colonIdx >= 0 ? host.slice(0, colonIdx) : host;
+  const portSuffix = colonIdx >= 0 ? host.slice(colonIdx) : '';
+  const parts = baseHost.split('.').filter(Boolean);
+  for (let i = 0; i < parts.length - 1; i++) {
+    const cand = parts.slice(i).join('.') + portSuffix;
+    out.add(cand);
+  }
+  out.add(baseHost + portSuffix);
+  if (baseHost.startsWith('www.')) out.add(baseHost.slice(4) + portSuffix);
+  return Array.from(out);
+}
+function browserSiteKeyFromUrl(input: string): string {
+  const cands = browserSiteCandidates(input);
+  return cands[0] || '';
+}
+function getBrowserCredForUrl(input: string): BrowserCredRecord | null {
+  const map = loadBrowserCredsMap();
+  for (const key of browserSiteCandidates(input)) {
+    const rec = map[key];
+    if (rec) return rec;
+  }
+  return null;
+}
+ipcMain.handle('browser-creds:get', (_e, { url, siteKey }: { url?: string; siteKey?: string }) => {
+  try {
+    const target = siteKey?.trim() || url || '';
+    if (!target) return { ok: false, found: false };
+    const rec = getBrowserCredForUrl(target);
+    if (!rec) return { ok: true, found: false };
+    return { ok: true, found: true, siteKey: rec.siteKey, username: rec.username || '', password: rec.password || '', updatedAt: rec.updatedAt || 0 };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('browser-creds:save', (_e, { url, siteKey, username, password }: { url?: string; siteKey?: string; username: string; password: string }) => {
+  try {
+    const key = (siteKey?.trim() || browserSiteKeyFromUrl(url || '')).toLowerCase();
+    if (!key) return { ok: false, error: 'siteKey/url 누락' };
+    const map = loadBrowserCredsMap();
+    map[key] = { siteKey: key, username: username || '', password: password || '', updatedAt: Date.now() };
+    saveBrowserCredsMap(map);
+    return { ok: true, siteKey: key };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('browser-creds:delete', (_e, { url, siteKey }: { url?: string; siteKey?: string }) => {
+  try {
+    const key = (siteKey?.trim() || browserSiteKeyFromUrl(url || '')).toLowerCase();
+    if (!key) return { ok: false, error: 'siteKey/url 누락' };
+    const map = loadBrowserCredsMap();
+    delete map[key];
+    saveBrowserCredsMap(map);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('browser-creds:list', async () => {
+  try {
+    const map = loadBrowserCredsMap();
+    return {
+      ok: true,
+      entries: Object.values(map).map(v => ({
+        siteKey: v.siteKey,
+        username: v.username || '',
+        updatedAt: v.updatedAt || 0,
+      })),
+    };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
 ipcMain.handle('vpn:available', () => vpn.isAvailable());
 ipcMain.handle('vpn:state', () => vpn.getState());
 ipcMain.handle('vpn:logs', () => vpn.getLogs());

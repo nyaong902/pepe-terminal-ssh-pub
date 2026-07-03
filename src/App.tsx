@@ -816,6 +816,7 @@ function App() {
   // 파일트리 패널의 top 오프셋 — 세션 사이드바(pinned)와 픽셀 단위로 정확히 맞추기 위해
   // "타이틀바(.tab-bar-row) 바로 아래" 위치를 직접 측정해서 사용 (CSS padding/margin 계산에 의존하지 않음).
   const [fileTreePanelTop, setFileTreePanelTop] = useState<number>(40);
+  const [leftDockWidth, setLeftDockWidth] = useState<number>(0);
   // 파일트리 패널의 left 오프셋 — 트리거의 실제 오른쪽 끝(getBoundingClientRect().right)을 측정.
   // 세션 사이드바가 pinned(실제 폭 차지)면 트리거가 그만큼 오른쪽에 있으므로, 하드코딩된 22px 로는
   // 안 맞음 — 트리거 우측 끝을 그대로 패널의 left 로 사용해서 항상 트리거 바로 오른쪽에서 열리게 함.
@@ -833,6 +834,12 @@ function App() {
       if (tabBarEl) setFileTreePanelTop(tabBarEl.getBoundingClientRect().bottom);
       const fileTreeTriggerEl = document.querySelector('.global-file-tree-wrap .workspace-file-tree-trigger') as HTMLElement | null;
       if (fileTreeTriggerEl) setFileTreePanelLeft(fileTreeTriggerEl.getBoundingClientRect().right);
+      const sessionPanelEl = document.querySelector('.session-sidebar-inner:not(.auto-hide)') as HTMLElement | null;
+      const fileTreePanelEl = document.querySelector('.global-file-tree-wrap .workspace-file-tree:not(.auto-hide)') as HTMLElement | null;
+      const sessionW = sessionPanelEl ? sessionPanelEl.getBoundingClientRect().width : 0;
+      const fileTreeW = fileTreePanelEl ? fileTreePanelEl.getBoundingClientRect().width : 0;
+      const fileTreeNudge = remoteTreePinned && fileTreeW > 0 ? 24 : 0;
+      setLeftDockWidth(Math.max(0, Math.round(sessionW + fileTreeW + fileTreeNudge)));
       setSessionSidebarUnpinned(!!document.querySelector('.session-sidebar-inner.auto-hide'));
     };
     measure();
@@ -2023,7 +2030,7 @@ function App() {
         const workspaceTabs = tabsRef.current;
         const targetIdx = workspaceActionIdx;
         const target = workspaceTabs[targetIdx];
-        if (target) setActiveTabId(target.id);
+        if (target && splitRightTabId !== target.id) setActiveTabId(target.id);
         return;
       }
       // 메신저 / AI 채팅 / 파일전송 워크스페이스 바로가기
@@ -4053,7 +4060,7 @@ function App() {
         >
           <div className="workspace-file-tree-toolbar">
             <button
-              className={`workspace-file-tree-pin ${remoteTreePinned ? 'pinned' : ''}`}
+              className={`workspace-file-tree-pin claude-chat-pin ${remoteTreePinned ? 'pinned' : ''}`}
               onClick={togglePin}
               title={remoteTreePinned ? tApp('fileTree.unpinTooltip') : tApp('fileTree.pinTooltip')}
             >📌</button>
@@ -4120,7 +4127,10 @@ function App() {
         }
       }}
       data-fs-term={fullscreenTermId || ''}
-      style={{ ['--claude-chat-width' as any]: `${claudeChatWidth}px` }}
+      style={{
+        ['--claude-chat-width' as any]: `${claudeChatWidth}px`,
+        ['--left-dock-width' as any]: `${leftDockWidth}px`,
+      }}
     >
       <SessionList
         onConnect={(sid, name, panelId, sessTheme, ff, fs, sb) => handleConnectSession(sid, name, panelId, sessTheme, ff, fs, sb)}
@@ -4775,7 +4785,7 @@ function App() {
                 >
                   <div className="workspace-file-tree-toolbar">
                     <button
-                      className={`workspace-file-tree-pin ${remoteTreePinned ? 'pinned' : ''}`}
+                      className={`workspace-file-tree-pin claude-chat-pin ${remoteTreePinned ? 'pinned' : ''}`}
                       onClick={() => setRemoteTreePinned(p => !p)}
                       title={remoteTreePinned ? tApp('fileTree.unpinTooltip') : tApp('fileTree.pinTooltip')}
                     >📌</button>

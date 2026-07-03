@@ -100,6 +100,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   const [folderPicker, setFolderPicker] = useState<{ sessionIds: string[] } | null>(null);
   const [searchValue, setSearchValue] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('name');
+  const [pendingSearchFocus, setPendingSearchFocus] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -152,15 +153,24 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
 
   useEffect(() => {
     const onFocusSearch = () => {
+      onSetTopPanel?.('session');
       setVisible(true);
-      requestAnimationFrame(() => {
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      });
+      setPendingSearchFocus(true);
     };
     window.addEventListener('sessionlist-focus-search', onFocusSearch as EventListener);
     return () => window.removeEventListener('sessionlist-focus-search', onFocusSearch as EventListener);
-  }, []);
+  }, [onSetTopPanel]);
+
+  useEffect(() => {
+    if (!pendingSearchFocus) return;
+    if (!visible) return;
+    const t = window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      setPendingSearchFocus(false);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [pendingSearchFocus, visible]);
 
   // 컨텍스트 메뉴 외부 클릭 시 닫기
   useEffect(() => {
@@ -815,7 +825,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
         <div className="session-toolbar">
           <div className="session-toolbar-title">{t('toolbarTitle')}</div>
           <button
-            className={`btn-pin ${pinned ? 'pinned' : ''}`}
+            className={`btn-pin claude-chat-pin ${pinned ? 'pinned' : ''}`}
             onClick={() => {
               const next = !pinned;
               setPinned(next);

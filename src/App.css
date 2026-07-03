@@ -699,7 +699,7 @@ body.popout-options .session-editor h3:first-child {
 
 /* 텍스트 일괄 전송 입력바가 표시될 때 하단 고정 컨텐츠에 여유 공간 확보 (pinned) */
 .app-root.has-broadcast .session-sidebar-inner:not(.auto-hide) {
-  padding-bottom: 64px; /* broadcast 36 + status 24 + 4 여백 */
+  padding-bottom: 60px; /* pinned 시 하단 고정 바 영역만큼 예약 */
 }
 /* auto-hide 는 sidebar 자체를 broadcast 위로 올림 */
 .app-root.has-broadcast .session-sidebar-inner.auto-hide {
@@ -707,7 +707,7 @@ body.popout-options .session-editor h3:first-child {
   padding-bottom: 2px;
 }
 .app-root.has-broadcast .session-list-scroll {
-  padding-bottom: 4px;
+  padding-bottom: 0;
 }
 .app-root.has-broadcast .app-main {
   padding-bottom: 60px; /* status bar 24 + broadcast bar 36 */
@@ -1062,10 +1062,11 @@ body.popout-options .session-editor h3:first-child {
   border-right: 1px solid var(--win-border, #333);
   padding: 8px;
   padding-top: 48px;
-  padding-bottom: 28px;
+  padding-bottom: 0;
   display: flex;
   flex-direction: column;
   min-width: 180px;
+  min-height: 0;
   box-sizing: border-box;
   position: relative;
   background: var(--win-bg, #0d0f10);
@@ -1262,6 +1263,7 @@ body.popout-options .session-editor h3:first-child {
 .session-list-scroll {
   overflow: auto;
   flex: 1 1 auto;
+  min-height: 0;
   outline: none;
   padding-bottom: 4px;
 }
@@ -4456,7 +4458,7 @@ body.popout-options .session-editor h3:first-child {
   flex-shrink: 0;
   position: fixed;
   bottom: 0;
-  left: 0;
+  left: var(--left-dock-width, 0px);
   right: 0;
   z-index: 1200;
 }
@@ -4464,7 +4466,7 @@ body.popout-options .session-editor h3:first-child {
 .broadcast-bar {
   position: fixed;
   bottom: 24px;
-  left: 0;
+  left: var(--left-dock-width, 0px);
   right: 0;
   height: 36px;
   box-sizing: border-box;
@@ -4698,6 +4700,7 @@ body.popout-options .session-editor h3:first-child {
   position: relative;
   min-width: 160px;
   max-width: 800px;
+  min-height: 0;
 }
 .workspace-file-tree-resizer {
   position: absolute;
@@ -4805,14 +4808,14 @@ body.popout-options .session-editor h3:first-child {
   font-size: 14px;
   padding: 2px 6px;
   opacity: 0.55;
-  transform: rotate(45deg);
-  transition: transform 0.15s, opacity 0.15s;
+  filter: grayscale(1);
+  transition: opacity 0.15s, filter 0.15s;
 }
 .workspace-file-tree-pin:hover { opacity: 1; }
 .workspace-file-tree-pin.pinned {
   opacity: 1;
-  transform: rotate(0deg);
-  color: #ffb347;
+  filter: grayscale(0);
+  color: inherit;
 }
 
 /* ── 통합 파일트리 wrap (app-root 레벨, 세션 사이드바 옆) — 세션 사이드바(.session-sidebar-inner)와
@@ -4826,6 +4829,7 @@ body.popout-options .session-editor h3:first-child {
   display: flex;
   flex-shrink: 0;
   align-self: stretch;
+  min-height: 0;
   pointer-events: none; /* 전체높이 투명 박스가 z-index 상승 시 클릭을 가로채지 않도록 — 실제 자식들에서만 복원 */
 }
 .global-file-tree-wrap > * {
@@ -4845,10 +4849,16 @@ body.popout-options .session-editor h3:first-child {
 .session-sidebar-inner,
 .global-file-tree-wrap .workspace-file-tree:not(.auto-hide) {
   padding-top: 48px;
+  padding-bottom: 0;
 }
 .app-root.has-broadcast .session-sidebar-inner:not(.auto-hide),
 .app-root.has-broadcast .global-file-tree-wrap .workspace-file-tree:not(.auto-hide) {
-  padding-bottom: 64px; /* broadcast 36 + status 24 + 4 여백 */
+  padding-bottom: 0; /* pinned 상태는 상태바 좌측을 오른쪽으로 밀어서 처리 */
+}
+.global-file-tree-wrap .workspace-file-tree:not(.auto-hide),
+.remote-file-tree-container,
+.panel-file-tree {
+  padding-bottom: 24px;
 }
 /* unpinned(auto-hide) 상태 — .session-sidebar-inner.auto-hide 와 동일한 값(position:fixed, left:22px 고정). */
 .session-sidebar-inner.auto-hide,
@@ -4880,11 +4890,12 @@ body.popout-options .session-editor h3:first-child {
   background: var(--win-bg, #0d0f10);
   border-right: 1px solid var(--win-border, #333);
   padding-top: 40px;
-  padding-bottom: 24px;
+  padding-bottom: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-height: 0;
 }
 /* 패널 내부 터미널+파일트리 분할 */
 .panel-terminal-split {
@@ -4909,6 +4920,8 @@ body.popout-options .session-editor h3:first-child {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-height: 0;
+  padding-bottom: 0;
 }
 .panel-file-tree-resizer {
   position: absolute;
