@@ -335,6 +335,10 @@ contextBridge.exposeInMainWorld('api', {
   chatCopyExternalFile: (srcPath: string, displayName?: string) => ipcRenderer.invoke('chat:copy-external-file', { srcPath, displayName }),
   // 전송 전에 대기 목록에서 첨부를 제거했을 때 그 임시 사본 삭제 (pepe-chat-attachments 안의 파일만)
   chatRemovePendingAttachment: (filePath: string) => ipcRenderer.invoke('chat:remove-pending-attachment', { filePath }),
+  aiAttachMirror: (args: { panelId: string; remotePath: string; isDir: boolean }) => ipcRenderer.invoke('ai-attach:mirror-remote', args),
+  aiAttachDispose: (args: { panelId: string; remotePath: string }) => ipcRenderer.invoke('ai-attach:dispose-remote', args),
+  aiAttachDisposePanel: (args: { panelId: string }) => ipcRenderer.invoke('ai-attach:dispose-panel', args),
+  localReadFile: (filePath: string) => ipcRenderer.invoke('local-fs:read-file', { filePath }),
   // transparent BrowserWindow drag-drop 우회 — 메인의 will-navigate 가 file:// 을 가로채면
   // 여기로 파일 경로가 도착. ClaudeChat 이 구독해 첨부 처리.
   onChatExternalFileDropped: (handler: (payload: { path: string }) => void) => {
@@ -433,8 +437,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Claude Code CLI
   claudeCheck: () => ipcRenderer.invoke('claude:check'),
-  claudeSend: (sessionId: string, prompt: string, addDirs?: string[], disallowBash?: boolean, sshTermId?: string, resumeSessionId?: string | null, permissionMode?: string, model?: string, perToolApproval?: boolean, requestId?: string, effort?: string, sshSessions?: { id: string; label: string }[]) =>
-    ipcRenderer.invoke('claude:send', { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions }),
+  claudeSend: (sessionId: string, prompt: string, addDirs?: string[], disallowBash?: boolean, sshTermId?: string, resumeSessionId?: string | null, permissionMode?: string, model?: string, perToolApproval?: boolean, requestId?: string, effort?: string, sshSessions?: { id: string; label: string }[], localAttachmentRoots?: string[]) =>
+    ipcRenderer.invoke('claude:send', { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots }),
   claudeHookRespond: (approvalId: string, decision: 'allow' | 'deny', reason?: string) =>
     ipcRenderer.invoke('claude:hook-respond', { approvalId, decision, reason }),
   onClaudeHookApprovalRequest: (cb: (p: any) => void) => {
@@ -452,13 +456,13 @@ contextBridge.exposeInMainWorld('api', {
   geminiCheck: () => ipcRenderer.invoke('gemini:check'),
   geminiModelInfo: () => ipcRenderer.invoke('gemini:modelInfo'),
   debugDump: (name: string, content: string) => ipcRenderer.invoke('debug:dump', { name, content }),
-  geminiSend: (sessionId: string, prompt: string, requestId?: string, model?: string, yolo?: boolean, addDirs?: string[], sshTermId?: string, sshSessions?: { id: string; label: string }[]) =>
-    ipcRenderer.invoke('gemini:send', { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }),
+  geminiSend: (sessionId: string, prompt: string, requestId?: string, model?: string, yolo?: boolean, addDirs?: string[], sshTermId?: string, sshSessions?: { id: string; label: string }[], localAttachmentRoots?: string[]) =>
+    ipcRenderer.invoke('gemini:send', { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions, localAttachmentRoots }),
   geminiStop: (sessionId: string, requestId?: string) => ipcRenderer.invoke('gemini:stop', { sessionId, requestId }),
   codexCheck: () => ipcRenderer.invoke('codex:check'),
   codexRateLimits: () => ipcRenderer.invoke('codex:rateLimits'),
-  codexSend: (sessionId: string, prompt: string, requestId?: string, model?: string, approvalPolicy?: string, effort?: string, sshTermId?: string, sshSessions?: Array<{ id: string; label: string }>) =>
-    ipcRenderer.invoke('codex:send', { sessionId, prompt, requestId, model, approvalPolicy, effort, sshTermId, sshSessions }),
+  codexSend: (sessionId: string, prompt: string, requestId?: string, model?: string, approvalPolicy?: string, effort?: string, sshTermId?: string, sshSessions?: Array<{ id: string; label: string }>, localAttachmentRoots?: string[]) =>
+    ipcRenderer.invoke('codex:send', { sessionId, prompt, requestId, model, approvalPolicy, effort, sshTermId, sshSessions, localAttachmentRoots }),
   codexStop: (sessionId: string, requestId?: string) => ipcRenderer.invoke('codex:stop', { sessionId, requestId }),
   customCheck: () => ipcRenderer.invoke('custom-llm:check'),
   customSend: (sessionId: string, messages: Array<{ role: string; content: string }>, requestId?: string, sshTermId?: string) =>
@@ -470,8 +474,8 @@ contextBridge.exposeInMainWorld('api', {
   antigravityModelInfo: () => ipcRenderer.invoke('antigravity:modelInfo'),
   antigravityOpenUsage: () => ipcRenderer.invoke('antigravity:openUsage'),
   antigravityProbeUsageTui: () => ipcRenderer.invoke('antigravity:probeUsageTui'),
-  antigravitySend: (sessionId: string, prompt: string, requestId?: string, model?: string, yolo?: boolean, addDirs?: string[], sshTermId?: string, sshSessions?: { id: string; label: string }[]) =>
-    ipcRenderer.invoke('antigravity:send', { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }),
+  antigravitySend: (sessionId: string, prompt: string, requestId?: string, model?: string, yolo?: boolean, addDirs?: string[], sshTermId?: string, sshSessions?: { id: string; label: string }[], localAttachmentRoots?: string[]) =>
+    ipcRenderer.invoke('antigravity:send', { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions, localAttachmentRoots }),
   antigravityStop: (sessionId: string, requestId?: string) =>
     ipcRenderer.invoke('antigravity:stop', { sessionId, requestId }),
   claudeProbeUsage: () => ipcRenderer.invoke('claude:probe-usage'),

@@ -1166,7 +1166,7 @@ type ChatHistoryEntry = {
 };
 
 export type FileContextItem = { fileName: string; remotePath: string; content: string };
-export type MountEntry = { termId: string; remotePath: string; uncPath: string; isDir: boolean };
+export type MountEntry = { entryId?: string; termId: string; remotePath: string; uncPath: string; isDir: boolean; mode?: 'ssh' | 'local'; localRoot?: string; fileCount?: number; synced?: boolean };
 
 type Props = {
   onClose?: () => void;
@@ -1174,7 +1174,7 @@ type Props = {
   onContextConsumed: () => void;
   mountEntries?: MountEntry[];
   onClearMounted?: () => void;
-  onRemoveMountedEntry?: (remotePath: string, termId: string) => void;
+  onRemoveMountedEntry?: (remotePath: string, termId: string, entryId?: string) => void;
   connectedSessions?: { termId: string; label: string }[];
   defaultSshSession?: { termId: string; label: string } | null;
   pinned?: boolean;
@@ -2947,6 +2947,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     }
     const addDirsSet = new Set<string>();
     const contextLines: string[] = [];
+    let localAttachmentRoots: string[] = [];
 
     // 0.A) 포크/이력 후속 질문이면 작업 대상을 prompt 최상단 + user text 에 직접 명시.
     // 공유 OFF 시에는 다른 에이전트한테 했던 첫 user 메시지를 inject 하면 정보가 누설되므로,
@@ -3061,6 +3062,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       );
     }
 
+    if (localAttachmentRoots.length > 0) {
+      for (const root of localAttachmentRoots) addDirsSet.add(root);
+    }
+
     // 0.9) 다이어그램/플로우차트는 반드시 Mermaid 코드 블록으로
     contextLines.push(
       `# 다이어그램 출력 가이드`,
@@ -3096,21 +3101,38 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
 
     // 1) 개별 첨부 (파일/폴더 우클릭 → AI 첨부) — pepe_ssh MCP 도구로 직접 접근.
     //    WebDAV 마운트는 제거됨. uncPath 가 채워져 있어도 addDirs 에 넣지 않음.
+    localAttachmentRoots = Array.from(new Set(mountEntries.filter(m => m.mode === 'local' && m.localRoot).map(m => m.localRoot!).filter(Boolean)));
     if (mountEntries.length > 0) {
+      const sshEntries = mountEntries.filter(m => m.mode !== 'local');
+      const localEntries = mountEntries.filter(m => m.mode === 'local');
       const pathMap = mountEntries.map(m => {
         const sess = connectedSessions.find(s => s.termId === m.termId);
         const sessLabel = sess?.label ? ` (${sess.label})` : '';
-        return `- \`${m.remotePath}\`${m.isDir ? '/' : ''}${sessLabel}`;
+        const localTag = m.mode === 'local' && m.localRoot ? ` [local:${m.localRoot}]` : '';
+        return `- \`${m.remotePath}\`${m.isDir ? '/' : ''}${sessLabel}${localTag}`;
       }).join('\n');
-      contextLines.push(
-        '',
-        '[명시적으로 첨부된 파일/폴더] — pepe_ssh MCP 도구로 접근:',
-        '  • 파일 읽기: mcp__pepe_ssh__ssh_read_file (path, session)',
-        '  • 디렉터리 목록: mcp__pepe_ssh__ssh_exec ("ls -la <path>", session)',
-        '  • 검색: mcp__pepe_ssh__ssh_grep / mcp__pepe_ssh__ssh_glob',
-        pathMap,
-      );
-      attachBadge = `📂 첨부 ${mountEntries.length}개:\n${mountEntries.slice(0, 5).map(m => `• ${m.remotePath}${m.isDir ? '/' : ''}`).join('\n')}${mountEntries.length > 5 ? `\n외 ${mountEntries.length - 5}개` : ''}\n\n`;
+      if (sshEntries.length > 0) {
+        contextLines.push(
+          '',
+          '[명시적으로 첨부된 파일/폴더] — pepe_ssh MCP 도구로 접근:',
+          '  • 파일 읽기: mcp__pepe_ssh__ssh_read_file (path, session)',
+          '  • 디렉터리 목록: mcp__pepe_ssh__ssh_exec ("ls -la <path>", session)',
+          '  • 검색: mcp__pepe_ssh__ssh_grep / mcp__pepe_ssh__ssh_glob',
+        );
+      }
+      if (localEntries.length > 0) {
+        contextLines.push(
+          '',
+          '[로컬 첨부] — 현재 작업공간의 로컬 복사본으로 취급:',
+          '  • 이 경로는 일반 로컬 파일처럼 읽고 수정하면 됩니다.',
+          '  • 변경 내용은 저장 즉시 원격 서버에 자동 반영됩니다.',
+        );
+      }
+      contextLines.push(pathMap);
+      const badgeParts: string[] = [];
+      if (sshEntries.length > 0) badgeParts.push(`📂 SSH ${sshEntries.length}개`);
+      if (localEntries.length > 0) badgeParts.push(`🗂 로컬 ${localEntries.length}개`);
+      attachBadge = `${badgeParts.join(' / ')}:\n${mountEntries.slice(0, 5).map(m => `• ${m.remotePath}${m.isDir ? '/' : ''}${m.mode === 'local' ? ' (local)' : ''}`).join('\n')}${mountEntries.length > 5 ? `\n외 ${mountEntries.length - 5}개` : ''}\n\n`;
     } else if (activeMounts.length > 0) {
       // 멀티 SSH 컨텍스트 — 파일 접근은 pepe_ssh MCP 도구로 (WebDAV 마운트 없음)
       if (activeMounts.length > 1) {
@@ -3354,7 +3376,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           geminiPlanRequestsRef.current.add(requestId);
         }
         // sshTermId 전달 → gemini 에 SSH MCP(pepe_ssh) 제공 (원격 파일/명령)
-        await (window as any).api?.geminiSend?.(sessionId, geminiPrompt, requestId, geminiModel, geminiYolo, addDirs, sshTermId, sshSessions);
+        await (window as any).api?.geminiSend?.(sessionId, geminiPrompt, requestId, geminiModel, geminiYolo, addDirs, sshTermId, sshSessions, localAttachmentRoots);
       } else if (currentAgentRef.current === 'custom') {
         // Custom LLM (LM Studio / OpenAI 호환) — 단순 fetch 스트리밍, 도구 호출 미지원
         // 대화 맥락 유지: 직전 메시지 + 새 user 메시지를 OpenAI 형식으로 보냄.
@@ -3366,7 +3388,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       } else if (currentAgentRef.current === 'antigravity') {
         // Antigravity CLI(agy) — 자체 OAuth, --print 모드로 prompt 전달
         // sshTermId/sshSessions 전달 → agy 에 pepe_ssh MCP 동적 등록
-        await (window as any).api?.antigravitySend?.(sessionId, prompt, requestId, model, antigravityYolo, addDirs, sshTermId, sshSessions);
+        await (window as any).api?.antigravitySend?.(sessionId, prompt, requestId, model, antigravityYolo, addDirs, sshTermId, sshSessions, localAttachmentRoots);
       } else if (currentAgentRef.current === 'codex') {
         // codex 는 비대화형(exec)이라 실행 중 승인이 불가 → claude 처럼 "계획 먼저 보여주고 승인" 2단계로 처리.
         // plan 모드(또는 default + 승인성 발화 아님)면 계획 단계로 전송.
@@ -3388,7 +3410,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           codexPlanRequestsRef.current.add(requestId);
         }
         // sshTermId 전달 → codex 에 SSH MCP(pepe_ssh) 제공 (원격 파일/명령/검색)
-        await (window as any).api?.codexSend?.(sessionId, codexPrompt, requestId, model, codexApprovalPolicy, effort, sshTermId, sshSessions);
+        await (window as any).api?.codexSend?.(sessionId, codexPrompt, requestId, model, codexApprovalPolicy, effort, sshTermId, sshSessions, localAttachmentRoots);
       } else {
         const disallowBash = !!sshTermId;
         // ⚠ lastClaudeMcpEnabledRef 자동 reset 로직 — 회귀 원인 의심으로 일단 비활성화.
@@ -3436,7 +3458,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             ``,
           );
         }
-        await (window as any).api?.claudeSend?.(sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, effectivePermMode, model, perToolApproval, requestId, effort, sshSessions);
+        await (window as any).api?.claudeSend?.(sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, effectivePermMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots);
       }
     } catch (err: any) {
       setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${err}`, id: `err-${Date.now()}`, seq: nextSeq() }]);
@@ -5403,28 +5425,41 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             </div>
             <div className="claude-chat-attachments-list">
               {mountEntries.map(m => (
-                <div key={`${m.termId}:${m.remotePath}`} className="claude-chat-attachment">
+                <div key={m.entryId || `${m.termId}:${m.remotePath}`} className={`claude-chat-attachment ${m.synced === false && !(m.mode === 'local' && m.localRoot) ? 'pending' : ''}`}>
                   {m.isDir ? '📁' : '📄'}
                   <span
                     className="claude-chat-attachment-path"
-                    title={m.isDir ? `${m.remotePath}\n${tt('folderNoPreview')}` : `${m.remotePath}\n${tt('clickToView')}`}
+                    title={m.isDir
+                      ? `${m.remotePath}${m.mode === 'local' ? '\n(local mirror)' : ''}${m.synced === false && !(m.mode === 'local' && m.localRoot) ? '\n(processing...)' : ''}\n${tt('folderNoPreview')}`
+                      : `${m.remotePath}${m.mode === 'local' ? `\n(local mirror: ${m.localRoot || ''})` : ''}${m.synced === false && !(m.mode === 'local' && m.localRoot) ? '\n(processing...)' : ''}\n${tt('clickToView')}`}
                     onClick={async () => {
-                      if (m.isDir) return;
+                      if (m.isDir || (m.synced === false && !(m.mode === 'local' && m.localRoot))) return;
                       try {
-                        const result: any = await (window as any).api?.sftpReadFile?.(m.termId, m.remotePath);
-                        if (result?.success) {
-                          const fname = m.remotePath.match(/[^\\/]+$/)?.[0] || m.remotePath;
-                          setAttachmentPreview({ name: fname, content: result.text || '' });
+                        if (m.mode === 'local' && m.localRoot) {
+                          const base = m.remotePath.match(/[^\\/]+$/)?.[0] || m.remotePath;
+                          const candidate = m.localRoot.replace(/[\\/]+$/, '') + '\\' + base;
+                          const result: any = await (window as any).api?.localReadFile?.(candidate);
+                          if (result?.success) {
+                            setAttachmentPreview({ name: base, content: result.text || '' });
+                          } else {
+                            setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: result?.error || tt('unknown') }) });
+                          }
                         } else {
-                          setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: result?.error || tt('unknown') }) });
+                          const result: any = await (window as any).api?.sftpReadFile?.(m.termId, m.remotePath);
+                          if (result?.success) {
+                            const fname = m.remotePath.match(/[^\\/]+$/)?.[0] || m.remotePath;
+                            setAttachmentPreview({ name: fname, content: result.text || '' });
+                          } else {
+                            setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: result?.error || tt('unknown') }) });
+                          }
                         }
                       } catch (err: any) {
                         setAttachmentPreview({ name: m.remotePath, content: tt('readFailedWith', { error: err?.message || err }) });
                       }
                     }}
-                    style={{ cursor: m.isDir ? 'default' : 'pointer', textDecoration: m.isDir ? 'none' : 'underline dotted', textUnderlineOffset: 2 }}
-                  >{m.remotePath}</span>
-                  {onRemoveMountedEntry && <button className="claude-chat-attachment-remove" onClick={() => onRemoveMountedEntry(m.remotePath, m.termId)} title={tt('remove')}>×</button>}
+                    style={{ cursor: (m.isDir || (m.synced === false && !(m.mode === 'local' && m.localRoot))) ? 'default' : 'pointer', textDecoration: (m.isDir || (m.synced === false && !(m.mode === 'local' && m.localRoot))) ? 'none' : 'underline dotted', textUnderlineOffset: 2, opacity: (m.synced === false && !(m.mode === 'local' && m.localRoot)) ? 0.7 : 1 }}
+                  >{m.remotePath}{m.mode === 'local' ? ` [local${typeof m.fileCount === 'number' ? `:${m.fileCount}` : ''}]` : ''}{m.synced === false && !(m.mode === 'local' && m.localRoot) ? ' (processing...)' : ''}</span>
+                  {onRemoveMountedEntry && <button className="claude-chat-attachment-remove" onClick={() => onRemoveMountedEntry(m.remotePath, m.termId, m.entryId)} title={tt('remove')}>×</button>}
                 </div>
               ))}
             </div>

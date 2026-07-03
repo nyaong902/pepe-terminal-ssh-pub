@@ -51,6 +51,8 @@ import { RemoteShareServer, type RemoteShareStartOptions } from './remoteShareSe
 // @ts-ignore
 import mcpSshServerScript from './mcpSshServer.cjs?raw';
 // @ts-ignore
+import mcpLocalFsServerScript from './mcpLocalFsServer.cjs?raw';
+// @ts-ignore
 import claudeHookScript from './claudeHookScript.cjs?raw';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -182,6 +184,215 @@ function getStartupSshTarget(): StartupSsh | null {
   return null;
 }
 let startupSshTarget: StartupSsh | null = getStartupSshTarget();
+
+function ensureTempScript(fileName: string, content: string) {
+  const fullPath = path.join(os.tmpdir(), fileName);
+  try {
+    const existing = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : '';
+    if (existing !== content) fs.writeFileSync(fullPath, content, 'utf-8');
+  } catch (err) {
+    console.error('[temp-script] write failed:', fileName, err);
+  }
+  return fullPath;
+}
+
+function safeJsonArray(value: any) {
+  try {
+    return JSON.stringify(Array.isArray(value) ? value : []);
+  } catch {
+    return '[]';
+  }
+}
+
+function normalizeLocalAttachmentRoots(localAttachmentRoots?: string[]) {
+  const roots = Array.isArray(localAttachmentRoots) ? localAttachmentRoots : [];
+  return Array.from(new Set(roots.map(r => String(r || '').trim()).filter(r => !!r && fs.existsSync(r))));
+}
+
+function buildLocalFsMcpEnv(localRoots: string[]) {
+  return {
+    PEPE_LOCAL_ROOTS: safeJsonArray(localRoots),
+    ELECTRON_RUN_AS_NODE: '1',
+  };
+}
+
+type AiMirrorSession = {
+  panelId: string;
+  remotePath: string;
+  localRoot: string;
+  isDir: boolean;
+  bundleRoot: string;
+  watcher?: fs.FSWatcher;
+  timer?: NodeJS.Timeout;
+  pendingPaths: Set<string>;
+  syncing: boolean;
+};
+
+const aiMirrorSessions = new Map<string, AiMirrorSession>();
+const aiMirrorPending = new Map<string, { bundleRoot: string; aborted: boolean }>();
+const aiMirrorSessionKey = (panelId: string, remotePath: string) => `${panelId}:${remotePath}`;
+function aiMirrorLog(msg: string) {
+  console.log('[ai-mirror]', msg);
+  try { mainWindow?.webContents.send('debug:log', `[ai-mirror] ${msg}`); } catch {}
+}
+
+function normalizeRemotePathJoin(basePath: string, relPath: string) {
+  const rel = String(relPath || '').replace(/[\\/]+/g, '/').replace(/^\/+/, '');
+  if (!rel) return basePath;
+  return String(basePath || '').replace(/[\\/]+$/g, '') + '/' + rel;
+}
+
+async function ensureRemoteDirRecursive(panelId: string, remoteDir: string) {
+  const bridge: any = getSSHBridge();
+  const clean = String(remoteDir || '').replace(/[\\/]+$/g, '');
+  if (!clean) return;
+  const parts = clean.split('/').filter(Boolean);
+  if (parts.length === 0) return;
+  const isAbs = clean.startsWith('/');
+  let cur = isAbs ? '/' : '';
+  for (const part of parts) {
+    cur = cur === '/' ? `/${part}` : (cur ? `${cur}/${part}` : part);
+    try { await bridge.handleSFTPMkdir(panelId, cur); } catch {}
+  }
+}
+
+function scheduleMirrorSync(session: AiMirrorSession, delay = 1200) {
+  if (session.timer) clearTimeout(session.timer);
+  session.timer = setTimeout(() => {
+    void flushMirrorSync(session);
+  }, delay);
+}
+
+async function flushMirrorSync(session: AiMirrorSession) {
+  if (session.syncing) {
+    scheduleMirrorSync(session, 250);
+    return;
+  }
+  const pending = Array.from(session.pendingPaths);
+  session.pendingPaths.clear();
+  if (pending.length === 0) return;
+  session.syncing = true;
+  try {
+    const uniq = Array.from(new Set(pending.map(p => path.resolve(p))));
+    aiMirrorLog(`flush start panel=${session.panelId} remote=${session.remotePath} items=${uniq.length}`);
+    for (const p of uniq) await syncMirrorLocalPath(session, p);
+  } finally {
+    session.syncing = false;
+    if (session.pendingPaths.size > 0) scheduleMirrorSync(session, 250);
+    else aiMirrorLog(`flush done panel=${session.panelId} remote=${session.remotePath}`);
+  }
+}
+
+async function syncMirrorLocalPath(session: AiMirrorSession, localPath: string) {
+  const bridge: any = getSSHBridge();
+  const pending = aiMirrorPending.get(aiMirrorSessionKey(session.panelId, session.remotePath));
+  if (pending?.aborted) return;
+  const abs = path.resolve(localPath);
+  const rootAbs = path.resolve(session.localRoot);
+  const remoteBase = String(session.remotePath || '');
+  const rel = path.relative(rootAbs, abs);
+  const remotePath = rel ? normalizeRemotePathJoin(remoteBase, rel) : remoteBase;
+  try {
+    if (!fs.existsSync(abs)) {
+      aiMirrorLog(`skip remote delete panel=${session.panelId} remote=${remotePath} reason=local-missing`);
+      return;
+    }
+    if (pending?.aborted) return;
+    const st = await fs.promises.stat(abs);
+    if (st.isDirectory()) {
+      aiMirrorLog(`sync dir panel=${session.panelId} local=${abs} remote=${remotePath}`);
+      await ensureRemoteDirRecursive(session.panelId, remotePath);
+      let localEntries: fs.Dirent[] = [];
+      try {
+        localEntries = await fs.promises.readdir(abs, { withFileTypes: true });
+      } catch {}
+      for (const entry of localEntries) {
+        const childLocal = path.join(abs, entry.name);
+        await syncMirrorLocalPath(session, childLocal);
+      }
+      return;
+    }
+    if (pending?.aborted) return;
+    if (st.size > 10 * 1024 * 1024) return;
+    const parentRemote = remotePath.includes('/') ? remotePath.slice(0, remotePath.lastIndexOf('/')) : '';
+    if (parentRemote) await ensureRemoteDirRecursive(session.panelId, parentRemote);
+    const buf = await fs.promises.readFile(abs);
+    const text = await decodeRemoteText(buf);
+    aiMirrorLog(`write remote panel=${session.panelId} local=${abs} remote=${remotePath} bytes=${buf.length}`);
+    await bridge.handleSFTPWriteFile(session.panelId, remotePath, text);
+  } catch (err) {
+    console.error('[ai-mirror] sync failed:', session.panelId, session.remotePath, localPath, err);
+  }
+}
+
+function disposeAiMirrorSession(panelId: string, remotePath: string) {
+  const key = aiMirrorSessionKey(panelId, remotePath);
+  const pending = aiMirrorPending.get(key);
+  if (pending) {
+    pending.aborted = true;
+    try { fs.rmSync(pending.bundleRoot, { recursive: true, force: true }); } catch {}
+    aiMirrorPending.delete(key);
+  }
+  const session = aiMirrorSessions.get(key);
+  if (!session) return { success: true, removed: false };
+  aiMirrorLog(`dispose panel=${panelId} remote=${remotePath}`);
+  try { if (session.timer) clearTimeout(session.timer); } catch {}
+  try { session.watcher?.close(); } catch {}
+  aiMirrorSessions.delete(key);
+  try { fs.rmSync(session.bundleRoot, { recursive: true, force: true }); } catch {}
+  return { success: true, removed: true };
+}
+
+function disposeAiMirrorPanel(panelId: string) {
+  const keys = new Set<string>();
+  for (const key of aiMirrorSessions.keys()) {
+    if (key.startsWith(`${panelId}:`)) keys.add(key);
+  }
+  for (const key of aiMirrorPending.keys()) {
+    if (key.startsWith(`${panelId}:`)) keys.add(key);
+  }
+  let removed = false;
+  for (const key of keys) {
+    const [pId, ...rest] = key.split(':');
+    const remotePath = rest.join(':');
+    removed = !!disposeAiMirrorSession(pId, remotePath) || removed;
+  }
+  return { success: true, removed };
+}
+
+function registerAiMirrorSession(panelId: string, remotePath: string, localRoot: string, isDir: boolean, bundleRoot: string) {
+  const key = aiMirrorSessionKey(panelId, remotePath);
+  const existing = aiMirrorSessions.get(key);
+  if (existing) {
+    aiMirrorLog(`replace existing panel=${panelId} remote=${remotePath}`);
+    try { if (existing.timer) clearTimeout(existing.timer); } catch {}
+    try { existing.watcher?.close(); } catch {}
+    aiMirrorSessions.delete(key);
+    try { fs.rmSync(existing.bundleRoot, { recursive: true, force: true }); } catch {}
+  }
+  try { fs.mkdirSync(localRoot, { recursive: true }); } catch {}
+  const session: AiMirrorSession = { panelId, remotePath, localRoot, isDir, bundleRoot, pendingPaths: new Set(), syncing: false };
+  try {
+    aiMirrorLog(`register panel=${panelId} remote=${remotePath} localRoot=${localRoot} kind=${isDir ? 'dir' : 'file'}`);
+    const startWatcher = (recursive: boolean) => fs.watch(localRoot, { recursive }, (_eventType, filename) => {
+      const rel = filename ? String(filename).replace(/^[\\/]+/, '') : '';
+      const changed = rel ? path.join(localRoot, rel) : localRoot;
+      aiMirrorLog(`watch event panel=${panelId} remote=${remotePath} change=${changed}`);
+      session.pendingPaths.add(changed);
+      scheduleMirrorSync(session);
+    });
+    try {
+      session.watcher = startWatcher(!!isDir);
+    } catch (err) {
+      aiMirrorLog(`recursive watcher fallback panel=${panelId} remote=${remotePath} err=${String((err as any)?.message || err)}`);
+      session.watcher = startWatcher(false);
+    }
+  } catch (err) {
+    console.error('[ai-mirror] watcher failed:', err);
+  }
+  aiMirrorSessions.set(key, session);
+  return session;
+}
 
 // 창 최대화 상태 + 복원 좌표
 let isMaximized = false;
@@ -420,6 +631,7 @@ function cleanupStaleTempFiles() {
       /^pepe-ext-icon-list-\d+/, /^pepe-ext-icons-\d+/, /^pepe-icon-list-\d+/,
       /^pepe-icons-batch-\d+/, /^pepe-shellicon-\d+/, /^pepe-icon-\d+/,
       /^pepe-mermaid-src\.txt$/, /^pepe-autotrack-/, /^pepe-pwd-/, /^pepe-mcp-\d+/,
+      /^pepe-ai-mirror-/, /^pepe-mcp-localfs-server\.cjs$/,
       /^gemini-prompt-\d+/, /^gemini-mcp-\d+/, /^claude-mcp-\d+/,
       /^pepe-sipd\.log$/, // SIP 사이드카 파일 로그 제거 (env 설정 안 했을 때 잔존 정리)
       /^pepe-agy-\d+/,    // Antigravity CLI 로그/리포트 (정상 종료 시 본인이 지우지만 비정상 종료 잔존)
@@ -463,9 +675,143 @@ function cleanupStaleTempFiles() {
   } catch {}
 }
 
+const PEPE_INSTANCE_REGISTRY_FILE = path.join(os.tmpdir(), 'pepe-instance-registry.json');
+const PEPE_INSTANCE_LOCK_FILE = path.join(os.tmpdir(), 'pepe-instance-registry.lock');
+
+type PepeInstanceRecord = { pid: number; startedAt: number };
+
+function withInstanceRegistryLock<T>(fn: () => T): T {
+  const deadline = Date.now() + 1500;
+  for (;;) {
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(PEPE_INSTANCE_LOCK_FILE, 'wx');
+      try { return fn(); } finally {
+        try { fs.closeSync(fd); } catch {}
+        try { fs.unlinkSync(PEPE_INSTANCE_LOCK_FILE); } catch {}
+      }
+    } catch (err: any) {
+      if (fd != null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      if (Date.now() >= deadline) return fn();
+      try { if (!fs.existsSync(PEPE_INSTANCE_LOCK_FILE)) continue; } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+}
+
+function readInstanceRegistry(): PepeInstanceRecord[] {
+  try {
+    const raw = fs.readFileSync(PEPE_INSTANCE_REGISTRY_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is PepeInstanceRecord => !!x && Number.isFinite(x.pid) && Number.isFinite(x.startedAt)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeInstanceRegistry(records: PepeInstanceRecord[]) {
+  try {
+    fs.writeFileSync(PEPE_INSTANCE_REGISTRY_FILE, JSON.stringify(records), 'utf-8');
+  } catch {}
+}
+
+function pruneDeadInstanceRecords(records: PepeInstanceRecord[]) {
+  return records.filter(r => {
+    try {
+      process.kill(r.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function registerPepeInstance() {
+  const now = Date.now();
+  withInstanceRegistryLock(() => {
+    const next = pruneDeadInstanceRecords(readInstanceRegistry());
+    if (!next.some(r => r.pid === process.pid)) next.push({ pid: process.pid, startedAt: now });
+    writeInstanceRegistry(next);
+  });
+}
+
+function unregisterPepeInstanceAndMaybeCleanup() {
+  let shouldCleanup = false;
+  withInstanceRegistryLock(() => {
+    const current = pruneDeadInstanceRecords(readInstanceRegistry()).filter(r => r.pid !== process.pid);
+    writeInstanceRegistry(current);
+    shouldCleanup = current.length === 0;
+  });
+  if (shouldCleanup) scheduleDetachedTempCleanup();
+}
+
+function scheduleDetachedTempCleanup() {
+  const cleanupScript = String.raw`
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const dir = os.tmpdir();
+    const patterns = [
+      /^pepe-gemini-\d+/, /^pepe-xshell-import-\d+/, /^pepe-desktop-\d+/,
+      /^pepe-mypc-\d+/, /^pepe-shell-\d+/, /^pepe-drives-\d+/,
+      /^pepe-ext-icon-list-\d+/, /^pepe-ext-icons-\d+/, /^pepe-icon-list-\d+/,
+      /^pepe-icons-batch-\d+/, /^pepe-shellicon-\d+/, /^pepe-icon-\d+/,
+      /^pepe-mermaid-src\.txt$/, /^pepe-autotrack-/, /^pepe-pwd-/, /^pepe-mcp-\d+/,
+      /^pepe-ai-mirror-/, /^pepe-mcp-localfs-server\.cjs$/, /^pepe-mcp-ssh-server\.cjs$/,
+      /^pepe-codex-home-/, /^pepe-agy-/, /^pepe-agy-report-/, /^pepe-agy-cont-/,
+      /^gemini-prompt-\d+/, /^gemini-mcp-\d+/, /^claude-mcp-\d+/, /^claude-prompt-\d+/,
+      /^codex-prompt-\d+/, /^pepe-quick-share-/, /^pepe-openvpn-/, /^pepe-openvpn-auth-/,
+      /^pepe-claude-hook(\.cjs|\.cmd)?$/, /^claude-settings-\d+\.json$/,
+      /^claude-mcp-\d+.*\.json$/, /^gemini-settings-\d+\.json$/, /^gemini-mcp-\d+.*\.json$/,
+    ];
+    const isTarget = (name) => patterns.some(re => re.test(name));
+    const rm = (full) => { try { fs.rmSync(full, { recursive: true, force: true }); } catch {} };
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (!isTarget(name)) continue;
+        rm(path.join(dir, name));
+      }
+    } catch {}
+  `;
+  try {
+    const { spawn } = require('child_process');
+    const child = spawn(process.execPath, ['-e', cleanupScript], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    });
+    child.unref();
+  } catch {}
+}
+
+function cleanupAiMirrorTempRoots(force = false) {
+  try {
+    const dir = os.tmpdir();
+    const liveRoots = new Set<string>();
+    for (const session of aiMirrorSessions.values()) {
+      if (session?.bundleRoot) liveRoots.add(path.resolve(session.bundleRoot));
+    }
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^pepe-ai-mirror-/.test(name)) continue;
+      const full = path.join(dir, name);
+      try {
+        if (!force && liveRoots.has(path.resolve(full))) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+        aiMirrorLog(`cleanup temp root ${full}`);
+      } catch (err) {
+        console.warn('[ai-mirror] cleanup failed:', full, err);
+      }
+    }
+  } catch {}
+}
+
 app.whenReady().then(() => {
   sessionsData = loadSessionsData();
   cleanupStaleTempFiles();
+  cleanupAiMirrorTempRoots(false);
+  registerPepeInstance();
   createWindow();
   installX11DisplayHook();
   void messengerStartService();
@@ -606,6 +952,10 @@ ipcMain.handle('remote-share:stop', () => remoteShareServer.stop());
 app.on('window-all-closed', () => {
   // 단일 윈도우 앱 — macOS 에서도 마지막 창 닫히면 완전 종료 (activate 핸들러 없어 dock 클릭으로 복귀 불가).
   app.quit();
+});
+
+app.on('before-quit', () => {
+  unregisterPepeInstanceAndMaybeCleanup();
 });
 
 // 앱 종료 직전 — 띄워놓은 모든 VcXsrv/embedded X 서버 + 활성 SSH 세션 정리.
@@ -1332,6 +1682,252 @@ ipcMain.handle('chat:remove-pending-attachment', (_e, { filePath }: { filePath: 
     return { success: true };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };
+  }
+});
+
+app.on('before-quit', () => {
+});
+
+ipcMain.handle('local-fs:read-file', async (_e, { filePath }: { filePath: string }) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { success: false, error: '파일이 없습니다' };
+    const buf = await fs.promises.readFile(filePath);
+    const text = await decodeRemoteText(buf);
+    return { success: true, text, size: buf.length };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+
+const AI_ATTACH_BINARY_EXT = new Set([
+  'png','jpg','jpeg','gif','bmp','ico','webp','tiff','heic','zip','gz','tar','bz2','7z','rar','exe','dll','so','dylib','bin','pdf','mp3','mp4','avi','mkv','mov','wav','flac','ogg','class','o','a','obj','lib','pyc','woff','woff2','ttf','otf','eot',
+  'pptx','ppt','docx','doc','xlsx','xls','hwp','hwpx','odt','ods','odp',
+]);
+function isLikelyBinaryName(name: string) {
+  const ext = path.extname(name).slice(1).toLowerCase();
+  return AI_ATTACH_BINARY_EXT.has(ext);
+}
+
+function safeMirrorName(remotePath: string) {
+  return String(remotePath)
+    .replace(/^[A-Za-z]:[\\/]/, '')
+    .replace(/^\/+/, '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120) || 'attachment';
+}
+
+function quoteShellArg(value: string) {
+  return `'${String(value || '').replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizeRemoteSlash(p: string) {
+  return String(p || '').replace(/[\\/]+/g, '/');
+}
+
+function remoteRelPath(base: string, full: string) {
+  const rel = path.posix.relative(normalizeRemoteSlash(base).replace(/\/+$/, ''), normalizeRemoteSlash(full));
+  return rel === '.' ? '' : rel;
+}
+
+const AI_ATTACH_EXCLUDE_DIRS = [
+  '.git', '.svn', 'node_modules', 'dist', 'build', 'coverage', '.cache', '.idea', '.vscode',
+  '__pycache__', '.venv', 'venv', '.next', 'target', 'out', 'bin', 'obj', 'logs', 'tmp',
+  '.mypy_cache', '.pytest_cache', '.gradle', '.terraform', '.cargo', 'vendor', 'release',
+];
+
+function shellFindPruneExpr() {
+  return AI_ATTACH_EXCLUDE_DIRS.map(d => `-path ${quoteShellArg(`*/${d}/*`)}`).join(' -o ');
+}
+
+const AI_ATTACH_TEXT_EXTS = [
+  '*.c', '*.h', '*.cpp', '*.hpp', '*.cc', '*.hh', '*.js', '*.jsx', '*.ts', '*.tsx', '*.mjs', '*.cjs',
+  '*.py', '*.sh', '*.bash', '*.zsh', '*.json', '*.yaml', '*.yml', '*.xml', '*.md', '*.txt', '*.ini',
+  '*.cfg', '*.toml', '*.sql', '*.go', '*.java', '*.kt', '*.rb', '*.php', '*.css', '*.scss', '*.html',
+  '*.htm', '*.vue', '*.svelte', '*.gradle', '*.dockerfile', 'Dockerfile*', '*.properties', '*.env',
+  '*.conf', '*.service', '*.ps1', '*.psm1', '*.bat', '*.cmd', '*.r', '*.swift', '*.dart', '*.lock',
+];
+
+async function decodeRemoteText(buf: Buffer) {
+  let text = buf.toString('utf-8');
+  if (text.includes('�')) {
+    try {
+      const iconv = require('iconv-lite');
+      const cp949 = iconv.decode(buf, 'cp949');
+      const curBad = (text.match(/�/g) || []).length;
+      const altBad = (cp949.match(/�/g) || []).length;
+      if (altBad < curBad) text = cp949;
+    } catch {}
+  }
+  return text;
+}
+
+async function mirrorRemoteAttachment(panelId: string, remotePath: string, isDir: boolean) {
+  const bridge: any = getSSHBridge();
+  const bundleRoot = path.join(os.tmpdir(), `pepe-ai-mirror-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
+  const targetRoot = path.join(bundleRoot, safeMirrorName(remotePath));
+  const key = aiMirrorSessionKey(panelId, remotePath);
+  aiMirrorPending.set(key, { bundleRoot, aborted: false });
+  const stats = { copiedFiles: 0, skippedFiles: 0, copiedBytes: 0 };
+  aiMirrorLog(`mirror start panel=${panelId} remote=${remotePath} kind=${isDir ? 'dir' : 'file'} target=${targetRoot}`);
+
+  const MIRROR_PARALLEL_FILES = 4;
+
+  const runQueue = async <T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>) => {
+    const queue = [...items];
+    let cursor = 0;
+    const runners = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= queue.length) return;
+        await worker(queue[idx], idx);
+      }
+    });
+    await Promise.all(runners);
+  };
+
+  const collectMirrorFiles = async (rootPath: string): Promise<{ files: string[]; mode: 'mime' | 'ext' }> => {
+    const normalized = normalizeRemoteSlash(rootPath).replace(/\/+$/, '');
+    const rootQ = quoteShellArg(normalized);
+    const pruneExpr = shellFindPruneExpr();
+    const extExpr = AI_ATTACH_TEXT_EXTS.map(ext => `-name ${quoteShellArg(ext)}`).join(' -o ');
+    const script = `
+ROOT=${rootQ}
+if command -v file >/dev/null 2>&1; then
+  printf "__MODE__:mime\\n"
+  find "$ROOT" \\( ${pruneExpr} \\) -prune -o -type f -exec sh -c '
+    for f do
+      mime=$(file -b --mime-type "$f" 2>/dev/null || echo unknown)
+      case "$mime" in
+        text/*|inode/x-empty|application/json|application/xml|application/yaml|application/x-yaml|application/javascript|application/x-javascript|application/x-sh|application/x-shellscript|application/x-python|application/x-perl|application/x-ruby|application/x-php|application/sql|application/x-sql|application/x-httpd-php)
+          printf "%s\\n" "$f"
+          ;;
+      esac
+    done
+  ' sh {} +
+else
+  printf "__MODE__:ext\\n"
+  find "$ROOT" \\( ${pruneExpr} \\) -prune -o -type f \\( ${extExpr} \\) -print
+fi
+`;
+    const r = await bridge.handleExec(panelId, script, 120000);
+    const out = String(r?.stdout || '').trim();
+    const err = String(r?.stderr || '').trim();
+    if (err) aiMirrorLog(`collect stderr panel=${panelId} remote=${remotePath} err=${err.slice(0, 500)}`);
+    if (typeof r?.exitCode === 'number' && r.exitCode !== 0) aiMirrorLog(`collect exit panel=${panelId} remote=${remotePath} code=${r.exitCode}`);
+    if (!out) return { files: [], mode: 'mime' };
+    const lines = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const modeLine = lines[0] && lines[0].startsWith('__MODE__:') ? lines.shift()! : '__MODE__:mime';
+    const mode = modeLine.replace('__MODE__:', '') as 'mime' | 'ext';
+    return { files: Array.from(new Set(lines)), mode };
+  };
+
+  try {
+    fs.mkdirSync(targetRoot, { recursive: true });
+    const pending = aiMirrorPending.get(key);
+    if (pending?.aborted) throw new Error('mirror cancelled');
+    const collected = isDir ? await collectMirrorFiles(remotePath) : { files: [normalizeRemoteSlash(remotePath)], mode: 'mime' as const };
+    let files = collected.files;
+    if (files.length === 0) {
+      aiMirrorLog(`mirror candidate list empty panel=${panelId} remote=${remotePath}`);
+      if (isDir) {
+        aiMirrorLog(`mirror fallback to recursive list panel=${panelId} remote=${remotePath}`);
+        const fallbackList: string[] = [];
+        const seen = new Set<string>();
+        const walk = async (baseRemote: string) => {
+          const entries: any[] = await bridge.handleSFTPListDir(panelId, baseRemote);
+          for (const entry of entries) {
+            const childName = String(entry?.name || '');
+            if (!childName || childName === '.' || childName === '..') continue;
+            const childRemote = baseRemote.replace(/[\\/]+$/, '') + '/' + childName;
+            if (entry.isDir) {
+              await walk(childRemote);
+            } else {
+              const rel = remoteRelPath(remotePath, childRemote);
+              if (seen.has(rel)) continue;
+              seen.add(rel);
+              fallbackList.push(childRemote);
+            }
+          }
+        };
+        try {
+          await walk(remotePath);
+          collected.files = Array.from(new Set(fallbackList));
+          files = collected.files;
+          aiMirrorLog(`mirror fallback candidate count panel=${panelId} remote=${remotePath} candidates=${collected.files.length}`);
+        } catch (e: any) {
+          aiMirrorLog(`mirror fallback failed panel=${panelId} remote=${remotePath} err=${String(e?.message || e)}`);
+        }
+      }
+    } else {
+      aiMirrorLog(`mirror candidate list ready panel=${panelId} remote=${remotePath} candidates=${files.length} mode=${collected.mode}`);
+    }
+    await runQueue(files, MIRROR_PARALLEL_FILES, async (src) => {
+      const pendingNow = aiMirrorPending.get(key);
+      if (pendingNow?.aborted) throw new Error('mirror cancelled');
+      const rel = isDir ? remoteRelPath(remotePath, src) : path.posix.basename(normalizeRemoteSlash(src));
+      const dst = rel ? path.join(targetRoot, rel.split('/').join(path.sep)) : targetRoot;
+      const name = path.posix.basename(normalizeRemoteSlash(src));
+      try {
+        const buf = await bridge.handleSFTPReadFile(panelId, src);
+        const pendingAfterRead = aiMirrorPending.get(key);
+        if (pendingAfterRead?.aborted) throw new Error('mirror cancelled');
+        if (buf.length > 5 * 1024 * 1024) { stats.skippedFiles++; return; }
+        const parent = path.dirname(dst);
+        try { fs.mkdirSync(parent, { recursive: true }); } catch {}
+        const text = await decodeRemoteText(buf);
+        fs.writeFileSync(dst, text, 'utf-8');
+        stats.copiedFiles++;
+        stats.copiedBytes += buf.length;
+      } catch (err: any) {
+        const msg = String(err?.message || err || '');
+        if (/is a directory|EISDIR/i.test(msg)) {
+          stats.skippedFiles++;
+          return;
+        }
+        if (isLikelyBinaryName(name)) {
+          stats.skippedFiles++;
+          return;
+        }
+        throw new Error(`Failed to mirror ${src}: ${msg}`);
+      }
+    });
+    const pendingAfter = aiMirrorPending.get(key);
+    if (pendingAfter?.aborted) throw new Error('mirror cancelled');
+    registerAiMirrorSession(panelId, remotePath, targetRoot, isDir, bundleRoot);
+    aiMirrorLog(`mirror done panel=${panelId} remote=${remotePath} copiedFiles=${stats.copiedFiles} skippedFiles=${stats.skippedFiles} copiedBytes=${stats.copiedBytes}`);
+    return { success: true, bundleRoot, localRoot: targetRoot, ...stats };
+  } finally {
+    const pending = aiMirrorPending.get(key);
+    if (pending && pending.bundleRoot === bundleRoot) aiMirrorPending.delete(key);
+    if (!aiMirrorSessions.has(key)) {
+      try { fs.rmSync(bundleRoot, { recursive: true, force: true }); } catch {}
+    }
+  }
+}
+
+ipcMain.handle('ai-attach:mirror-remote', async (_e, { panelId, remotePath, isDir }: { panelId: string; remotePath: string; isDir: boolean }) => {
+  try {
+    if (!panelId || !remotePath) return { success: false, error: 'panelId and remotePath are required' };
+    return await mirrorRemoteAttachment(panelId, remotePath, !!isDir);
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle('ai-attach:dispose-remote', async (_e, { panelId, remotePath }: { panelId: string; remotePath: string }) => {
+  try {
+    return disposeAiMirrorSession(panelId, remotePath);
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('ai-attach:dispose-panel', async (_e, { panelId }: { panelId: string }) => {
+  try {
+    return disposeAiMirrorPanel(panelId);
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
   }
 });
 
@@ -5304,6 +5900,7 @@ ipcMain.on('ssh:disconnect', (_e, { panelId }) => {
   connectedPanels.delete(panelId);
   connectingPanels.delete(panelId);
   getSSHBridge().handleDisconnect(panelId);
+  try { disposeAiMirrorPanel(panelId); } catch {}
   termBroadcast('ssh:closed', { panelId });
   if (webdavBridge) {
     try { webdavBridge.unregisterSession(panelId); } catch {}
@@ -6389,7 +6986,7 @@ ipcMain.handle('claude:get-mount-path', async (_e, { panelId, remotePath }: { pa
 });
 
 // claude CLI 실행 + 스트리밍 응답 (print 모드)
-ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions }: { sessionId: string; prompt: string; addDirs?: string[]; disallowBash?: boolean; sshTermId?: string; resumeSessionId?: string | null; permissionMode?: string; model?: string; perToolApproval?: boolean; requestId?: string; effort?: string; sshSessions?: { id: string; label: string }[] }) => {
+ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots }: { sessionId: string; prompt: string; addDirs?: string[]; disallowBash?: boolean; sshTermId?: string; resumeSessionId?: string | null; permissionMode?: string; model?: string; perToolApproval?: boolean; requestId?: string; effort?: string; sshSessions?: { id: string; label: string }[]; localAttachmentRoots?: string[] }) => {
   try {
     const { spawn } = require('child_process');
     // requestId 가 있으면 그걸 프로세스 키로 사용 — 동일 sessionId 안에서 여러 대화가 동시에 진행될 수 있음.
@@ -6436,10 +7033,12 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
     else if (permissionMode === 'acceptEdits') permFlag = '--permission-mode acceptEdits';
     else if (permissionMode === 'default') permFlag = '--permission-mode default';
     else permFlag = '--dangerously-skip-permissions'; // bypassPermissions (기본)
-    // MCP 서버 설정 (원격 SSH 명령 실행용) — sshTermId 가 있을 때만 활성화
+    const localRoots = normalizeLocalAttachmentRoots(localAttachmentRoots);
+
+    // MCP 서버 설정 (원격 SSH 명령 실행용 / 로컬 미러 첨부용)
     let mcpConfigArg = '';
     let mcpCfgTmp = '';
-    if (sshTermId) {
+    if (sshTermId || localRoots.length > 0) {
       await startMcpControl();
       // 임베드된 스크립트를 임시 파일로 추출 (dev/prod 모두 작동)
       const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
@@ -6465,20 +7064,29 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
       const mcpServerEnv: Record<string, string> = {
         PEPE_CTRL_PORT: String(mcpControlPort),
         PEPE_CTRL_TOKEN: mcpControlToken,
-        PEPE_TERM_ID: sshTermId,
-        // 멀티 SSH 세션 — JSON [{id,label}] (MCP 가 session 인자로 선택). 없으면 단일 PEPE_TERM_ID.
-        PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
       };
       if (!nodeBin) mcpServerEnv.ELECTRON_RUN_AS_NODE = '1';
-      const mcpCfg = {
-        mcpServers: {
-          pepe_ssh: {
-            command: mcpServerCmd,
-            args: [mcpScriptPath],
-            env: mcpServerEnv,
-          },
-        },
+      const mcpCfg: any = {
+        mcpServers: {},
       };
+      if (sshTermId) {
+        mcpServerEnv.PEPE_TERM_ID = sshTermId;
+        // 멀티 SSH 세션 — JSON [{id,label}] (MCP 가 session 인자로 선택). 없으면 단일 PEPE_TERM_ID.
+        mcpServerEnv.PEPE_TERM_IDS = JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]);
+        mcpCfg.mcpServers.pepe_ssh = {
+          command: mcpServerCmd,
+          args: [mcpScriptPath],
+          env: mcpServerEnv,
+        };
+      }
+      if (localRoots.length > 0) {
+        const localScriptPath = ensureTempScript('pepe-mcp-localfs-server.cjs', mcpLocalFsServerScript);
+        mcpCfg.mcpServers.pepe_localfs = {
+          command: mcpServerCmd,
+          args: [localScriptPath],
+          env: buildLocalFsMcpEnv(localRoots),
+        };
+      }
       console.log('[claude] MCP server binary:', mcpServerCmd, '(node found:', !!nodeBin, ')');
       mcpCfgTmp = path.join(os.tmpdir(), `claude-mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
       fs.writeFileSync(mcpCfgTmp, JSON.stringify(mcpCfg), 'utf-8');
@@ -6491,9 +7099,10 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
 
     // SSH 컨텍스트: 로컬 Bash 금지 (Unix 경로 접근 불가) — Read/Edit/Grep/Glob/LS + MCP ssh_exec 허용
     // 원격 파일/명령은 pepe_ssh MCP 도구로 (WebDAV 제거). read/write/exec/grep/glob/list 모두 허용.
-    const mcpToolAllow = sshTermId
-      ? `"mcp__pepe_ssh__ssh_exec" "mcp__pepe_ssh__ssh_read_file" "mcp__pepe_ssh__ssh_write_file" "mcp__pepe_ssh__ssh_grep" "mcp__pepe_ssh__ssh_glob" "mcp__pepe_ssh__ssh_list_sessions"`
-      : '';
+    const mcpToolAllow = [
+      sshTermId ? `"mcp__pepe_ssh__ssh_exec" "mcp__pepe_ssh__ssh_read_file" "mcp__pepe_ssh__ssh_write_file" "mcp__pepe_ssh__ssh_grep" "mcp__pepe_ssh__ssh_glob" "mcp__pepe_ssh__ssh_list_sessions"` : '',
+      localRoots.length > 0 ? `"mcp__pepe_localfs__list_roots" "mcp__pepe_localfs__list_directory" "mcp__pepe_localfs__read_file" "mcp__pepe_localfs__glob_files" "mcp__pepe_localfs__search_files"` : '',
+    ].filter(Boolean).join(' ');
     const allowedFlag = disallowBash
       ? `--allowedTools "Read" "Edit" "Write" "Glob" "Grep" "LS" ${mcpToolAllow} "WebFetch" "WebSearch"`
       : '';
@@ -6988,7 +7597,7 @@ ipcMain.handle('gemini:modelInfo', async () => {
   }
 });
 
-ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }: { sessionId: string; prompt: string; requestId?: string; model?: string; yolo?: boolean; addDirs?: string[]; sshTermId?: string; sshSessions?: { id: string; label: string }[] }) => {
+ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions, localAttachmentRoots }: { sessionId: string; prompt: string; requestId?: string; model?: string; yolo?: boolean; addDirs?: string[]; sshTermId?: string; sshSessions?: { id: string; label: string }[]; localAttachmentRoots?: string[] }) => {
   try {
     // 같은 sessionId로 실행 중인 Codex 프로세스 정리
     const prevCodex = codexProcesses.get(sessionId);
@@ -7030,30 +7639,41 @@ ipcMain.handle('gemini:send', async (_e, { sessionId, prompt, requestId, model, 
     // gemini 는 WebDAV UNC 워크스페이스를 못 쓰므로(realpathSync hang) 원격 파일은 MCP 로 처리.
     // GEMINI_CLI_SYSTEM_SETTINGS_PATH 로 임시 system settings 를 주입 → ~/.gemini/settings.json 오염 없음.
     let geminiSettingsTmp = '';
-    if (sshTermId) {
+    const localRoots = normalizeLocalAttachmentRoots(localAttachmentRoots);
+    if (sshTermId || localRoots.length > 0) {
       try {
         await startMcpControl();
-        const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
-        try {
-          const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
-          if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
-        } catch (e) { console.error('[gemini] MCP script extract failed:', e); }
         const geminiSettings: any = {
-          mcpServers: {
-            pepe_ssh: {
-              command: process.execPath,
-              args: [mcpScriptPath],
-              env: {
-                PEPE_CTRL_PORT: String(mcpControlPort),
-                PEPE_CTRL_TOKEN: mcpControlToken,
-                PEPE_TERM_ID: sshTermId,
-                PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
-                ELECTRON_RUN_AS_NODE: '1',
-              },
-              trust: true,
-            },
-          },
+          mcpServers: {},
         };
+        if (sshTermId) {
+          const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
+          try {
+            const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
+            if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
+          } catch (e) { console.error('[gemini] MCP script extract failed:', e); }
+          geminiSettings.mcpServers.pepe_ssh = {
+            command: process.execPath,
+            args: [mcpScriptPath],
+            env: {
+              PEPE_CTRL_PORT: String(mcpControlPort),
+              PEPE_CTRL_TOKEN: mcpControlToken,
+              PEPE_TERM_ID: sshTermId,
+              PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
+              ELECTRON_RUN_AS_NODE: '1',
+            },
+            trust: true,
+          };
+        }
+        if (localRoots.length > 0) {
+          const localScriptPath = ensureTempScript('pepe-mcp-localfs-server.cjs', mcpLocalFsServerScript);
+          geminiSettings.mcpServers.pepe_localfs = {
+            command: process.execPath,
+            args: [localScriptPath],
+            env: buildLocalFsMcpEnv(localRoots),
+            trust: true,
+          };
+        }
         // API 키가 설정돼 있으면 OAuth 무료티어 우회 — gemini-cli 가 GEMINI_API_KEY 모드로 인증.
         // (이게 없으면 OAuth(_doSetupUser) 흐름으로 빠져 IneligibleTierError 발생)
         // selectedType + enforcedType 모두 지정해 user 설정의 oauth-personal 을 확실히 override.
@@ -7374,7 +7994,7 @@ ipcMain.handle('codex:rateLimits', async () => {
   }
 });
 
-ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, approvalPolicy, effort, sshTermId, sshSessions }: { sessionId: string; prompt: string; requestId?: string; model?: string; approvalPolicy?: 'suggest' | 'auto-edit' | 'full-auto'; effort?: string; sshTermId?: string; sshSessions?: Array<{ id: string; label: string }> }) => {
+ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, approvalPolicy, effort, sshTermId, sshSessions, localAttachmentRoots }: { sessionId: string; prompt: string; requestId?: string; model?: string; approvalPolicy?: 'suggest' | 'auto-edit' | 'full-auto'; effort?: string; sshTermId?: string; sshSessions?: Array<{ id: string; label: string }>; localAttachmentRoots?: string[] }) => {
   try {
     // 같은 sessionId로 실행 중인 Gemini 프로세스 정리
     const prevGemini = geminiProcesses.get(sessionId);
@@ -7411,23 +8031,20 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
     const realCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
     let effectiveCodexHome = realCodexHome;
     let tmpCodexHome = '';
-    if (sshTermId) {
+    const localRoots = normalizeLocalAttachmentRoots(localAttachmentRoots);
+    if (sshTermId || localRoots.length > 0) {
       try {
         await startMcpControl();
-        const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
-        try {
-          const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
-          if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
-        } catch (e) { console.error('[codex] MCP script extract failed:', e); }
-
         tmpCodexHome = path.join(os.tmpdir(), `pepe-codex-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
         fs.mkdirSync(tmpCodexHome, { recursive: true });
         // 로그인(auth.json) 유지를 위해 실제 홈에서 복사
-        for (const f of ['auth.json']) {
-          try {
-            const src = path.join(realCodexHome, f);
-            if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmpCodexHome, f));
-          } catch {}
+        if (sshTermId) {
+          for (const f of ['auth.json']) {
+            try {
+              const src = path.join(realCodexHome, f);
+              if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmpCodexHome, f));
+            } catch {}
+          }
         }
         // 기존 config.toml(모델/설정) 보존 — mcp_servers 블록만 덧붙임
         let baseToml = '';
@@ -7437,25 +8054,48 @@ ipcMain.handle('codex:send', async (_e, { sessionId, prompt, requestId, model, a
         } catch {}
 
         const tomlStr = (s: string) => '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-        const termIdsJson = JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]);
-        const mcpBlock = [
-          '',
-          '# pepe_ssh — PePe Terminal SSH MCP (auto-generated, do not edit)',
-          '[mcp_servers.pepe_ssh]',
-          `command = ${tomlStr(process.execPath)}`,
-          `args = [${tomlStr(mcpScriptPath)}]`,
-          '',
-          '[mcp_servers.pepe_ssh.env]',
-          `PEPE_CTRL_PORT = ${tomlStr(String(mcpControlPort))}`,
-          `PEPE_CTRL_TOKEN = ${tomlStr(mcpControlToken)}`,
-          `PEPE_TERM_ID = ${tomlStr(sshTermId)}`,
-          `PEPE_TERM_IDS = ${tomlStr(termIdsJson)}`,
-          `ELECTRON_RUN_AS_NODE = ${tomlStr('1')}`,
-          '',
-        ].join('\n');
-        fs.writeFileSync(path.join(tmpCodexHome, 'config.toml'), baseToml + '\n' + mcpBlock, 'utf-8');
+        const blocks: string[] = [];
+        if (sshTermId) {
+          const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
+          try {
+            const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
+            if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
+          } catch (e) { console.error('[codex] MCP script extract failed:', e); }
+          const termIdsJson = JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]);
+          blocks.push([
+            '',
+            '# pepe_ssh — PePe Terminal SSH MCP (auto-generated, do not edit)',
+            '[mcp_servers.pepe_ssh]',
+            `command = ${tomlStr(process.execPath)}`,
+            `args = [${tomlStr(mcpScriptPath)}]`,
+            '',
+            '[mcp_servers.pepe_ssh.env]',
+            `PEPE_CTRL_PORT = ${tomlStr(String(mcpControlPort))}`,
+            `PEPE_CTRL_TOKEN = ${tomlStr(mcpControlToken)}`,
+            `PEPE_TERM_ID = ${tomlStr(sshTermId)}`,
+            `PEPE_TERM_IDS = ${tomlStr(termIdsJson)}`,
+            `ELECTRON_RUN_AS_NODE = ${tomlStr('1')}`,
+            '',
+          ].join('\n'));
+        }
+        if (localRoots.length > 0) {
+          const localScriptPath = ensureTempScript('pepe-mcp-localfs-server.cjs', mcpLocalFsServerScript);
+          blocks.push([
+            '',
+            '# pepe_localfs — synced local attachment MCP (auto-generated, do not edit)',
+            '[mcp_servers.pepe_localfs]',
+            `command = ${tomlStr(process.execPath)}`,
+            `args = [${tomlStr(localScriptPath)}]`,
+            '',
+            '[mcp_servers.pepe_localfs.env]',
+            `PEPE_LOCAL_ROOTS = ${tomlStr(safeJsonArray(localRoots))}`,
+            `ELECTRON_RUN_AS_NODE = ${tomlStr('1')}`,
+            '',
+          ].join('\n'));
+        }
+        fs.writeFileSync(path.join(tmpCodexHome, 'config.toml'), baseToml + '\n' + blocks.join('\n'), 'utf-8');
         effectiveCodexHome = tmpCodexHome;
-        console.log('[codex] MCP(pepe_ssh) configured via CODEX_HOME:', tmpCodexHome, '| termId:', sshTermId);
+        console.log('[codex] MCP configured via CODEX_HOME:', tmpCodexHome, '| termId:', sshTermId || '(none)', '| localRoots:', localRoots.length);
       } catch (e) {
         console.error('[codex] MCP setup failed:', e);
         effectiveCodexHome = realCodexHome;
@@ -8365,7 +9005,7 @@ ipcMain.handle('antigravity:openUsage', async () => {
   } catch (e: any) { return { success: false, error: String(e) }; }
 });
 
-ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions }: { sessionId: string; prompt: string; requestId?: string; model?: string; yolo?: boolean; addDirs?: string[]; sshTermId?: string; sshSessions?: { id: string; label: string }[] }) => {
+ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, model, yolo, addDirs, sshTermId, sshSessions, localAttachmentRoots }: { sessionId: string; prompt: string; requestId?: string; model?: string; yolo?: boolean; addDirs?: string[]; sshTermId?: string; sshSessions?: { id: string; label: string }[]; localAttachmentRoots?: string[] }) => {
   try {
     const { spawn } = require('child_process');
     const procKey = requestId || sessionId;
@@ -8449,30 +9089,38 @@ ipcMain.handle('antigravity:send', async (_e, { sessionId, prompt, requestId, mo
     // ── SSH MCP 연동 — sshTermId 가 있으면 agy 에 pepe_ssh MCP 동적 등록 ──
     // agy 는 ~/.gemini/antigravity-cli/mcp_config.json 에서 MCP 서버 목록을 로드.
     // 매 호출마다 갱신해서 현재 SSH 세션이 PEPE_TERM_ID 로 주입되게 함.
-    if (sshTermId) {
+    const localRoots = normalizeLocalAttachmentRoots(localAttachmentRoots);
+    if (sshTermId || localRoots.length > 0) {
       try {
         await startMcpControl();
-        const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
-        try {
-          const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
-          if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
-        } catch (e) { console.error('[antigravity] MCP script extract failed:', e); }
-        const mcpCfg = {
-          mcpServers: {
-            pepe_ssh: {
-              command: process.execPath,
-              args: [mcpScriptPath],
-              env: {
-                PEPE_CTRL_PORT: String(mcpControlPort),
-                PEPE_CTRL_TOKEN: mcpControlToken,
-                PEPE_TERM_ID: sshTermId,
-                PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
-                PEPE_YOLO: yolo ? '1' : '0',
-                ELECTRON_RUN_AS_NODE: '1',
-              },
+        const mcpCfg: any = { mcpServers: {} };
+        if (sshTermId) {
+          const mcpScriptPath = path.join(os.tmpdir(), 'pepe-mcp-ssh-server.cjs');
+          try {
+            const existing = fs.existsSync(mcpScriptPath) ? fs.readFileSync(mcpScriptPath, 'utf-8') : '';
+            if (existing !== mcpSshServerScript) fs.writeFileSync(mcpScriptPath, mcpSshServerScript, 'utf-8');
+          } catch (e) { console.error('[antigravity] MCP script extract failed:', e); }
+          mcpCfg.mcpServers.pepe_ssh = {
+            command: process.execPath,
+            args: [mcpScriptPath],
+            env: {
+              PEPE_CTRL_PORT: String(mcpControlPort),
+              PEPE_CTRL_TOKEN: mcpControlToken,
+              PEPE_TERM_ID: sshTermId,
+              PEPE_TERM_IDS: JSON.stringify(Array.isArray(sshSessions) && sshSessions.length > 0 ? sshSessions : [{ id: sshTermId, label: sshTermId }]),
+              PEPE_YOLO: yolo ? '1' : '0',
+              ELECTRON_RUN_AS_NODE: '1',
             },
-          },
-        };
+          };
+        }
+        if (localRoots.length > 0) {
+          const localScriptPath = ensureTempScript('pepe-mcp-localfs-server.cjs', mcpLocalFsServerScript);
+          mcpCfg.mcpServers.pepe_localfs = {
+            command: process.execPath,
+            args: [localScriptPath],
+            env: buildLocalFsMcpEnv(localRoots),
+          };
+        }
         // 공식 docs(https://antigravity.google/docs/plugins): 플러그인 폴더 구조
         //   ~/.gemini/config/plugins/<name>/plugin.json   ← 마커 {"name":"..."}
         //   ~/.gemini/config/plugins/<name>/mcp_config.json ← MCP 서버 정의

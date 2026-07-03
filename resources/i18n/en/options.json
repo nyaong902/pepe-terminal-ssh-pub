@@ -4,6 +4,7 @@
   "tabs": {
     "terminal": "Terminal",
     "session": "Sessions",
+    "mcp": "MCP",
     "keybindings": "Keybindings"
   },
   "clipboard": {
@@ -39,6 +40,14 @@
     "deleteConversations": "Delete all conversations",
     "confirmDeleteUsers": "Delete all discovered users and conversations?",
     "deleteUsers": "Delete all users"
+  },
+  "mcp": {
+    "heading": "AI attachment MCP mode",
+    "desc": "Choose how AI chat attachments are exposed to the CLI. The selected mode is used when you attach files or folders from the remote tree.",
+    "sshTitle": "1. Existing SSH MCP",
+    "sshDesc": "The CLI reads remote files directly over SSH using the current pepe_ssh MCP tools.",
+    "localTitle": "2. Local mirror MCP",
+    "localDesc": "Remote attachments are copied locally first, then the CLI reads them through a local filesystem MCP server."
   },
   "aiAgent": {
     "heading": "AI Agent",

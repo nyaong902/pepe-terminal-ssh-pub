@@ -73,7 +73,8 @@
     "mountFail": "마운트 실패: {{error}}",
     "pathConvertFail": "경로 변환 실패: {{error}}",
     "attached": "첨부 완료 (WebDAV 실시간 접근)",
-    "attachFail": "첨부 실패: {{error}}"
+    "attachFail": "첨부 실패: {{error}}",
+    "syncingLocal": "원격 첨부를 로컬로 복사 중: {{path}}"
   },
   "tabs": {
     "browser": "🌐 브라우저",

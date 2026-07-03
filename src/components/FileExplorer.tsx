@@ -38,6 +38,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 이 FileExplorer 인스턴스의 고유 ID — 전송 이벤트 필터링에 사용
   const workspaceIdRef = React.useRef(`fe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const { t } = useTranslation('fileExplorer');
+  const [bootReady, setBootReady] = useState(false);
   const localLabel = t('local');
   const [sources, setSources] = useState<PanelSource[]>([{ mode: 'local', label: localLabel }]);
   // 좌·우 패널 각각 여러 폴더 탭 유지 — 각 탭은 자기 source/path/selected 상태
@@ -121,6 +122,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   const [credConnecting, setCredConnecting] = useState(false);
   const credUserInputRef = useRef<HTMLInputElement>(null);
   const credModalRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => setBootReady(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
   // useLayoutEffect — DOM 커밋 직후(브라우저 페인트 이전)에 실행되어
   // 어떤 포스트-렌더 포커스 이벤트보다 먼저 input 을 확보
   useLayoutEffect(() => {
@@ -148,6 +153,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   }, [credPrompt]);
 
   useEffect(() => {
+    if (!bootReady) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -172,19 +178,21 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     };
     load();
     return () => { cancelled = true; };
-  }, [sessions.length]);
+  }, [sessions.length, bootReady]);
 
   // 언마운트 시 lazy 연결 정리 — 다만 "새 창 분리" 케이스에서는 보존(window.__preserveFileExplorerConns).
   useEffect(() => {
+    if (!bootReady) return;
     return () => {
       if ((window as any).__preserveFileExplorerConns) return;
       for (const cid of lazyConns) {
         try { api?.feSftpDisconnect?.(cid); } catch {}
       }
     };
-  }, [lazyConns]);
+  }, [lazyConns, bootReady]);
   // 상태 변경 시 부모(App.tsx)에 보고 — 분리 시 사용. selected 는 Set → Array 로 직렬화.
   useEffect(() => {
+    if (!bootReady) return;
     if (!onStateChange) return;
     try {
       onStateChange({
@@ -193,10 +201,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         leftActive, rightActive, lazyConns,
       });
     } catch {}
-  }, [leftTabs, rightTabs, leftActive, rightActive, lazyConns, onStateChange]);
+  }, [leftTabs, rightTabs, leftActive, rightActive, lazyConns, onStateChange, bootReady]);
 
   // 초기 경로
   useEffect(() => {
+    if (!bootReady) return;
     (async () => {
       try {
         const home = await api?.feGetHome?.();
@@ -226,10 +235,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       });
     } catch {}
     return () => { try { unsub2?.(); } catch {} };
-  }, []);
+  }, [bootReady]);
 
   // 파일 전송 탭에서 세션 더블클릭으로 SFTP 연결된 이벤트 수신
   useEffect(() => {
+    if (!bootReady) return;
     const handler = async (e: Event) => {
       const { connId, sessionName, host, feTabId } = (e as CustomEvent).detail;
       // 특정 파일 전송 탭을 대상으로 한 이벤트면 그 탭의 인스턴스만 처리 (중복 추가 방지)
@@ -257,10 +267,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     };
     window.addEventListener('fe-sftp-connected', handler);
     return () => window.removeEventListener('fe-sftp-connected', handler);
-  }, [rightSource.mode]);
+  }, [rightSource.mode, bootReady]);
 
   // 빠른 연결 바에서 들어오는 SFTP 직접 연결 요청 처리
   useEffect(() => {
+    if (!bootReady) return;
     const handler = async (ev: any) => {
       const info = ev.detail || {};
       if (!info.host || !info.username) return;
@@ -290,11 +301,12 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     };
     window.addEventListener('fe-quick-sftp-connect', handler);
     return () => window.removeEventListener('fe-quick-sftp-connect', handler);
-  }, [selectedSide]);
+  }, [selectedSide, bootReady]);
 
   // sessions prop 변경 시 소스 목록 갱신
   const sessKey = sessions.map(s => s.termId).join(',');
   useEffect(() => {
+    if (!bootReady) return;
     const newSources: PanelSource[] = [{ mode: 'local', label: localLabel }];
     // 이미 터미널로 연결된 세션의 sessionId
     const connectedSessionIds = new Set(sessions.map(s => s.sessionId).filter(Boolean));
@@ -355,7 +367,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         tryGetHome(10);
       }
     }
-  }, [sessKey, initDone, sessionFolderMap, allSessionsList]);
+  }, [sessKey, initDone, sessionFolderMap, allSessionsList, bootReady]);
 
   // getHomeWithRetry 를 effect 에서 참조하기 위한 ref (초기 자동선택에서 사용)
   const getHomeWithRetryRef = React.useRef<((mode: string, termId?: string) => Promise<string>) | null>(null);
@@ -762,6 +774,14 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
+
+  if (!bootReady) {
+    return (
+      <div className="fe-container" style={{ alignItems: 'center', justifyContent: 'center', color: '#8aa', background: '#111', minHeight: 0 }}>
+        파일전송 워크스페이스를 준비하는 중...
+      </div>
+    );
+  }
 
   try { return (
     <div className="fe-container">

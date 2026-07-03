@@ -102,6 +102,8 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   const [searchScope, setSearchScope] = useState<SearchScope>('name');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -147,6 +149,18 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
       setVisible(false);
     }
   }, [pinned]);
+
+  useEffect(() => {
+    const onFocusSearch = () => {
+      setVisible(true);
+      requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      });
+    };
+    window.addEventListener('sessionlist-focus-search', onFocusSearch as EventListener);
+    return () => window.removeEventListener('sessionlist-focus-search', onFocusSearch as EventListener);
+  }, []);
 
   // 컨텍스트 메뉴 외부 클릭 시 닫기
   useEffect(() => {
@@ -563,6 +577,63 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     return result;
   }, [sessions, folders, childOrder, collapsed]);
 
+  // 검색 상태에서 실제로 보이는 세션 순서
+  const searchVisibleSessionIds = useMemo<string[]>(() => {
+    if (!searchQuery) return visibleSessionIds;
+    const result: string[] = [];
+    const walk = (parentId?: string) => {
+      const key = parentId || '__root__';
+      const order = childOrder[key];
+      const childFolders = folders.filter(f => (f.parentId ?? undefined) === parentId && isFolderVisible(f));
+      const childSessions = sessions.filter(s => (s.folderId ?? undefined) === parentId && isSessionVisible(s));
+      const allIds = order
+        ? [...order.filter(id => childFolders.some(f => f.id === id) || childSessions.some(s => s.id === id)),
+           ...childFolders.filter(f => !order.includes(f.id)).map(f => f.id),
+           ...childSessions.filter(s => !order.includes(s.id)).map(s => s.id)]
+        : [...childFolders.map(f => f.id), ...childSessions.map(s => s.id)];
+      for (const id of allIds) {
+        const f = childFolders.find(x => x.id === id);
+        if (f) {
+          if (!collapsed.has(f.id)) walk(f.id);
+          continue;
+        }
+        const s = childSessions.find(x => x.id === id);
+        if (s) result.push(s.id);
+      }
+    };
+    walk(undefined);
+    return result;
+  }, [searchQuery, visibleSessionIds, sessions, folders, childOrder, collapsed, isFolderVisible, isSessionVisible]);
+
+  const navigationSessionIds = searchQuery ? searchVisibleSessionIds : visibleSessionIds;
+
+  const focusVisibleSession = useCallback((sessionId: string) => {
+    setSelectedId(sessionId);
+    setSelectedType('session');
+    setSelectedIds(new Set());
+    setTimeout(() => {
+      const el = document.querySelector(`[data-session-id="${sessionId}"]`) as HTMLElement | null;
+      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      listRef.current?.focus({ preventScroll: true });
+    }, 0);
+  }, []);
+
+  const moveSelectionBy = useCallback((delta: number) => {
+    if (!navigationSessionIds.length) return;
+    const currentIdx = selectedId ? navigationSessionIds.indexOf(selectedId) : -1;
+    const nextIdx = currentIdx < 0
+      ? (delta > 0 ? 0 : navigationSessionIds.length - 1)
+      : Math.min(Math.max(currentIdx + delta, 0), navigationSessionIds.length - 1);
+    const nextId = navigationSessionIds[nextIdx];
+    if (nextId) focusVisibleSession(nextId);
+  }, [focusVisibleSession, selectedId, navigationSessionIds]);
+
+  const connectSelectedSession = useCallback(() => {
+    if (selectedType !== 'session' || !selectedId) return;
+    const s = sessions.find(x => x.id === selectedId);
+    if (s) handleConnect(s);
+  }, [handleConnect, selectedId, selectedType, sessions]);
+
   // 재귀 트리 렌더링 — childOrder 기반 혼합 순서
   const renderTree = (parentId?: string, depth = 0) => {
     const key = parentId || '__root__';
@@ -776,8 +847,18 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
           </select>
           <input
             className="session-search-input"
+            ref={searchInputRef}
             value={searchValue}
             onChange={e => setSearchValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                const nextId = navigationSessionIds[0];
+                if (nextId) focusVisibleSession(nextId);
+                setTimeout(() => listRef.current?.focus({ preventScroll: true }), 0);
+              }
+            }}
             placeholder={t('searchPlaceholder', { scope: searchScopeLabel[searchScope] })}
             spellCheck={false}
           />
@@ -795,6 +876,7 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
 
         <div
           className="session-list-scroll"
+          ref={listRef}
           tabIndex={0}
           onClick={e => { if (e.target === e.currentTarget) { setSelectedId(null); setSelectedType('session'); setSelectedIds(new Set()); } }}
           onKeyDown={e => {
@@ -821,6 +903,23 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             if (e.key === 'Delete' && selectedId) {
               e.preventDefault();
               handleDelete();
+            }
+            if (e.key === 'ArrowDown' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+              e.preventDefault();
+              moveSelectionBy(1);
+              return;
+            }
+            if (e.key === 'ArrowUp' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+              e.preventDefault();
+              moveSelectionBy(-1);
+              return;
+            }
+            if (e.key === 'Enter' && !e.shiftKey) {
+              if (selectedType === 'session' && selectedId) {
+                e.preventDefault();
+                connectSelectedSession();
+              }
+              return;
             }
             // Ctrl+C: 세션/폴더 복사
             if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedId) {

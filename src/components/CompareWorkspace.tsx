@@ -660,21 +660,16 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         api.compareRead?.(rightSrc.mode, rightSrc.basePath, rightSrc.termId),
       ]);
       const normEol = (s: string) => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      let lC = '', rC = '', lOK = false, rOK = false;
+      let lC = '', rC = '';
       if (l?.error) setContentErr(t('sourceReadFail', { error: l.error }));
       else {
         setLeftEol(detectEol(l.content ?? '')); setLeftEnc(l.encoding || 'UTF-8');
-        lC = normEol(l.content ?? ''); setLeftContent(lC); setLeftOriginal(lC); lOK = true;
+        lC = normEol(l.content ?? ''); setLeftContent(lC); setLeftOriginal(lC);
       }
       if (r?.error) setContentErr(p => p ? p + ' / ' + t('targetReadFail', { error: r.error }) : t('targetReadFail', { error: r.error }));
       else {
         setRightEol(detectEol(r.content ?? '')); setRightEnc(r.encoding || 'UTF-8');
-        rC = normEol(r.content ?? ''); setRightContent(rC); setRightOriginal(rC); rOK = true;
-      }
-      // 양쪽 모두 성공 + 내용 동일 → 안내 + 모달
-      if (lOK && rOK && lC === rC) {
-        setSameNote(t('sameContentAllMatch'));
-        setAllMatchModal({ left: leftSrc.basePath, right: rightSrc.basePath });
+        rC = normEol(r.content ?? ''); setRightContent(rC); setRightOriginal(rC);
       }
     } catch (err: any) {
       setContentErr(String(err?.message || err));

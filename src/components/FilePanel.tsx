@@ -166,6 +166,7 @@ function getFileIcon(name: string, isDir: boolean, shellPath?: string): string {
 
 export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId }) => {
   const { t } = useTranslation('fileExplorer');
+  const [bootReady, setBootReady] = useState(false);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -307,6 +308,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // - 로컬: path-specific 로딩 전 깜빡임 방지용 fallback (dir 아이콘 + ext 아이콘)
   // ★ 500ms debounce — PowerShell spawn 과 modal 타이밍 충돌 방지
   useEffect(() => {
+    if (!bootReady) return;
     if (source.mode !== 'remote' && source.mode !== 'local') return;
     if (!files || files.length === 0) return;
     if (renamingFile) return;
@@ -356,12 +358,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       })();
     }, 100);
     return () => clearTimeout(t);
-  }, [files, source.mode, renamingFile]);
+  }, [files, source.mode, renamingFile, bootReady]);
 
   // 로컬 모드에서 파일 목록 변경 시 shell icon 을 BATCH 로 요청.
   // ★ 500ms debounce — 빠른 연속 파일 작업(create/rename 등) 으로 PowerShell spawn 이
   //   modal 열림 타이밍과 겹쳐 OS 포커스를 빼앗는 문제 방지
   useEffect(() => {
+    if (!bootReady) return;
     if (source.mode !== 'local') return;
     if (!files || files.length === 0) return;
     if (renamingFile) return;
@@ -420,7 +423,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       fetchIcons();
     }, 500);
     return () => clearTimeout(t);
-  }, [files, source.mode, currentPath, renamingFile]);
+  }, [files, source.mode, currentPath, renamingFile, bootReady]);
 
   // 파일명 인코딩 — SSH/SFTP 원격 파일명 디코딩에 사용. localStorage 영속화.
   // (loadDir 보다 먼저 선언되어야 함 — useCallback 이 dep 로 사용)
@@ -431,6 +434,10 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     try { localStorage.setItem(`feEncoding:${panelId}`, encoding); } catch {}
   }, [encoding, panelId]);
   const [encodingMenu, setEncodingMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => setBootReady(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
 
   // 디렉토리 오류 메시지 — ENOENT 류는 친화적 한글로 변환 후 모달로 노출, 그 외엔 인라인.
   const isPathNotFoundError = (err: string): boolean => {
@@ -469,7 +476,11 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     setLoading(false);
   }, [source.mode, source.termId, encoding]);
 
-  useEffect(() => { loadDir(currentPath); }, [currentPath, loadDir, refreshKey]);
+  useEffect(() => {
+    if (!bootReady) return;
+    const t = window.setTimeout(() => loadDir(currentPath), 0);
+    return () => window.clearTimeout(t);
+  }, [currentPath, loadDir, refreshKey, bootReady]);
   useEffect(() => { setEditPath(friendlyShellLabel(currentPath) || currentPath); }, [currentPath]);
 
   const sep = source.mode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
@@ -892,6 +903,14 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
 
   const sortedFiles = getSortedFiles();
   const sortIcon = (key: SortKey) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  if (!bootReady) {
+    return (
+      <div className="fe-panel" style={{ alignItems: 'center', justifyContent: 'center', color: '#8aa', background: '#111', minHeight: 0 }}>
+        파일 목록을 준비하는 중...
+      </div>
+    );
+  }
 
   return (
     <div className="fe-panel">

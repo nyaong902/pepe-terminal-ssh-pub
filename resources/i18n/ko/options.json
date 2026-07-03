@@ -4,6 +4,7 @@
   "tabs": {
     "terminal": "터미널",
     "session": "세션",
+    "mcp": "MCP",
     "keybindings": "단축키"
   },
   "clipboard": {
@@ -39,6 +40,14 @@
     "deleteConversations": "전체 대화 삭제",
     "confirmDeleteUsers": "발견된 모든 사용자와 대화내역을 삭제할까요?",
     "deleteUsers": "전체 사용자 삭제"
+  },
+  "mcp": {
+    "heading": "AI 첨부 MCP 방식",
+    "desc": "AI 채팅 첨부 파일/폴더를 CLI에 어떤 방식으로 노출할지 선택합니다. 원격 트리에서 첨부할 때 이 설정이 사용됩니다.",
+    "sshTitle": "1. 기존 SSH MCP",
+    "sshDesc": "현재 pepe_ssh MCP 도구로 CLI가 원격 파일을 SSH로 직접 읽습니다.",
+    "localTitle": "2. 로컬 미러 MCP",
+    "localDesc": "원격 첨부를 먼저 로컬로 수집한 뒤, 로컬 파일시스템 MCP 서버로 CLI가 읽습니다."
   },
   "aiAgent": {
     "heading": "AI Agent",

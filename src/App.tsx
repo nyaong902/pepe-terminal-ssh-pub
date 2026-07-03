@@ -16,7 +16,7 @@ import { BrowserPane } from './components/BrowserPane';
 import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
-import { MicroSipWorkspace } from './components/MicroSipWorkspace';
+import { MicroSipWorkspace, type MicroSipView } from './components/MicroSipWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
 import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -63,6 +63,7 @@ export type TabId = string;
 export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
+const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
 function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
@@ -74,6 +75,17 @@ function buildJumpChain(sess: any): { host: string; user?: string; port?: number
     out.push({ host, user: j.user || 'root', port: Number(j.port) || 22, password: j.password || undefined });
   }
   return out;
+}
+
+function pickWorkspaceColor(tabs: Tab[], insertIndex: number): TabColor {
+  const neighborColors = new Set<TabColor>();
+  const left = tabs[insertIndex - 1];
+  const right = tabs[insertIndex];
+  if (left?.color && left.color !== 'default') neighborColors.add(left.color);
+  if (right?.color && right.color !== 'default') neighborColors.add(right.color);
+  const pool = WORKSPACE_COLORS.filter(c => !neighborColors.has(c));
+  const choices = pool.length > 0 ? pool : WORKSPACE_COLORS;
+  return choices[Math.floor(Math.random() * choices.length)];
 }
 
 // 일괄전송 히스토리 (앱 실행 중 유지, 최대 50개)
@@ -99,7 +111,7 @@ function App() {
   const [tabs, setTabs] = useState<Tab[]>(() => {
     // 분리 창은 빈 상태로 시작 — 마운트 후 main 에서 받은 탭 페이로드로 채운다(기본 워크스페이스/자동 셸 생성 방지).
     if (IS_DETACHED_WINDOW) return [];
-    return [{ id: 'tab-1', title: 'Workspace 1', layout: createInitialLayout('tab-1') }];
+    return [{ id: 'tab-1', title: 'Workspace 1', layout: createInitialLayout('tab-1'), color: pickWorkspaceColor([], 0) }];
   });
   // 빈 deps useEffect 에서 최신 tabs 참조용 — state 변경 시마다 ref 동기화
   const tabsRef = useRef(tabs);
@@ -131,6 +143,8 @@ function App() {
   };
   const activeTabIdRef = useRef(activeTabId);
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
+  const closeTabRef = useRef<(id: TabId) => void>(() => {});
+  const [microSipViewByTab, setMicroSipViewByTab] = useState<Record<string, MicroSipView>>({});
   // 탭별로 선택된 패널 ID 기억
   const [selectedPanelByTab, setSelectedPanelByTab] = useState<Record<string, string | null>>({});
   const selectedPanelId = selectedPanelByTab[activeTabId] ?? null;
@@ -340,7 +354,9 @@ function App() {
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
   const [optFontSize, setOptFontSize] = useState(() => Number(localStorage.getItem('terminalFontSize')) || 14);
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
-  const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'messenger' | 'keybindings'>('terminal');
+  const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'mcp' | 'messenger' | 'keybindings'>('terminal');
+  const [aiMcpAttachmentMode, setAiMcpAttachmentMode] = useState<'ssh' | 'local'>('ssh');
+  const aiMcpAttachmentModeLoadedRef = useRef(false);
   const [keybindingsState, setKeybindingsState] = useState<Record<string, string>>({});
   const [keybindingsDraft, setKeybindingsDraft] = useState<Record<string, string>>({});
 
@@ -427,6 +443,9 @@ function App() {
         if (prefs?.claudeChatView === 'ai' || prefs?.claudeChatView === 'messenger') {
           setClaudeChatView(prefs.claudeChatView);
         }
+        if (prefs?.aiMcpAttachmentMode === 'local' || prefs?.aiMcpAttachmentMode === 'ssh') {
+          setAiMcpAttachmentMode(prefs.aiMcpAttachmentMode);
+        }
         if (typeof prefs?.remoteTreeWidth === 'number' && prefs.remoteTreeWidth >= 160 && prefs.remoteTreeWidth <= 800) {
           setRemoteTreeWidth(prefs.remoteTreeWidth);
         }
@@ -444,6 +463,7 @@ function App() {
         claudeChatPinnedLoadedRef.current = true;
         showClaudeChatLoadedRef.current = true;
         claudeChatViewLoadedRef.current = true;
+        aiMcpAttachmentModeLoadedRef.current = true;
       } catch {}
       showBroadcastLoadedRef.current = true;
     })();
@@ -881,6 +901,10 @@ function App() {
     try { (window as any).api?.setUIPrefs?.({ claudeChatView }); } catch {}
   }, [claudeChatView]);
   useEffect(() => {
+    if (!aiMcpAttachmentModeLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ aiMcpAttachmentMode }); } catch {}
+  }, [aiMcpAttachmentMode]);
+  useEffect(() => {
     const onMessengerEvent = (p: any) => {
       // 모든 이벤트에서 prefs(나의 접속 숨기기) 동기화 — 상단 상태 표시 LED/문구 반영.
       if (p?.state?.prefs) setMessengerHidden(!!p.state.prefs.hidePresence);
@@ -980,7 +1004,7 @@ function App() {
   const [claudeFileContext, setClaudeFileContext] = useState<{ fileName: string; remotePath: string; content: string }[] | null>(null);
   const [aiAgent, setAiAgent] = useState<'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity'>('claude');
   // WebDAV 마운트 첨부 엔트리
-  const [claudeMountEntries, setClaudeMountEntries] = useState<{ termId: string; remotePath: string; uncPath: string; isDir: boolean }[]>([]);
+  const [claudeMountEntries, setClaudeMountEntries] = useState<{ entryId?: string; termId: string; remotePath: string; uncPath: string; isDir: boolean; mode?: 'ssh' | 'local'; localRoot?: string; fileCount?: number; synced?: boolean }[]>([]);
   // 연결 상태 변경 tick — 아래 영속화 effect 가 새 SSH 연결을 감지하도록 미리 선언.
   const [connectedTick, setConnectedTick] = useState(0);
   // 세션별 첨부 프리셋(영속화) — key = 저장된 sessionId, value = remotePath/isDir 목록.
@@ -988,6 +1012,63 @@ function App() {
   type MountPreset = { remotePath: string; isDir: boolean };
   const [mountPresetsBySession, setMountPresetsBySession] = useState<Record<string, MountPreset[]>>({});
   const mountPresetsLoadedRef = useRef(false);
+  const makeClaudeEntryId = () => `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const persistClaudeMountPresets = useCallback((entries: typeof claudeMountEntries, clearSessionIds: string[] = []) => {
+    if (!mountPresetsLoadedRef.current) return;
+    setMountPresetsBySession(prev => {
+      const next: Record<string, MountPreset[]> = { ...prev };
+      for (const sid of clearSessionIds) {
+        if (sid && next[sid]) delete next[sid];
+      }
+      const grouped = new Map<string, MountPreset[]>();
+      for (const e of entries) {
+        const info = getTermSessionInfo(e.termId);
+        const sid = info?.sessionId;
+        if (!sid) continue;
+        const arr = grouped.get(sid) || [];
+        if (arr.some(p => p.remotePath === e.remotePath && p.isDir === e.isDir)) continue;
+        arr.push({ remotePath: e.remotePath, isDir: e.isDir });
+        grouped.set(sid, arr);
+      }
+      let changed = clearSessionIds.some(sid => !!sid && !!prev[sid]);
+      for (const [sid, arr] of grouped) {
+        const prevArr = next[sid];
+        const same = prevArr && prevArr.length === arr.length && prevArr.every((p, i) => p.remotePath === arr[i].remotePath && p.isDir === arr[i].isDir);
+        if (!same) {
+          next[sid] = arr;
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { (window as any).api?.setUIPrefs?.({ claudeMountPresetsBySession: next }); } catch {}
+        return next;
+      }
+      return prev;
+    });
+  }, []);
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const attachLocalMirrorWithRetry = useCallback(async (
+    termId: string,
+    remotePath: string,
+    isDir: boolean,
+    opts?: { attempts?: number; delayMs?: number; onAttempt?: (attempt: number, total: number) => void },
+  ) => {
+    const attempts = Math.max(1, opts?.attempts || 3);
+    const delayMs = Math.max(0, opts?.delayMs || 700);
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      opts?.onAttempt?.(attempt, attempts);
+      try {
+        const r = await (window as any).api?.aiAttachMirror?.({ panelId: termId, remotePath, isDir });
+        if (r?.success) return r;
+        lastErr = new Error(r?.error || 'mirror failed');
+      } catch (err) {
+        lastErr = err;
+      }
+      if (attempt < attempts) await sleep(delayMs * attempt);
+    }
+    throw lastErr || new Error('mirror failed');
+  }, []);
   // prefs 에서 1회 로드
   useEffect(() => {
     (async () => {
@@ -1001,39 +1082,8 @@ function App() {
   }, []);
   // 현재 claudeMountEntries 가 변할 때마다 prefs 에 저장 (sessionId 가 있는 세션만 — quick connect 제외)
   useEffect(() => {
-    if (!mountPresetsLoadedRef.current) return;
-    const next: Record<string, MountPreset[]> = { ...mountPresetsBySession };
-    // 현재 entries 를 sessionId 단위로 그룹화
-    const grouped = new Map<string, MountPreset[]>();
-    for (const e of claudeMountEntries) {
-      const info = getTermSessionInfo(e.termId);
-      const sid = info?.sessionId;
-      if (!sid) continue; // 저장된 세션이 아니면 영속화 안 함
-      const arr = grouped.get(sid) || [];
-      arr.push({ remotePath: e.remotePath, isDir: e.isDir });
-      grouped.set(sid, arr);
-    }
-    // 현재 화면에서 보인 sessionId 들의 preset 만 갱신 (다른 세션 preset 은 보존)
-    let changed = false;
-    for (const [sid, arr] of grouped) {
-      const prev = next[sid];
-      const same = prev && prev.length === arr.length && prev.every((p, i) => p.remotePath === arr[i].remotePath && p.isDir === arr[i].isDir);
-      if (!same) { next[sid] = arr; changed = true; }
-    }
-    // 현재 연결된 세션이지만 entry 가 비었으면 preset 도 제거 — 사용자가 모두 지운 경우
-    const liveSessionIds = new Set<string>();
-    for (const e of claudeMountEntries) {
-      const info = getTermSessionInfo(e.termId);
-      if (info?.sessionId) liveSessionIds.add(info.sessionId);
-    }
-    // (claudeMountEntries 에 등장하지 않더라도 연결된 세션의 preset 은 그대로 둠 — 화면에 안 보이는 다른 세션 보존)
-    void liveSessionIds;
-    if (changed) {
-      setMountPresetsBySession(next);
-      try { (window as any).api?.setUIPrefs?.({ claudeMountPresetsBySession: next }); } catch {}
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [claudeMountEntries]);
+    persistClaudeMountPresets(claudeMountEntries);
+  }, [claudeMountEntries, connectedTick, persistClaudeMountPresets]);
   // 연결된 세션 termId 가 등장하면 그 sessionId 의 preset 으로 entries 복원
   // (이미 같은 sessionId 의 entry 가 화면에 있으면 skip)
   useEffect(() => {
@@ -1050,31 +1100,103 @@ function App() {
     };
     for (const t of tabs) walk(t.layout);
     if (connectedTermIds.length === 0) return;
-    // 각 termId 의 sessionId 가 preset 을 가지면 자동 복원 (이미 화면에 있는 entry 는 dedup)
-    setClaudeMountEntries(prev => {
-      const exists = new Set(prev.map(e => `${e.termId}|${e.remotePath}`));
-      const additions: typeof prev = [];
-      for (const termId of connectedTermIds) {
-        const info = getTermSessionInfo(termId);
-        const sid = info?.sessionId;
-        if (!sid) continue;
-        // 이 termId 의 prev entries 가 이미 있으면 복원 skip (사용자가 직접 지운 상태일 수 있음)
-        if (prev.some(e => e.termId === termId)) continue;
-        const presets = mountPresetsBySession[sid];
-        if (!presets || presets.length === 0) continue;
-        for (const p of presets) {
-          const key = `${termId}|${p.remotePath}`;
-          if (exists.has(key)) continue;
-          // uncPath 는 더 이상 사용하지 않으므로 빈 값. ClaudeChat 은 remotePath 기준으로 동작.
-          additions.push({ termId, remotePath: p.remotePath, uncPath: '', isDir: p.isDir });
-          exists.add(key);
+    const restoreMode = aiMcpAttachmentMode === 'local' ? 'local' : 'ssh';
+    void (async () => {
+      try {
+        for (const termId of connectedTermIds) {
+          const info = getTermSessionInfo(termId);
+          const sid = info?.sessionId;
+          if (!sid) continue;
+          const presets = mountPresetsBySession[sid];
+          if (!presets || presets.length === 0) continue;
+          if (restoreMode === 'local') {
+            const localJobs = presets
+              .filter(p => !claudeMountEntries.some(e => e.termId === termId && e.remotePath === p.remotePath))
+              .map((p, idx) => {
+                const entryId = makeClaudeEntryId();
+                return { entryId, termId, remotePath: p.remotePath, isDir: p.isDir, idx };
+              });
+            if (localJobs.length === 0) continue;
+            setClaudeMountEntries(prev => {
+              const existing = new Set(prev.map(e => `${e.termId}|${e.remotePath}`));
+              const additions = localJobs
+                .filter(job => !existing.has(`${job.termId}|${job.remotePath}`))
+                .map(job => ({
+                  entryId: job.entryId,
+                  termId: job.termId,
+                  remotePath: job.remotePath,
+                  uncPath: '',
+                  isDir: job.isDir,
+                  mode: 'local' as const,
+                  fileCount: undefined as number | undefined,
+                  synced: false as const,
+                }));
+              return additions.length > 0 ? [...prev, ...additions] : prev;
+            });
+            setClaudeAttaching({ message: tApp('claudeAttach.syncingLocal', { path: `${info?.sessionName || sid}` }), progress: 0, total: localJobs.length });
+            const limit = Math.min(4, Math.max(1, localJobs.length));
+            let cursor = 0;
+            const runNext = async (): Promise<void> => {
+              const idx = cursor++;
+              if (idx >= localJobs.length) return;
+              const job = localJobs[idx];
+              try {
+                const r = await attachLocalMirrorWithRetry(termId, job.remotePath, job.isDir, {
+                  attempts: 3,
+                  delayMs: 900,
+                  onAttempt: (attempt, total) => setClaudeAttaching({
+                    message: tApp('claudeAttach.syncingLocal', { path: `${info?.sessionName || sid}${attempt > 1 ? ` (retry ${attempt}/${total})` : ''}` }),
+                    progress: idx,
+                    total: localJobs.length,
+                  }),
+                });
+                setClaudeMountEntries(prev => prev.map(e =>
+                  e.entryId === job.entryId || (e.termId === termId && e.remotePath === job.remotePath)
+                    ? { ...e, entryId: e.entryId || job.entryId, mode: 'local', localRoot: r.localRoot, fileCount: typeof r.copiedFiles === 'number' ? r.copiedFiles : e.fileCount, synced: true }
+                    : e
+                ));
+              } catch (err) {
+                console.error('[claude-mount-restore-local]', err);
+              } finally {
+                setClaudeAttaching({ message: tApp('claudeAttach.syncingLocal', { path: `${info?.sessionName || sid}` }), progress: Math.min(localJobs.length, idx + 1), total: localJobs.length });
+              }
+              return runNext();
+            };
+            await Promise.all(Array.from({ length: Math.min(limit, localJobs.length) }, () => runNext()));
+          } else {
+            setClaudeMountEntries(prev => {
+              const exists = new Set(prev.map(e => `${e.termId}|${e.remotePath}`));
+              const additions: typeof prev = [];
+              for (const p of presets) {
+                const key = `${termId}|${p.remotePath}`;
+                if (exists.has(key)) continue;
+                const entryId = makeClaudeEntryId();
+                additions.push({ entryId, termId, remotePath: p.remotePath, uncPath: '', isDir: p.isDir, mode: 'ssh', synced: true });
+                exists.add(key);
+              }
+              return additions.length > 0 ? [...prev, ...additions] : prev;
+            });
+          }
         }
+      } catch (err) {
+        console.error('[claude-mount-restore]', err);
+      } finally {
+        setClaudeAttaching(null);
       }
-      return additions.length > 0 ? [...prev, ...additions] : prev;
-    });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mountPresetsBySession, tabs, connectedTick]);
+  }, [mountPresetsBySession, tabs, connectedTick, aiMcpAttachmentMode, attachLocalMirrorWithRetry]);
   const [claudeAttaching, setClaudeAttaching] = useState<{ message: string; progress: number; total: number } | null>(null);
+  const formatClaudeAttachToast = useCallback((message: string) => {
+    const raw = String(message || '').trim();
+    if (!raw) return raw;
+    const compact = raw
+      // 같은 진행 꼬리표가 2번 붙는 경우 하나만 남긴다.
+      .replace(/(\s#?\d+\s+\d+\/\d+)\s+\(\d+\/\d+\)\s*$/, '$1')
+      .replace(/\s+\(\d+\/\d+\)\s*$/, '')
+      .replace(/\s+#(\d+)\s+(\d+\/\d+)$/, ' #$1 $2');
+    return compact;
+  }, []);
   // 글로벌 연결 상태 변경시 일괄전송 카운트 등 재계산을 위해 강제 리렌더 (connectedTick 은 위에 선언됨)
   useEffect(() => subscribeConnectedChange(() => setConnectedTick(n => n + 1)), []);
   const connectedBrowserSessions = useMemo(() => {
@@ -1844,7 +1966,10 @@ function App() {
       } catch {}
     }
     const id = `tab-fe-${Date.now()}`;
-    setTabs(prev => [...prev, { id, title, layout: createInitialLayout(id), type: 'fileExplorer', initialTermId: tid, initialRemotePath: remotePath }]);
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title, layout: createInitialLayout(id), type: 'fileExplorer', initialTermId: tid, initialRemotePath: remotePath, color }];
+    });
     setActiveTabId(id);
   }, [getActiveTermId, getActiveRemotePwd]);
 
@@ -1877,6 +2002,72 @@ function App() {
           });
           setTimeout(() => { refitAllTerms(); focusTerm(tid); }, 150);
         }
+        return;
+      }
+      // 워크스페이스 바로가기: Ctrl+1~0
+      const workspaceShortcutActions = [
+        'switchWorkspace1',
+        'switchWorkspace2',
+        'switchWorkspace3',
+        'switchWorkspace4',
+        'switchWorkspace5',
+        'switchWorkspace6',
+        'switchWorkspace7',
+        'switchWorkspace8',
+        'switchWorkspace9',
+        'switchWorkspace10',
+      ];
+      const workspaceActionIdx = workspaceShortcutActions.findIndex(actionId => matchKeybinding(e, actionId));
+      if (workspaceActionIdx >= 0) {
+        e.preventDefault();
+        const workspaceTabs = tabsRef.current;
+        const targetIdx = workspaceActionIdx;
+        const target = workspaceTabs[targetIdx];
+        if (target) setActiveTabId(target.id);
+        return;
+      }
+      // 메신저 / AI 채팅 / 파일전송 워크스페이스 바로가기
+      if (matchKeybinding(e, 'openMessenger')) {
+        e.preventDefault();
+        setShowClaudeChat(true);
+        setClaudeChatView('messenger');
+        setClaudeChatVisible(true);
+        return;
+      }
+      if (matchKeybinding(e, 'openAiChat')) {
+        e.preventDefault();
+        setShowClaudeChat(true);
+        setClaudeChatView('ai');
+        setClaudeChatVisible(true);
+        return;
+      }
+      if (matchKeybinding(e, 'openFileTransfer')) {
+        e.preventDefault();
+        void openFileTransferTab(tApp('tabs.fileTransfer'));
+        return;
+      }
+      if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.code === 'KeyS') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('sessionlist-focus-search'));
+        return;
+      }
+      if (matchKeybinding(e, 'closeWorkspace')) {
+        e.preventDefault();
+        if (activeTab && tabs.length > 1) closeTabRef.current(activeTab.id);
+        return;
+      }
+      if (activeTab?.type === 'microsip' && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
+        e.preventDefault();
+        type VisibleMicroSipView = Exclude<MicroSipView, 'messages'>;
+        const order: VisibleMicroSipView[] = ['phones', 'settings', 'macros', 'contacts', 'log'];
+        const currentView: VisibleMicroSipView = (microSipViewByTab[activeTab.id] && microSipViewByTab[activeTab.id] !== 'messages')
+          ? microSipViewByTab[activeTab.id] as VisibleMicroSipView
+          : 'phones';
+        const curIdx = order.indexOf(currentView);
+        const delta = matchKeybinding(e, 'prevTab') ? -1 : 1;
+        const nextView = order[(curIdx + delta + order.length) % order.length];
+        setMicroSipViewByTab(prev => ({ ...prev, [activeTab.id]: nextView }));
+        workspaceStateRef.current.set(activeTab.id, { ...(workspaceStateRef.current.get(activeTab.id) || {}), microsipView: nextView });
         return;
       }
       // 연결된 세션 선택 + 가로/세로 분할
@@ -1924,7 +2115,7 @@ function App() {
       }
       if (!(e.ctrlKey || e.metaKey)) return;
       // 미니탭 순환
-      if (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab')) {
+      if (activeTab?.type !== 'microsip' && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
         if (!activeTab) return;
         const leaves: { nodeId: string; sessions: PanelSession[]; activeIdx: number }[] = [];
         const collect = (node: LayoutNode) => {
@@ -2044,7 +2235,7 @@ function App() {
     };
     window.addEventListener('keydown', handler, true); // capture phase
     return () => window.removeEventListener('keydown', handler, true);
-  }, [getActiveTermId, showOptions]);
+  }, [getActiveTermId, showOptions, openFileTransferTab, activeTab, tabs.length, microSipViewByTab]);
 
   // SFTP 진행률/완료 이벤트
   useEffect(() => {
@@ -2066,7 +2257,10 @@ function App() {
     const sn = shellName || defaultShell.name;
     const sp = shellPath || defaultShell.path;
     const layout = createInitialLayout(id, sn, sp);
-    setTabs(prev => [...prev, { id, title: `Workspace ${prev.length + 1}`, layout }]);
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title: `Workspace ${prev.length + 1}`, layout, color }];
+    });
     setActiveTabId(id);
     // 새 워크스페이스의 루트 패널 자동 선택
     if (layout.type === 'leaf') setSelectedPanelId(layout.id);
@@ -2079,18 +2273,47 @@ function App() {
     if (existing) { setActiveTabId(existing.id); return; }
     const id = `editor-${Date.now()}`;
     const layout = createInitialLayout(id);
-    setTabs(prev => [...prev, { id, title: `📝 ${fileName}`, layout, type: 'fileEditor', editor: { termId, remotePath, fileName } }]);
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title: `📝 ${fileName}`, layout, type: 'fileEditor', editor: { termId, remotePath, fileName }, color }];
+    });
     setActiveTabId(id);
   };
 
-  // Claude 에 파일/폴더 첨부 — WebDAV 마운트는 제거됨. pepe_ssh MCP 도구로 직접 접근.
+  // Claude 에 파일/폴더 첨부 — 1번은 기존 SSH MCP, 2번은 로컬 미러 + filesystem MCP.
   // uncPath 는 더 이상 사용하지 않음 (빈 값). ClaudeChat 은 remotePath + termId 만으로 동작.
   const handleAttachToClaude = async (termId: string, remotePath: string, _fileName: string, isDir: boolean) => {
     setShowClaudeChat(true);
     try {
+      if (aiMcpAttachmentMode === 'local') {
+        const entryId = makeClaudeEntryId();
+        setClaudeMountEntries(prev => {
+          if (prev.some(e => e.termId === termId && e.remotePath === remotePath)) return prev;
+          return [...prev, { entryId, termId, remotePath, uncPath: '', isDir, mode: 'local', synced: false }];
+        });
+        setClaudeAttaching({ message: tApp('claudeAttach.syncingLocal', { path: remotePath }), progress: 0, total: 1 });
+        const r = await attachLocalMirrorWithRetry(termId, remotePath, isDir, {
+          attempts: 3,
+          delayMs: 900,
+          onAttempt: (attempt, total) => setClaudeAttaching({
+            message: tApp('claudeAttach.syncingLocal', { path: `${remotePath}${attempt > 1 ? ` (retry ${attempt}/${total})` : ''}` }),
+            progress: attempt - 1,
+            total,
+          }),
+        });
+        setClaudeMountEntries(prev => prev.map(e =>
+          e.entryId === entryId || (e.termId === termId && e.remotePath === remotePath)
+            ? { ...e, entryId: e.entryId || entryId, mode: 'local', localRoot: r.localRoot, fileCount: typeof r.copiedFiles === 'number' ? r.copiedFiles : e.fileCount, synced: true }
+            : e
+        ));
+        setClaudeAttaching({ message: tApp('claudeAttach.syncingLocal', { path: remotePath }), progress: 1, total: 1 });
+        setTimeout(() => setClaudeAttaching(null), 800);
+        return;
+      }
       setClaudeMountEntries(prev => {
-        const map = new Map(prev.map(e => [`${e.termId}:${e.remotePath}`, e]));
-        map.set(`${termId}:${remotePath}`, { termId, remotePath, uncPath: '', isDir });
+        const entryId = makeClaudeEntryId();
+        const map = new Map(prev.map(e => [e.entryId || `${e.termId}:${e.remotePath}`, e]));
+        map.set(entryId, { entryId, termId, remotePath, uncPath: '', isDir, mode: 'ssh', synced: true });
         return Array.from(map.values());
       });
     } catch (err: any) {
@@ -2108,7 +2331,10 @@ function App() {
   const addSpecialTab = (type: TabType, title: string) => {
     const id = `tab-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
     const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
-    setTabs(prev => [...prev, { id, title, layout: emptyLayout, type }]);
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title, layout: emptyLayout, type, color }];
+    });
     setActiveTabId(id);
   };
   const addBrowserTab = () => addSpecialTab('browser', tApp('tabs.browser'));
@@ -2123,13 +2349,17 @@ function App() {
     if (existing) { setActiveTabId(existing.id); return; }
     const id = `tab-sqltool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
     const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
-    setTabs(prev => [...prev, { id, title: `🗄️ ${sessionName}`, layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId, sessionName } }]);
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title: `🗄️ ${sessionName}`, layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId, sessionName }, color }];
+    });
     setActiveTabId(id);
   };
 
   // 단일 termId 의 모든 백엔드 리소스 해제 — close 경로 어디서든 일관되게 호출
   const releaseTermResources = useCallback((termId: string) => {
     if (!termId) return;
+    try { (window as any).api?.aiAttachDisposePanel?.({ panelId: termId }); } catch {}
     try { (window as any).api?.disconnectSSH?.(termId); } catch {}
     try { (window as any).api?.feReleaseSftp?.(termId); } catch {}
     try { (window as any).api?.claudeUnregisterMount?.(termId); } catch {}
@@ -2170,6 +2400,7 @@ function App() {
     // 포커스를 못 받아 입력이 안 먹는 경우가 있어 레이아웃 정리 후 다시 포커스.
     setTimeout(() => { window.dispatchEvent(new Event('resize')); refitAllTerms(); restoreTerminalFocus(); }, 100);
   };
+  closeTabRef.current = closeTab;
 
   const updateLayout = (tabId: TabId, fn: (layout: LayoutNode) => LayoutNode) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, layout: fn(t.layout) } : t));
@@ -2438,7 +2669,7 @@ function App() {
       // 분리 창이 비면 창을 닫고, 메인 창이면 빈 워크스페이스로 대체.
       if (IS_DETACHED_WINDOW) { try { (window as any).api?.windowClose?.(); } catch {} return; }
       const id = `tab-${Date.now()}`;
-      setTabs([{ id, title: 'Workspace 1', layout: createInitialLayout(id) }]);
+      setTabs([{ id, title: 'Workspace 1', layout: createInitialLayout(id), color: pickWorkspaceColor([], 0) }]);
       setActiveTabId(id);
       return;
     }
@@ -3015,7 +3246,10 @@ function App() {
         // 터미널 탭이 하나도 없으면 새로 생성
         const id = `tab-${Date.now()}`;
         const layout = createInitialLayout(id);
-        setTabs(prev => [...prev, { id, title: `Workspace ${prev.length + 1}`, layout }]);
+        setTabs(prev => {
+          const color = pickWorkspaceColor(prev, prev.length);
+          return [...prev, { id, title: `Workspace ${prev.length + 1}`, layout, color }];
+        });
         setActiveTabId(id);
         targetLeafId = findFirstLeafId(layout);
         targetTabId = id;
@@ -3222,10 +3456,12 @@ function App() {
         setActiveTabId(existingFe.id);
       } else {
         const id = `tab-fe-${Date.now()}`;
-        const feTab = { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType };
-        setTabs(prev => [...prev, feTab]);
-        setActiveTabId(id);
         feTabId = id;
+        setTabs(prev => {
+          const color = pickWorkspaceColor(prev, prev.length);
+          return [...prev, { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType, color }];
+        });
+        setActiveTabId(id);
       }
       // FileExplorer 마운트 후 이벤트가 처리되도록 약간 지연
       setTimeout(() => {
@@ -3409,7 +3645,7 @@ function App() {
       label: tMenu('file.title'),
       items: [
         { label: tMenu('file.newWorkspace'), action: () => addTab() },
-        { label: tMenu('file.closeWorkspace'), action: () => activeTab && closeTab(activeTab.id), disabled: tabs.length <= 1 },
+        { label: tMenu('file.closeWorkspace'), shortcut: 'Ctrl+F4', action: () => activeTab && closeTab(activeTab.id), disabled: tabs.length <= 1 },
         { separator: true, label: '' },
         { label: tMenu('file.exportSessions'), action: () => (window as any).api.exportSessions() },
         { label: tMenu('file.importSessions'), action: async () => { const r = await (window as any).api.importSessions(); if (r) { window.dispatchEvent(new Event('sessions-reload')); showToast(r.addedCount != null ? tMenu('file.importedToast', { added: r.addedCount, total: r.totalParsed }) : tMenu('file.importedToastSimple')); } } },
@@ -3562,6 +3798,10 @@ function App() {
             '── 사용자 지정 단축키 ──\n' +
             lines.join('\n') +
             '\n\n── 고정 단축키 ──\n' +
+            'Ctrl+1~0 — 열린 탭 순서대로 1~10 이동\n' +
+            'Ctrl+M — 메신저 열기\n' +
+            'Ctrl+N — AI 채팅 열기\n' +
+            'Ctrl+T — 파일전송 워크스페이스 열기\n' +
             'Alt+1~9 — 미니탭 전환\n' +
             'Alt+Enter — 현재 터미널 전체화면 토글\n' +
             'Ctrl+L — 스크롤 맨 아래로\n' +
@@ -3895,11 +4135,14 @@ function App() {
           const isTerminalWs = (t: any) => !t?.type || t.type === 'terminal';
           const openInNewWorkspace = () => {
             const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-            const newTab = { id: newTabId, title: `Workspace ${tabs.length + 1}`, layout: createInitialLayout(newTabId) } as any;
-            setTabs(prev => [...prev, newTab]);
+            const layout = createInitialLayout(newTabId);
+            setTabs(prev => {
+              const color = pickWorkspaceColor(prev, prev.length);
+              return [...prev, { id: newTabId, title: `Workspace ${prev.length + 1}`, layout, color } as any];
+            });
             setActiveTabId(newTabId);
             targetTabId = newTabId;
-            targetPanelId = findFirstLeafId(newTab.layout);
+            targetPanelId = findFirstLeafId(layout);
           };
           if (opts?.newWorkspace) {
             openInNewWorkspace();
@@ -4078,10 +4321,12 @@ function App() {
             // 연결 대상은 우클릭한 세션의 SFTP(아래 fe-sftp-connected 로 탭 생성)이므로
             // initialTermId(활성 터미널 기준 auto-init)는 넘기지 않는다 — 무관한 세션 자동 오픈 방지.
             const id = `tab-fe-${Date.now()}`;
-            const feTab = { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType };
-            setTabs(prev => [...prev, feTab]);
-            setActiveTabId(id);
             feTabId = id;
+            setTabs(prev => {
+              const color = pickWorkspaceColor(prev, prev.length);
+              return [...prev, { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType, color }];
+            });
+            setActiveTabId(id);
           }
           // SFTP 연결 — 점프 타겟 설정돼 있으면 ProxyJump 로 내부 서버까지 직결
           try {
@@ -4635,7 +4880,13 @@ function App() {
         {tabs.filter(t => t.type === 'microsip').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="MicroSIP">
-              <MicroSipWorkspace />
+              <MicroSipWorkspace
+                initialView={(microSipViewByTab[t.id] || t.workspaceState?.microsipView || workspaceStateRef.current.get(t.id)?.microsipView || 'phones') as any}
+                onViewChange={(view) => {
+                  setMicroSipViewByTab(prev => ({ ...prev, [t.id]: view }));
+                  workspaceStateRef.current.set(t.id, { ...(workspaceStateRef.current.get(t.id) || {}), microsipView: view });
+                }}
+              />
             </ErrorBoundary>
           </div>
         ))}
@@ -5218,6 +5469,7 @@ function App() {
               <div className="options-tabs options-tabs-side">
                 <button className={`options-tab ${optionsTab === 'terminal' ? 'active' : ''}`} onClick={() => setOptionsTab('terminal')}>{tOpt('tabs.terminal')}</button>
                 <button className={`options-tab ${optionsTab === 'session' ? 'active' : ''}`} onClick={() => setOptionsTab('session')}>{tOpt('tabs.session')}</button>
+                <button className={`options-tab ${optionsTab === 'mcp' ? 'active' : ''}`} onClick={() => setOptionsTab('mcp')}>{tOpt('tabs.mcp')}</button>
                 <button className={`options-tab ${optionsTab === 'keybindings' ? 'active' : ''}`} onClick={() => setOptionsTab('keybindings')}>{tOpt('tabs.keybindings')}</button>
                 <button className={`options-tab ${optionsTab === 'messenger' ? 'active' : ''}`} onClick={() => setOptionsTab('messenger')}>{tOpt('messenger.tab')}</button>
               </div>
@@ -5427,6 +5679,43 @@ function App() {
                     <span style={{ color: contextMenuRegistered ? '#4caf50' : '#888', fontSize: 12, alignSelf: 'center' }}>
                       {contextMenuRegistered ? tOpt('contextMenu.registered') : tOpt('contextMenu.notRegistered')}
                     </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {optionsTab === 'mcp' && (
+              <div className="options-content">
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('mcp.heading')}</div>
+                  <p style={{ color: '#888', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
+                    {tOpt('mcp.desc')}
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <label className="settings-radio" style={{ alignItems: 'flex-start', gap: 10 }}>
+                      <input
+                        type="radio"
+                        name="aiMcpAttachmentMode"
+                        checked={aiMcpAttachmentMode === 'ssh'}
+                        onChange={() => setAiMcpAttachmentMode('ssh')}
+                      />
+                      <span>
+                        <div style={{ fontWeight: 600, color: '#ddd' }}>{tOpt('mcp.sshTitle')}</div>
+                        <div style={{ color: '#888', fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>{tOpt('mcp.sshDesc')}</div>
+                      </span>
+                    </label>
+                    <label className="settings-radio" style={{ alignItems: 'flex-start', gap: 10 }}>
+                      <input
+                        type="radio"
+                        name="aiMcpAttachmentMode"
+                        checked={aiMcpAttachmentMode === 'local'}
+                        onChange={() => setAiMcpAttachmentMode('local')}
+                      />
+                      <span>
+                        <div style={{ fontWeight: 600, color: '#ddd' }}>{tOpt('mcp.localTitle')}</div>
+                        <div style={{ color: '#888', fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>{tOpt('mcp.localDesc')}</div>
+                      </span>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -5675,8 +5964,31 @@ function App() {
               pendingContext={claudeFileContext}
               onContextConsumed={() => setClaudeFileContext(null)}
               mountEntries={claudeMountEntries}
-              onClearMounted={() => setClaudeMountEntries([])}
-              onRemoveMountedEntry={(rp, termId) => setClaudeMountEntries(prev => prev.filter(e => !(e.remotePath === rp && e.termId === termId)))}
+              onClearMounted={async () => {
+                const clearSessionIds = new Set<string>();
+                for (const e of claudeMountEntries) {
+                  if (e.mode === 'local') {
+                    try { await (window as any).api?.aiAttachDispose?.({ panelId: e.termId, remotePath: e.remotePath }); } catch {}
+                  }
+                  const info = getTermSessionInfo(e.termId);
+                  if (info?.sessionId) clearSessionIds.add(info.sessionId);
+                }
+                setClaudeMountEntries([]);
+                persistClaudeMountPresets([], [...clearSessionIds]);
+              }}
+              onRemoveMountedEntry={async (rp, termId, entryId) => {
+                const target = claudeMountEntries.find(e => entryId ? e.entryId === entryId : e.remotePath === rp && e.termId === termId);
+                if (target?.mode === 'local') {
+                  try { await (window as any).api?.aiAttachDispose?.({ panelId: termId, remotePath: rp }); } catch {}
+                }
+                setClaudeMountEntries(prev => {
+                  const next = prev.filter(e => entryId ? e.entryId !== entryId : !(e.remotePath === rp && e.termId === termId));
+                  const sid = getTermSessionInfo(termId)?.sessionId;
+                  const stillHas = sid ? next.some(e => getTermSessionInfo(e.termId)?.sessionId === sid) : false;
+                  persistClaudeMountPresets(next, sid && !stillHas ? [sid] : []);
+                  return next;
+                });
+              }}
               connectedSessions={connectedSessions}
               defaultSshSession={defaultSsh}
               pinned={claudeChatPinned}
@@ -5693,7 +6005,7 @@ function App() {
       })()}
       {claudeAttaching && (
         <div className="claude-attach-toast">
-          <div className="claude-attach-toast-msg">🤖 {claudeAttaching.message}</div>
+          <div className="claude-attach-toast-msg">🤖 {formatClaudeAttachToast(claudeAttaching.message)}</div>
           {claudeAttaching.total > 0 && (
             <div className="claude-attach-toast-bar">
               <div className="claude-attach-toast-bar-fill" style={{ width: `${Math.min(100, (claudeAttaching.progress / claudeAttaching.total) * 100)}%` }} />
@@ -6252,8 +6564,16 @@ function App() {
                   // 이 일괄전송 1회 전체에 같은 workspaceId 부여 → 충돌 "전체 적용" 결정이 모든 파일·세션에 재사용됨.
                   // (이게 없으면 매 feTransfer 가 새 transferId 라 "전체 적용" 이 기억 안 되고 매번 다시 물음)
                   const bcastWid = `bcast-xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                  let okCount = 0;
-                  let errCount = 0;
+                  const jobs: Array<{
+                    tid: string;
+                    basePath: string;
+                    label: string;
+                    filename: string;
+                    remotePath: string;
+                    src: any;
+                    skip: boolean;
+                    skipMsg?: string;
+                  }> = [];
                   for (const tid of targets) {
                     const basePath = override || getCurrentPwdForTerm(tid) || '/';
                     const info = getTermSessionInfo(tid);
@@ -6261,44 +6581,63 @@ function App() {
                     for (const f of bcastXferFiles) {
                       const filename = f.path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
                       const remotePath = basePath.endsWith('/') ? basePath + filename : basePath + '/' + filename;
-                      // 동일 세션은 source == target 이므로 skip
-                      if (f.sourceTermId && f.sourceTermId === tid) {
-                        setBcastXferLog(prev => [...prev, tApp('bcastXfer.skipSameSession', { label, filename })]);
-                        continue;
-                      }
-                      const src: any = f.sourceTermId
-                        ? { mode: 'remote', termId: f.sourceTermId, path: f.path }
-                        : { mode: 'local', path: f.path };
-                      try {
-                        // feTransfer 는 즉시 { seq } 만 반환하므로 fe:transfer-done 이벤트로 실제 완료를 await.
-                        const r: any = await new Promise(resolve => {
-                          (window as any).api?.feTransfer?.(
-                            src,
-                            { mode: 'remote', termId: tid, path: remotePath },
-                            filename,
-                            bcastWid,
-                          ).then((res: any) => {
-                            const seq: number = res?.seq;
-                            if (seq == null) { resolve({ success: res?.success ?? true }); return; }
-                            const unsub = (window as any).api?.onFeTransferDone?.((p: any) => {
-                              if (p.seq === seq) { unsub?.(); resolve(p); }
-                            });
-                            if (!unsub) resolve({ success: true });
-                          }).catch((e: any) => resolve({ success: false, error: String(e) }));
-                        });
-                        if (r?.success) {
-                          okCount++;
-                          setBcastXferLog(prev => [...prev, `✓ ${label}: ${filename} → ${basePath}`]);
-                        } else {
-                          errCount++;
-                          setBcastXferLog(prev => [...prev, `✗ ${label}: ${filename} — ${r?.error || 'unknown'}`]);
-                        }
-                      } catch (err: any) {
-                        errCount++;
-                        setBcastXferLog(prev => [...prev, `✗ ${label}: ${filename} — ${err?.message || err}`]);
-                      }
+                      const skip = !!(f.sourceTermId && f.sourceTermId === tid);
+                      jobs.push({
+                        tid,
+                        basePath,
+                        label,
+                        filename,
+                        remotePath,
+                        src: f.sourceTermId
+                          ? { mode: 'remote', termId: f.sourceTermId, path: f.path }
+                          : { mode: 'local', path: f.path },
+                        skip,
+                        skipMsg: skip ? tApp('bcastXfer.skipSameSession', { label, filename }) : undefined,
+                      });
                     }
                   }
+                  const limit = Math.min(4, Math.max(1, targets.length > 1 ? 3 : 2));
+                  let okCount = 0;
+                  let errCount = 0;
+                  let cursor = 0;
+                  const runNext = async (): Promise<void> => {
+                    const idx = cursor++;
+                    if (idx >= jobs.length) return;
+                    const job = jobs[idx];
+                    if (job.skip) {
+                      setBcastXferLog(prev => [...prev, job.skipMsg || '']);
+                      return runNext();
+                    }
+                    try {
+                      const r: any = await new Promise(resolve => {
+                        (window as any).api?.feTransfer?.(
+                          job.src,
+                          { mode: 'remote', termId: job.tid, path: job.remotePath },
+                          job.filename,
+                          bcastWid,
+                        ).then((res: any) => {
+                          const seq: number = res?.seq;
+                          if (seq == null) { resolve({ success: res?.success ?? true }); return; }
+                          const unsub = (window as any).api?.onFeTransferDone?.((p: any) => {
+                            if (p.seq === seq) { unsub?.(); resolve(p); }
+                          });
+                          if (!unsub) resolve({ success: true });
+                        }).catch((e: any) => resolve({ success: false, error: String(e) }));
+                      });
+                      if (r?.success) {
+                        okCount++;
+                        setBcastXferLog(prev => [...prev, `✓ ${job.label}: ${job.filename} → ${job.basePath}`]);
+                      } else {
+                        errCount++;
+                        setBcastXferLog(prev => [...prev, `✗ ${job.label}: ${job.filename} — ${r?.error || 'unknown'}`]);
+                      }
+                    } catch (err: any) {
+                      errCount++;
+                      setBcastXferLog(prev => [...prev, `✗ ${job.label}: ${job.filename} — ${err?.message || err}`]);
+                    }
+                    return runNext();
+                  };
+                  await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, () => runNext()));
                   setBcastXferLog(prev => [...prev, tApp('bcastXfer.doneLog', { ok: okCount, err: errCount })]);
                   setBcastXferInProgress(false);
                   flashBroadcastNotice(tApp('bcastXfer.doneToast', { ok: okCount, total: okCount + errCount }), errCount === 0 ? 'ok' : 'warn');

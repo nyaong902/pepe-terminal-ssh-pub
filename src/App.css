@@ -835,7 +835,30 @@ body.popout-options .session-editor h3:first-child {
   border-color: var(--win-accent, #2b6b9b);
 }
 
-/* 탭 색깔 — 전체 배경에 색상 채움 */
+.tab-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tab-shortcut-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* 탭 색깔 — 원래 계열 */
 .tab-item.tab-color-red    { background: #c0392b; color: #fff; border-color: #962d22; }
 .tab-item.tab-color-orange { background: #d35400; color: #fff; border-color: #a04000; }
 .tab-item.tab-color-yellow { background: #d4ac0d; color: #2a2a2a; border-color: #a8870a; }
@@ -848,12 +871,12 @@ body.popout-options .session-editor h3:first-child {
 .tab-item.tab-color-green:hover  { background: #27ae60; }
 .tab-item.tab-color-blue:hover   { background: #3498db; }
 .tab-item.tab-color-purple:hover { background: #9b59b6; }
-.tab-item.tab-color-red.active    { background: #e74c3c; border-color: #fff; }
-.tab-item.tab-color-orange.active { background: #e67e22; border-color: #fff; }
+.tab-item.tab-color-red.active    { background: #e74c3c; border-color: #fff; color: #fff; }
+.tab-item.tab-color-orange.active { background: #e67e22; border-color: #fff; color: #fff; }
 .tab-item.tab-color-yellow.active { background: #f1c40f; border-color: #fff; color: #2a2a2a; }
-.tab-item.tab-color-green.active  { background: #27ae60; border-color: #fff; }
-.tab-item.tab-color-blue.active   { background: #3498db; border-color: #fff; }
-.tab-item.tab-color-purple.active { background: #9b59b6; border-color: #fff; }
+.tab-item.tab-color-green.active  { background: #27ae60; border-color: #fff; color: #fff; }
+.tab-item.tab-color-blue.active   { background: #3498db; border-color: #fff; color: #fff; }
+.tab-item.tab-color-purple.active { background: #9b59b6; border-color: #fff; color: #fff; }
 
 .tab-status-dot {
   width: 7px;
@@ -1879,7 +1902,7 @@ body.popout-options .session-editor h3:first-child {
   border-color: var(--win-accent, #2b6b9b);
 }
 
-/* 미니탭 색깔 — 전체 배경에 색상 채움 */
+/* 미니탭 색깔 — 원래 계열 */
 .panel-session-tab.mini-tab-color-red    { background: #c0392b; color: #fff; border-color: #962d22; }
 .panel-session-tab.mini-tab-color-orange { background: #d35400; color: #fff; border-color: #a04000; }
 .panel-session-tab.mini-tab-color-yellow { background: #d4ac0d; color: #2a2a2a; border-color: #a8870a; }
@@ -1892,12 +1915,12 @@ body.popout-options .session-editor h3:first-child {
 .panel-session-tab.mini-tab-color-green:hover  { background: #27ae60; }
 .panel-session-tab.mini-tab-color-blue:hover   { background: #3498db; }
 .panel-session-tab.mini-tab-color-purple:hover { background: #9b59b6; }
-.panel-session-tab.mini-tab-color-red.active    { background: #e74c3c; border-color: #fff; }
-.panel-session-tab.mini-tab-color-orange.active { background: #e67e22; border-color: #fff; }
+.panel-session-tab.mini-tab-color-red.active    { background: #e74c3c; border-color: #fff; color: #fff; }
+.panel-session-tab.mini-tab-color-orange.active { background: #e67e22; border-color: #fff; color: #fff; }
 .panel-session-tab.mini-tab-color-yellow.active { background: #f1c40f; border-color: #fff; color: #2a2a2a; }
-.panel-session-tab.mini-tab-color-green.active  { background: #27ae60; border-color: #fff; }
-.panel-session-tab.mini-tab-color-blue.active   { background: #3498db; border-color: #fff; }
-.panel-session-tab.mini-tab-color-purple.active { background: #9b59b6; border-color: #fff; }
+.panel-session-tab.mini-tab-color-green.active  { background: #27ae60; border-color: #fff; color: #fff; }
+.panel-session-tab.mini-tab-color-blue.active   { background: #3498db; border-color: #fff; color: #fff; }
+.panel-session-tab.mini-tab-color-purple.active { background: #9b59b6; border-color: #fff; color: #fff; }
 .panel-session-tab.dragging-preview {
   color: var(--win-text, #fff) !important;
   background: var(--win-accent, #2b6b9b) !important;

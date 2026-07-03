@@ -92,6 +92,8 @@ type CallHistEntry = {
   result: 'answered' | 'missed' | 'no-answer';
 };
 
+export type MicroSipView = 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log';
+
 const MAX_ENDPOINTS = 10;
 const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 
@@ -174,8 +176,11 @@ function defaultEndpoint(n: number): SipEndpoint {
   };
 }
 
-export const MicroSipWorkspace: React.FC = () => {
-  const [view, setView] = useState<'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'>('phones');
+export const MicroSipWorkspace: React.FC<{
+  initialView?: MicroSipView;
+  onViewChange?: (view: MicroSipView) => void;
+}> = ({ initialView = 'phones', onViewChange }) => {
+  const [view, setView] = useState<MicroSipView>(initialView);
   const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string; body?: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
@@ -202,6 +207,13 @@ export const MicroSipWorkspace: React.FC = () => {
   const autoRegDoneRef = useRef(false);
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
+
+  useEffect(() => {
+    setView(initialView);
+  }, [initialView]);
+  useEffect(() => {
+    onViewChange?.(view);
+  }, [view, onViewChange]);
 
   // ── 영속(UI prefs) ──
   useEffect(() => {
@@ -583,6 +595,12 @@ export const MicroSipWorkspace: React.FC = () => {
     if (cur.call === 'connected') { void sendDtmf(id, key); }
     else setRt(id, { dialed: (cur.dialed || '') + key });
   };
+  const switchViewByDelta = (delta: number) => {
+    const order: Exclude<MicroSipView, 'messages'>[] = ['phones', 'settings', 'macros', 'contacts', 'log'];
+    const idx = order.indexOf((view === 'messages' ? 'phones' : view) as Exclude<MicroSipView, 'messages'>);
+    const next = order[(idx + delta + order.length) % order.length];
+    setView(next);
+  };
 
   // 음량(마이크/스피커) — 변경/엔진 준비 시 데몬에 적용
   useEffect(() => { if (engineReady) { try { api().sipSetVolume?.({ mic: micLevel, speaker: spkLevel }); } catch {} } /* eslint-disable-next-line */ }, [engineReady, micLevel, spkLevel]);
@@ -650,7 +668,18 @@ export const MicroSipWorkspace: React.FC = () => {
   };
 
   return (
-    <div className="microsip-ws" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)' }}>
+    <div
+      className="microsip-ws"
+      style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)' }}
+      onKeyDownCapture={e => {
+        if (!(e.ctrlKey || e.metaKey) || e.key !== 'Tab') return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation?.();
+        switchViewByDelta(e.shiftKey ? -1 : 1);
+      }}
+      tabIndex={-1}
+    >
       {/* 토스트 알림 (등록/통화 실패 등) */}
       {toasts.length > 0 && (
         <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
@@ -795,7 +824,7 @@ const MicroSipHeader: React.FC<{
 }> = (p) => {
   // 네이티브 엔진이 장치를 제공하면(name 기준) 그 목록을, 아니면 브라우저 장치를 사용
   const useSip = p.sipInputs.length > 0 || p.sipOutputs.length > 0;
-  const tab = (id: string, label: string) => (
+  const tab = (id: MicroSipView, label: string) => (
     <button onClick={() => p.setView(id)}
       style={{ padding: '6px 12px', borderRadius: '8px 8px 0 0', border: '1px solid var(--win-border, #30363d)', borderBottom: 'none',
         background: p.view === id ? 'var(--win-surface, #161b22)' : 'transparent', color: p.view === id ? 'var(--win-text, #fff)' : 'var(--win-text-dim, #9aa7b3)',

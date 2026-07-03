@@ -73,7 +73,8 @@
     "mountFail": "Mount failed: {{error}}",
     "pathConvertFail": "Path conversion failed: {{error}}",
     "attached": "Attached (WebDAV live access)",
-    "attachFail": "Attach failed: {{error}}"
+    "attachFail": "Attach failed: {{error}}",
+    "syncingLocal": "Copying remote attachment locally: {{path}}"
   },
   "tabs": {
     "browser": "🌐 Browser",

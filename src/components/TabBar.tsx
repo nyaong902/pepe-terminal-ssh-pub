@@ -43,6 +43,12 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
   const [renameValue, setRenameValue] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const workspaceTabs = tabs;
+  const getWorkspaceShortcutLabel = (tabId: string): string | null => {
+    const idx = workspaceTabs.findIndex(tab => tab.id === tabId);
+    if (idx < 0 || idx >= 10) return null;
+    return idx === 9 ? '0' : String(idx + 1);
+  };
 
   const startRename = (tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
@@ -119,7 +125,13 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           onAuxClick={e => { if (e.button === 1) { e.preventDefault(); onCloseTab(tab.id); } }}
           onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id }); }}
         >
-          {hasSession?.[tab.id] && <span className="tab-status-dot" />}
+          <span className="tab-title-row">
+            {hasSession?.[tab.id] && <span className="tab-status-dot" />}
+            {(() => {
+              const shortcut = getWorkspaceShortcutLabel(tab.id);
+              return shortcut ? <span className="tab-shortcut-badge" aria-label={`Ctrl+${shortcut}`}>{shortcut}</span> : null;
+            })()}
+          </span>
           {renamingId === tab.id ? (
             <input
               className="tab-rename-input"
