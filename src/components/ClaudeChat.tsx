@@ -4017,8 +4017,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       } catch { return false; }
     };
     // AI Chat 사이드바 어디에 떨어뜨려도 첨부되도록 컨테이너 전체를 드롭존으로 인정.
+    // 단, 메신저 탭(MessengerWorkspace)은 사이드바 안에 중첩되어 있지만 자기 자신의 드롭/붙여넣기
+    // 처리를 갖고 있으므로 여기서 명시적으로 제외 — 안 그러면 메신저 드롭이 AI Chat 에도 중복 첨부됨.
     const inChatArea = (target: HTMLElement | null) =>
-      !!(target && target.closest && (
+      !!(target && target.closest && !target.closest('.messenger-ws') && (
         target.closest('.claude-chat-input-dropzone') ||
         target.closest('.claude-chat-sidebar') ||
         target.closest('.claude-chat-container')
@@ -4483,17 +4485,18 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           onClick={() => onViewChange?.('messenger')}
         >💬 {tt('messenger')}</button>
       </div>
-      {activeView === 'messenger' ? (
-        <div className="claude-chat-messenger-pane">
-          <MessengerWorkspace
-            visible={visible && activeView === 'messenger'}
-            connectedSessions={connectedSessions.map(s => ({
-              panelId: s.termId,
-              sessionName: s.label,
-            }))}
-          />
-        </div>
-      ) : (
+      {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
+          그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
+      <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>
+        <MessengerWorkspace
+          visible={visible && activeView === 'messenger'}
+          connectedSessions={connectedSessions.map(s => ({
+            panelId: s.termId,
+            sessionName: s.label,
+          }))}
+        />
+      </div>
+      {activeView === 'messenger' ? null : (
       <>
       {showUsagePanel && (
         <div className="claude-chat-usage-panel claude-chat-usage-popup"
@@ -5452,7 +5455,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           <div className="claude-chat-attachments">
             <div className="claude-chat-attachments-header">
               <span>{tt('attachBinaryCount', { count: binaryAttachments.length })}</span>
-              <button className="claude-chat-attachments-clear" onClick={() => setBinaryAttachments([])}>{tt('removeAll')}</button>
+              <button className="claude-chat-attachments-clear" onClick={() => {
+                for (const b of binaryAttachments) { try { (window as any).api?.chatRemovePendingAttachment?.(b.path); } catch {} }
+                setBinaryAttachments([]);
+              }}>{tt('removeAll')}</button>
             </div>
             <div className="claude-chat-attachments-list">
               {binaryAttachments.map((b, i) => (
@@ -5464,7 +5470,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   )}
                   <span className="claude-chat-attachment-path" title={b.path}>{b.name}</span>
                   <span style={{ color: '#888', fontSize: 10 }}>{(b.size / 1024).toFixed(1)}KB</span>
-                  <button className="claude-chat-attachment-remove" onClick={() => setBinaryAttachments(prev => prev.filter((_, x) => x !== i))}>×</button>
+                  <button className="claude-chat-attachment-remove" onClick={() => {
+                    try { (window as any).api?.chatRemovePendingAttachment?.(b.path); } catch {}
+                    setBinaryAttachments(prev => prev.filter((_, x) => x !== i));
+                  }}>×</button>
                 </div>
               ))}
             </div>

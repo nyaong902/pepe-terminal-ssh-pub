@@ -33,7 +33,11 @@ contextBridge.exposeInMainWorld('api', {
   messengerGetState: () => ipcRenderer.invoke('messenger:get-state'),
   messengerUpdatePrefs: (prefs: any) => ipcRenderer.invoke('messenger:update-prefs', prefs),
   messengerSendMessage: (peerId: string, text: string) => ipcRenderer.invoke('messenger:send-message', { peerId, text }),
+  messengerMarkRead: (peerId: string, messageId: string) => ipcRenderer.invoke('messenger:mark-read', { peerId, messageId }),
+  messengerRecallMessage: (peerId: string, messageId: string) => ipcRenderer.invoke('messenger:recall-message', { peerId, messageId }),
   messengerSendFiles: (peerId: string) => ipcRenderer.invoke('messenger:send-files', { peerId }),
+  messengerPickFiles: () => ipcRenderer.invoke('messenger:pick-files'),
+  messengerSendFilePaths: (peerId: string, filePaths: string[]) => ipcRenderer.invoke('messenger:send-file-paths', { peerId, filePaths }),
   messengerSendRemoteFiles: (peerId: string, connId: string, remotePaths: string[]) => ipcRenderer.invoke('messenger:send-remote-files', { peerId, connId, remotePaths }),
   messengerScanRange: (prefix?: string) => ipcRenderer.invoke('messenger:scan-range', { prefix }),
   messengerDeleteConversation: (peerId: string) => ipcRenderer.invoke('messenger:delete-conversation', { peerId }),
@@ -329,6 +333,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   // 메인 프로세스에서 절대경로 파일을 chat 첨부 디렉토리로 복사 후 경로 반환
   chatCopyExternalFile: (srcPath: string, displayName?: string) => ipcRenderer.invoke('chat:copy-external-file', { srcPath, displayName }),
+  // 전송 전에 대기 목록에서 첨부를 제거했을 때 그 임시 사본 삭제 (pepe-chat-attachments 안의 파일만)
+  chatRemovePendingAttachment: (filePath: string) => ipcRenderer.invoke('chat:remove-pending-attachment', { filePath }),
   // transparent BrowserWindow drag-drop 우회 — 메인의 will-navigate 가 file:// 을 가로채면
   // 여기로 파일 경로가 도착. ClaudeChat 이 구독해 첨부 처리.
   onChatExternalFileDropped: (handler: (payload: { path: string }) => void) => {

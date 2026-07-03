@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
-type Msg = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number };
+type Msg = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number; read?: boolean; recalled?: boolean };
 type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center'; popupHoldSec?: number };
 type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs };
 type RemoteEntry = { name: string; isDir: boolean; size?: number; mtime?: number };
 type ConnectedSession = { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number };
+type PendingAttachment = { name: string; path: string; size: number; mime: string; previewUrl?: string };
 
 const emptyState: State = { peers: [], messages: [], prefs: {} };
 
@@ -50,6 +51,75 @@ function canRevealFile(msg: Msg) {
   return msg.direction === 'in' || /^[A-Za-z]:[\\/]/.test(p) || /^\\\\/.test(p);
 }
 
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
+function isImageFile(name?: string) {
+  const ext = (name || '').split('.').pop()?.toLowerCase() || '';
+  return IMAGE_EXT.has(ext);
+}
+function fileUrl(p?: string) {
+  if (!p) return '';
+  const norm = p.replace(/\\/g, '/');
+  return 'file:///' + (norm.startsWith('/') ? norm.slice(1) : norm);
+}
+
+// 메시지가 이모티콘만으로 구성됐으면 개수를 반환(0이면 일반 텍스트) — 카톡/디스코드처럼
+// 개수가 적을수록(1~3개) 더 크게 렌더링하기 위함.
+const EMOJI_ONLY_RE = new RegExp('^(\\p{Extended_Pictographic}\\uFE0F?(\\u200D\\p{Extended_Pictographic}\\uFE0F?)*|\\s)+$', 'u');
+function emojiOnlyCount(text?: string): number {
+  const trimmed = (text || '').trim();
+  if (!trimmed || !EMOJI_ONLY_RE.test(trimmed)) return 0;
+  try {
+    const seg = new (Intl as any).Segmenter(undefined, { granularity: 'grapheme' });
+    return Array.from(seg.segment(trimmed)).length;
+  } catch {
+    return Array.from(trimmed).length;
+  }
+}
+
+type EmojiCategory = { key: string; icon: string; label: string; emojis: string[] };
+const EMOJI_CATEGORIES: EmojiCategory[] = [
+  {
+    key: 'pepe', icon: '🐸', label: 'PePe',
+    emojis: ['🐸', '💻', '🖥️', '⌨️', '🔌', '📡', '🔧', '🐧', '🔒', '🔓', '🚀', '🐛', '⚙️', '🛰️', '💾'],
+  },
+  {
+    key: 'smileys', icon: '😀', label: '표정',
+    emojis: [
+      '😀', '😁', '😂', '🤣', '😅', '😊', '😉', '😍', '🥰', '😘',
+      '🤔', '🙄', '😴', '😭', '😢', '😡', '😱', '🥳', '😎', '🤗',
+      '🤩', '😏', '😬', '🙃', '😐', '😅', '🥲', '😤', '🤯', '🥶',
+    ],
+  },
+  {
+    key: 'gesture', icon: '👍', label: '사람',
+    emojis: [
+      '👍', '👎', '👏', '🙏', '💪', '🤝', '👋', '✌️', '🤞', '👌',
+      '👉', '👈', '👆', '👇', '✋', '🤙', '👊', '🫡', '🙌', '🤦',
+    ],
+  },
+  {
+    key: 'animal', icon: '🐶', label: '동물',
+    emojis: [
+      '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯',
+      '🦁', '🐮', '🐷', '🐔', '🐧', '🐦', '🐢', '🐍', '🦄', '🐳',
+    ],
+  },
+  {
+    key: 'food', icon: '🍕', label: '음식',
+    emojis: [
+      '🍕', '🍔', '🍟', '🌭', '🍿', '🍩', '🎂', '☕', '🍺', '🍻',
+      '🍎', '🍌', '🍇', '🍓', '🍉', '🥐', '🍜', '🍣', '🍦', '🍫',
+    ],
+  },
+  {
+    key: 'symbol', icon: '❤️', label: '기호',
+    emojis: [
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💯', '✨',
+      '🔥', '⭐', '⚡', '✅', '❌', '❓', '❗', '💤', '🎉', '🎊',
+    ],
+  },
+];
+
 function scanLabel(payload: any, t: (k: string, o?: any) => string) {
   const ranges = Array.isArray(payload?.prefixes) ? payload.prefixes.map((v: string) => `${v}.x.x`) : [];
   const directCount = Array.isArray(payload?.directHosts) ? payload.directHosts.length : 0;
@@ -60,8 +130,8 @@ function scanLabel(payload: any, t: (k: string, o?: any) => string) {
 export const MessengerWorkspace: React.FC<{
   connectedSessions?: ConnectedSession[];
   visible?: boolean;
-  initialState?: { selectedPeerId?: string; text?: string; settingsExpanded?: boolean } | null;
-  onStateChange?: (state: { selectedPeerId: string; text: string; settingsExpanded: boolean }) => void;
+  initialState?: { selectedPeerId?: string; text?: string; settingsExpanded?: boolean; pendingAttachments?: PendingAttachment[] } | null;
+  onStateChange?: (state: { selectedPeerId: string; text: string; settingsExpanded: boolean; pendingAttachments: PendingAttachment[] }) => void;
 }> = ({ connectedSessions = [], visible = true, initialState, onStateChange }) => {
   const { t } = useTranslation('messenger');
   const [state, setState] = useState<State>(emptyState);
@@ -73,11 +143,14 @@ export const MessengerWorkspace: React.FC<{
   const [saving, setSaving] = useState(false);
   const [scanText, setScanText] = useState('');
   const [settingsExpanded, setSettingsExpanded] = useState(initialState?.settingsExpanded ?? false);
-  // 부모에게 상태 보고 — 분리 시 직렬화.
+  // AI Chat 탭으로 갔다가 돌아오면 MessengerWorkspace 가 언마운트/재마운트되므로(탭 전환이 조건부
+  // 렌더) 첨부 목록도 selectedPeerId/text 처럼 부모에 보고했다가 복원해야 유지됨.
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>(initialState?.pendingAttachments || []);
+  // 부모에게 상태 보고 — 탭 전환/분리 시 직렬화.
   useEffect(() => {
     if (!onStateChange) return;
-    try { onStateChange({ selectedPeerId, text, settingsExpanded }); } catch {}
-  }, [selectedPeerId, text, settingsExpanded, onStateChange]);
+    try { onStateChange({ selectedPeerId, text, settingsExpanded, pendingAttachments }); } catch {}
+  }, [selectedPeerId, text, settingsExpanded, pendingAttachments, onStateChange]);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const msgListRef = useRef<HTMLElement | null>(null);
   const scrollMsgsToBottom = (delay = 0) => {
@@ -89,6 +162,16 @@ export const MessengerWorkspace: React.FC<{
     try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }
   });
   const [menu, setMenu] = useState<{ x: number; y: number; peerId: string } | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiCategory, setEmojiCategory] = useState<string>('pepe');
+  const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('messenger:recentEmojis') || '[]') || []; } catch { return []; }
+  });
+  // 이모티콘 팝업 위치 — CSS 만으로는 패널 경계 안에 정확히 못 가둬서, 버튼/패널 실제 크기를
+  // 측정해 패널(.messenger-ws) 기준 절대좌표(px)를 직접 계산.
+  const emojiBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [emojiPopupPos, setEmojiPopupPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
+  const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteSessions, setRemoteSessions] = useState<any[]>([]);
   const [remoteFolders, setRemoteFolders] = useState<any[]>([]);
@@ -105,6 +188,9 @@ export const MessengerWorkspace: React.FC<{
   const [remoteError, setRemoteError] = useState('');
   const [narrowLayout, setNarrowLayout] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  // .messenger-chat 도 position:relative 라 실제로는 이게 이모티콘 팝업의 containing block
+  // (더 가까운 positioned 조상이 우선) — .messenger-ws 기준으로 좌표를 재면 세션 목록 폭만큼 어긋남.
+  const chatMainRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const el = workspaceRef.current;
@@ -197,6 +283,22 @@ export const MessengerWorkspace: React.FC<{
     if (latest > 0) markRead(selectedPeerId, latest);
   }, [selectedPeerId, state.messages]);
 
+  // 상대에게 "읽음" 확인 전송 — 그래야 상대 쪽에서 이 메시지를 더 이상 회수(recall) 못 하게 됨.
+  const ackedReadRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedPeerId) return;
+    for (const m of state.messages) {
+      if (m.peerId === selectedPeerId && m.direction === 'in' && !ackedReadRef.current.has(m.id)) {
+        ackedReadRef.current.add(m.id);
+        (window as any).api?.messengerMarkRead?.(selectedPeerId, m.id);
+      }
+    }
+  }, [selectedPeerId, state.messages]);
+
+  const recallMessage = async (peerId: string, messageId: string) => {
+    await (window as any).api?.messengerRecallMessage?.(peerId, messageId);
+  };
+
   // Seed the name input from prefs when it changes, but only if the user is not
   // actively focusing/editing it. Uncontrolled input(=DOM이 입력을 소유)이라
   // React 가 입력 중 re-render 하지 않아 한글 IME 조합이 깨지지 않는다.
@@ -228,15 +330,166 @@ export const MessengerWorkspace: React.FC<{
 
   const send = async () => {
     const body = text.trim();
-    if (!body || !canSend) return;
+    if ((!body && pendingAttachments.length === 0) || !canSend) return;
+    const attachments = pendingAttachments;
     setText('');
-    const res = await (window as any).api?.messengerSendMessage?.(selectedPeerId, body);
-    if (!res?.success) setText(body);
+    setPendingAttachments([]);
+    if (attachments.length > 0) {
+      const paths = attachments.map(a => a.path);
+      const res = await (window as any).api?.messengerSendFilePaths?.(selectedPeerId, paths);
+      if (!res?.success) setPendingAttachments(attachments);
+    }
+    if (body) {
+      const res = await (window as any).api?.messengerSendMessage?.(selectedPeerId, body);
+      if (!res?.success) setText(body);
+    }
   };
 
-  const sendFiles = async () => {
+  // 이모티콘 팝업 위치/폭 재계산 — 버튼/패널(.messenger-chat, 실제 containing block) 실측 기준.
+  const recomputeEmojiPopupPos = () => {
+    const btnRect = emojiBtnRef.current?.getBoundingClientRect();
+    const panelRect = chatMainRef.current?.getBoundingClientRect();
+    if (!btnRect || !panelRect) return;
+    const MARGIN = 8;
+    // 패널이 300px 보다 좁으면 팝업 자체 폭도 줄여서 항상 안에 들어가게 함
+    // (CSS max-width/cqw 계산만으로는 정확히 안 맞아 JS 로 직접 폭까지 계산).
+    const width = Math.max(160, Math.min(300, panelRect.width - MARGIN * 2));
+    // 버튼 오른쪽 끝에 맞춰 왼쪽으로 펼치되, 패널 좌우 경계 안으로 클램프.
+    let left = btnRect.right - panelRect.left - width;
+    left = Math.max(MARGIN, Math.min(left, panelRect.width - width - MARGIN));
+    const bottom = panelRect.bottom - btnRect.top + 6;
+    setEmojiPopupPos({ left, bottom, width });
+  };
+  // 팝업이 열려있는 동안 창/패널 크기가 실시간으로 바뀌면 위치도 같이 재계산.
+  useEffect(() => {
+    if (!emojiOpen) return;
+    window.addEventListener('resize', recomputeEmojiPopupPos);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(recomputeEmojiPopupPos) : null;
+    if (ro && chatMainRef.current) ro.observe(chatMainRef.current);
+    return () => {
+      window.removeEventListener('resize', recomputeEmojiPopupPos);
+      ro?.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emojiOpen]);
+
+  // 이모티콘을 커서 위치에 삽입 (없으면 끝에 추가).
+  const insertEmoji = (emoji: string) => {
+    const el = composeTextareaRef.current;
+    if (!el) { setText(prev => prev + emoji); return; }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + emoji.length;
+      el.setSelectionRange(pos, pos);
+    });
+    setRecentEmojis(prev => {
+      const nextRecent = [emoji, ...prev.filter(e => e !== emoji)].slice(0, 24);
+      try { localStorage.setItem('messenger:recentEmojis', JSON.stringify(nextRecent)); } catch {}
+      return nextRecent;
+    });
+  };
+
+  // 로컬 파일 선택 — 바로 전송하지 않고 첨부 목록에 추가 (드래그/붙여넣기와 동일한 흐름).
+  const pickFiles = async () => {
     if (!canSend) return;
-    await (window as any).api?.messengerSendFiles?.(selectedPeerId);
+    const res = await (window as any).api?.messengerPickFiles?.();
+    if (!res?.success || !Array.isArray(res.files)) return;
+    for (const f of res.files) {
+      const img = isImageFile(f.name);
+      setPendingAttachments(prev => [...prev, {
+        name: f.name,
+        path: f.path,
+        size: f.size,
+        mime: img ? 'image/*' : '',
+        previewUrl: img ? fileUrl(f.path) : undefined,
+      }]);
+    }
+  };
+
+  // Explorer 등 외부에서 드래그된 File 의 실제 절대경로를 webUtils.getPathForFile 로 얻어
+  // 임시 디렉토리로 복사(chatCopyExternalFile) 후 첨부 목록에 추가.
+  const attachExternalFile = async (file: File) => {
+    try {
+      const fsPath: string | null = (window as any).api?.getPathForFile?.(file) || null;
+      if (!fsPath) return;
+      const res = await (window as any).api?.chatCopyExternalFile?.(fsPath, file.name);
+      if (!res?.success || !res.path) return;
+      let previewUrl: string | undefined;
+      if (res.mime?.startsWith('image/') && file.size < 2 * 1024 * 1024) {
+        try {
+          previewUrl = await new Promise<string>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result || ''));
+            r.onerror = () => reject(r.error);
+            r.readAsDataURL(file);
+          });
+        } catch {}
+      }
+      setPendingAttachments(prev => [...prev, { name: res.displayName || file.name, path: res.path, size: res.size, mime: res.mime || '', previewUrl }]);
+    } catch {}
+  };
+
+  // 클립보드에서 붙여넣은 이미지/파일(스크린샷 등) — dataUrl 로 저장 후 첨부 목록에 추가.
+  const attachPastedBlob = async (blob: Blob, suggestedName?: string) => {
+    try {
+      const name = suggestedName || `paste-${Date.now()}.png`;
+      const mime = blob.type || '';
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(r.error || new Error('FileReader 실패'));
+        r.readAsDataURL(blob);
+      });
+      const res = await (window as any).api?.chatSavePastedBlob?.(dataUrl, name, mime);
+      if (!res?.success) return;
+      const previewUrl = mime.startsWith('image/') ? dataUrl : undefined;
+      setPendingAttachments(prev => [...prev, { name: res.displayName || name, path: res.path, size: res.size, mime, previewUrl }]);
+    } catch {}
+  };
+
+  const onComposePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const blobs: { blob: Blob; name?: string }[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) blobs.push({ blob: f, name: f.name });
+      }
+    }
+    if (blobs.length === 0) return; // 텍스트만 — 기본 붙여넣기 동작 유지
+    e.preventDefault();
+    e.stopPropagation(); // MessengerWorkspace 가 ClaudeChat 사이드바 안에 중첩돼 있어 상위로 전파되면 중복 첨부됨
+    for (const b of blobs) void attachPastedBlob(b.blob, b.name);
+  };
+
+  const [dragOver, setDragOver] = useState(false);
+  const dragCounter = useRef(0);
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!canSend) return;
+    dragCounter.current++;
+    setDragOver(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current = Math.max(0, dragCounter.current - 1);
+    if (dragCounter.current === 0) setDragOver(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current = 0;
+    setDragOver(false);
+    if (!canSend) return;
+    for (const f of Array.from(e.dataTransfer.files)) void attachExternalFile(f);
   };
 
   // sessionId 기준 연결 상태 맵 + 이미 살아있는 터미널 연결의 termId(재사용용)
@@ -388,7 +641,7 @@ export const MessengerWorkspace: React.FC<{
   };
 
   return (
-    <div className={`messenger-ws ${narrowLayout ? 'narrow' : ''}`} ref={workspaceRef} onClick={() => setMenu(null)}>
+    <div className={`messenger-ws ${narrowLayout ? 'narrow' : ''}`} ref={workspaceRef} onClick={() => { setMenu(null); setEmojiOpen(false); }}>
       <aside className="messenger-side">
         <div className="messenger-brand">
           <div>
@@ -470,7 +723,13 @@ export const MessengerWorkspace: React.FC<{
                 key={peer.id}
                 className={`messenger-peer ${peer.id === selectedPeerId ? 'active' : ''} ${peer.online ? 'online' : 'offline'} ${unread > 0 ? 'has-unread' : ''}`}
                 onClick={() => setSelectedPeerId(peer.id)}
-                onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, peerId: peer.id }); }}
+                onContextMenu={e => {
+                  e.preventDefault();
+                  // .messenger-context 가 이제 패널 기준 position:absolute 라 뷰포트 좌표가 아니라
+                  // 패널(workspaceRef) 기준 상대 좌표로 변환해서 저장.
+                  const rect = workspaceRef.current?.getBoundingClientRect();
+                  setMenu({ x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0), peerId: peer.id });
+                }}
               >
                 <span className="messenger-avatar">{peer.name.slice(0, 1).toUpperCase()}</span>
                 <span className="messenger-peer-main">
@@ -484,7 +743,17 @@ export const MessengerWorkspace: React.FC<{
         </div>
       </aside>
 
-      <main className="messenger-chat">
+      <main
+        ref={chatMainRef}
+        className={`messenger-chat ${dragOver ? 'drag-over' : ''}`}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragOver && canSend && (
+          <div className="messenger-drop-overlay">📎 {t('dropToAttach', { defaultValue: '여기에 놓아서 첨부' })}</div>
+        )}
         <header className="messenger-chat-head">
           {selectedPeer ? (
             <>
@@ -504,11 +773,27 @@ export const MessengerWorkspace: React.FC<{
 
         <section className="messenger-messages" ref={msgListRef}>
           {messages.length === 0 && <div className="messenger-empty large">{t('noMessages')}</div>}
-          {messages.map(m => (
-            <div key={m.id} className={`messenger-bubble ${m.direction}`}>
-              {m.kind === 'file' ? (
+          {messages.map(m => {
+            const emojiCount = m.kind === 'text' ? emojiOnlyCount(m.text) : 0;
+            const emojiSizeClass = emojiCount === 1 ? 'emoji-x1' : emojiCount === 2 ? 'emoji-x2' : emojiCount === 3 ? 'emoji-x3' : '';
+            const recallable = m.direction === 'out' && !m.recalled && !m.read;
+            return (
+            <div key={m.id} className={`messenger-bubble ${m.direction} ${emojiSizeClass}`}>
+              {m.recalled ? (
+                <div className="messenger-recalled">{m.direction === 'out' ? t('messageRecalledSelf', { defaultValue: '메시지를 삭제했습니다.' }) : t('messageRecalledPeer', { defaultValue: '상대방이 메시지를 회수했습니다.' })}</div>
+              ) : m.kind === 'file' ? (
                 <div>
-                  <b>{t('fileLabel')}</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
+                  {isImageFile(m.fileName) && m.filePath ? (
+                    <img
+                      className="messenger-image-preview"
+                      src={fileUrl(m.filePath)}
+                      alt={m.fileName}
+                      onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}
+                    />
+                  ) : null}
+                  <div>
+                    <b>{t('fileLabel')}</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
+                  </div>
                   {m.filePath && (
                     <>
                       <div className="messenger-file-path">{m.filePath}</div>
@@ -519,14 +804,52 @@ export const MessengerWorkspace: React.FC<{
               ) : (
                 <div>{m.text}</div>
               )}
-              <time>{fmtTime(m.ts)}</time>
+              <div className="messenger-bubble-footer">
+                <time>{fmtTime(m.ts)}</time>
+                {recallable && (
+                  <button
+                    className="messenger-recall-btn"
+                    title={t('recallMessage', { defaultValue: '보내기 취소' })}
+                    onClick={() => recallMessage(m.peerId, m.id)}
+                  >✕</button>
+                )}
+              </div>
             </div>
-          ))}
+            );
+          })}
         </section>
 
         <footer className="messenger-compose">
-          <div className="messenger-compose-toolbar">
-            <button className="messenger-chip-btn" disabled={!canSend} onClick={sendFiles} title={t('localFile')} aria-label={t('localFile')}>
+          {pendingAttachments.length > 0 && (
+            <div className="messenger-attachments">
+              <div className="messenger-attachments-header">
+                <span>📎 첨부 {pendingAttachments.length}개</span>
+                <button className="messenger-attachments-clear" onClick={() => {
+                  for (const a of pendingAttachments) { try { (window as any).api?.chatRemovePendingAttachment?.(a.path); } catch {} }
+                  setPendingAttachments([]);
+                }}>전체 제거</button>
+              </div>
+              <div className="messenger-attachments-list">
+                {pendingAttachments.map((a, i) => (
+                  <div key={`${a.path}-${i}`} className="messenger-attachment-chip">
+                    {a.previewUrl ? (
+                      <img src={a.previewUrl} alt={a.name} />
+                    ) : (
+                      <span className="messenger-attachment-chip-icon">📄</span>
+                    )}
+                    <span className="messenger-attachment-chip-name" title={a.path}>{a.name}</span>
+                    <span className="messenger-attachment-chip-size">{(a.size / 1024).toFixed(1)}KB</span>
+                    <button className="messenger-attachment-chip-remove" onClick={() => {
+                      try { (window as any).api?.chatRemovePendingAttachment?.(a.path); } catch {}
+                      setPendingAttachments(prev => prev.filter((_, x) => x !== i));
+                    }}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="messenger-compose-toolbar" onMouseDown={e => e.preventDefault()}>
+            <button className="messenger-chip-btn" disabled={!canSend} onClick={pickFiles} title={t('localFile')} aria-label={t('localFile')}>
               <span className="messenger-chip-btn-icon">📎</span>
               <span className="messenger-chip-btn-text">{t('localFile')}</span>
             </button>
@@ -534,26 +857,94 @@ export const MessengerWorkspace: React.FC<{
               <span className="messenger-chip-btn-icon">🌐</span>
               <span className="messenger-chip-btn-text">{t('remoteFile')}</span>
             </button>
+            <div className="messenger-emoji-wrap">
+              <button
+                ref={emojiBtnRef}
+                className="messenger-chip-btn"
+                disabled={!canSend}
+                onClick={e => {
+                  e.stopPropagation();
+                  setEmojiOpen(v => {
+                    const next = !v;
+                    if (next) recomputeEmojiPopupPos();
+                    return next;
+                  });
+                }}
+                title="이모티콘"
+                aria-label="이모티콘"
+              >
+                <span className="messenger-chip-btn-icon">🐸</span>
+                <span className="messenger-chip-btn-text">이모티콘</span>
+              </button>
+              {emojiOpen && (() => {
+                const activeCat = emojiCategory === 'recent'
+                  ? { key: 'recent', icon: '🕒', label: '최근', emojis: recentEmojis }
+                  : EMOJI_CATEGORIES.find(c => c.key === emojiCategory) || EMOJI_CATEGORIES[0];
+                return (
+                  <div
+                    className="messenger-emoji-popup"
+                    style={emojiPopupPos ? { left: emojiPopupPos.left, bottom: emojiPopupPos.bottom, width: emojiPopupPos.width } : undefined}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div className="messenger-emoji-tabs">
+                      <button
+                        className={`messenger-emoji-tab ${emojiCategory === 'recent' ? 'active' : ''}`}
+                        title="최근 사용"
+                        onClick={() => setEmojiCategory('recent')}
+                      >🕒</button>
+                      {EMOJI_CATEGORIES.map(c => (
+                        <button
+                          key={c.key}
+                          className={`messenger-emoji-tab ${emojiCategory === c.key ? 'active' : ''}`}
+                          title={c.label}
+                          onClick={() => setEmojiCategory(c.key)}
+                        >{c.icon}</button>
+                      ))}
+                    </div>
+                    <div
+                      className="messenger-emoji-grid"
+                      style={{ gridTemplateColumns: `repeat(${Math.max(4, Math.floor((emojiPopupPos?.width || 300) / 34))}, minmax(0, 1fr))` }}
+                    >
+                      {activeCat.emojis.length === 0 ? (
+                        <div className="messenger-emoji-empty">아직 사용한 이모티콘이 없습니다.</div>
+                      ) : (
+                        activeCat.emojis.map((em, i) => (
+                          <button key={`${em}-${i}`} className="messenger-emoji-item" onClick={() => insertEmoji(em)}>{em}</button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
           <div className="messenger-compose-editor">
             <textarea
+              ref={composeTextareaRef}
               value={text}
               disabled={!canSend}
               onChange={e => setText(e.target.value)}
+              onPaste={onComposePaste}
+              onFocus={() => setEmojiOpen(false)}
+              onMouseDown={e => {
+                // 플레이스홀더만 보이는 빈 입력창에서 드래그하면 플레이스홀더 텍스트가 선택 영역처럼 보이는
+                // 크로미움 버그성 동작이 있어, 비어있을 때는 드래그 선택을 막고 커서 포커스만 남긴다.
+                if (!text) {
+                  e.preventDefault();
+                  composeTextareaRef.current?.focus();
+                }
+              }}
+              onDragStart={e => { if (!text) e.preventDefault(); }}
+              style={!text ? { userSelect: 'none', WebkitUserSelect: 'none' } as React.CSSProperties : undefined}
               onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   void send();
                 }
               }}
-              placeholder={selectedPeer ? (hidePresence ? t('composeHidden') : (selectedOnline ? t('composePlaceholder') : t('composeOffline'))) : t('selectPeer')}
+              placeholder={selectedPeer ? (hidePresence ? t('composeHidden') : (selectedOnline ? `${t('composePlaceholder')} · 📎🌐😀 드래그·Ctrl+V 로 첨부 가능` : t('composeOffline'))) : t('selectPeer')}
             />
-            <button className="messenger-send-btn" disabled={!canSend || !text.trim()} onClick={send}>{t('send')} (Enter)</button>
-          </div>
-          <div className="messenger-compose-hint">
-            {selectedPeer
-              ? '📎 로컬 파일 · 🌐 원격 파일 버튼으로 파일을 전송할 수 있습니다.'
-              : t('selectPeer')}
+            <button className="messenger-send-btn" disabled={!canSend || (!text.trim() && pendingAttachments.length === 0)} onClick={send}>{t('send')} (Enter)</button>
           </div>
         </footer>
       </main>

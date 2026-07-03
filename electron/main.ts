@@ -443,6 +443,24 @@ function cleanupStaleTempFiles() {
       } catch {}
     }
   } catch {}
+  // 채팅/메신저 첨부 임시 복사본(pepe-chat-attachments) — 재첨부하거나 앱을 재시작해도 계속 쌓이므로
+  // 같은 나이 기반 정책으로 정리. 다른 PePe 인스턴스가 방금 만든 파일은 아직 "오래된" 게 아니라서
+  // 자연히 보호됨 (PID 추적 없이도 멀티 인스턴스 안전).
+  try {
+    const attachDir = path.join(os.tmpdir(), 'pepe-chat-attachments');
+    if (fs.existsSync(attachDir)) {
+      const now = Date.now();
+      const MAX_AGE = 60 * 60 * 1000; // 60분 — 첨부는 좀 더 오래 들고 있을 수 있어 여유를 둠
+      for (const name of fs.readdirSync(attachDir)) {
+        const full = path.join(attachDir, name);
+        try {
+          const st = fs.statSync(full);
+          if (now - st.mtimeMs < MAX_AGE) continue;
+          fs.rmSync(full, { force: true });
+        } catch {}
+      }
+    }
+  } catch {}
 }
 
 app.whenReady().then(() => {
@@ -671,7 +689,7 @@ ipcMain.handle('window-theme:set', (_e, id: string) => {
 
 // ── LAN Mini Messenger ─────────────────────────────────────────────
 type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
-type MessengerMessage = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number };
+type MessengerMessage = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number; read?: boolean; recalled?: boolean };
 type MessengerPrefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center' | 'edge'; popupHoldSec?: number };
 
 const MSG_DISCOVERY_PORT = 39455;
@@ -784,6 +802,34 @@ function messengerRemember(msg: MessengerMessage) {
   messengerPruneMessages();
   messengerSaveMessages();
   messengerEmit({ type: 'message', message: msg, state: messengerState() });
+}
+// 상대에게 "읽음" 확인을 보냄 — 보낸 사람 쪽에서 회수(recall) 가능 여부 판단에 사용.
+async function messengerSendReadAck(peer: MessengerPeer, messageId: string) {
+  try {
+    await messengerWritePeer(peer, { app: 'pepe-terminal-ssh', type: 'read', fromId: messengerId, messageId, ts: Date.now() });
+  } catch {}
+}
+// 내가 보낸 메시지를 회수(삭제) — 아직 상대가 안 읽었을 때만 허용. 로컬 기록도 같이 지움.
+async function messengerRecallMessage(peerId: string, messageId: string): Promise<{ success: boolean; error?: string }> {
+  const peer = messengerPeers.get(peerId);
+  if (!peer) return { success: false, error: 'peer not found' };
+  const msg = messengerMessages.find(m => m.id === messageId && m.peerId === peerId && m.direction === 'out');
+  if (!msg) return { success: false, error: 'message not found' };
+  if (msg.read) return { success: false, error: 'already read' };
+  try {
+    await messengerWritePeer(peer, { app: 'pepe-terminal-ssh', type: 'recall', fromId: messengerId, messageId, ts: Date.now() });
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+  msg.recalled = true;
+  msg.text = undefined;
+  // 주의: msg.filePath 는 사용자가 📎 다이얼로그로 고른 원본 파일일 수 있어 삭제하지 않음
+  // (드래그/붙여넣기로 첨부한 임시 사본은 전송 성공 시 이미 정리됨 — messenger:send-file-paths 참고).
+  msg.filePath = undefined;
+  msg.fileName = undefined;
+  messengerSaveMessages();
+  messengerEmit({ type: 'state', state: messengerState() });
+  return { success: true };
 }
 function messengerPacket(reply = false) {
   return Buffer.from(JSON.stringify({
@@ -980,6 +1026,29 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
     const savePath = path.join(messengerDownloadsDir(), `${Date.now()}-${fileName}`);
     fs.writeFileSync(savePath, data);
     messengerRemember({ id: payload.messageId || `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind: 'file', fileName, filePath: savePath, size: data.length, ts: Number(payload.ts) || Date.now() });
+  } else if (payload.type === 'read') {
+    // 상대가 내가 보낸 메시지를 읽었다는 확인 — 그 메시지엔 더 이상 회수(recall) 못 하게 표시.
+    const msg = messengerMessages.find(m => m.id === payload.messageId && m.peerId === peerId && m.direction === 'out');
+    if (msg && !msg.read) {
+      msg.read = true;
+      messengerSaveMessages();
+      messengerEmit({ type: 'state', state: messengerState() });
+    }
+  } else if (payload.type === 'recall') {
+    // 상대가 자기가 보낸(내 입장에선 받은) 메시지를 회수함 — 내 쪽 기록도 삭제 표시로 갱신.
+    const msg = messengerMessages.find(m => m.id === payload.messageId && m.peerId === peerId && m.direction === 'in');
+    if (msg && !msg.recalled) {
+      msg.recalled = true;
+      msg.text = undefined;
+      // 받은 파일은 우리가 messengerDownloadsDir() 에 직접 저장한 사본이라 안전하게 삭제 가능.
+      if (msg.kind === 'file' && msg.filePath) {
+        try { if (fs.existsSync(msg.filePath)) fs.unlinkSync(msg.filePath); } catch {}
+      }
+      msg.filePath = undefined;
+      msg.fileName = undefined;
+      messengerSaveMessages();
+      messengerEmit({ type: 'state', state: messengerState() });
+    }
   }
 }
 
@@ -1073,6 +1142,26 @@ ipcMain.handle('messenger:send-message', async (_e, { peerId, text }: { peerId: 
   messengerRemember(msg);
   return { success: true };
 });
+ipcMain.handle('messenger:mark-read', async (_e, { peerId, messageId }: { peerId: string; messageId: string }) => {
+  const peer = messengerPeers.get(peerId);
+  const msg = messengerMessages.find(m => m.id === messageId && m.peerId === peerId && m.direction === 'in');
+  if (!peer || !msg) return { success: false };
+  await messengerSendReadAck(peer, messageId);
+  return { success: true };
+});
+ipcMain.handle('messenger:recall-message', async (_e, { peerId, messageId }: { peerId: string; messageId: string }) => {
+  return messengerRecallMessage(peerId, messageId);
+});
+// 다이얼로그로 파일만 선택 — 바로 전송하지 않고 렌더러의 첨부 목록에 올릴 경로 목록을 반환.
+ipcMain.handle('messenger:pick-files', async () => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] });
+  if (picked.canceled || picked.filePaths.length === 0) return { success: false, canceled: true };
+  const files = picked.filePaths
+    .filter(p => { try { return fs.statSync(p).isFile(); } catch { return false; } })
+    .map(p => ({ path: p, name: path.basename(p), size: fs.statSync(p).size }));
+  return { success: true, files };
+});
 ipcMain.handle('messenger:send-files', async (_e, { peerId }: { peerId: string }) => {
   if (messengerPrefs.hidePresence) return { success: false, error: 'presence hidden' };
   const peer = messengerPeers.get(peerId);
@@ -1086,6 +1175,32 @@ ipcMain.handle('messenger:send-files', async (_e, { peerId }: { peerId: string }
     await messengerSendFileBuffer(peer, path.basename(filePath), filePath, fs.readFileSync(filePath));
   }
   return { success: true };
+});
+// 네이티브 다이얼로그 없이 — 드래그앤드롭 등으로 이미 알고 있는 파일 경로를 바로 전송.
+ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, filePaths }: { peerId: string; filePaths: string[] }) => {
+  if (messengerPrefs.hidePresence) return { success: false, error: 'presence hidden' };
+  const peer = messengerPeers.get(peerId);
+  if (!peer) return { success: false, error: 'peer not found' };
+  if (Date.now() - peer.lastSeen >= MSG_ONLINE_WINDOW_MS) return { success: false, error: 'peer is offline' };
+  const paths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
+  if (paths.length === 0) return { success: false, error: 'no files' };
+  // 드래그/붙여넣기 첨부는 chatCopyExternalFile/chatSavePastedBlob 이 이 임시 폴더로 복사해둔 사본이라
+  // 전송 후엔 필요 없음 — 전송 성공 시 삭제. (📎 버튼으로 고른 사용자의 원본 파일은 이 폴더 밖이라 안전)
+  const attachTmpDir = path.join(os.tmpdir(), 'pepe-chat-attachments');
+  try {
+    for (const filePath of paths) {
+      if (!fs.existsSync(filePath)) continue;
+      const st = fs.statSync(filePath);
+      if (!st.isFile()) continue;
+      await messengerSendFileBuffer(peer, path.basename(filePath), filePath, fs.readFileSync(filePath));
+      if (path.dirname(filePath) === attachTmpDir) {
+        try { fs.unlinkSync(filePath); } catch {}
+      }
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
 });
 ipcMain.handle('messenger:send-remote-files', async (_e, { peerId, connId, remotePaths }: { peerId: string; connId: string; remotePaths: string[] }) => {
   try {
@@ -1202,6 +1317,19 @@ ipcMain.handle('chat:save-pasted-blob', async (_e, { dataUrl, name, mimeType }: 
     const fpath = path.join(dir, safe);
     fs.writeFileSync(fpath, buf);
     return { success: true, path: fpath, dir, displayName, size: buf.length, mime };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 대기 중이던 첨부를 전송 전에 목록에서 제거했을 때 그 임시 사본도 즉시 정리.
+// pepe-chat-attachments 폴더 안의 파일만 지움 — 사용자의 원본 파일(📎 다이얼로그로 고른 것)은 보호.
+ipcMain.handle('chat:remove-pending-attachment', (_e, { filePath }: { filePath: string }) => {
+  try {
+    if (!filePath) return { success: false };
+    const attachDir = path.join(os.tmpdir(), 'pepe-chat-attachments');
+    if (path.dirname(filePath) !== attachDir) return { success: false, error: 'not a temp attachment' };
+    if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+    return { success: true };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };
   }
