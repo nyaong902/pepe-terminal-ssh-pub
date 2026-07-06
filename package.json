@@ -147,9 +147,11 @@
         "portable"
       ],
       "icon": "public/icon.ico",
-      "certificateFile": "cert/PePeTerminal_v2.pfx",
-      "certificatePassword": "pepe1234",
-      "sign": "./scripts/sign-with-retry.js",
+      "signtoolOptions": {
+        "certificateFile": "cert/PePeTerminal_v2.pfx",
+        "certificatePassword": "pepe1234",
+        "sign": "./scripts/sign-with-retry.js"
+      },
       "extraResources": [
         {
           "from": "resources/openvpn-win",

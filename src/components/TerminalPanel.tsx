@@ -275,6 +275,9 @@ export function stashXtermDom(termId: string) {
   if (el && el.parentNode && el.parentNode !== getXtermStash()) {
     getXtermStash().appendChild(el);
   }
+  visibleTermIds.delete(termId);
+  try { (window as any).api?.setTermVisibility?.(termId, false); } catch {}
+  scheduleCompaction(termId);
 }
 
 // stash 에서 꺼낸 후 refit 이 안정화된 시점에 호출 — 저장된 논리 라인 위치로 복원.
@@ -298,6 +301,134 @@ function restoreSavedScroll(termId: string) {
       }
     }
   } catch {}
+}
+
+// 현재 화면에 보이는(stash 되지 않은) termId 집합 — 앱 포커스와 무관하게, 패널 안에서 실제로
+// 선택된 세션 탭인지만 따진다. 안 보이는 탭은 sshDataHandlers/ptyDataHandlers 에서 즉시 이
+// termCompactedBuffer 로 데이터를 모으고 실시간 파싱/렌더는 건너뛴다 (탭이 여러 개 열려 있을 때
+// 안 보이는 탭까지 매번 렌더링해서 버벅이는 문제 방지 — 앱 자체 포커스 유무와는 무관, 그건
+// backgroundThrottling:false + 커맨드라인 플래그로 항상 실시간 유지).
+const visibleTermIds: Set<string> = new Set();
+
+// WebGL 렌더러는 타이핑 반응성(커서/글자 렌더)에 확실히 유리하지만, GPU 컨텍스트를 쓰기 때문에
+// 창이 백그라운드로 가면(포커스 상실/최소화) OS/드라이버가 컨텍스트를 드롭하는 경우가 흔하다
+// (Tabby 등 다른 xterm 기반 터미널도 동일 — "The GPU context is often dropped while the app is
+// in the background"). 컨텍스트가 죽은 채로 계속 그리려 하면 버벅임의 원인이 되므로, 컨텍스트
+// 손실 시 addon 을 버리고 xterm 기본 DOM 렌더러로 잠깐 폴백해두고, 창이 다시 포커스를 받거나
+// 이 탭이 다시 보일 때만(visible && focused 상태에서만 새 GPU 컨텍스트 생성 가능) 재부착한다.
+const termWebglPendingRecovery: Set<string> = new Set();
+function attachWebglAddon(termId: string) {
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  const term: any = entry.term;
+  if (term.__webglAddon) return;
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      try { webgl.dispose(); } catch {}
+      term.__webglAddon = null;
+      termWebglPendingRecovery.add(termId);
+    });
+    term.loadAddon(webgl);
+    term.__webglAddon = webgl;
+    termWebglPendingRecovery.delete(termId);
+  } catch {}
+}
+function tryRecoverWebgl(termId: string) {
+  if (!termWebglPendingRecovery.has(termId)) return;
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  const el = (entry.term as any).element as HTMLElement | undefined;
+  // 새 GPU 컨텍스트는 실제로 화면에 보이고(offsetParent) 창이 포커스를 가진 상태에서만 안정적으로
+  // 생성 가능 — 그렇지 않으면 재생성하자마자 또 죽는 경우가 있어 조건을 걸어둔다.
+  if (!el || el.offsetParent === null || !document.hasFocus()) return;
+  attachWebglAddon(termId);
+  try {
+    const core = (entry.term as any)._core;
+    core?._renderService?.clear?.();
+    core?._renderService?.handleResize?.(entry.term.cols, entry.term.rows);
+  } catch {}
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', () => {
+    for (const termId of visibleTermIds) tryRecoverWebgl(termId);
+  });
+}
+
+// 안 보이는 동안 모아둔(또는 60초 이상 안 보여서 압축된) 데이터 — termId → 청크 배열.
+// 문자열을 매번 이어붙이면(+=) V8 이 매번 새 문자열을 통째로 복사해야 해서, heavy tail -f 처럼
+// 자주 append 될 때 큰 문자열 복사가 반복되며 GC 압박 → 버벅임(멈칫)으로 이어진다.
+// 청크를 배열에 push(O(1))만 하고, 실제 하나의 문자열로 합치는 건 flush 시점에 한 번만 한다.
+const termCompactedChunks: Map<string, string[]> = new Map();
+const termCompactedLen: Map<string, number> = new Map();
+const termCompactTimer: Map<string, ReturnType<typeof setTimeout>> = new Map();
+const COMPACT_IDLE_MS = 60_000; // 안 보이는 채로 이 시간 이상 지나면 xterm 버퍼 자체도 비워 메모리 회수
+
+function cancelCompaction(termId: string) {
+  const t = termCompactTimer.get(termId);
+  if (t) { clearTimeout(t); termCompactTimer.delete(termId); }
+}
+
+// 안 보이는 탭이 tail -f 처럼 아주 오래 heavy 출력을 계속 내면 청크가 무한정 쌓일 수 있어서
+// (백그라운드 방치 = 메모리 무한 증가) 총 길이 상한을 두고, 넘으면 오래된 청크부터 버린다 —
+// 어차피 scrollback 한도 때문에 다시 볼 때도 다 안 보일 내용이라 안전. 청크 단위 제거라 O(k).
+const COMPACT_BUFFER_MAX_CHARS = 2_000_000; // 대략 수 MB 수준으로 캡
+// 청크 하나가 너무 크면(예: 60초 idle 압축 시 직렬화된 스크롤백 전체) 복원할 때 xterm.write() 가
+// 그 큰 덩어리를 한 번의 "action" 으로 처리하며 자체 12ms 양보 로직을 건너뛰고 통째로 파싱해
+// 멈칫거림 — 그래서 저장 시점에 미리 작은 조각으로 쪼개 둔다 (main.ts 의 IPC 청크 상한과 동일 취지).
+const COMPACT_CHUNK_MAX_CHARS = 32_768;
+function appendCompactedBuffer(termId: string, data: string) {
+  if (!data) return;
+  const chunks = termCompactedChunks.get(termId) || [];
+  for (let i = 0; i < data.length; i += COMPACT_CHUNK_MAX_CHARS) {
+    chunks.push(data.slice(i, i + COMPACT_CHUNK_MAX_CHARS));
+  }
+  let total = (termCompactedLen.get(termId) || 0) + data.length;
+  while (total > COMPACT_BUFFER_MAX_CHARS && chunks.length > 1) {
+    total -= chunks.shift()!.length;
+  }
+  termCompactedChunks.set(termId, chunks);
+  termCompactedLen.set(termId, total);
+}
+
+function clearCompactedBuffer(termId: string) {
+  termCompactedChunks.delete(termId);
+  termCompactedLen.delete(termId);
+}
+
+function scheduleCompaction(termId: string) {
+  cancelCompaction(termId);
+  const timer = setTimeout(() => {
+    termCompactTimer.delete(termId);
+    if (visibleTermIds.has(termId)) return; // 그 사이 다시 보임
+    const entry = termStore.get(termId);
+    if (!entry) return;
+    try {
+      const scrollback = (entry.term as any).options?.scrollback ?? 5000;
+      // 안 보이는 동안엔 실시간 write 를 건너뛰므로 xterm 버퍼는 stash 시점 상태 그대로 — 그걸
+      // 직렬화한 뒤 reset() 으로 메모리를 회수하고, 그 사이 모아둔(더 최신) 청크들 앞에 끼워넣는다.
+      const serialized = serializeTermBuffer(termId, scrollback);
+      (entry.term as any).reset();
+      const already = termCompactedChunks.get(termId) || [];
+      clearCompactedBuffer(termId);
+      appendCompactedBuffer(termId, serialized);
+      for (const chunk of already) appendCompactedBuffer(termId, chunk);
+    } catch {}
+  }, COMPACT_IDLE_MS);
+  termCompactTimer.set(termId, timer);
+}
+
+// 압축된 termId 에 새 출력이 도착하거나 다시 화면에 보이게 되면, 비워둔 버퍼에 저장해둔
+// 내용을 먼저 복원해서 순서를 보존한다 (이후 이어지는 새 데이터가 뒤에 붙도록).
+// 청크 단위로 나눠서 write() — 하나로 합쳐서 한 번에 넘기면 xterm 이 그 거대한 문자열을
+// 자체 12ms 양보 없이 통째로 파싱해 멈칫거린다 (프로파일링으로 확인된 patrern).
+export function flushCompactedBuffer(termId: string) {
+  const chunks = termCompactedChunks.get(termId);
+  if (chunks === undefined) return;
+  clearCompactedBuffer(termId);
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  try { for (const chunk of chunks) entry.term.write(chunk); } catch {}
 }
 
 // xterm 5.3 의 rows 증가 시 grow bug 수동 보정.
@@ -1709,6 +1840,12 @@ export function getAllTermIds(): string[] {
 // 호출처: App.tsx releaseTermResources 끝, closeTab/closePanel/handleCloseSession
 export function disposeTermFully(termId: string) {
   if (!termId) return;
+  // 0) 백그라운드 압축 스케줄/버퍼 정리
+  cancelCompaction(termId);
+  clearCompactedBuffer(termId);
+  visibleTermIds.delete(termId);
+  termWebglPendingRecovery.delete(termId);
+  try { (window as any).api?.setTermVisibility?.(termId, false); } catch {}
   // 1) flame/prism cursor overlay (setInterval) 정리
   try { flameOverlayCleanup.get(termId)?.(); } catch {}
   flameOverlayCleanup.delete(termId);
@@ -1950,6 +2087,15 @@ function ensureSSHSetup(termId: string) {
 
   sshDataHandlers.set(termId, (p: any) => {
     try {
+      // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면(다른 세션
+      // 탭이 활성 상태) 굳이 실시간으로 파싱/렌더할 필요가 없다 — 문자열로만 모아두고 그 탭을
+      // 다시 볼 때 한 번에 반영. 앱 자체의 포커스 유무와는 무관 (그건 항상 실시간 유지).
+      if (!visibleTermIds.has(termId)) {
+        appendCompactedBuffer(termId, p.data || '');
+        return;
+      }
+      // 백그라운드 압축 상태에서 새 출력이 왔으면, 순서 보존을 위해 압축 해제(복원)부터.
+      flushCompactedBuffer(termId);
       // 사용자가 스크롤 위로 올렸을 때 새 출력으로 scrollback 증가하면서 viewport 가 따라 움직이지
       // 않도록 ydisp 를 안정화. write 전후로 끝에서부터의 라인 offset 을 보존.
       const core = (term as any)._core;
@@ -2225,6 +2371,14 @@ function ensurePtySetup(termId: string) {
 
   ptyDataHandlers.set(termId, (p: any) => {
     try {
+      // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면 실시간
+      // 파싱/렌더 없이 문자열로만 모아두고 다시 볼 때 반영.
+      if (!visibleTermIds.has(termId)) {
+        appendCompactedBuffer(termId, p.data || '');
+        return;
+      }
+      // 백그라운드 압축 상태에서 새 출력이 왔으면, 순서 보존을 위해 압축 해제(복원)부터.
+      flushCompactedBuffer(termId);
       const data: string = p.data;
       // ConPTY drop window: PTY resize 직후 오는 전체화면 repaint 를 억제해 커서 위치 깨짐 방지.
       // ConPTY/PSReadLine 이 보내는 full-screen repaint 시그니처 패턴들:
@@ -2945,6 +3099,11 @@ export const TerminalPanel: React.FC<Props> = ({
     // 이미 같은 터미널이 마운트되어 있으면 다시 그리지 않음
     if (mountedTermRef.current === activeTermId) return;
     mountedTermRef.current = activeTermId;
+    visibleTermIds.add(activeTermId);
+    try { (window as any).api?.setTermVisibility?.(activeTermId, true); } catch {}
+    cancelCompaction(activeTermId);
+    // 백그라운드로 오래 있어서 버퍼가 압축(직렬화 후 비움)됐었다면 복귀 시 먼저 복원.
+    flushCompactedBuffer(activeTermId);
 
     const { term, fit } = getOrCreateTerm(activeTermId);
 
@@ -2959,6 +3118,7 @@ export const TerminalPanel: React.FC<Props> = ({
       requestAnimationFrame(() => {
         refitTerm(activeTermId);
         restoreSavedScroll(activeTermId);
+        tryRecoverWebgl(activeTermId); // 백그라운드에 있는 동안 GPU 컨텍스트가 죽었을 수 있음
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 50);
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 200);
         setTimeout(() => { restoreSavedScroll(activeTermId); termSavedScroll.delete(activeTermId); }, 350);
@@ -2966,20 +3126,7 @@ export const TerminalPanel: React.FC<Props> = ({
     } else {
       containerRef.current.innerHTML = '';
       term.open(containerRef.current);
-      // 기본 DOM 렌더러는 출력이 많을수록 CSS 규칙/span 이 계속 쌓여 메모리·성능이 저하되므로
-      // WebGL 렌더러로 전환 (캔버스 1장에 렌더 — 로그 폭주 시 누적 없음). 컨텍스트 손실 시
-      // DOM 렌더러로 자동 폴백.
-      if (!(term as any).__webglAttached) {
-        (term as any).__webglAttached = true;
-        try {
-          const webgl = new WebglAddon();
-          webgl.onContextLoss(() => {
-            try { webgl.dispose(); } catch {}
-            (term as any).__webglAttached = false;
-          });
-          term.loadAddon(webgl);
-        } catch {}
-      }
+      attachWebglAddon(activeTermId);
     }
     applyTermOpacity(activeTermId, containerRef.current);
 

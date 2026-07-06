@@ -307,6 +307,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('telnet:connect', { panelId, host, port, cols, rows, encoding }),
   isSSHConnected: (panelId: string) =>
     ipcRenderer.invoke('ssh:is-connected', panelId),
+  setTermVisibility: (panelId: string, visible: boolean) =>
+    ipcRenderer.send('term:set-visibility', { panelId, visible }),
   sendSSHInput: (panelId: string, data?: string, b64?: string) =>
     ipcRenderer.send('ssh:input', { panelId, data, b64 }),
   disconnectSSH: (panelId: string) =>

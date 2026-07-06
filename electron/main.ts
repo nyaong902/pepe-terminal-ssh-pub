@@ -15,7 +15,9 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 // (3개 HWND 모두 IDropTarget COM 등록 성공해도 OS 가 GPU 프로세스 합성 윈도우로 라우팅)
 // disable-direct-composition 은 캐시 에러만 만들고 효과 없어 적용 안 함.
 // 사용자는 Ctrl+V (paste) 또는 📄+ 버튼(파일 픽커) 으로 첨부 가능.
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// IntensiveWakeUpThrottling: Chromium 이 5분 넘게 안 보이는 프레임의 setTimeout/setInterval 을
+// 1분에 1번으로 강하게 몰아버리는 기능 — 백그라운드에서도 SSH 로그가 실시간으로 나와야 하므로 끔.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,IntensiveWakeUpThrottling');
 // ── 다중 인스턴스 캐시 충돌 제거 ────────────────────────────────────────────
 // 여러 PePe 인스턴스를 동시에 띄우면 같은 userData 의 캐시 디렉토리를 두고 충돌해
 // 'Unable to move the cache (0x5) / Gpu Cache Creation failed / Unable to create cache' 가
@@ -80,20 +82,43 @@ function termBroadcast(channel: string, payload: any) {
 // tail -f 같은 고빈도 출력은 stream 'data' 이벤트가 초당 수백 번씩 발생 — 매번 개별 IPC 로
 // 보내면 (구조적 복제 비용 + 렌더러 쪽 xterm 파싱/렌더 1회씩) 탭이 많아질수록 렌더러 메인
 // 스레드가 포화되어 버벅임. 짧은 시간창(8ms) 동안 같은 패널의 데이터를 합쳐 IPC 1회로 축소.
+//
+// 렌더러가 지금 화면에 실제로 보여주고 있는 패널(termId)을 알려주면(term:set-visibility),
+// 안 보이는 패널은 배치 주기를 훨씬 길게(300ms) 늘려서 IPC wake-up 빈도 자체를 줄인다.
+// 앱이 포커스를 잃으면 Windows 가 렌더러 프로세스에 주는 CPU 타임슬라이스가 줄어드는데,
+// 이때 탭이 여러 개 다 8ms 마다 IPC 를 깨우면 (안 보이는 탭은 어차피 xterm.write 도 안 하면서)
+// 컨텍스트 스위칭 오버헤드만 늘어 활성 탭 렌더링까지 버벅이게 만든다.
+const visiblePanelIds = new Set<string>();
 const dataBatchBuf = new Map<string, string>();
 const dataBatchScheduled = new Set<string>();
-const DATA_BATCH_MS = 8;
+const DATA_BATCH_MS_VISIBLE = 8;
+const DATA_BATCH_MS_HIDDEN = 300;
+// SSH 연결이 여러 개 동시에 활발하면 메인 프로세스 이벤트 루프가 그 사이를 오가면서 타이밍이
+// 밀리고, 그 결과 배치 타이머가 늦게 발동해 한 번에 훨씬 큰 덩어리가 쌓일 수 있다. xterm.js 는
+// 한 번의 write() 로 들어온 텍스트를 파싱하는 데 실제로 CPU 시간이 들기 때문에(렌더링이 아니라
+// 파싱 자체가 비용), 덩어리가 커질수록 그걸 한 번에 처리하며 눈에 띄게 멈칫거린다(프로파일링으로
+// 확인됨: xterm 내부 _innerWrite 가 self time 대부분을 차지). IPC 로 보내는 조각 크기 자체에
+// 상한을 둬서, 아무리 밀렸어도 한 번의 write() 가 처리할 양은 항상 작게 유지한다.
+const DATA_CHUNK_MAX_CHARS = 32_768;
 function queueTermData(channel: 'ssh:data' | 'pty:data', panelId: string, data: string) {
   const key = `${channel}:${panelId}`;
   dataBatchBuf.set(key, (dataBatchBuf.get(key) || '') + data);
   if (dataBatchScheduled.has(key)) return;
   dataBatchScheduled.add(key);
+  const delay = visiblePanelIds.has(panelId) ? DATA_BATCH_MS_VISIBLE : DATA_BATCH_MS_HIDDEN;
   setTimeout(() => {
     dataBatchScheduled.delete(key);
     const merged = dataBatchBuf.get(key);
     dataBatchBuf.delete(key);
-    if (merged) termBroadcast(channel, { panelId, data: merged });
-  }, DATA_BATCH_MS);
+    if (!merged) return;
+    if (merged.length <= DATA_CHUNK_MAX_CHARS) {
+      termBroadcast(channel, { panelId, data: merged });
+      return;
+    }
+    for (let i = 0; i < merged.length; i += DATA_CHUNK_MAX_CHARS) {
+      termBroadcast(channel, { panelId, data: merged.slice(i, i + DATA_CHUNK_MAX_CHARS) });
+    }
+  }, delay);
 }
 let sessionsData: SessionsData = { folders: [], sessions: [] };
 const connectedPanels = new Set<string>();
@@ -434,6 +459,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       webviewTag: true, // 브라우저 워크스페이스 (<webview>) 활성화
+      // 창이 포커스를 잃거나 다른 창에 가려져도 Chromium 이 setTimeout/rAF 를 스로틀링하지
+      // 않도록 — 꺼두지 않으면 백그라운드에서 SSH 로그 출력이 버벅이며 지연됨.
+      backgroundThrottling: false,
     },
   });
 
@@ -443,6 +471,7 @@ function createWindow() {
     // Aero Snap 미리보기 창 사전 생성 + 로드 — 첫 드래그 시 BrowserWindow 생성 지연(수백ms) 제거
     setTimeout(() => ensureSnapPreview(), 500);
   });
+
 
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
   if (!app.isPackaged && devServerUrl) {
@@ -5900,6 +5929,13 @@ ipcMain.handle('telnet:connect', (_e, { panelId, host, port, cols, rows, encodin
   telnetPanels.add(panelId);
   getTelnetBridge().connect(panelId, host, port, cols, rows, encoding);
   return 'ok';
+});
+
+// 렌더러가 지금 실제로 화면에 보여주고 있는 패널을 알려줌 — queueTermData 배치 주기 조절용.
+ipcMain.on('term:set-visibility', (_e, { panelId, visible }: { panelId: string; visible: boolean }) => {
+  if (!panelId) return;
+  if (visible) visiblePanelIds.add(panelId);
+  else visiblePanelIds.delete(panelId);
 });
 
 ipcMain.on('ssh:input', (_e, { panelId, data, b64 }) => {
