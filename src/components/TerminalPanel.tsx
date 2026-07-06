@@ -11,6 +11,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { SerializeAddon } from 'xterm-addon-serialize';
 import { Unicode11Addon } from 'xterm-addon-unicode11';
+import { WebglAddon } from 'xterm-addon-webgl';
 import { getThemeByName, terminalThemes } from '../utils/terminalThemes';
 import { getTerminalSettings, type MouseButtonAction } from '../utils/terminalSettings';
 import { matchKeybinding, isKeybindingListening } from '../utils/keybindings';
@@ -2965,6 +2966,20 @@ export const TerminalPanel: React.FC<Props> = ({
     } else {
       containerRef.current.innerHTML = '';
       term.open(containerRef.current);
+      // 기본 DOM 렌더러는 출력이 많을수록 CSS 규칙/span 이 계속 쌓여 메모리·성능이 저하되므로
+      // WebGL 렌더러로 전환 (캔버스 1장에 렌더 — 로그 폭주 시 누적 없음). 컨텍스트 손실 시
+      // DOM 렌더러로 자동 폴백.
+      if (!(term as any).__webglAttached) {
+        (term as any).__webglAttached = true;
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => {
+            try { webgl.dispose(); } catch {}
+            (term as any).__webglAttached = false;
+          });
+          term.loadAddon(webgl);
+        } catch {}
+      }
     }
     applyTermOpacity(activeTermId, containerRef.current);
 

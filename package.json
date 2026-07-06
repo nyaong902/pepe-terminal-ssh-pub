@@ -45,7 +45,8 @@
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-search": "^0.13.0",
     "xterm-addon-serialize": "^0.11.0",
-    "xterm-addon-unicode11": "^0.6.0"
+    "xterm-addon-unicode11": "^0.6.0",
+    "xterm-addon-webgl": "^0.16.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.64",
@@ -187,8 +188,18 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "dmg", "arch": ["x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "public/icon-mac.png",
       "category": "public.app-category.developer-tools",

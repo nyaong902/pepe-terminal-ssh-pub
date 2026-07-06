@@ -77,6 +77,24 @@ function termBroadcast(channel: string, payload: any) {
   try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); } catch {}
   for (const w of detachedWindows) { try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch {} }
 }
+// tail -f 같은 고빈도 출력은 stream 'data' 이벤트가 초당 수백 번씩 발생 — 매번 개별 IPC 로
+// 보내면 (구조적 복제 비용 + 렌더러 쪽 xterm 파싱/렌더 1회씩) 탭이 많아질수록 렌더러 메인
+// 스레드가 포화되어 버벅임. 짧은 시간창(8ms) 동안 같은 패널의 데이터를 합쳐 IPC 1회로 축소.
+const dataBatchBuf = new Map<string, string>();
+const dataBatchScheduled = new Set<string>();
+const DATA_BATCH_MS = 8;
+function queueTermData(channel: 'ssh:data' | 'pty:data', panelId: string, data: string) {
+  const key = `${channel}:${panelId}`;
+  dataBatchBuf.set(key, (dataBatchBuf.get(key) || '') + data);
+  if (dataBatchScheduled.has(key)) return;
+  dataBatchScheduled.add(key);
+  setTimeout(() => {
+    dataBatchScheduled.delete(key);
+    const merged = dataBatchBuf.get(key);
+    dataBatchBuf.delete(key);
+    if (merged) termBroadcast(channel, { panelId, data: merged });
+  }, DATA_BATCH_MS);
+}
 let sessionsData: SessionsData = { folders: [], sessions: [] };
 const connectedPanels = new Set<string>();
 const connectingPanels = new Set<string>();
@@ -843,7 +861,7 @@ app.whenReady().then(() => {
     if (!mainWindow) return;
     switch (msg.type) {
       case 'data':
-        termBroadcast('ssh:data', { panelId: msg.panelId, data: msg.data });
+        queueTermData('ssh:data', msg.panelId, msg.data);
         break;
       case 'connected':
         connectingPanels.delete(msg.panelId);
@@ -869,7 +887,7 @@ app.whenReady().then(() => {
 
     switch (msg.type) {
       case 'data':
-        termBroadcast('ssh:data', { panelId: msg.panelId, data: msg.data });
+        if (msg.panelId) queueTermData('ssh:data', msg.panelId, msg.data || '');
         break;
       case 'connected':
         connectingPanels.delete(msg.panelId);
@@ -6146,7 +6164,7 @@ ipcMain.handle('pty:spawn', (_e, { panelId, shell: shellPath, cols, rows, cwd }:
   }
   ptyProcesses.set(panelId, proc);
   proc.onData((data: string) => {
-    termBroadcast('pty:data', { panelId, data });
+    queueTermData('pty:data', panelId, data);
   });
   proc.onExit(({ exitCode }: { exitCode: number }) => {
     ptyProcesses.delete(panelId);

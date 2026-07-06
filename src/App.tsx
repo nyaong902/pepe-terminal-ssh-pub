@@ -842,16 +842,26 @@ function App() {
       setLeftDockWidth(Math.max(0, Math.round(sessionW + fileTreeW + fileTreeNudge)));
       setSessionSidebarUnpinned(!!document.querySelector('.session-sidebar-inner.auto-hide'));
     };
+    // document.body 전체를 subtree 로 감시하다 보니 터미널(xterm) 내부 DOM 변화(로그 출력마다의
+    // 줄 갱신, 접근성용 텍스트 업데이트 등)까지 다 잡혀서, 로그가 많이 찍힐 때 콜백이 초당 수백~
+    // 수천 번 실행되며 매번 setState 를 여러 개씩 호출 — React 업데이트 객체가 폭증하는 원인이었음.
+    // rAF 로 묶어서 프레임당 최대 1번만 실제 measure() 가 돌도록 코얼레싱.
+    let rafId = 0;
+    const scheduleMeasure = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => { rafId = 0; measure(); });
+    };
     measure();
     const t1 = setTimeout(measure, 100);
     const t2 = setTimeout(measure, 500);
-    window.addEventListener('resize', measure);
-    const mo = new MutationObserver(measure);
+    window.addEventListener('resize', scheduleMeasure);
+    const mo = new MutationObserver(scheduleMeasure);
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
     return () => {
       clearTimeout(t1); clearTimeout(t2);
-      window.removeEventListener('resize', measure);
+      window.removeEventListener('resize', scheduleMeasure);
       mo.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, []);
   useEffect(() => {
