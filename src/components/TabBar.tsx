@@ -16,6 +16,8 @@ type Props = {
   onAddVpnTab?: () => void;
   onAddMicroSipTab?: () => void;
   onAddI18nEditorTab?: () => void;
+  onAddCustomWorkspace?: (templateId?: string) => void;
+  customWorkspaces?: { id: string; name: string }[];
   onCloseTab: (id: string) => void;
   onRenameTab?: (id: string, name: string) => void;
   onReorderTabs?: (fromId: string, toId: string) => void;
@@ -33,7 +35,7 @@ type Props = {
   availableShells?: ShellInfo[];
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -261,6 +263,13 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 { label: t('vpnWorkspace'), onClick: () => onAddVpnTab?.() },
                 { label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() },
                 { label: t('translationEditor'), onClick: () => onAddI18nEditorTab?.() },
+              ],
+            },
+            {
+              label: `🧩  ${t('customWorkspace', { defaultValue: '커스텀 워크스페이스' })}`,
+              submenu: [
+                { label: t('customWorkspaceAdd', { defaultValue: '추가' }), onClick: () => onAddCustomWorkspace?.() },
+                ...(customWorkspaces?.map(ws => ({ label: ws.name, onClick: () => onAddCustomWorkspace?.(ws.id) })) || []),
               ],
             },
           ]}

@@ -19,6 +19,8 @@ import { VpnWorkspace } from './components/VpnWorkspace';
 import { MicroSipWorkspace, type MicroSipView } from './components/MicroSipWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
 import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { CustomWorkspaceDialog, CustomWorkspaceManager } from './components/CustomWorkspaceDialog';
+import { CustomWorkspaceView } from './components/CustomWorkspaceView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
@@ -37,6 +39,7 @@ import { setLanguage, getCurrentLanguage } from './i18n';
 import { useTranslation } from 'react-i18next';
 import { SessionList } from './components/SessionList';
 import { SessionEditor } from './components/SessionEditor';
+import { type CustomWorkspaceTemplate, normalizeCustomWorkspaceTemplate } from './utils/customWorkspaces';
 import {
   LayoutNode,
   PanelSession,
@@ -60,9 +63,9 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'customWorkspace';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any };
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
@@ -354,9 +357,12 @@ function App() {
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
   const [optFontSize, setOptFontSize] = useState(() => Number(localStorage.getItem('terminalFontSize')) || 14);
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
-  const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'mcp' | 'messenger' | 'keybindings'>('terminal');
+  const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'workspace' | 'mcp' | 'debug' | 'messenger' | 'keybindings'>('terminal');
   const [aiMcpAttachmentMode, setAiMcpAttachmentMode] = useState<'ssh' | 'local'>('ssh');
   const aiMcpAttachmentModeLoadedRef = useRef(false);
+  const [customWorkspaces, setCustomWorkspaces] = useState<CustomWorkspaceTemplate[]>([]);
+  const customWorkspacesLoadedRef = useRef(false);
+  const [customWorkspaceDialog, setCustomWorkspaceDialog] = useState<{ open: boolean; template?: CustomWorkspaceTemplate | null }>({ open: false, template: null });
   const [keybindingsState, setKeybindingsState] = useState<Record<string, string>>({});
   const [keybindingsDraft, setKeybindingsDraft] = useState<Record<string, string>>({});
 
@@ -376,7 +382,18 @@ function App() {
   const [shellPrefsLoaded, setShellPrefsLoaded] = useState<boolean>(false);
   const [optDefaultShellPath, setOptDefaultShellPath] = useState('');
   const [showBroadcast, setShowBroadcast] = useState<boolean>(true);
+  const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
+  const [showRuntimeLogs, setShowRuntimeLogs] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem('showRuntimeLogs');
+      return raw === null ? true : raw === '1';
+    } catch {
+      return true;
+    }
+  });
+  const runtimeLogText = runtimeLogs.join('\n');
   const showBroadcastLoadedRef = useRef(false);
+  const showRuntimeLogsLoadedRef = useRef(false);
   // 사용 가능한 로컬 쉘 목록 로드 + 기본 쉘 설정 로드 + startupCwd
   useEffect(() => {
     Promise.all([
@@ -399,6 +416,7 @@ function App() {
       }
       setDefaultShell({ name, path: spath });
       setMessengerHidden(!!prefs?.messenger?.hidePresence);
+      if (typeof prefs?.showRuntimeLogs !== 'undefined') setShowRuntimeLogs(!!prefs.showRuntimeLogs);
       setShellPrefsLoaded(true);
       // 초기 탭의 세션명/경로/cwd를 업데이트
       setTabs(prev => prev.map((t, i) => {
@@ -430,6 +448,18 @@ function App() {
         }
         if (Array.isArray(prefs?.quickCmds)) setQuickCmds(prefs.quickCmds);
         quickCmdsLoadedRef.current = true;
+        if (Array.isArray(prefs?.customWorkspaces)) {
+          setCustomWorkspaces(prefs.customWorkspaces.map((tpl: any) => normalizeCustomWorkspaceTemplate({
+            id: String(tpl.id || `cw-${Date.now()}`),
+            name: String(tpl.name || '커스텀 워크스페이스'),
+            layout: tpl.layout,
+            slots: Array.isArray(tpl.slots)
+              ? tpl.slots.map((slot: any, idx: number) => ({ id: String(slot?.id || `slot-${idx + 1}`), kind: slot?.kind || null }))
+              : [],
+            createdAt: Number(tpl.createdAt) || Date.now(),
+            updatedAt: Number(tpl.updatedAt) || Date.now(),
+          })));
+        }
         if (typeof prefs?.claudeChatWidth === 'number' && prefs.claudeChatWidth >= 280 && prefs.claudeChatWidth <= 1200) {
           setClaudeChatWidth(prefs.claudeChatWidth);
         }
@@ -446,6 +476,9 @@ function App() {
         if (prefs?.aiMcpAttachmentMode === 'local' || prefs?.aiMcpAttachmentMode === 'ssh') {
           setAiMcpAttachmentMode(prefs.aiMcpAttachmentMode);
         }
+      if (typeof prefs?.showRuntimeLogs === 'boolean') {
+        setShowRuntimeLogs(prefs.showRuntimeLogs);
+      }
         if (typeof prefs?.remoteTreeWidth === 'number' && prefs.remoteTreeWidth >= 160 && prefs.remoteTreeWidth <= 800) {
           setRemoteTreeWidth(prefs.remoteTreeWidth);
         }
@@ -464,8 +497,10 @@ function App() {
         showClaudeChatLoadedRef.current = true;
         claudeChatViewLoadedRef.current = true;
         aiMcpAttachmentModeLoadedRef.current = true;
+        customWorkspacesLoadedRef.current = true;
       } catch {}
       showBroadcastLoadedRef.current = true;
+      showRuntimeLogsLoadedRef.current = true;
     })();
   }, []);
   // 옵션 다이얼로그 열림 시 글로벌 플래그 동기화 (TerminalPanel에서 참조)
@@ -511,6 +546,14 @@ function App() {
     if (!showBroadcastLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ showBroadcast }); } catch {}
   }, [showBroadcast]);
+  useEffect(() => {
+    if (!showRuntimeLogsLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ showRuntimeLogs }); } catch {}
+  }, [showRuntimeLogs]);
+  useEffect(() => {
+    if (!customWorkspacesLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ customWorkspaces }); } catch {}
+  }, [customWorkspaces]);
   const [broadcastText, setBroadcastText] = useState('');
   const [broadcastAppendNewline, setBroadcastAppendNewline] = useState(true);
   const [broadcastScope, setBroadcastScope] = useState<'current' | 'visible' | 'connected'>('visible');
@@ -1305,11 +1348,20 @@ function App() {
   // main 프로세스 디버그 로그를 DevTools Console 로 포워딩
   useEffect(() => {
     const off = (window as any).api?.onDebugLog?.((msg: string) => {
+      const line = String(msg || '').trim();
+      if (!line) return;
       // eslint-disable-next-line no-console
-      console.log('%c[main]', 'color:#8ab4f8', msg);
+      console.log('%c[main]', 'color:#8ab4f8', line);
+      setRuntimeLogs(prev => {
+        const next = [...prev, `[main] ${line}`];
+        return next.slice(-120);
+      });
     });
     return () => { try { off?.(); } catch {} };
   }, []);
+  useEffect(() => {
+    try { localStorage.setItem('showRuntimeLogs', showRuntimeLogs ? '1' : '0'); } catch {}
+  }, [showRuntimeLogs]);
   const [fullscreenTermId, setFullscreenTermId] = useState<string | null>(null);
   const fsWasMaxRef = useRef(false);
   const [showQuickConnect, setShowQuickConnect] = useState(() => {
@@ -2350,6 +2402,87 @@ function App() {
   const addVpnTab = () => addSpecialTab('vpn', tApp('tabs.vpn'));
   const addMicroSipTab = () => addSpecialTab('microsip', '📞 MicroSIP');
   const addI18nEditorTab = () => addSpecialTab('i18nEditor', tApp('tabs.i18nEditor'));
+  const openCustomWorkspaceTemplate = useCallback((templateId: string) => {
+    const tpl = customWorkspaces.find(t => t.id === templateId);
+    if (!tpl) return;
+    const existing = tabs.find(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = `tab-cw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
+    const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, {
+        id,
+        title: tpl.name,
+        layout: emptyLayout,
+        type: 'customWorkspace',
+        customTitle: true,
+        customWorkspaceId: tpl.id,
+        customWorkspaceTemplate: tpl,
+        workspaceState: {},
+        color,
+      }];
+    });
+    setActiveTabId(id);
+  }, [customWorkspaces, tabs]);
+  const openCustomWorkspaceCreator = useCallback(() => {
+    setShowOptions(true);
+    setOptionsTab('workspace');
+    setCustomWorkspaceDialog({ open: true, template: null });
+  }, []);
+  const editCustomWorkspaceTemplate = useCallback((templateId: string) => {
+    const tpl = customWorkspaces.find(t => t.id === templateId);
+    if (!tpl) return;
+    setShowOptions(true);
+    setOptionsTab('workspace');
+    setCustomWorkspaceDialog({ open: true, template: tpl });
+  }, [customWorkspaces]);
+  const saveCustomWorkspaceTemplate = useCallback((template: CustomWorkspaceTemplate) => {
+    const normalized = normalizeCustomWorkspaceTemplate(template);
+    setCustomWorkspaces(prev => {
+      const exists = prev.some(t => t.id === normalized.id);
+      if (exists) return prev.map(t => t.id === normalized.id ? normalized : t);
+      return [...prev, normalized];
+    });
+    setCustomWorkspaceDialog({ open: false, template: null });
+    const existing = tabs.find(t => t.type === 'customWorkspace' && t.customWorkspaceId === normalized.id);
+    if (existing) {
+      setTabs(prev => prev.map(t => t.id === existing.id ? { ...t, title: normalized.name, customWorkspaceId: normalized.id, customWorkspaceTemplate: normalized } : t));
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = `tab-cw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
+    const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, {
+        id,
+        title: normalized.name,
+        layout: emptyLayout,
+        type: 'customWorkspace',
+        customTitle: true,
+        customWorkspaceId: normalized.id,
+        customWorkspaceTemplate: normalized,
+        workspaceState: {},
+        color,
+      }];
+    });
+    setActiveTabId(id);
+  }, []);
+  const renameCustomWorkspaceTemplate = useCallback((templateId: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCustomWorkspaces(prev => prev.map(t => t.id === templateId ? { ...t, name: trimmed, updatedAt: Date.now() } : t));
+    setTabs(prev => prev.map(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId ? { ...t, title: trimmed, customWorkspaceTemplate: t.customWorkspaceTemplate ? { ...t.customWorkspaceTemplate, name: trimmed, updatedAt: Date.now() } : t.customWorkspaceTemplate } : t));
+  }, []);
+  const deleteCustomWorkspaceTemplate = useCallback((templateId: string) => {
+    setCustomWorkspaces(prev => prev.filter(t => t.id !== templateId));
+    const removedTabs = tabsRef.current.filter(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
+    removedTabs.forEach(tab => closeTab(tab.id));
+  }, []);
   const openSqlToolTab = (sessionId: string, sessionName: string) => {
     // 동일 sessionId 의 SQL Tool 탭이 이미 있으면 그 탭으로 전환
     const existing = tabs.find(t => t.type === 'sqlTool' && t.sqlTool?.sessionId === sessionId);
@@ -4374,6 +4507,14 @@ function App() {
           onAddVpnTab={addVpnTab}
           onAddMicroSipTab={addMicroSipTab}
           onAddI18nEditorTab={addI18nEditorTab}
+          onAddCustomWorkspace={(templateId?: string) => {
+            if (templateId) {
+              openCustomWorkspaceTemplate(templateId);
+              return;
+            }
+            openCustomWorkspaceCreator();
+          }}
+          customWorkspaces={customWorkspaces}
           onCloseTab={closeTab} onRenameTab={renameTab}
           onReorderTabs={(fromId, toId) => {
             setTabs(prev => {
@@ -4907,6 +5048,33 @@ function App() {
             </ErrorBoundary>
           </div>
         ))}
+        {tabs.filter(t => t.type === 'customWorkspace').map(t => {
+          const tpl = t.customWorkspaceTemplate || customWorkspaces.find(ws => ws.id === t.customWorkspaceId);
+          if (!tpl) return null;
+          return (
+            <div key={t.id} style={tabSlotStyle(t)}>
+              <ErrorBoundary label={tpl.name}>
+                <CustomWorkspaceView
+                  template={tpl}
+                  state={t.workspaceState || {}}
+                  onStateChange={(st) => {
+                    workspaceStateRef.current.set(t.id, st);
+                    setTabs(prev => prev.map(tab => tab.id === t.id ? { ...tab, workspaceState: st } : tab));
+                  }}
+                  onTemplateChange={(next) => {
+                    const normalized = normalizeCustomWorkspaceTemplate(next);
+                    setCustomWorkspaces(prev => prev.map(ws => ws.id === normalized.id ? normalized : ws));
+                    setTabs(prev => prev.map(tab => tab.type === 'customWorkspace' && tab.customWorkspaceId === normalized.id ? { ...tab, title: normalized.name, customWorkspaceTemplate: normalized } : tab));
+                  }}
+                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
+                  connectedBrowserSessions={connectedBrowserSessions}
+                  availableShells={availableShells}
+                  onCloseTerm={releaseTermResources}
+                />
+              </ErrorBoundary>
+            </div>
+          );
+        })}
         {/* SQL Tool 탭은 sessionId 별로 마운트 유지 (재방문 시 쿼리/연결 상태 보존) */}
         {tabs.filter(t => t.type === 'sqlTool').map(t => {
           // 분리/복원으로 carry 된 workspaceState 가 있으면 자식 마운트 전 cache 에 hydrate.
@@ -5382,6 +5550,126 @@ function App() {
           label: tMenu('view.windowTheme'),
         }}
       />
+      {showRuntimeLogs && (
+        <div
+          style={{
+            position: 'fixed',
+            right: 12,
+            bottom: 54,
+            zIndex: 9998,
+            width: 'min(720px, calc(100vw - 24px))',
+            maxHeight: '34vh',
+            border: '1px solid #2f6f7d',
+            borderRadius: 10,
+            background: 'rgba(5, 15, 19, 0.94)',
+            boxShadow: '0 18px 42px rgba(0,0,0,0.45)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 10px', borderBottom: '1px solid #214854', background: '#0b1a20' }}>
+              <div style={{ color: '#d7f4ff', fontWeight: 700, fontSize: 12 }}>런타임 로그</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  className="btn-add"
+                  style={{ padding: '4px 9px', fontSize: 11 }}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(runtimeLogText);
+                      showToast('런타임 로그를 복사했습니다.');
+                    } catch {
+                      try {
+                        const ta = document.createElement('textarea');
+                        ta.value = runtimeLogText;
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.focus();
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        showToast('런타임 로그를 복사했습니다.');
+                      } catch {
+                        showToast('복사에 실패했습니다.');
+                      }
+                    }
+                  }}
+                >
+                  복사
+                </button>
+                <button
+                  className="btn-add"
+                  style={{ padding: '4px 9px', fontSize: 11 }}
+                  onClick={() => setRuntimeLogs([])}
+                >
+                  비우기
+                </button>
+              <button
+                className="btn-add"
+                style={{ padding: '4px 9px', fontSize: 11 }}
+                onClick={() => setShowRuntimeLogs(false)}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+          <div style={{ minHeight: 0, overflow: 'auto', padding: '8px 10px' }}>
+            {runtimeLogs.length > 0 ? (
+              <textarea
+                readOnly
+                value={runtimeLogText}
+                onFocus={e => e.currentTarget.select()}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  minHeight: 180,
+                  resize: 'none',
+                  border: 0,
+                  outline: 'none',
+                  background: 'transparent',
+                  color: '#b8e7f3',
+                  fontFamily: 'Consolas, monospace',
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                  whiteSpace: 'pre',
+                  overflow: 'auto',
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  minHeight: 180,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#7ea1ab',
+                  fontSize: 12,
+                  letterSpacing: 0.2,
+                }}
+              >
+                런타임 로그 대기 중...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {!showRuntimeLogs && runtimeLogs.length > 0 && (
+        <button
+          className="btn-add"
+          style={{
+            position: 'fixed',
+            right: 12,
+            bottom: 54,
+            zIndex: 9998,
+            padding: '6px 10px',
+            fontSize: 11,
+          }}
+          onClick={() => setShowRuntimeLogs(true)}
+        >
+          로그 {runtimeLogs.length}
+        </button>
+      )}
 
       {editSessionCtx && (
         <SessionEditor
@@ -5471,6 +5759,7 @@ function App() {
           window.addEventListener('mouseup', onUp);
         };
         return (
+        <>
         <div className="session-editor-backdrop">
           <div className="session-editor" onClick={e => e.stopPropagation()} style={{ width: 640 }}>
             <h3 style={isOptionsPopout ? { userSelect: 'none' } : { cursor: 'move', userSelect: 'none' }} onMouseDown={isOptionsPopout ? undefined : onDragStart} title={isOptionsPopout ? '' : tOpt('dragToMove')}>{tOpt('title')}</h3>
@@ -5479,7 +5768,9 @@ function App() {
               <div className="options-tabs options-tabs-side">
                 <button className={`options-tab ${optionsTab === 'terminal' ? 'active' : ''}`} onClick={() => setOptionsTab('terminal')}>{tOpt('tabs.terminal')}</button>
                 <button className={`options-tab ${optionsTab === 'session' ? 'active' : ''}`} onClick={() => setOptionsTab('session')}>{tOpt('tabs.session')}</button>
+                <button className={`options-tab ${optionsTab === 'workspace' ? 'active' : ''}`} onClick={() => setOptionsTab('workspace')}>{tOpt('tabs.workspace')}</button>
                 <button className={`options-tab ${optionsTab === 'mcp' ? 'active' : ''}`} onClick={() => setOptionsTab('mcp')}>{tOpt('tabs.mcp')}</button>
+                <button className={`options-tab ${optionsTab === 'debug' ? 'active' : ''}`} onClick={() => setOptionsTab('debug')}>{tOpt('tabs.debug')}</button>
                 <button className={`options-tab ${optionsTab === 'keybindings' ? 'active' : ''}`} onClick={() => setOptionsTab('keybindings')}>{tOpt('tabs.keybindings')}</button>
                 <button className={`options-tab ${optionsTab === 'messenger' ? 'active' : ''}`} onClick={() => setOptionsTab('messenger')}>{tOpt('messenger.tab')}</button>
               </div>
@@ -5694,6 +5985,17 @@ function App() {
               </div>
             )}
 
+            {optionsTab === 'workspace' && (
+              <CustomWorkspaceManager
+                templates={customWorkspaces}
+                onCreate={openCustomWorkspaceCreator}
+                onOpen={openCustomWorkspaceTemplate}
+                onEdit={editCustomWorkspaceTemplate}
+                onRename={renameCustomWorkspaceTemplate}
+                onDelete={deleteCustomWorkspaceTemplate}
+              />
+            )}
+
             {optionsTab === 'mcp' && (
               <div className="options-content">
                 <div style={{ marginBottom: 16 }}>
@@ -5726,6 +6028,28 @@ function App() {
                         <div style={{ color: '#888', fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>{tOpt('mcp.localDesc')}</div>
                       </span>
                     </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {optionsTab === 'debug' && (
+              <div className="options-content">
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('debug.heading')}</div>
+                  <p style={{ color: '#888', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
+                    {tOpt('debug.desc')}
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className={`btn-add ${showRuntimeLogs ? 'active' : ''}`}
+                      onClick={() => setShowRuntimeLogs(v => !v)}
+                    >
+                      {showRuntimeLogs ? tOpt('debug.on') : tOpt('debug.off')}
+                    </button>
+                    <span style={{ color: showRuntimeLogs ? '#6ee7b7' : '#9aa3ad', fontSize: 12 }}>
+                      {showRuntimeLogs ? tOpt('debug.visible') : tOpt('debug.hidden')}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -5808,6 +6132,7 @@ function App() {
                 setKeybindingsState(keybindingsDraft);
                 loadKeybindings(keybindingsDraft);
                 (window as any).api?.setUIPrefs?.({ keybindings: keybindingsDraft });
+                (window as any).api?.setUIPrefs?.({ showRuntimeLogs });
                 setListeningAction(null);
                 setShowOptions(false);
                 if (isOptionsPopout) {
@@ -5818,7 +6143,13 @@ function App() {
             </div>
           </div>
         </div>
-        );
+        <CustomWorkspaceDialog
+          open={customWorkspaceDialog.open}
+          initialTemplate={customWorkspaceDialog.template || null}
+          onCancel={() => setCustomWorkspaceDialog({ open: false, template: null })}
+          onSave={saveCustomWorkspaceTemplate}
+        />
+        </>);
       })()}
       {showRemoteShare && <RemoteShareDialog onClose={() => setShowRemoteShare(false)} />}
 

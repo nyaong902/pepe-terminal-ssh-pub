@@ -2,7 +2,7 @@
 // 파일 비교 워크스페이스 — 두 디렉토리(로컬/원격 SFTP) 를 재귀 walk 한 후
 // 동일 상대경로의 파일 쌍에 대해 size 기반 상태(same/changed/left-only/right-only) 산출.
 // 행 클릭 시 하단 Monaco DiffEditor 에서 양쪽 파일 내용 비교.
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
@@ -10,8 +10,23 @@ import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
 import type { PanelSession } from '../utils/layoutUtils';
 import { matchKeybinding, getKeybinding, formatKeyComboForOS } from '../utils/keybindings';
 import { RemotePathPicker } from './RemotePathPicker';
+import { setTermFocusBlocked } from './TerminalPanel';
+import { notifyError } from './Notify';
 
 const api = (window as any).api || {};
+
+// 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
+// (FileExplorer.tsx / MessengerWorkspace.tsx 와 동일 로직 — lazy 세션 연결에 필요)
+function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
+  const arr = Array.isArray(sess?.jumps) ? sess.jumps : [];
+  const out: { host: string; user?: string; port?: number; password?: string }[] = [];
+  for (const j of arr) {
+    const host = (j && typeof j.host === 'string') ? j.host.trim() : '';
+    if (!host) break;
+    out.push({ host, user: j.user || 'root', port: Number(j.port) || 22, password: j.password || undefined });
+  }
+  return out;
+}
 
 type Side = 'left' | 'right';
 type SourceMode = 'local' | 'remote';
@@ -225,32 +240,62 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const dirSnapRef  = useRef<ModeSnap | null>(null);
   const fileSnapRef = useRef<ModeSnap | null>(null);
 
+  // 서버 선택 select — 파일전송 워크스페이스(FileExplorer/FilePanel)와 동일한 형태:
+  // 로컬 + 로컬 드라이브 트리(들여쓰기) + 연결됨(🟢)/연결 안됨(⚪) 그룹.
+  const renderServerSelect = (side: Side, src: Source) => (
+    <select
+      value={
+        src.mode === 'remote' && src.termId ? `remote:${src.termId}` : 'local'
+      }
+      disabled={lazyConnectingSide === side}
+      onChange={e => {
+        const v = e.target.value;
+        if (v === 'local') { updateSrc(side, { mode: 'local', termId: undefined, sessionId: undefined, label: t('local') }); return; }
+        if (v.startsWith('local-drive:')) {
+          updateSrc(side, { mode: 'local', termId: undefined, sessionId: undefined, label: t('local'), basePath: v.slice('local-drive:'.length) });
+          return;
+        }
+        if (v.startsWith('lazy:')) { void connectLazySession(side, v.slice('lazy:'.length)); return; }
+        if (v.startsWith('remote:')) {
+          const termId = v.slice('remote:'.length);
+          const opt = sourceOptions.find(o => o.termId === termId);
+          if (opt) {
+            const codeDir = autoFillCodePath(opt.sessionId);
+            const patch: Partial<Source> = { mode: 'remote', termId: opt.termId, sessionId: opt.sessionId, label: opt.label };
+            if (codeDir) patch.basePath = codeDir;
+            updateSrc(side, patch);
+          }
+        }
+      }}
+      style={{ width: 130, minWidth: 80, flexShrink: 1, fontSize: 12 }}
+    >
+      <option value="local">{t('local')}</option>
+      {drives.map(d => {
+        const depth = (d.depth ?? 0) + 1;
+        return <option key={`local-drive:${d.path}`} value={`local-drive:${d.path}`}>{'    '.repeat(depth) + d.label}</option>;
+      })}
+      {sourceOptions.filter(o => o.mode === 'remote').length > 0 && (
+        <optgroup label={t('groupConnected')}>
+          {sourceOptions.filter(o => o.mode === 'remote').map(o => (
+            <option key={o.termId} value={`remote:${o.termId}`}>{o.label}</option>
+          ))}
+        </optgroup>
+      )}
+      {notConnectedOptions.length > 0 && (
+        <optgroup label={t('groupNotConnected')}>
+          {notConnectedOptions.map(o => (
+            <option key={o.sessionId} value={`lazy:${o.sessionId}`}>{o.label}</option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
+
   // 파일 비교용 picker (단일 파일 선택)
   const renderFilePicker = (side: Side, src: Source) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
       <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
-      <select
-        value={src.mode === 'remote' ? (src.termId || '') : 'local'}
-        onChange={e => {
-          const v = e.target.value;
-          if (v === 'local') updateSrc(side, { mode: 'local', termId: undefined, sessionId: undefined, label: t('local') });
-          else {
-            const opt = sourceOptions.find(o => o.termId === v);
-            if (opt) {
-              const codeDir = autoFillCodePath(opt.sessionId);
-              const patch: Partial<Source> = { mode: 'remote', termId: opt.termId, sessionId: opt.sessionId, label: opt.label };
-              if (codeDir) patch.basePath = codeDir;
-              updateSrc(side, patch);
-            }
-          }
-        }}
-        style={{ width: 130, minWidth: 80, flexShrink: 1, fontSize: 12 }}
-      >
-        <option value="local">{t('local')}</option>
-        {sourceOptions.filter(o => o.mode === 'remote').map(o => (
-          <option key={o.termId} value={o.termId}>{o.label}</option>
-        ))}
-      </select>
+      {renderServerSelect(side, src)}
       <input
         type="text"
         value={src.basePath}
@@ -277,15 +322,179 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     </div>
   );
 
-  // 가용 소스 목록 (드롭다운) — 연결된 세션(termId 있음) 만 SFTP 비교 가능. lazy 는 일단 제외.
+  // 세션 id → 소속 폴더 경로("부모/자식" 형태) — FileExplorer.tsx 의 sessionFolderMap 과 동일
+  const [sessionFolderMap, setSessionFolderMap] = useState<Record<string, string>>({});
+
+  // 이 워크스페이스가 직접(lazy) 연결한 세션들 — sessions prop(터미널로 연결된 것) 과는 별개 목록.
+  // 여기 없으면 select 의 value(remote:connId) 와 매칭되는 <option> 이 없어 "선택해도 반영 안 되는"
+  // 것처럼 보였다 — 연결은 백그라운드로 잘 됐어도 드롭다운에 나타나지 않는 버그.
+  // 연결 성공 시 이 목록에 추가해 연결됨(🟢) 그룹에 함께 노출한다.
+  const [ownConnectedSessions, setOwnConnectedSessions] = useState<{ sessionId: string; termId: string; label: string }[]>([]);
+
+  // 가용 소스 목록 (드롭다운) — 연결된 세션(termId 있음). 라벨은 FileExplorer.tsx 와 동일 형식
+  // (🟢 세션명 [폴더경로]) — 세션이 속한 폴더가 있으면 [폴더] 를 붙인다.
   const sourceOptions = useMemo<Source[]>(() => {
     const opts: Source[] = [{ mode: 'local', label: t('local'), basePath: '' }];
     for (const s of sessions) {
       if (!s.termId) continue;
-      opts.push({ mode: 'remote', termId: s.termId, sessionId: s.sessionId, label: `🟢 ${s.sessionName}`, basePath: '' });
+      const folder = s.sessionId ? sessionFolderMap[s.sessionId] : '';
+      const label = folder ? `🟢 ${s.sessionName}  [${folder}]` : `🟢 ${s.sessionName}`;
+      opts.push({ mode: 'remote', termId: s.termId, sessionId: s.sessionId, label, basePath: '' });
+    }
+    for (const o of ownConnectedSessions) {
+      opts.push({ mode: 'remote', termId: o.termId, sessionId: o.sessionId, label: o.label, basePath: '' });
     }
     return opts;
-  }, [sessions.map(s => s.termId).join(',')]);
+  }, [sessions.map(s => s.termId).join(','), sessionFolderMap, ownConnectedSessions]);
+
+  // 파일전송 워크스페이스(FileExplorer)와 동일한 서버 목록 형태 — 로컬 드라이브 트리 +
+  // 연결됨(🟢)/연결 안됨(⚪, 저장된 세션 전체) 그룹. 연결 안됨 세션은 선택 시 백그라운드로
+  // lazy SFTP 연결을 수립한다(connectLazySession).
+  const [drives, setDrives] = useState<{ path: string; label: string; depth?: number }[]>([]);
+  const [allSessionsList, setAllSessionsList] = useState<any[]>([]);
+  const [lazyConnectingSide, setLazyConnectingSide] = useState<Side | null>(null);
+  const lazyConnsRef = useRef<Set<string>>(new Set());
+  // 자격증명 입력 프롬프트 — 저장된 비밀번호/키가 없는 세션 lazy 연결 시 표시 (FileExplorer.tsx 와 동일)
+  const [credPrompt, setCredPrompt] = useState<{ sess: any; side: Side; jumps: any[] } | null>(null);
+  const [credUser, setCredUser] = useState('');
+  const [credPass, setCredPass] = useState('');
+  const [credShowPass, setCredShowPass] = useState(false);
+  const [credConnecting, setCredConnecting] = useState(false);
+  const credUserInputRef = useRef<HTMLInputElement>(null);
+  const credModalRef = useRef<HTMLDivElement>(null);
+  // 모달이 뜨는 동안 터미널이 포커스를 가로채지 못하도록 차단 + input 에 포커스 유지
+  useLayoutEffect(() => {
+    if (!credPrompt) { setTermFocusBlocked(false); return; }
+    credUserInputRef.current?.focus();
+    const trap = (e: FocusEvent) => {
+      const modal = credModalRef.current;
+      const input = credUserInputRef.current;
+      if (!modal || !input) return;
+      if (!modal.contains(e.target as Node)) { e.stopImmediatePropagation(); input.focus(); }
+    };
+    document.addEventListener('focusin', trap, true);
+    return () => { document.removeEventListener('focusin', trap, true); };
+  }, [credPrompt]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list: any = await api.feGetDrives?.();
+        if (Array.isArray(list)) {
+          setDrives(list.map((x: any) => typeof x === 'string' ? { path: x, label: x } : x).filter((x: any) => x && x.path));
+        }
+      } catch {}
+    })();
+    (async () => {
+      try {
+        const data: any = await api.listSessions?.();
+        const list: any[] = Array.isArray(data?.sessions) ? data.sessions : [];
+        const folders: any[] = Array.isArray(data?.folders) ? data.folders : [];
+        setAllSessionsList(list);
+        const folderById: Record<string, any> = {};
+        for (const f of folders) folderById[f.id] = f;
+        const folderPath = (fid?: string): string => {
+          if (!fid) return '';
+          const f = folderById[fid];
+          if (!f) return '';
+          const parent = folderPath(f.parentId);
+          return parent ? `${parent}/${f.name}` : f.name;
+        };
+        const map: Record<string, string> = {};
+        for (const s of list) map[s.id] = folderPath(s.folderId);
+        setSessionFolderMap(map);
+      } catch {}
+    })();
+  }, []);
+
+  // 언마운트 시 이 워크스페이스가 자체적으로 연 lazy SFTP 연결 정리 (터미널로 연결된 세션은 그대로 둠).
+  useEffect(() => () => {
+    for (const cid of lazyConnsRef.current) {
+      try { api.feSftpDisconnect?.(cid); } catch {}
+    }
+    lazyConnsRef.current.clear();
+  }, []);
+
+  // FileExplorer.tsx 와 동일 라벨 형식: ⚪ 세션명 [폴더경로] (host)
+  // — ownConnectedSessions(직접 lazy 연결한 것)도 제외해야 연결 후 "연결 안됨"에 중복으로 안 남는다.
+  const notConnectedOptions = useMemo(() => {
+    const connectedSessionIds = new Set([
+      ...sessions.map(s => s.sessionId).filter(Boolean),
+      ...ownConnectedSessions.map(o => o.sessionId),
+    ]);
+    return allSessionsList
+      .filter(s => !connectedSessionIds.has(s.id))
+      .map(s => {
+        const folder = sessionFolderMap[s.id];
+        const label = folder ? `⚪ ${s.name}  [${folder}] (${s.host})` : `⚪ ${s.name} (${s.host})`;
+        return { sessionId: s.id as string, label };
+      });
+  }, [sessions.map(s => s.sessionId).join(','), allSessionsList, sessionFolderMap, ownConnectedSessions]);
+
+  // 연결 안됨(lazy) 세션을 선택했을 때 — 저장된 자격증명으로 백그라운드 SFTP 연결을 수립.
+  // 저장된 비밀번호/키가 없으면 자격증명 입력 모달을 띄운다 (FileExplorer.tsx 와 동일 동작).
+  const connectLazySession = async (side: Side, sessionId: string) => {
+    const sess = allSessionsList.find(s => s.id === sessionId);
+    if (!sess) { setScanError(side === 'left' ? t('sourceNoSession') : t('targetNoSession')); return; }
+    const jumps = buildJumpChain(sess);
+    const auth = sess.auth;
+    const hasCredential = auth?.type === 'key' || (auth?.type === 'password' && auth?.password);
+    if (!hasCredential) {
+      setTermFocusBlocked(true); // 렌더 전에 동기 차단 — useLayoutEffect 보다 먼저 실행됨
+      setCredPrompt({ sess, side, jumps });
+      setCredUser(sess.username || '');
+      setCredPass('');
+      setCredShowPass(false);
+      return;
+    }
+    setLazyConnectingSide(side);
+    setScanError('');
+    try {
+      const connId = `compare-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const r: any = await api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, auth, undefined, jumps.length ? jumps : undefined);
+      if (!r?.success) { setScanError(t('connectFail', { err: r?.error || 'unknown' })); return; }
+      lazyConnsRef.current.add(connId);
+      const codeDir = autoFillCodePath(sess.id);
+      const folder = sessionFolderMap[sess.id];
+      const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
+      setOwnConnectedSessions(prev => [...prev.filter(o => o.sessionId !== sess.id), { sessionId: sess.id, termId: connId, label }]);
+      const patch: Partial<Source> = { mode: 'remote', termId: connId, sessionId: sess.id, label };
+      if (codeDir) patch.basePath = codeDir;
+      updateSrc(side, patch);
+    } catch (err: any) {
+      setScanError(t('connectFail', { err: String(err?.message || err) }));
+    } finally {
+      setLazyConnectingSide(null);
+    }
+  };
+
+  // 자격증명 모달 확인 — 입력된 id/비밀번호로 연결 재시도 (FileExplorer.tsx 의 handleCredSubmit 과 동일)
+  const handleCredSubmit = async () => {
+    if (!credPrompt) return;
+    const { sess, side, jumps } = credPrompt;
+    setCredConnecting(true);
+    try {
+      const connId = `compare-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const r: any = await api.feSftpConnect?.(connId, sess.host, sess.port || 22, credUser, { type: 'password', password: credPass }, undefined, jumps.length ? jumps : undefined);
+      if (!r?.success) {
+        notifyError(t('connectFail', { err: r?.error || 'unknown' }));
+        setCredConnecting(false);
+        return;
+      }
+      lazyConnsRef.current.add(connId);
+      const codeDir = autoFillCodePath(sess.id);
+      const folder = sessionFolderMap[sess.id];
+      const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
+      setOwnConnectedSessions(prev => [...prev.filter(o => o.sessionId !== sess.id), { sessionId: sess.id, termId: connId, label }]);
+      const patch: Partial<Source> = { mode: 'remote', termId: connId, sessionId: sess.id, label };
+      if (codeDir) patch.basePath = codeDir;
+      updateSrc(side, patch);
+      setCredPrompt(null);
+    } catch (err: any) {
+      notifyError(t('connectFail', { err: String(err?.message || err) }));
+    }
+    setCredConnecting(false);
+  };
 
   const visibleRows = useMemo(() => {
     const statusOrder: Record<DiffStatus, number> = { changed: 0, 'left-only': 1, 'right-only': 2, same: 3 };
@@ -919,28 +1128,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const renderSourcePicker = (side: Side, src: Source) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
       <span style={{ fontSize: 12, color: 'var(--win-text-dim, #bbb)', width: 42, flexShrink: 0 }}>{side === 'left' ? t('source') : t('target')}</span>
-      <select
-        value={src.mode === 'remote' ? (src.termId || '') : 'local'}
-        onChange={e => {
-          const v = e.target.value;
-          if (v === 'local') updateSrc(side, { mode: 'local', termId: undefined, sessionId: undefined, label: t('local') });
-          else {
-            const opt = sourceOptions.find(o => o.termId === v);
-            if (opt) {
-              const codeDir = autoFillCodePath(opt.sessionId);
-              const patch: Partial<Source> = { mode: 'remote', termId: opt.termId, sessionId: opt.sessionId, label: opt.label };
-              if (codeDir) patch.basePath = codeDir;
-              updateSrc(side, patch);
-            }
-          }
-        }}
-        style={{ width: 130, minWidth: 80, flexShrink: 1, fontSize: 12 }}
-      >
-        <option value="local">{t('local')}</option>
-        {sourceOptions.filter(o => o.mode === 'remote').map(o => (
-          <option key={o.termId} value={o.termId}>{o.label}</option>
-        ))}
-      </select>
+      {renderServerSelect(side, src)}
       <input
         type="text"
         value={src.basePath}
@@ -1558,6 +1746,52 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
           onPick={(p) => updateSrc(pickerSide!, { basePath: p })}
           onClose={() => setPickerSide(null)}
         />
+      )}
+      {/* 자격증명 입력 모달 — 저장된 비밀번호/키가 없는 세션 lazy 연결 시 (FileExplorer.tsx 와 동일) */}
+      {credPrompt && (
+        <div className="session-editor-backdrop" onClick={() => setCredPrompt(null)}>
+          <div className="cred-modal" ref={credModalRef} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ outline: 'none' }}>
+            <div className="cred-modal-header">
+              <span className="cred-modal-title">🔒 {t('credModalTitle')}</span>
+              <button className="cred-modal-close" onClick={() => setCredPrompt(null)}>✕</button>
+            </div>
+            <div className="cred-modal-host">{credPrompt.sess.host} {t('credModalConnectTo')}</div>
+            <div className="cred-modal-fields">
+              <input
+                ref={credUserInputRef}
+                className="cred-modal-input"
+                placeholder="username"
+                value={credUser}
+                onChange={e => setCredUser(e.target.value)}
+              />
+              <div className="cred-modal-pass-wrap">
+                <input
+                  className="cred-modal-input"
+                  type={credShowPass ? 'text' : 'password'}
+                  placeholder="password"
+                  value={credPass}
+                  onChange={e => setCredPass(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleCredSubmit(); }}
+                />
+                <button
+                  type="button"
+                  className="cred-modal-eye-btn"
+                  tabIndex={-1}
+                  onClick={() => setCredShowPass(v => !v)}
+                  title={credShowPass ? t('hide') : t('show')}
+                >
+                  {credShowPass ? '🙈' : '👁'}
+                </button>
+              </div>
+            </div>
+            <div className="cred-modal-actions">
+              <button className="btn-cancel" onClick={() => setCredPrompt(null)}>{t('cancel')}</button>
+              <button className="btn-save" onClick={handleCredSubmit} disabled={credConnecting}>
+                {credConnecting ? t('connecting') : t('connect')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {/* All match 안내 모달 — 두 파일 내용이 완전히 일치할 때 */}
       {allMatchModal && (

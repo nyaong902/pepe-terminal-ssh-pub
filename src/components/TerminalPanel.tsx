@@ -2854,6 +2854,7 @@ type Props = {
   workspaceList?: { id: string; title: string }[];
   currentWorkspaceId?: string;
   onMoveSessionToWorkspace?: (fromNodeId: string, termId: string, targetTabId: string) => void;
+  singleSessionMode?: boolean;
   onSplitMoveSession?: (fromNodeId: string, termId: string, toNodeId: string, zone: 'left' | 'right' | 'top' | 'bottom') => void;
   onReorderSession?: (nodeId: string, fromIdx: number, toIdx: number) => void;
   onAddSession?: (nodeId: string, shellName?: string, shellPath?: string) => void;
@@ -2876,7 +2877,7 @@ export const TerminalPanel: React.FC<Props> = ({
   nodeId, panel, onSplit, onClose, onSelect, onSwitchSession, onCloseSession, onDetachSession, onDuplicateSessionToNewWindow, onSetSessionColor, onMoveSession, onSplitMoveSession, onReorderSession, onAddSession, onRenameSession, onConnectDrop, onDuplicateSession, availableShells,
   treeWidth = 240, onTreeWidthChange, onOpenRemoteFile, onAttachToClaude,
   isFloating, onToggleFloat, isSelected: _isSelected, onSplitWithPicker,
-  workspaceList, currentWorkspaceId, onMoveSessionToWorkspace,
+  workspaceList, currentWorkspaceId, onMoveSessionToWorkspace, singleSessionMode = false,
 }) => {
   const { t } = useTranslation('terminal');
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -2928,6 +2929,10 @@ export const TerminalPanel: React.FC<Props> = ({
   // 패널이 비어 있으면 자동으로 새 세션(미니탭) 생성 (중복 호출 방지)
   const autoAddedRef = useRef(false);
   useEffect(() => {
+    if (singleSessionMode) {
+      autoAddedRef.current = false;
+      return;
+    }
     if (panel.sessions.length === 0) {
       if (autoAddedRef.current) return;
       autoAddedRef.current = true;
@@ -3437,137 +3442,152 @@ export const TerminalPanel: React.FC<Props> = ({
         }}
       >
         {panel.sessions.length > 0 ? (
-          <div className="panel-session-tabs-wrapper">
-            <div className="panel-session-tabs" data-panel-tabs={nodeId} onWheel={e => {
-              e.currentTarget.scrollLeft += e.deltaY > 0 ? 60 : -60;
-            }}>
-            {panel.sessions.map((sess, idx) => (
-              <span
-                key={sess.termId}
-                className={`panel-session-tab ${idx === panel.activeIdx ? 'active' : ''}${sess.color && sess.color !== 'default' ? ` mini-tab-color-${sess.color}` : ''}`}
-                title={sess.sessionName}
-                draggable
-                onDragStart={e => {
-                  e.stopPropagation();
-                  e.dataTransfer.setData('text/mini-session', JSON.stringify({ nodeId, termId: sess.termId, idx }));
-                  e.dataTransfer.effectAllowed = 'move';
-                  // 깔끔한 드래그 이미지 — 툴팁(absolute 자식)이 탭 아래 영역까지 차지해 기본 drag image
-                  // 가 터미널 내용까지 포함하던 문제 해결. 탭 본체만 클론 후 setDragImage.
-                  try {
-                    const orig = e.currentTarget as HTMLElement;
-                    const rect = orig.getBoundingClientRect();
-                    const clone = orig.cloneNode(true) as HTMLElement;
-                    clone.querySelectorAll('.panel-session-tab-tooltip').forEach(n => n.remove());
-                    // 비활성 탭도 드래그 중엔 활성처럼 보이게 강제 — 어두운 배경에 묻히는 문제 해결
-                    clone.classList.add('active', 'dragging-preview');
-                    clone.style.position = 'absolute';
-                    clone.style.top = '-10000px';
-                    clone.style.left = '-10000px';
-                    clone.style.width = rect.width + 'px';
-                    clone.style.height = rect.height + 'px';
-                    clone.style.pointerEvents = 'none';
-                    document.body.appendChild(clone);
-                    e.dataTransfer.setDragImage(clone, e.clientX - rect.left, e.clientY - rect.top);
-                    setTimeout(() => { try { clone.remove(); } catch {} }, 0);
-                  } catch {}
-                }}
-                onDragOver={e => {
-                  if (e.dataTransfer.types.includes('text/mini-session')) { e.preventDefault(); e.stopPropagation(); }
-                }}
-                onDrop={e => {
-                  const raw = e.dataTransfer?.getData('text/mini-session');
-                  if (!raw) return;
-                  e.preventDefault(); e.stopPropagation();
-                  const data = JSON.parse(raw);
-                  if (data.nodeId === nodeId && data.idx !== undefined && data.idx !== idx) {
-                    onReorderSession?.(nodeId, data.idx, idx);
-                  } else if (data.nodeId !== nodeId) {
-                    onMoveSession?.(data.nodeId, data.termId, nodeId);
-                  }
-                  setDropZone(null);
-                }}
-                onDragEnd={e => {
-                  // 미니탭을 창 밖에 드롭하면 새 창으로 분리
-                  if (!onDetachSession) return;
-                  const sx = e.screenX, sy = e.screenY;
-                  (async () => {
-                    try {
-                      const b: any = await (window as any).api?.getWindowBounds?.();
-                      if (b && (sx < b.x || sx > b.x + b.width || sy < b.y || sy > b.y + b.height)) {
-                        onDetachSession(nodeId, sess.termId, sx, sy);
-                      }
-                    } catch {}
-                  })();
-                }}
-                onClick={e => {
-                  e.stopPropagation();
-                  // 수동 더블클릭 — 같은 미니탭에서 500ms 내 2번째 클릭이면 복제 실행
-                  // (native onDoubleClick 은 layout 재렌더 시 발화 안 하는 케이스가 있어 수동 감지로 통일)
-                  const now = Date.now();
-                  const prev = lastClickRef.current;
-                  if (prev && prev.termId === sess.termId && now - prev.at < 500) {
-                    lastClickRef.current = null;
-                    onDuplicateSession?.(nodeId, sess.termId);
-                    return;
-                  }
-                  lastClickRef.current = { termId: sess.termId, at: now };
-                  onSwitchSession?.(nodeId, idx);
-                }}
-                onAuxClick={e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); window.api?.disconnectSSH?.(sess.termId); onCloseSession?.(nodeId, sess.termId); } }}
-                onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMiniCtx({ x: e.clientX, y: e.clientY, termId: sess.termId, name: sess.sessionName }); }}
-              >
-                <span className={`panel-status-dot ${globalConnected.has(sess.termId) ? 'connected' : 'disconnected'}`} />
-                {renamingTermId === sess.termId ? (
-                  <input
-                    className="mini-tab-rename-input"
-                    value={renameValue}
-                    onChange={e => setRenameValue(e.target.value)}
-                    onBlur={() => { if (renameValue.trim()) onRenameSession?.(nodeId, sess.termId, renameValue.trim()); setRenamingTermId(null); }}
-                    onKeyDown={e => {
-                      e.stopPropagation();
-                      if (e.key === 'Enter') { if (renameValue.trim()) onRenameSession?.(nodeId, sess.termId, renameValue.trim()); setRenamingTermId(null); }
-                      if (e.key === 'Escape') setRenamingTermId(null);
-                    }}
-                    autoFocus
-                    onClick={e => e.stopPropagation()}
-                  />
-                ) : (
-                  <>
-                    <span className="panel-session-tab-name">{sess.sessionName}</span>
-                    <span className="panel-session-tab-tooltip">{sess.sessionName}</span>
-                  </>
-                )}
-                <span className="panel-session-tab-close" onClick={e => {
-                  e.stopPropagation();
-                  window.api?.disconnectSSH?.(sess.termId);
-                  onCloseSession?.(nodeId, sess.termId);
-                }}>&times;</span>
+          singleSessionMode ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0 }}>
+              <span className="panel-header-label" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span className={`panel-status-dot ${globalConnected.has(activeTermId || '') ? 'connected' : 'disconnected'}`} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {activeSession?.sessionName || t('ui.session')}
+                </span>
               </span>
-            ))}
-            <span className="panel-session-tab-add" onClick={e => { e.stopPropagation(); onAddSession?.(nodeId); }} title={t('ui.newSession')}>+</span>
-            {availableShells && availableShells.length > 0 && (
-              <span className="panel-session-tab-add panel-shell-btn" onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setShellMenu(prev => prev ? null : { x: r.left, y: r.bottom }); }} title={t('ui.shellSelect')}>∨</span>
-            )}
-          </div>
-            <button className="panel-tabs-scroll-btn" onClick={() => {
-              const el = document.querySelector(`[data-panel-tabs="${nodeId}"]`);
-              if (el) el.scrollBy({ left: -100, behavior: 'smooth' });
-            }}>‹</button>
-            <button className="panel-tabs-scroll-btn" onClick={() => {
-              const el = document.querySelector(`[data-panel-tabs="${nodeId}"]`);
-              if (el) el.scrollBy({ left: 100, behavior: 'smooth' });
-            }}>›</button>
-          </div>
+            </div>
+          ) : (
+            <div className="panel-session-tabs-wrapper">
+              <div className="panel-session-tabs" data-panel-tabs={nodeId} onWheel={e => {
+                e.currentTarget.scrollLeft += e.deltaY > 0 ? 60 : -60;
+              }}>
+              {panel.sessions.map((sess, idx) => (
+                <span
+                  key={sess.termId}
+                  className={`panel-session-tab ${idx === panel.activeIdx ? 'active' : ''}${sess.color && sess.color !== 'default' ? ` mini-tab-color-${sess.color}` : ''}`}
+                  title={sess.sessionName}
+                  draggable
+                  onDragStart={e => {
+                    e.stopPropagation();
+                    e.dataTransfer.setData('text/mini-session', JSON.stringify({ nodeId, termId: sess.termId, idx }));
+                    e.dataTransfer.effectAllowed = 'move';
+                    try {
+                      const orig = e.currentTarget as HTMLElement;
+                      const rect = orig.getBoundingClientRect();
+                      const clone = orig.cloneNode(true) as HTMLElement;
+                      clone.querySelectorAll('.panel-session-tab-tooltip').forEach(n => n.remove());
+                      clone.classList.add('active', 'dragging-preview');
+                      clone.style.position = 'absolute';
+                      clone.style.top = '-10000px';
+                      clone.style.left = '-10000px';
+                      clone.style.width = rect.width + 'px';
+                      clone.style.height = rect.height + 'px';
+                      clone.style.pointerEvents = 'none';
+                      document.body.appendChild(clone);
+                      e.dataTransfer.setDragImage(clone, e.clientX - rect.left, e.clientY - rect.top);
+                      setTimeout(() => { try { clone.remove(); } catch {} }, 0);
+                    } catch {}
+                  }}
+                  onDragOver={e => {
+                    if (e.dataTransfer.types.includes('text/mini-session')) { e.preventDefault(); e.stopPropagation(); }
+                  }}
+                  onDrop={e => {
+                    const raw = e.dataTransfer?.getData('text/mini-session');
+                    if (!raw) return;
+                    e.preventDefault(); e.stopPropagation();
+                    const data = JSON.parse(raw);
+                    if (data.nodeId === nodeId && data.idx !== undefined && data.idx !== idx) {
+                      onReorderSession?.(nodeId, data.idx, idx);
+                    } else if (data.nodeId !== nodeId) {
+                      onMoveSession?.(data.nodeId, data.termId, nodeId);
+                    }
+                    setDropZone(null);
+                  }}
+                  onDragEnd={e => {
+                    if (!onDetachSession) return;
+                    const sx = e.screenX, sy = e.screenY;
+                    (async () => {
+                      try {
+                        const b: any = await (window as any).api?.getWindowBounds?.();
+                        if (b && (sx < b.x || sx > b.x + b.width || sy < b.y || sy > b.y + b.height)) {
+                          onDetachSession(nodeId, sess.termId, sx, sy);
+                        }
+                      } catch {}
+                    })();
+                  }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    const now = Date.now();
+                    const prev = lastClickRef.current;
+                    if (prev && prev.termId === sess.termId && now - prev.at < 500) {
+                      lastClickRef.current = null;
+                      onDuplicateSession?.(nodeId, sess.termId);
+                      return;
+                    }
+                    lastClickRef.current = { termId: sess.termId, at: now };
+                    onSwitchSession?.(nodeId, idx);
+                  }}
+                  onAuxClick={e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); window.api?.disconnectSSH?.(sess.termId); onCloseSession?.(nodeId, sess.termId); } }}
+                  onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMiniCtx({ x: e.clientX, y: e.clientY, termId: sess.termId, name: sess.sessionName }); }}
+                >
+                  <span className={`panel-status-dot ${globalConnected.has(sess.termId) ? 'connected' : 'disconnected'}`} />
+                  {renamingTermId === sess.termId ? (
+                    <input
+                      className="mini-tab-rename-input"
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onBlur={() => { if (renameValue.trim()) onRenameSession?.(nodeId, sess.termId, renameValue.trim()); setRenamingTermId(null); }}
+                      onKeyDown={e => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter') { if (renameValue.trim()) onRenameSession?.(nodeId, sess.termId, renameValue.trim()); setRenamingTermId(null); }
+                        if (e.key === 'Escape') setRenamingTermId(null);
+                      }}
+                      autoFocus
+                      onClick={e => e.stopPropagation()}
+                    />
+                  ) : (
+                    <>
+                      <span className="panel-session-tab-name">{sess.sessionName}</span>
+                      <span className="panel-session-tab-tooltip">{sess.sessionName}</span>
+                    </>
+                  )}
+                  <span className="panel-session-tab-close" onClick={e => {
+                    e.stopPropagation();
+                    window.api?.disconnectSSH?.(sess.termId);
+                    onCloseSession?.(nodeId, sess.termId);
+                  }}>&times;</span>
+                </span>
+              ))}
+              <span className="panel-session-tab-add" onClick={e => { e.stopPropagation(); onAddSession?.(nodeId); }} title={t('ui.newSession')}>+</span>
+              {availableShells && availableShells.length > 0 && (
+                <span className="panel-session-tab-add panel-shell-btn" onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setShellMenu(prev => prev ? null : { x: r.left, y: r.bottom }); }} title={t('ui.shellSelect')}>∨</span>
+              )}
+            </div>
+              <button className="panel-tabs-scroll-btn" onClick={() => {
+                const el = document.querySelector(`[data-panel-tabs="${nodeId}"]`);
+                if (el) el.scrollBy({ left: -100, behavior: 'smooth' });
+              }}>‹</button>
+              <button className="panel-tabs-scroll-btn" onClick={() => {
+                const el = document.querySelector(`[data-panel-tabs="${nodeId}"]`);
+                if (el) el.scrollBy({ left: 100, behavior: 'smooth' });
+              }}>›</button>
+            </div>
+          )
         ) : (
           <span className="panel-header-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             Empty
-            <span className="panel-session-tab-add" onClick={e => { e.stopPropagation(); onAddSession?.(nodeId); }} title={t('ui.newSession')}>+</span>
-            {availableShells && availableShells.length > 0 && (
-              <span className="panel-session-tab-add panel-shell-btn" onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setShellMenu(prev => prev ? null : { x: r.left, y: r.bottom }); }} title={t('ui.shellSelect')}>∨</span>
+            {!singleSessionMode && (
+              <>
+                <span className="panel-session-tab-add" onClick={e => { e.stopPropagation(); onAddSession?.(nodeId); }} title={t('ui.newSession')}>+</span>
+                {availableShells && availableShells.length > 0 && (
+                  <span className="panel-session-tab-add panel-shell-btn" onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setShellMenu(prev => prev ? null : { x: r.left, y: r.bottom }); }} title={t('ui.shellSelect')}>∨</span>
+                )}
+              </>
+            )}
+            {singleSessionMode && (
+              <button className="panel-btn" onClick={e => { e.stopPropagation(); onAddSession?.(nodeId); }} title={t('ui.newSession')}>
+                세션 연결
+              </button>
             )}
           </span>
         )}
 
+        {!singleSessionMode && (
         <div className="panel-controls-wrap" ref={panelControlsWrapRef}>
         {(() => {
           const recOn = !!activeTermId && isRecording(activeTermId);
@@ -3720,6 +3740,8 @@ export const TerminalPanel: React.FC<Props> = ({
           </div>
         )}
         </div>
+        )}
+        {!singleSessionMode && (
         <button
           className="panel-btn panel-btn-close"
           onClick={() => {
@@ -3733,6 +3755,7 @@ export const TerminalPanel: React.FC<Props> = ({
           }}
           title="Close"
         >&times;</button>
+        )}
       </div>
       <div className="panel-terminal-split">
         {(() => {

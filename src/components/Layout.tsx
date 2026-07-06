@@ -35,6 +35,8 @@ type CommonHandlers = {
   onMoveSessionToWorkspace?: (fromNodeId: string, termId: string, targetTabId: string) => void;
   // 컨테이너 노드의 자식 분할 비율 변경 알림 — 사용자가 drag 로 조절 시
   onContainerResize?: (containerNodeId: string, sizes: number[]) => void;
+  // 커스텀 워크스페이스 터미널 슬롯 — 싱글탭 전용. 미니탭/툴바 아이콘 숨김.
+  singleSessionMode?: boolean;
 };
 
 type Props = CommonHandlers & { root: LayoutNode };
@@ -83,6 +85,7 @@ const NodeView: React.FC<NodeProps> = ({ node, ...h }) => {
             workspaceList={h.workspaceList}
             currentWorkspaceId={h.currentWorkspaceId}
             onMoveSessionToWorkspace={h.onMoveSessionToWorkspace}
+            singleSessionMode={h.singleSessionMode}
           />
         </div>
       </div>

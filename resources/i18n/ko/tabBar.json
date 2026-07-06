@@ -10,6 +10,8 @@
   "fileTransferTab": "📁 파일 전송",
   "workspaceN": "워크스페이스 {{n}}",
   "workspace": "워크스페이스",
+  "customWorkspace": "커스텀 워크스페이스",
+  "customWorkspaceAdd": "추가",
   "shellSelect": "쉘 선택",
   "scrollPrev": "이전",
   "scrollNext": "다음",
