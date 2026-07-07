@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('api', {
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)
   worklogGetAll: () => ipcRenderer.invoke('worklog:get-all'),
   worklogSaveDay: (date: string, day: { todos: any[] }) => ipcRenderer.invoke('worklog:save-day', { date, day }),
+  // 포스트잇 — 화면 어디든 붙일 수 있는 독립 창 (stickyNotes.json)
+  stickyNoteCreate: () => ipcRenderer.invoke('sticky-note:create'),
+  stickyNoteGet: (id: string) => ipcRenderer.invoke('sticky-note:get', id),
+  stickyNoteUpdateContent: (id: string, html: string) => ipcRenderer.invoke('sticky-note:update-content', { id, html }),
+  stickyNoteDelete: (id: string) => ipcRenderer.invoke('sticky-note:delete', id),
   // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
   setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
   onWindowTheme: (cb: (id: string) => void) => {

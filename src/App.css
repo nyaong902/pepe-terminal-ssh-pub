@@ -25,16 +25,20 @@ html, body {
 
 /* ── Search Bar ── */
 .search-bar {
-  position: absolute;
-  top: 0;
+  position: fixed;
+  /* z-index 를 tab-bar-row(2200)보다 높여서 그 위에 겹쳐 뜨도록 함 — top:40px(탭바 바로 아래)로
+     내리면 AI Chat 사이드바 헤더 등 그 아래 콘텐츠와 겹쳐 보이는 문제가 있어, 탭바 높이(40px)
+     안쪽에 살짝 띄운다. */
+  top: 6px;
   right: 140px;
-  z-index: 2000;
+  z-index: 2201;
   display: flex;
   flex-direction: column;
   gap: 4px;
   background: var(--win-surface, #1a1a1a);
-  border-radius: 0 0 6px 6px;
+  border-radius: 6px;
   padding: 6px 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 
 .quick-connect-bar {

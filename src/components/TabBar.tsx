@@ -4,6 +4,14 @@ import { useTranslation } from 'react-i18next';
 import type { Tab, TabColor } from '../App';
 import { ContextMenu } from './ContextMenu';
 
+// 커스텀 워크스페이스 메뉴에서 순서 구분용 — 1~9는 키캡 이모지, 10은 🔟, 그 이상은 숫자만.
+const NUMBER_KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+function numberBadge(n: number): string {
+  if (n >= 1 && n <= 9) return NUMBER_KEYCAPS[n - 1];
+  if (n === 10) return '🔟';
+  return `${n}.`;
+}
+
 type ShellInfo = { name: string; path: string; icon?: string };
 type Props = {
   tabs: Tab[];
@@ -268,8 +276,8 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             {
               label: `🧩  ${t('customWorkspace', { defaultValue: '커스텀 워크스페이스' })}`,
               submenu: [
-                { label: t('customWorkspaceAdd', { defaultValue: '추가' }), onClick: () => onAddCustomWorkspace?.() },
-                ...(customWorkspaces?.map(ws => ({ label: ws.name, onClick: () => onAddCustomWorkspace?.(ws.id) })) || []),
+                { label: `➕  ${t('customWorkspaceAdd', { defaultValue: '추가' })}`, onClick: () => onAddCustomWorkspace?.() },
+                ...(customWorkspaces?.map((ws, i) => ({ label: `${numberBadge(i + 1)}  ${ws.name}`, onClick: () => onAddCustomWorkspace?.(ws.id) })) || []),
               ],
             },
           ]}

@@ -36,6 +36,8 @@ import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
+import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
+import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
 import { getTelnetBridge } from './telnetBridge';
@@ -1028,6 +1030,7 @@ app.whenReady().then(() => {
   cleanupAiMirrorTempRoots(false);
   registerPepeInstance();
   createWindow();
+  restoreStickyNotes();
   installX11DisplayHook();
   void messengerStartService();
 
@@ -5302,39 +5305,48 @@ ipcMain.handle('fe:connected-sessions', () => {
 // ── SFTP IPC ──
 
 ipcMain.handle('sftp:download', async (_e, { panelId, remotePath, isDir }: { panelId: string; remotePath: string; isDir?: boolean }) => {
-  if (!mainWindow) return null;
+  xferLog(`ipc sftp:download 요청 panelId=${panelId} remotePath=${remotePath} isDir=${!!isDir}`);
+  if (!mainWindow) { xferLog('ipc sftp:download 중단 — mainWindow 없음'); return null; }
   const bridge = getSSHBridge();
   const baseName = remotePath.split('/').filter(Boolean).pop() || 'download';
   if (isDir) {
     // 폴더 다운로드 — 부모 폴더 고른 뒤 그 안에 원격 폴더 이름으로 재귀 복사
+    xferLog('ipc sftp:download 폴더 저장 위치 선택 다이얼로그 표시');
     const pick = await dialog.showOpenDialog(mainWindow, {
       title: t('dialog.saveDownloadLocation'),
       properties: ['openDirectory', 'createDirectory'],
     });
-    if (pick.canceled || pick.filePaths.length === 0) return null;
+    if (pick.canceled || pick.filePaths.length === 0) { xferLog('ipc sftp:download 폴더 선택 취소됨'); return null; }
     const parentDir = pick.filePaths[0];
     const localDst = path.join(parentDir, baseName);
+    xferLog(`ipc sftp:download 폴더 선택됨 → ${localDst}`);
     try {
       await bridge.handleTransfer(
         { mode: 'remote', termId: panelId, path: remotePath },
         { mode: 'local', path: localDst },
         baseName,
       );
+      xferLog('ipc sftp:download 폴더 다운로드 완료');
       return { success: true, localPath: localDst };
     } catch (err: any) {
+      xferLog(`ipc sftp:download 폴더 다운로드 실패: ${err?.message || err}`);
       return { success: false, error: String(err) };
     }
   }
   // 파일 다운로드 — 저장 이름까지 지정
+  xferLog('ipc sftp:download 파일 저장 위치 선택 다이얼로그 표시');
   const result = await dialog.showSaveDialog(mainWindow, {
     title: t('dialog.saveRemoteFile'),
     defaultPath: baseName,
   });
-  if (result.canceled || !result.filePath) return null;
+  if (result.canceled || !result.filePath) { xferLog('ipc sftp:download 저장 취소됨'); return null; }
+  xferLog(`ipc sftp:download 저장 위치 선택됨 → ${result.filePath}`);
   try {
     await bridge.handleSFTPDownload(panelId, remotePath, result.filePath);
+    xferLog('ipc sftp:download 완료');
     return { success: true, localPath: result.filePath };
   } catch (err: any) {
+    xferLog(`ipc sftp:download 실패: ${err?.message || err}`);
     return { success: false, error: String(err) };
   }
 });
@@ -5904,6 +5916,103 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
 
 ipcMain.handle('window:detach-tab', (_e, { payload, bounds }: { payload: any; bounds?: any }) => {
   try { createDetachedWindow(payload, bounds); return true; } catch (err) { console.error('[detach] fail', err); return false; }
+});
+
+// ── 포스트잇(Sticky Note) — 화면 어디든 붙일 수 있는 독립 창들 ───────────────
+// 각 노트는 frameless/transparent/always-on-top 인 별도 BrowserWindow. 위치/크기/내용은
+// stickyNotesStore.ts 에 즉시 저장되어 앱을 껐다 켜도 마지막 위치에 그대로 복원된다.
+const stickyNoteWindows = new Map<string, BrowserWindow>();
+const stickyNoteBoundsSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function loadStickyNoteWindow(url: string, win: BrowserWindow) {
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
+  if (!app.isPackaged && devServerUrl) {
+    win.loadURL(devServerUrl + url);
+  } else {
+    win.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url.replace(/^#/, '') });
+  }
+}
+
+function createStickyNoteWindow(note: StickyNote, focus: boolean) {
+  const existing = stickyNoteWindows.get(note.id);
+  if (existing && !existing.isDestroyed()) { if (focus) { existing.show(); existing.focus(); } return existing; }
+  const win = new BrowserWindow({
+    x: Math.round(note.x), y: Math.round(note.y),
+    width: Math.round(note.width), height: Math.round(note.height),
+    minWidth: 240, minHeight: 220,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  stickyNoteWindows.set(note.id, win);
+  win.once('ready-to-show', () => { try { win.show(); if (focus) win.focus(); } catch {} });
+  const saveBoundsDebounced = () => {
+    const timer = stickyNoteBoundsSaveTimers.get(note.id);
+    if (timer) clearTimeout(timer);
+    stickyNoteBoundsSaveTimers.set(note.id, setTimeout(() => {
+      if (win.isDestroyed()) return;
+      const b = win.getBounds();
+      try { updateStickyNote(note.id, { x: b.x, y: b.y, width: b.width, height: b.height }); } catch {}
+    }, 300));
+  };
+  win.on('move', saveBoundsDebounced);
+  win.on('resize', saveBoundsDebounced);
+  win.on('closed', () => {
+    stickyNoteWindows.delete(note.id);
+    const timer = stickyNoteBoundsSaveTimers.get(note.id);
+    if (timer) clearTimeout(timer);
+    stickyNoteBoundsSaveTimers.delete(note.id);
+  });
+  loadStickyNoteWindow(`#sticky-note?id=${encodeURIComponent(note.id)}`, win);
+  return win;
+}
+
+function restoreStickyNotes() {
+  try {
+    const { notes } = loadStickyNotes();
+    for (const note of notes) createStickyNoteWindow(note, false);
+  } catch (err) { console.error('[sticky-note] restore failed:', err); }
+}
+
+ipcMain.handle('sticky-note:create', () => {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x: ax, y: ay, width: aw, height: ah } = display.workArea;
+  const count = stickyNoteWindows.size;
+  const defaultWidth = 380;
+  const defaultHeight = 380;
+  const note: StickyNote = {
+    id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    x: ax + Math.min(60 + (count % 8) * 28, aw - defaultWidth),
+    y: ay + Math.min(60 + (count % 8) * 28, ah - defaultHeight),
+    width: defaultWidth,
+    height: defaultHeight,
+    html: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  addStickyNote(note);
+  createStickyNoteWindow(note, true);
+  return note;
+});
+
+ipcMain.handle('sticky-note:get', (_e, id: string) => getStickyNote(id) || null);
+
+ipcMain.handle('sticky-note:update-content', (_e, { id, html }: { id: string; html: string }) => {
+  try { updateStickyNote(id, { html }); } catch {}
+});
+
+ipcMain.handle('sticky-note:delete', (_e, id: string) => {
+  const win = stickyNoteWindows.get(id);
+  if (win && !win.isDestroyed()) win.destroy();
+  stickyNoteWindows.delete(id);
+  try { removeStickyNote(id); } catch {}
 });
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
 ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {

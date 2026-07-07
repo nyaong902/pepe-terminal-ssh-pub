@@ -9,6 +9,7 @@ import App from './App'
 import SessionEditorPopout from './SessionEditorPopout'
 import TabApp from './components/TabApp'
 import PanelHost from './components/PanelHost'
+import StickyNotePopout from './components/StickyNotePopout'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
@@ -57,6 +58,15 @@ if (window.location.hash.includes('panel-app')) {
   const hashQuery = window.location.hash.split('?')[1] || '';
   const tabId = new URLSearchParams(hashQuery).get('tabId') || '';
   root = <TabApp tabId={tabId} />;
+} else if (window.location.hash.includes('sticky-note')) {
+  // 포스트잇 독립 창 진입점 — '#sticky-note?id=X' (electron/main.ts 의 createStickyNoteWindow 가 로드)
+  const hashQuery = window.location.hash.split('?')[1] || '';
+  const noteId = new URLSearchParams(hashQuery).get('id') || '';
+  document.documentElement.style.background = 'transparent';
+  document.body.style.background = 'transparent';
+  document.body.style.margin = '0';
+  document.body.style.padding = '0';
+  root = <StickyNotePopout noteId={noteId} />;
 } else if (window.location.hash.includes('tab-poc')) {
   // 개발용 PoC — 실제 WebContentsView 가 이 frameless/transparent 창 위에서 정상
   // 렌더링/IPC 되는지만 확인하는 임시 경로. 실제 앱 UI 와는 무관.

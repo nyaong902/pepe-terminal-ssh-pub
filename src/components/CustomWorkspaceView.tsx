@@ -92,6 +92,8 @@ function TerminalSlot({
   availableShells,
   sessions,
   singleSessionMode,
+  initialSession,
+  onSessionChange,
 }: {
   workspaceId: string;
   slotId: string;
@@ -102,6 +104,10 @@ function TerminalSlot({
   availableShells?: { name: string; path: string; icon?: string }[];
   sessions: any[];
   singleSessionMode?: boolean;
+  // 마지막 연결 세션 — 상태가 비어 있는(새로 생성된) 슬롯일 때 초기 레이아웃에 자동 반영되어
+  // TerminalPanel 의 마운트 시 자동 접속 로직(activeSession.sessionId 존재 시)을 그대로 탄다.
+  initialSession?: { id: string; sessionId: string; name: string; host?: string; username?: string };
+  onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string }) => void;
 }) {
   const debugIdRef = React.useRef(`cw-term-${workspaceId}:${slotId}`);
   const emitDebugLog = (...parts: any[]) => {
@@ -112,7 +118,21 @@ function TerminalSlot({
     try { (window as any).api?.debugLog?.(line); } catch {}
     try { console.log(line); } catch {}
   };
-  const [layout, setLayout] = useState<LayoutNode>(() => state?.layout || createInitialLayout(`${workspaceId}-${slotId}`));
+  const [layout, setLayout] = useState<LayoutNode>(() => {
+    if (state?.layout) return state.layout;
+    const initial = createInitialLayout(`${workspaceId}-${slotId}`);
+    if (!initialSession || initial.type !== 'leaf') return initial;
+    const termId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    registerTermSession(termId, initialSession.sessionId, initialSession.name, initialSession.host ?? '');
+    return {
+      ...initial,
+      panel: {
+        ...initial.panel,
+        sessions: [{ termId, sessionId: initialSession.sessionId, sessionName: initialSession.name }],
+        activeIdx: 0,
+      },
+    };
+  });
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(state?.selectedPanelId || null);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(state?.activeSlotId || null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -260,6 +280,7 @@ function TerminalSlot({
     setSelectedPanelId(nodeId);
     setPickerOpen(false);
     setPickerNodeId(null);
+    try { onSessionChange?.({ id: session.id, sessionId: session.id, name: displayName, host: session.host, username: session.username }); } catch {}
     try {
       emitDebugLog('[cw-debug][terminal-slot] connect-ssh', { termId: nextTermId, sessionId: session.id, displayName, singleSessionMode });
       const result = await (window as any).api?.connectSSH?.(nextTermId, session.id);
@@ -458,6 +479,7 @@ function TerminalSlot({
           return found;
         };
         const targetSession = findTargetSession(layout, nodeId);
+        try { onSessionChange?.({ id: sessionId, sessionId, name: displayName, host: session.host, username: session.username }); } catch {}
         emitDebugLog('[cw-debug][terminal-slot] connect-drop', {
           workspaceId,
           slotId,
@@ -770,6 +792,16 @@ export const CustomWorkspaceView: React.FC<{
                         availableShells={availableShells}
                         sessions={sessions as any}
                         singleSessionMode
+                        initialSession={slot.lastSession}
+                        onSessionChange={session => {
+                          const nextTemplate = {
+                            ...localTemplate,
+                            slots: localTemplate.slots.map(s => s.id === slot.id ? { ...s, lastSession: session } : s),
+                            updatedAt: Date.now(),
+                          };
+                          setLocalTemplate(nextTemplate);
+                          onTemplateChange(nextTemplate);
+                        }}
                       />
                     </div>
                   )}

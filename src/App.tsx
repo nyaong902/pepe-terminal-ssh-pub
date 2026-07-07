@@ -387,14 +387,17 @@ function App() {
   const [showRuntimeLogs, setShowRuntimeLogs] = useState<boolean>(() => {
     try {
       const raw = localStorage.getItem('showRuntimeLogs');
-      return raw === null ? true : raw === '1';
+      return raw === null ? false : raw === '1';
     } catch {
-      return true;
+      return false;
     }
   });
   const runtimeLogText = runtimeLogs.join('\n');
   const showBroadcastLoadedRef = useRef(false);
   const showRuntimeLogsLoadedRef = useRef(false);
+  // onDebugLog 구독 핸들러가 최신 showRuntimeLogs 값을 읽도록 — 구독 자체는 마운트 시 1회만 건다.
+  const showRuntimeLogsRef = useRef(showRuntimeLogs);
+  useEffect(() => { showRuntimeLogsRef.current = showRuntimeLogs; }, [showRuntimeLogs]);
   // 사용 가능한 로컬 쉘 목록 로드 + 기본 쉘 설정 로드 + startupCwd
   useEffect(() => {
     Promise.all([
@@ -1396,6 +1399,9 @@ function App() {
       if (!line) return;
       // eslint-disable-next-line no-console
       console.log('%c[main]', 'color:#8ab4f8', line);
+      // 디버그 로그 창이 꺼져 있으면(기본값) 수집도 하지 않는다 — 꺼둔 상태에서도
+      // 로그가 쌓여 우하단 "로그 N" 배지가 계속 떠 있던 문제의 원인.
+      if (!showRuntimeLogsRef.current) return;
       setRuntimeLogs(prev => {
         const next = [...prev, `[main] ${line}`];
         return next.slice(-120);
@@ -4750,6 +4756,7 @@ function App() {
             }}
           >💬</button>
           <button className={`tool-btn ${showBroadcast ? 'active' : ''}`} title={showBroadcast ? tApp('toolbar.broadcastHide') : tApp('toolbar.broadcastShow')} onClick={() => setShowBroadcast(v => !v)}>📢</button>
+          <button className="tool-btn" title={tApp('toolbar.stickyNote', { defaultValue: '포스트잇' })} onClick={() => { try { (window as any).api?.stickyNoteCreate?.(); } catch {} }}>📝</button>
           <button
             className={`tool-btn btn-pin${terminalPinned ? ' pinned' : ''}`}
             title={terminalPinned ? tApp('toolbar.terminalUnpin') : tApp('toolbar.terminalPin')}
@@ -5758,23 +5765,6 @@ function App() {
           </div>
         </div>
       )}
-      {!showRuntimeLogs && runtimeLogs.length > 0 && (
-        <button
-          className="btn-add"
-          style={{
-            position: 'fixed',
-            right: 12,
-            bottom: 54,
-            zIndex: 9998,
-            padding: '6px 10px',
-            fontSize: 11,
-          }}
-          onClick={() => setShowRuntimeLogs(true)}
-        >
-          로그 {runtimeLogs.length}
-        </button>
-      )}
-
       {editSessionCtx && (
         <SessionEditor
           session={editSessionCtx.session}

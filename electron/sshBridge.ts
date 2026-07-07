@@ -29,6 +29,13 @@ import type { LoginScriptRule } from './sessionsStore';
 import { startEmbeddedX11 } from './x11Server';
 import { startBundledX11 } from './x11Bundled';
 
+// 파일 전송 과정을 런타임 로그 패널(옵션 > 디버그)에 실시간 노출 — 다운로드/업로드가 "조용히
+// 멈추는" 증상을 사용자가 직접 어느 단계에서 막히는지 확인할 수 있게 한다.
+export function xferLog(msg: string) {
+  console.log(`[xfer] ${msg}`);
+  try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[xfer] ${msg}`); } catch {}
+}
+
 // sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
 // (구조적 복제 불가능한 함수라서) 같은 이름의 boolean 값으로 치환해 보낸 결과를, 이 아래 수십 곳의
 // 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
@@ -801,6 +808,18 @@ class SSHBridge extends EventEmitter {
       finish(responses);
       this.pendingAuth.delete(panelId);
     }
+    // 비밀번호를 저장하지 않은 세션은 sessionStore 에 빈 auth 로만 캐시돼 있어, 이후 SFTP
+    // 전용 연결(worker/dedicated)이 "새로" 열릴 때 재인증에 실패해 결국 worker RPC 프록시로
+    // 떨어지며 파일 전송이 막힌다. keyboard-interactive 로 받은 비밀번호를 캐시에 채워 넣어
+    // 재사용 가능하게 한다.
+    const pw = responses?.[0];
+    if (pw) {
+      const session = this.sessionStore.get(panelId);
+      if (session && !session.auth?.password) {
+        this.sessionStore.set(panelId, { ...session, auth: { ...(session.auth || {}), type: session.auth?.type || 'password', password: pw } });
+        xferLog(`auth-response: cached password for panelId=${panelId} (was unsaved) — SFTP transfer will now be able to reconnect`);
+      }
+    }
   }
 
   handleInput(panelId: string, data?: string, b64?: string) {
@@ -1311,7 +1330,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   // 외부에서 명시적으로 panel 의 dedicated SFTP 만 종료 (SSH 메인 연결은 유지) — 파일트리 unmount 등에서 호출
   public releaseDedicatedSftp(panelId: string) {
-    try { this._cleanupDedicatedSftp(panelId); } catch {}
+    xferLog(`releaseDedicatedSftp panelId=${panelId} (세션 정보는 유지 — 터미널 연결 살아있음)`);
+    try { this._cleanupDedicatedSftp(panelId, false); } catch {}
     try { const s = this.sftpCache.get(panelId); if (s) { s.end?.(); this.sftpCache.delete(panelId); } } catch {}
   }
 
@@ -1863,7 +1883,12 @@ probe_curl || probe_wget || probe_python
   }
 
   // 전용 SFTP 연결 해제 헬퍼
-  private _cleanupDedicatedSftp(panelId: string) {
+  // clearSessionStore=false — releaseDedicatedSftp(파일트리 unmount 등, 터미널 연결은 유지)
+  // 에서 호출될 때는 sessionStore 를 지우면 안 된다: 지우면 이후 다운로드/업로드가 worker/dedicated
+  // SFTP 를 "새로" 열 때 필요한 세션 정보(호스트/인증)를 잃어버려 재연결에 실패하고, 결국 스트림
+  // 전송을 지원하지 않는 터미널 worker RPC 프록시로 폴백되어 파일 전송이 조용히/명시적으로 막힌다.
+  // 실제 연결 종료(handleDisconnect, conn 에러 등)에서는 그대로 true 로 세션 정보도 정리한다.
+  private _cleanupDedicatedSftp(panelId: string, clearSessionStore = true) {
     const subsys = this.sftpDedicatedSubsys.get(panelId);
     if (subsys) { try { subsys.end(); } catch {} this.sftpDedicatedSubsys.delete(panelId); }
     const conn = this.sftpDedicatedConn.get(panelId);
@@ -1872,34 +1897,37 @@ probe_curl || probe_wget || probe_python
     const worker = this.sftpWorkers.get(panelId);
     if (worker) { try { worker.postMessage({ type: 'shutdown' }); } catch {} this.sftpWorkers.delete(panelId); }
     this.sftpWorkerReqs.delete(panelId);
-    this.sessionStore.delete(panelId);
+    if (clearSessionStore) this.sessionStore.delete(panelId);
   }
 
   // Worker thread 생성/재사용 — 최초 1회만 SSH 연결, 이후 transfer 요청 처리
   private getOrCreateSftpWorker(panelId: string): Promise<Worker> {
     const existing = this.sftpWorkers.get(panelId);
-    if (existing) return Promise.resolve(existing);
+    if (existing) { xferLog(`worker reuse panelId=${panelId}`); return Promise.resolve(existing); }
     // 이미 연결 중인 promise 재사용 — fire-and-forget + 실제 전송 동시에 호출 시 중복 생성 방지
     const pending = this.sftpWorkerPromises.get(panelId);
-    if (pending) return pending;
+    if (pending) { xferLog(`worker connect already in-flight panelId=${panelId}`); return pending; }
     const session = this.sessionStore.get(panelId);
-    if (!session) return Promise.reject(new Error('세션 정보 없음'));
+    if (!session) { xferLog(`worker skip — no sessionStore entry for panelId=${panelId}`); return Promise.reject(new Error('세션 정보 없음')); }
+    xferLog(`worker spawn panelId=${panelId} host=${session.host}`);
     const promise = new Promise<Worker>((resolve, reject) => {
       const workerPath = path.join(__dirname, 'sftpTransferWorker.cjs');
       let worker: Worker;
       try { worker = new Worker(workerPath, { workerData: { session } }); }
-      catch (e) { return reject(e); }
+      catch (e) { xferLog(`worker spawn FAILED panelId=${panelId}: ${e}`); return reject(e); }
       const reqs = new Map<string, { onProgress:(t:number,total:number)=>void; resolve:()=>void; reject:(e:Error)=>void }>();
       this.sftpWorkerReqs.set(panelId, reqs);
       let resolved = false;
       worker.on('message', (msg: any) => {
         if (msg.type === 'ready') {
           resolved = true;
+          xferLog(`worker ready panelId=${panelId}`);
           this.sftpWorkerPromises.delete(panelId);
           this.sftpWorkers.set(panelId, worker);
           if (!this.sftpWorkerOps.has(panelId)) this.sftpWorkerOps.set(panelId, new Map());
           resolve(worker);
         } else if (msg.type === 'connect-error') {
+          xferLog(`worker connect-error panelId=${panelId}: ${msg.error}`);
           if (!resolved) reject(new Error(msg.error));
         } else if (msg.type === 'progress') {
           reqs.get(msg.id)?.onProgress(msg.transferred, msg.total);
@@ -1918,6 +1946,7 @@ probe_curl || probe_wget || probe_python
         }
       });
       worker.on('error', (e: Error) => {
+        xferLog(`worker error panelId=${panelId}: ${e?.message || e}`);
         this.sftpWorkerPromises.delete(panelId);
         if (!resolved) reject(e);
         for (const r of reqs.values()) r.reject(e);
@@ -1929,6 +1958,7 @@ probe_curl || probe_wget || probe_python
         this.sftpWorkerOps.delete(panelId);
       });
       worker.on('exit', () => {
+        xferLog(`worker exit panelId=${panelId}`);
         this.sftpWorkerPromises.delete(panelId);
         const ops = this.sftpWorkerOps.get(panelId);
         if (ops) { for (const p of ops.values()) p.reject(new Error('Worker exited')); ops.clear(); }
@@ -2048,11 +2078,13 @@ probe_curl || probe_wget || probe_python
   async handleSFTPDownload(panelId: string, remotePath: string, localPath: string, ctx?: any): Promise<void> {
     const filename = remotePath.split('/').pop() || remotePath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: remotePath, dstPath: localPath } : {};
+    xferLog(`download start panelId=${panelId} remote=${remotePath} local=${localPath}`);
     // Worker thread 사용 (메인 이벤트 루프 보호)
     let worker: Worker | null = null;
-    try { worker = await this.getOrCreateSftpWorker(panelId); } catch { /* fallback */ }
+    try { worker = await this.getOrCreateSftpWorker(panelId); } catch (e: any) { xferLog(`download: worker unavailable (${e?.message || e}) — falling back`); }
     if (worker) {
       const reqId = `dl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      xferLog(`download via worker reqId=${reqId}`);
       return new Promise((resolve, reject) => {
         let lastProgressEmit = 0;
         this.sftpWorkerReqs.get(panelId)?.set(reqId, {
@@ -2062,22 +2094,33 @@ probe_curl || probe_wget || probe_python
             lastProgressEmit = now;
             this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred: t, total, filename, direction: 'download', ...extra }) });
           },
-          resolve: () => { this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve(); },
-          reject: (e) => { this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); reject(e); },
+          resolve: () => { xferLog(`download done (worker) reqId=${reqId}`); this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve(); },
+          reject: (e) => { xferLog(`download FAILED (worker) reqId=${reqId}: ${e}`); this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); reject(e); },
         });
         worker!.postMessage({ type: 'transfer', id: reqId, action: 'download', srcPath: remotePath, dstPath: localPath });
       });
     }
     // Fallback: 전용 SFTP 직접 사용
+    xferLog(`download via dedicated/shared sftp fallback panelId=${panelId}`);
     const sftp = await this.getDedicatedSftp(panelId);
+    xferLog(`download fallback sftp obtained (proxy=${!!sftp.__isWorkerSftpProxy}) panelId=${panelId}`);
     try {
       const stat: any = await new Promise((res, rej) => sftp.stat(remotePath, (e: any, s: any) => e ? rej(e) : res(s)));
       if (stat.size === 0) {
         fs.writeFileSync(localPath, Buffer.alloc(0));
+        xferLog(`download done (0-byte fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) });
         return;
       }
     } catch { /* stat 실패하면 일반 다운로드 시도 */ }
+    if (sftp.__isWorkerSftpProxy) {
+      // 이 프록시는 콜백형 RPC 만 지원 — fastGet 의 함수 인자(step)는 구조적 복제가 안 돼
+      // worker.postMessage 에서 조용히 죽는다(DataCloneError). 여기서 명시적으로 에러 처리.
+      xferLog(`download ABORT — fallback sftp is a worker-RPC proxy (stream transfer unsupported) panelId=${panelId}`);
+      const err = new Error('이 세션은 대용량 파일 전송을 지원하지 않는 연결 방식입니다 (worker RPC proxy)');
+      this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) });
+      throw err;
+    }
     return new Promise((resolve, reject) => {
       let lastStepEmit = 0;
       sftp.fastGet(remotePath, localPath, {
@@ -2089,7 +2132,8 @@ probe_curl || probe_wget || probe_python
           this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred, total, filename, direction: 'download', ...extra }) });
         },
       }, (err: any) => {
-        if (err) { this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); return reject(err); }
+        if (err) { xferLog(`download FAILED (fallback) panelId=${panelId}: ${err}`); this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); return reject(err); }
+        xferLog(`download done (fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve();
       });
     });
@@ -2098,21 +2142,24 @@ probe_curl || probe_wget || probe_python
   async handleSFTPUpload(panelId: string, localPath: string, remotePath: string, ctx?: any): Promise<void> {
     const filename = localPath.replace(/\\/g, '/').split('/').pop() || localPath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: localPath, dstPath: remotePath } : {};
+    xferLog(`upload start panelId=${panelId} local=${localPath} remote=${remotePath}`);
     // 0바이트 파일은 sftp.open/close 사용
     try {
       const localStat = fs.statSync(localPath);
       if (localStat.size === 0) {
         const sftp0 = await this.getDedicatedSftp(panelId);
         await new Promise<void>((res, rej) => { sftp0.open(remotePath, 'w', (err: any, handle: any) => { if (err) return rej(err); sftp0.close(handle, (e: any) => e ? rej(e) : res()); }); });
+        xferLog(`upload done (0-byte) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) });
         return;
       }
     } catch { /* stat 실패하면 일반 업로드 시도 */ }
     // Worker thread 사용
     let worker: Worker | null = null;
-    try { worker = await this.getOrCreateSftpWorker(panelId); } catch { /* fallback */ }
+    try { worker = await this.getOrCreateSftpWorker(panelId); } catch (e: any) { xferLog(`upload: worker unavailable (${e?.message || e}) — falling back`); }
     if (worker) {
       const reqId = `ul-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      xferLog(`upload via worker reqId=${reqId}`);
       return new Promise((resolve, reject) => {
         let lastProgressEmit = 0;
         this.sftpWorkerReqs.get(panelId)?.set(reqId, {
@@ -2122,14 +2169,22 @@ probe_curl || probe_wget || probe_python
             lastProgressEmit = now;
             this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred: t, total, filename, direction: 'upload', ...extra }) });
           },
-          resolve: () => { this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve(); },
-          reject: (e) => { this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); reject(e); },
+          resolve: () => { xferLog(`upload done (worker) reqId=${reqId}`); this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve(); },
+          reject: (e) => { xferLog(`upload FAILED (worker) reqId=${reqId}: ${e}`); this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); reject(e); },
         });
         worker!.postMessage({ type: 'transfer', id: reqId, action: 'upload', srcPath: localPath, dstPath: remotePath });
       });
     }
     // Fallback
+    xferLog(`upload via dedicated/shared sftp fallback panelId=${panelId}`);
     const sftp = await this.getDedicatedSftp(panelId);
+    xferLog(`upload fallback sftp obtained (proxy=${!!sftp.__isWorkerSftpProxy}) panelId=${panelId}`);
+    if (sftp.__isWorkerSftpProxy) {
+      xferLog(`upload ABORT — fallback sftp is a worker-RPC proxy (stream transfer unsupported) panelId=${panelId}`);
+      const err = new Error('이 세션은 대용량 파일 전송을 지원하지 않는 연결 방식입니다 (worker RPC proxy)');
+      this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) });
+      throw err;
+    }
     return new Promise((resolve, reject) => {
       let lastStepEmit = 0;
       sftp.fastPut(localPath, remotePath, {
@@ -2141,7 +2196,8 @@ probe_curl || probe_wget || probe_python
           this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred, total, filename, direction: 'upload', ...extra }) });
         },
       }, (err: any) => {
-        if (err) { this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); return reject(err); }
+        if (err) { xferLog(`upload FAILED (fallback) panelId=${panelId}: ${err}`); this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); return reject(err); }
+        xferLog(`upload done (fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve();
       });
     });

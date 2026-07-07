@@ -17,9 +17,19 @@ export type CustomWorkspaceLayoutPreset =
   | 'grid4'
   | 'grid6';
 
+export type CustomWorkspaceLastSession = {
+  id: string;
+  sessionId: string;
+  name: string;
+  host?: string;
+  username?: string;
+};
+
 export type CustomWorkspaceSlot = {
   id: string;
   kind: CustomWorkspaceKind | null;
+  // 터미널 슬롯 — 마지막으로 연결했던 세션. 워크스페이스 탭을 새로 열 때 자동 접속에 사용.
+  lastSession?: CustomWorkspaceLastSession;
 };
 
 export type CustomWorkspaceTemplate = {
