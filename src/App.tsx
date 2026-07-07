@@ -1780,6 +1780,29 @@ function App() {
     }, 0);
   };
 
+  const runQuickCmd = (qc: QuickCmd) => {
+    sendBroadcast(broadcastScope, { raw: (qc.cmd.endsWith('\n') ? qc.cmd : qc.cmd + '\n'), label: qc.label });
+    setQuickCmdMenuOpen(false);
+  };
+  // 빠른 명령 메뉴가 떠 있는 동안 숫자키(1~9, 0=10번째)로 바로 실행 — 마우스 클릭 없이 사용.
+  // capture 단계에서 가로채 터미널로 숫자 입력이 새는 것을 막는다.
+  useEffect(() => {
+    if (!quickCmdMenuOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      const n = e.key >= '1' && e.key <= '9' ? Number(e.key) : (e.key === '0' ? 10 : null);
+      if (n == null) return;
+      const qc = quickCmds[n - 1];
+      if (!qc) return;
+      e.preventDefault();
+      e.stopPropagation();
+      runQuickCmd(qc);
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickCmdMenuOpen, quickCmds]);
+
   const handleThemeChange = (name: string) => {
     setThemeName(name);
     const tid = getActiveTermId();
@@ -2557,6 +2580,8 @@ function App() {
     { id: 'cmd-browser', label: '브라우저 워크스페이스', icon: '🌐', keywords: ['browser', 'web'], run: () => addBrowserTab() },
     { id: 'cmd-compare', label: '파일 비교 워크스페이스', icon: '🔍', keywords: ['compare', 'diff'], run: () => addCompareTab() },
     { id: 'cmd-fileTransfer', label: '파일전송 워크스페이스', icon: '📁', keywords: ['file transfer', 'sftp', 'upload', 'download'], run: () => { void openFileTransferTab(tApp('tabs.fileTransfer')); } },
+    { id: 'cmd-bcastXfer', label: '일괄전송', icon: '📤', keywords: ['broadcast', 'bulk transfer', '일괄 전송', '파일'], run: () => { setBcastXferFiles([]); setBcastXferPath(''); setBcastXferLog([]); setShowBcastFileXfer(true); } },
+    { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
     { id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() },
     { id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() },
@@ -5616,15 +5641,17 @@ function App() {
                       아직 빠른 명령이 없습니다. 아래 "+ 새 명령 추가" 로 만들어 보세요.
                     </div>
                   )}
-                  {quickCmds.map(qc => (
+                  {quickCmds.map((qc, qi) => (
                     <div key={qc.id}
-                      onClick={() => {
-                        sendBroadcast(broadcastScope, { raw: (qc.cmd.endsWith('\n') ? qc.cmd : qc.cmd + '\n'), label: qc.label });
-                        setQuickCmdMenuOpen(false);
-                      }}
+                      onClick={() => runQuickCmd(qc)}
                       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', borderBottom: '1px solid #333' }}
                       onMouseEnter={e => (e.currentTarget.style.background = '#2d2d2d')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      {qi < 10 && (
+                        <span style={{ flexShrink: 0, minWidth: 16, textAlign: 'center', fontSize: 11, fontFamily: 'monospace', color: '#6a9', border: '1px solid #3a5', borderRadius: 3, padding: '0 3px' }}>
+                          {(qi + 1) % 10}
+                        </span>
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, color: '#9cdcfe', fontWeight: 600 }}>{qc.label}</div>
                         <div style={{ fontSize: 10, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{qc.cmd}</div>
