@@ -196,15 +196,16 @@ class SSHBridge extends EventEmitter {
     this.emit('message', { type: 'sftp-complete', panelId: 'transfer', data: JSON.stringify({ filename: '', direction: 'cancelled', transferId, rel: '', rootName: '' }) });
   }
 
-  // 충돌 다이얼로그 뮤텍스 — 한 번에 하나의 다이얼로그만 표시
-  private async acquireConflictLock(transferId: string): Promise<() => void> {
+  // 충돌 다이얼로그 뮤텍스 — 한 번에 하나의 다이얼로그만 표시.
+  // 키는 (같은 일괄전송 batch 를 공유하는) workspaceId, 없으면 transferId.
+  private async acquireConflictLock(lockKey: string): Promise<() => void> {
     // 이전 락이 풀릴 때까지 대기
-    while (this.conflictLock.has(transferId)) {
-      try { await this.conflictLock.get(transferId); } catch {}
+    while (this.conflictLock.has(lockKey)) {
+      try { await this.conflictLock.get(lockKey); } catch {}
     }
     let release!: () => void;
-    this.conflictLock.set(transferId, new Promise<void>(res => { release = res; }));
-    return () => { this.conflictLock.delete(transferId); release(); };
+    this.conflictLock.set(lockKey, new Promise<void>(res => { release = res; }));
+    return () => { this.conflictLock.delete(lockKey); release(); };
   }
 
   private requestConflictDecision(meta: any): Promise<any> {
@@ -2780,8 +2781,14 @@ probe_curl || probe_wget || probe_python
         this.transferDefaults.set(ctx!.transferId, cur);
         if (ctx!.workspaceId) this.setWorkspaceConflictDefault(ctx!.workspaceId, kind, action);
       } else {
-        // 뮤텍스 획득 — 한 번에 다이얼로그 하나만 표시
-        const release = await this.acquireConflictLock(ctx!.transferId);
+        // 뮤텍스 획득 — 한 번에 다이얼로그 하나만 표시.
+        // 일괄전송(bcastXfer)처럼 여러 파일이 동시에 handleTransfer 를 호출하면 각자 새
+        // transferId 를 받으므로, 락을 transferId 로 걸면 서로 다른 파일끼리는 전혀 직렬화가
+        //안 돼 "모두 적용"을 체크해도 이미 동시에 열려있던 다른 파일들의 다이얼로그는 그대로
+        // 뜬다. workspaceId(같은 일괄전송 1회 전체에 공유)가 있으면 그걸로 락을 걸어야
+        // 진짜로 한 번에 하나씩만 물어보고, 나머지는 방금 저장된 "모두 적용" 값을 재사용한다.
+        const lockKey = ctx!.workspaceId || ctx!.transferId;
+        const release = await this.acquireConflictLock(lockKey);
         try {
           // 락 대기 중 다른 워커가 "모두 적용" 결정했을 수 있음 — 재확인
           const def = (this.transferDefaults.get(ctx!.transferId) || {})[kind]

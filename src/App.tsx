@@ -8,6 +8,7 @@ import type { MenuDef } from './components/MenuBar';
 import { Layout } from './components/Layout';
 import IsolatedTabSlot from './components/IsolatedTabSlot';
 import { SearchBar } from './components/SearchBar';
+import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { FileExplorer } from './components/FileExplorer';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
@@ -224,6 +225,7 @@ function App() {
     }
   }, [selectedPanelId, activeTabId]);
   const [showSearch, setShowSearch] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
   // 비밀번호 저장 권유 모달 — 'ssh-fresh-password-success' 이벤트로 트리거됨
   const [savePwdPrompt, setSavePwdPrompt] = useState<{ termId: string; sessionId: string; password: string; hostHint?: string } | null>(null);
   // 비밀번호 입력 모달들 — 동시에 여러 세션 비밀번호 입력 가능 (단일 모달이 다른 세션
@@ -458,7 +460,21 @@ function App() {
             name: String(tpl.name || '커스텀 워크스페이스'),
             layout: tpl.layout,
             slots: Array.isArray(tpl.slots)
-              ? tpl.slots.map((slot: any, idx: number) => ({ id: String(slot?.id || `slot-${idx + 1}`), kind: slot?.kind || null }))
+              ? tpl.slots.map((slot: any, idx: number) => ({
+                  id: String(slot?.id || `slot-${idx + 1}`),
+                  kind: slot?.kind || null,
+                  // 터미널 슬롯의 마지막 연결 세션 — 앱 재시작 후 자동 재접속에 사용. 누락되면
+                  // 저장돼 있어도 매번 새로 물어야 해서 여기서 같이 복원해야 함.
+                  ...(slot?.lastSession && typeof slot.lastSession === 'object' && slot.lastSession.sessionId
+                    ? { lastSession: {
+                        id: String(slot.lastSession.id ?? slot.lastSession.sessionId),
+                        sessionId: String(slot.lastSession.sessionId),
+                        name: String(slot.lastSession.name || ''),
+                        host: slot.lastSession.host ? String(slot.lastSession.host) : undefined,
+                        username: slot.lastSession.username ? String(slot.lastSession.username) : undefined,
+                      } }
+                    : {}),
+                }))
               : [],
             createdAt: Number(tpl.createdAt) || Date.now(),
             updatedAt: Number(tpl.updatedAt) || Date.now(),
@@ -2291,6 +2307,7 @@ function App() {
         return;
       }
       if (matchKeybinding(e, 'find')) { e.preventDefault(); setShowSearch(prev => !prev); return; }
+      if (matchKeybinding(e, 'commandPalette')) { e.preventDefault(); setShowCommandPalette(prev => !prev); return; }
       if (matchKeybinding(e, 'toggleFileTree')) {
         e.preventDefault();
         // 워크스페이스 공유 파일 트리 핀/언핀 토글
@@ -2530,6 +2547,35 @@ function App() {
     setCustomWorkspaces(prev => prev.map(t => t.id === templateId ? { ...t, name: trimmed, updatedAt: Date.now() } : t));
     setTabs(prev => prev.map(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId ? { ...t, title: trimmed, customWorkspaceTemplate: t.customWorkspaceTemplate ? { ...t.customWorkspaceTemplate, name: trimmed, updatedAt: Date.now() } : t.customWorkspaceTemplate } : t));
   }, []);
+  // 커맨드 팔레트(Ctrl+W) 항목 — 메뉴/워크스페이스를 한곳에서 검색해 바로 실행.
+  // useMemo 로 캐싱하면 안 됨 — openCustomWorkspaceTemplate 등이 클로저로 캡처한 tabs 가
+  // 메모 생성 시점에 고정돼버려서, 그 이후 탭을 열고 닫아도 "이미 열려있는 탭"으로 오판(또는
+  // 반대로 이미 닫힌 탭 id 로 setActiveTabId 를 불러 아무 반응 없음)하는 버그가 있었다.
+  // 목록이 20개 안팎으로 작아 매 렌더 새로 만들어도 비용이 무시할 만하다.
+  const commandPaletteCommands: CommandItem[] = [
+    { id: 'cmd-terminal', label: '터미널 워크스페이스', icon: '💻', keywords: ['terminal', '셸', 'shell'], run: () => addTab() },
+    { id: 'cmd-browser', label: '브라우저 워크스페이스', icon: '🌐', keywords: ['browser', 'web'], run: () => addBrowserTab() },
+    { id: 'cmd-compare', label: '파일 비교 워크스페이스', icon: '🔍', keywords: ['compare', 'diff'], run: () => addCompareTab() },
+    { id: 'cmd-fileTransfer', label: '파일전송 워크스페이스', icon: '📁', keywords: ['file transfer', 'sftp', 'upload', 'download'], run: () => { void openFileTransferTab(tApp('tabs.fileTransfer')); } },
+    { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
+    { id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() },
+    { id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() },
+    { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
+    { id: 'cmd-customWorkspaceAdd', label: '커스텀 워크스페이스 추가', icon: '➕', keywords: ['custom workspace', '커스텀'], run: () => openCustomWorkspaceCreator() },
+    ...customWorkspaces.map((ws, i) => ({
+      id: `cmd-customWorkspace-${ws.id}`,
+      label: ws.name,
+      icon: '🧩',
+      hint: `커스텀 워크스페이스 ${i + 1}`,
+      keywords: ['custom workspace', '커스텀', ws.name],
+      run: () => openCustomWorkspaceTemplate(ws.id),
+    })),
+    { id: 'cmd-stickyNote', label: '포스트잇 추가', icon: '📝', keywords: ['sticky note', 'memo', '메모'], run: () => { try { (window as any).api?.stickyNoteCreate?.(); } catch {} } },
+    { id: 'cmd-aiChat', label: 'AI Chat 열기', icon: '🤖', keywords: ['ai', 'chat', 'claude'], run: () => openClaudeChatView('ai') },
+    { id: 'cmd-messenger', label: '메신저 열기', icon: '💬', keywords: ['messenger', '메신저'], run: () => openClaudeChatView('messenger') },
+    { id: 'cmd-worklog', label: '작업일지 열기', icon: '🗓️', keywords: ['worklog', 'todo', '작업일지'], run: () => openClaudeChatView('worklog') },
+    { id: 'cmd-options', label: '설정 열기', icon: '⚙️', keywords: ['settings', 'options', '옵션', '설정'], run: () => setShowOptions(true) },
+  ];
   const deleteCustomWorkspaceTemplate = useCallback((templateId: string) => {
     setCustomWorkspaces(prev => prev.filter(t => t.id !== templateId));
     const removedTabs = tabsRef.current.filter(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
@@ -4923,6 +4969,12 @@ function App() {
             activeTab={activeTab}
             selectedPanelId={selectedPanelId}
             onClose={() => setShowSearch(false)}
+          />
+        )}
+        {showCommandPalette && (
+          <CommandPalette
+            commands={commandPaletteCommands}
+            onClose={() => setShowCommandPalette(false)}
           />
         )}
 
