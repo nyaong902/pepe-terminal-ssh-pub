@@ -302,6 +302,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
   try { mainWindow?.webContents.send('debug:log', `[unhandledRejection] ${(reason as any)?.message || reason}`); } catch {}
 });
+ipcMain.on('debug:log', (_e, msg: any) => {
+  try { mainWindow?.webContents.send('debug:log', String(msg ?? '')); } catch {}
+});
 
 // 커맨드라인에서 전달된 초기 경로 (탐색기 우클릭 → "터미널에서 열기")
 function getStartupCwd(): string | null {
@@ -6141,6 +6144,18 @@ ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; pr
     const proxyBypassRules = typeof args.proxyBypassRules === 'string' ? args.proxyBypassRules : 'localhost,127.0.0.1,::1';
     await session.setProxy({ mode: 'fixed_servers', proxyRules: args.proxyRules, proxyBypassRules });
     try { await session.closeAllConnections?.(); } catch {}
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('browser:resize-guest', async (_e, args: { webContentsId: number; width: number; height: number }) => {
+  try {
+    const wc: any = webContents.fromId(args.webContentsId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    const width = Math.max(1, Math.floor(Number(args?.width || 0)));
+    const height = Math.max(1, Math.floor(Number(args?.height || 0)));
+    wc.setSize?.({ normal: { width, height } });
     return { success: true };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };

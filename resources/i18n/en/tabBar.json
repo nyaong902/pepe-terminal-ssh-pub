@@ -10,6 +10,8 @@
   "fileTransferTab": "📁 File transfer",
   "workspaceN": "Workspace {{n}}",
   "workspace": "Workspace",
+  "customWorkspace": "Custom workspace",
+  "customWorkspaceAdd": "Add",
   "shellSelect": "Select shell",
   "scrollPrev": "Previous",
   "scrollNext": "Next",

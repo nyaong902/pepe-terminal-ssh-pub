@@ -283,6 +283,7 @@ contextBridge.exposeInMainWorld('api', {
   getDetachedInit: () => ipcRenderer.invoke('window:get-detached-init'),
   getConnectedPanels: () => ipcRenderer.invoke('ssh:connected-panels'),
   setWebviewProxy: (args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => ipcRenderer.invoke('browser:set-proxy', args),
+  resizeBrowserGuest: (args: { webContentsId: number; width: number; height: number }) => ipcRenderer.invoke('browser:resize-guest', args),
   agentIsRunning: (args: { sessionId?: string; requestId?: string }) => ipcRenderer.invoke('agent:is-running', args),
   getCursorPoint: () => ipcRenderer.invoke('window:cursor-point'),
   getWindowBounds: () => ipcRenderer.invoke('window:get-bounds'),
@@ -296,6 +297,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('debug:log', listener);
     return () => ipcRenderer.removeListener('debug:log', listener);
   },
+  debugLog: (msg: string) => ipcRenderer.send('debug:log', msg),
 
   // SSH control
   resetSSHState: (panelId: string) => ipcRenderer.invoke('ssh:reset-state', panelId),

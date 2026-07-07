@@ -4,7 +4,9 @@
   "tabs": {
     "terminal": "Terminal",
     "session": "Sessions",
+    "workspace": "Workspace",
     "mcp": "MCP",
+    "debug": "Debug",
     "keybindings": "Keybindings"
   },
   "clipboard": {
@@ -48,6 +50,14 @@
     "sshDesc": "The CLI reads remote files directly over SSH using the current pepe_ssh MCP tools.",
     "localTitle": "2. Local mirror MCP",
     "localDesc": "Remote attachments are copied locally first, then the CLI reads them through a local filesystem MCP server."
+  },
+  "debug": {
+    "heading": "Debug logs",
+    "desc": "Controls visibility of the runtime log panel. When ON, the log window appears in the bottom-right. When OFF, it is hidden.",
+    "on": "ON",
+    "off": "OFF",
+    "visible": "The log window is visible",
+    "hidden": "The log window is hidden"
   },
   "aiAgent": {
     "heading": "AI Agent",
@@ -100,5 +110,10 @@
   "actions": {
     "cancel": "Cancel",
     "save": "Save"
+  },
+  "workspace": {
+    "prepare": "Preparing",
+    "placeholder": "Only the custom workspace menu has been added for now.",
+    "empty": "No custom workspaces are registered."
   }
 }
