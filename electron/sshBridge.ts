@@ -405,16 +405,32 @@ class SSHBridge extends EventEmitter {
     };
 
     const connProxy = new EventEmitter() as any;
+    connProxy.__isWorkerConnProxy = true;
     connProxy.end = () => { try { worker.postMessage({ type: 'disconnect' }); } catch {} };
-    connProxy.exec = (command: string, cb: (err: any, stream: any) => void) => {
+    connProxy.exec = (command: string, optionsOrCb: any, maybeCb?: (err: any, stream: any) => void) => {
+      // handleExec 는 conn.exec(command, {pty:false}, cb) 처럼 3-인자(ssh2 Client 시그니처)로
+      // 호출한다 — 원래 이 프록시는 (command, cb) 2-인자만 받아, options 객체가 cb 자리에
+      // 잘못 들어가 "cb is not a function" 으로 죽던 버그가 있었다. 인자 개수에 맞춰 받는다.
+      const cb: (err: any, stream: any) => void = typeof optionsOrCb === 'function' ? optionsOrCb : (maybeCb as any);
       const reqId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const execStream = new EventEmitter() as any;
+      // handleExec 의 _handleExecInner 는 real ssh2 ChannelStream 처럼 stream.stderr.on(...) 를
+      // 무조건 호출한다 — 이 프록시 스트림엔 .stderr 가 없어서 "Cannot read properties of
+      // undefined (reading 'on')" 으로 콜백 안에서 죽었고, 그 에러가 mcp-control 응답의 id:null
+      // 버그와 겹쳐 클라이언트에 전달도 안 되고 조용히 타임아웃날 때까지 멈춰있던 원인이었다.
+      execStream.stderr = new EventEmitter();
       const reqs = this.terminalWorkerExecReqs.get(panelId);
       reqs?.set(reqId, {
         resolve: (out: string) => { execStream.emit('data', Buffer.from(out, 'utf8')); execStream.emit('close'); },
         reject: (e: Error) => execStream.emit('error', e),
       });
-      cb(null, execStream);
+      try {
+        cb(null, execStream);
+      } catch (e: any) {
+        xferLog(`connProxy.exec 콜백 실행 중 오류 panelId=${panelId}: ${e?.message || e}`);
+        reqs?.delete(reqId);
+        return;
+      }
       worker.postMessage({ type: 'exec', reqId, command });
     };
     connProxy.sftp = (cb: (err: any, sftp: any) => void) => {
@@ -3193,15 +3209,36 @@ probe_curl || probe_wget || probe_python
     const commandToSend: string | Buffer = useIconv ? commandBuf : command;
 
     return new Promise((resolve, reject) => {
-      const to = setTimeout(() => reject(new Error('exec timeout')), timeoutMs);
+      let liveStream: any = null;
+      // 타임아웃 시 우리 쪽에서 기다리기만 포기하고 원격 프로세스는 그대로 살려두면(예: 큰
+      // ClearCase VOB 를 훑는 find/grep), 이후 재시도가 쌓일 때마다 원격에 겹치는 무거운
+      // 프로세스가 계속 늘어나 점점 더 느려지다가 결국 매번 타임아웃나는 악순환이 생긴다
+      // ("아까는 되다가 갑자기 안 됨" 증상). 채널을 닫아 원격 프로세스도 같이 끝낸다.
+      let channelOpened = false;
+      const to = setTimeout(() => {
+        xferLog(`exec timeout panelId=${panelId} channelOpened=${channelOpened} isProxy=${!!conn.__isWorkerConnProxy} cmd="${command.slice(0, 120)}" — 원격 프로세스 종료 시도`);
+        try { liveStream?.signal?.('KILL'); } catch {}
+        try { liveStream?.close?.(); } catch {}
+        reject(new Error('exec timeout'));
+      }, timeoutMs);
+      xferLog(`exec channel-open 요청 panelId=${panelId} isProxy=${!!conn.__isWorkerConnProxy} cmd="${command.slice(0, 120)}"`);
       conn.exec(commandToSend as any, { pty: false }, (err: any, stream: any) => {
-        if (err) { clearTimeout(to); return reject(err); }
+        channelOpened = true;
+        if (err) { xferLog(`exec channel-open 실패 panelId=${panelId}: ${err?.message || err}`); clearTimeout(to); return reject(err); }
+        xferLog(`exec channel opened panelId=${panelId}`);
+        liveStream = stream;
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
         let exitCode: number | null = null;
         stream.on('data', (data: Buffer) => { stdoutChunks.push(data); });
         stream.stderr.on('data', (data: Buffer) => { stderrChunks.push(data); });
         stream.on('exit', (code: number) => { exitCode = code; });
+        // pty 없는(비대화형) exec 채널은 원격 셸이 접속 시 "계속하려면 Enter" 같은 배너/확인
+        // 프롬프트로 stdin 을 기다리는 서버에서 명령이 시작도 못 하고 영원히 멈춘다 — 실제
+        // 터미널(pty 있음)에서는 같은 명령이 바로 되는데 MCP exec 에서만 매번 타임아웃나는
+        // 증상으로 확인됨. 채널을 열자마자 개행 1개를 보내 그런 프롬프트를 통과시키고, 우리
+        // 명령은 stdin 을 쓰지 않으므로 곧바로 EOF 로 닫아 정상적인 명령엔 영향이 없게 한다.
+        try { stream.write('\n'); stream.end(); } catch {}
         stream.on('close', () => {
           clearTimeout(to);
           const outBuf = Buffer.concat(stdoutChunks);

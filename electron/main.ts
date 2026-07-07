@@ -7514,8 +7514,15 @@ const startMcpControl = async (): Promise<void> => {
           buf = buf.slice(idx + 1);
           if (!line.trim()) continue;
           (async () => {
+            // 실패 시 에러 응답의 id 매칭용 — try 안에서 req 파싱 자체가 실패하면 null 유지(그
+            // 경우 클라이언트도 이 요청의 id 를 모르므로 매칭 불가라 상관없음). 파싱 이후
+            // 단계(handleExec 등)에서 던지면 반드시 원래 req.id 를 써야 한다 — 이전엔 catch 블록이
+            // 항상 id:null 로 응답해서, mcpSshServer.cjs 의 pendingById.get(id) 매칭에 실패해
+            // 에러가 클라이언트에 전혀 전달되지 못하고 그냥 영원히 대기(=타임아웃)하는 버그가 있었다.
+            let reqId: any = null;
             try {
               const req = JSON.parse(line);
+              reqId = req.id;
               if (req.token !== mcpControlToken) {
                 sock.write(JSON.stringify({ id: req.id, error: 'invalid token' }) + '\n');
                 return;
@@ -7549,7 +7556,8 @@ const startMcpControl = async (): Promise<void> => {
                 sock.write(JSON.stringify({ id: req.id, error: 'unknown op' }) + '\n');
               }
             } catch (err: any) {
-              try { sock.write(JSON.stringify({ id: null, error: String(err) }) + '\n'); } catch {}
+              xferLog(`mcp-control op 처리 실패 reqId=${reqId}: ${err?.message || err}`);
+              try { sock.write(JSON.stringify({ id: reqId, error: String(err) }) + '\n'); } catch {}
             }
           })();
         }
