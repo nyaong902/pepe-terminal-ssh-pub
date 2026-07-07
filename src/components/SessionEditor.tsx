@@ -94,8 +94,8 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
   const [scrollback, setScrollback] = useState(session?.scrollback ?? 0);
   const [icon, setIcon] = useState(session?.icon ?? '🖥️');
   const [initialPath, setInitialPath] = useState(session?.initialPath ?? '');
-  const [fileTreeEnabled, setFileTreeEnabled] = useState<boolean>(session?.fileTreeEnabled ?? false);
-  const [autoTrackPwd, setAutoTrackPwd] = useState<boolean>(!!session?.autoTrackPwd);
+  const [fileTreeEnabled, setFileTreeEnabled] = useState<boolean>(session?.fileTreeEnabled ?? true);
+  const [autoTrackPwd, setAutoTrackPwd] = useState<boolean>(session?.autoTrackPwd ?? true);
   type KeySeqMode = 'vt220' | 'ascii127' | 'backspace';
   const [backspaceKeyMode, setBackspaceKeyMode] = useState<KeySeqMode>((session?.backspaceKeyMode as KeySeqMode) || 'backspace');
   const [deleteKeyMode, setDeleteKeyMode] = useState<KeySeqMode>((session?.deleteKeyMode as KeySeqMode) || 'vt220');
@@ -160,8 +160,8 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     setScrollback(session?.scrollback ?? 0);
     setIcon(session?.icon ?? '🖥️');
     setInitialPath(session?.initialPath ?? '');
-    setFileTreeEnabled(session?.fileTreeEnabled ?? false);
-    setAutoTrackPwd(!!session?.autoTrackPwd);
+    setFileTreeEnabled(session?.fileTreeEnabled ?? true);
+    setAutoTrackPwd(session?.autoTrackPwd ?? true);
     setBackspaceKeyMode((session?.backspaceKeyMode as KeySeqMode) || 'ascii127');
     setDeleteKeyMode((session?.deleteKeyMode as KeySeqMode) || 'vt220');
     setLogPath(session?.logPath ?? '');

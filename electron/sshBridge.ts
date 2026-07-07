@@ -29,6 +29,21 @@ import type { LoginScriptRule } from './sessionsStore';
 import { startEmbeddedX11 } from './x11Server';
 import { startBundledX11 } from './x11Bundled';
 
+// sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
+// (구조적 복제 불가능한 함수라서) 같은 이름의 boolean 값으로 치환해 보낸 결과를, 이 아래 수십 곳의
+// 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
+// 그래서 worker 경로(X11 세션 등)든 일반 경로든 소비 코드는 전혀 손댈 필요가 없다.
+function rehydrateSftpAttrs(value: any): any {
+  if (Array.isArray(value)) { value.forEach(rehydrateSftpAttrs); return value; }
+  if (value && typeof value === 'object') {
+    for (const key of Object.keys(value)) rehydrateSftpAttrs(value[key]);
+    if (typeof value.isDirectory === 'boolean') { const b = value.isDirectory; value.isDirectory = () => b; }
+    if (typeof value.isSymbolicLink === 'boolean') { const b = value.isSymbolicLink; value.isSymbolicLink = () => b; }
+    if (typeof value.isFile === 'boolean') { const b = value.isFile; value.isFile = () => b; }
+  }
+  return value;
+}
+
 // 로컬 X 서버 (Windows VcXsrv / X410 등) 로 X11 채널 forward.
 // 표준: TCP localhost:6000+display_num. display 0 가 기본.
 function setupX11Forwarding(conn: any, displayNum = 0, emit?: (msg: string) => void) {
@@ -89,6 +104,14 @@ class SSHBridge extends EventEmitter {
   private scriptRunners: Map<string, ExpectSendRunner> = new Map();
   // X11 서버 측 실패 hint 중복 방지 — panelId 별 1회만.
   private x11HintEmitted: Set<string> = new Set();
+  // 인터랙티브 터미널 채널을 별도 워커로 처리 중인 panelId — 점프호스트/X11/로그인스크립트가
+  // 없는 "단순 연결"만 대상(v1 범위). SSH2 프로토콜 자체의 암호화 해제가 메인 프로세스가 아니라
+  // 이 worker 안에서 일어나서, 세션 여러 개를 동시에 heavy 하게 쓸 때 메인 프로세스가 병목이
+  // 되어 다른 세션/IPC 라우팅까지 버벅이던 문제를 줄인다(실측: 메인 프로세스 self-time 상당 부분이
+  // ssh2 cipher decrypt + pwd 자동추적 정규식 스캔이었음).
+  private terminalWorkers: Map<string, Worker> = new Map();
+  private terminalWorkerExecReqs: Map<string, Map<string, { resolve: (v: string) => void; reject: (e: Error) => void }>> = new Map();
+  private terminalWorkerSftpReqs: Map<string, Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>> = new Map();
 
   /** ssh2 debug 에서 서버가 보내는 X11 관련 흔한 실패 패턴을 잡아 사용자 친화 안내 송출 */
   private maybeEmitX11ServerHint(panelId: string, msg: string) {
@@ -220,6 +243,12 @@ class SSHBridge extends EventEmitter {
     if (this.clients.has(panelId)) return;
     // 세션 정보 저장 (전송 전용 SSH 연결 재생성용)
     this.sessionStore.set(panelId, session);
+    // 점프호스트/로그인스크립트가 없는 단순 연결(X11 은 지원)은 워커로 위임(암호화 해제를
+    // 메인 프로세스 밖으로 빼서 heavy 세션 여러 개 동시 사용 시 메인 프로세스 병목 완화).
+    // 복잡한 케이스(점프/로그인스크립트)는 기존 경로(아래) 그대로 — 기존 동작에 전혀 영향 없음.
+    if (this._normalizeJumps(session).length === 0 && !(session.loginScript && session.loginScript.length > 0)) {
+      return this._handleConnectViaWorker(panelId, session, cols, rows);
+    }
     // 이전 pending 연결이 있으면 먼저 정리 (retry 시 이중 연결 방지)
     const prev = this.pendingConnects.get(panelId);
     if (prev) {
@@ -320,6 +349,166 @@ class SSHBridge extends EventEmitter {
     });
 
     conn.connect(cfg);
+  }
+
+  // 단순 연결(점프/로그인스크립트 없음, X11 은 지원)을 sshTerminalWorker.cjs 로 위임한다.
+  // this.clients 에는 기존과 동일한 모양({conn, stream, encoding})을 저장하되, conn/stream 은
+  // 진짜 ssh2 객체가 아니라 워커로 메시지를 전달하는 얇은 프록시다 — 그래서 execCommand/
+  // getSftp/handleInput/handleResize/handleDisconnect 등 기존 메서드가 전혀 안 바뀌어도 그대로 동작한다.
+  private async _handleConnectViaWorker(panelId: string, session: any, cols?: number, rows?: number) {
+    // X11 로컬 서버 준비는 기존 _openShellOnConn 의 ensureX11Ready 와 동일 로직 — 여러 세션이
+    // 같은 디스플레이 번호를 조율해야 하므로 메인 프로세스에서 그대로 처리하고, 확정된 디스플레이
+    // 번호만 워커에 넘긴다(워커 안에서는 conn.on('x11',...) 채널 포워딩만 하면 됨).
+    let x11Display: number | undefined;
+    if (session.x11Forward) {
+      const requestedX11Display = typeof session.x11Display === 'number' ? session.x11Display : 0;
+      const log = (msg: string) => { console.log(`[x11] ${msg}`); this.emit('message', { type: 'x11-log', panelId, data: msg }); };
+      try {
+        const { usedBundled, displayNum: chosen } = await startBundledX11(requestedX11Display, log);
+        x11Display = chosen;
+        if (!usedBundled) {
+          log('번들/외부 X 서버 미사용 — 내장 X 서버 시작 (제한적 호환)');
+          startEmbeddedX11(x11Display, log);
+        }
+      } catch (e: any) {
+        log(`X11 setup 오류: ${e?.message || e}`);
+      }
+    }
+
+    const workerPath = path.join(__dirname, 'sshTerminalWorker.cjs');
+    let worker: Worker;
+    try { worker = new Worker(workerPath); } catch (e: any) {
+      this.emit('message', { type: 'error', panelId, error: `워커 생성 실패: ${e?.message || e}` });
+      return;
+    }
+    this.terminalWorkers.set(panelId, worker);
+    this.terminalWorkerExecReqs.set(panelId, new Map());
+    this.terminalWorkerSftpReqs.set(panelId, new Map());
+
+    // 기존 conn/stream API 를 흉내내는 프록시 — EventEmitter 기반이라 .on(...) 도 그대로 지원.
+    const streamProxy = new EventEmitter() as any;
+    streamProxy.write = (data: Buffer | string) => {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      worker.postMessage({ type: 'input', dataB64: buf.toString('base64') });
+    };
+    streamProxy.setWindow = (rowsArg: number, colsArg: number) => {
+      worker.postMessage({ type: 'resize', cols: colsArg, rows: rowsArg });
+    };
+
+    const connProxy = new EventEmitter() as any;
+    connProxy.end = () => { try { worker.postMessage({ type: 'disconnect' }); } catch {} };
+    connProxy.exec = (command: string, cb: (err: any, stream: any) => void) => {
+      const reqId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const execStream = new EventEmitter() as any;
+      const reqs = this.terminalWorkerExecReqs.get(panelId);
+      reqs?.set(reqId, {
+        resolve: (out: string) => { execStream.emit('data', Buffer.from(out, 'utf8')); execStream.emit('close'); },
+        reject: (e: Error) => execStream.emit('error', e),
+      });
+      cb(null, execStream);
+      worker.postMessage({ type: 'exec', reqId, command });
+    };
+    connProxy.sftp = (cb: (err: any, sftp: any) => void) => {
+      // 제네릭 SFTP RPC 프록시 — readdir/stat/mkdir/rename/unlink 등 콜백형 메서드만 지원.
+      // createReadStream/createWriteStream 같은 스트림 반환형은 v1 미지원(실제 대용량 전송은
+      // 이미 별도 sftpTransferWorker 경로를 우선 사용하므로 이 경로를 안 탐).
+      const sftpProxy: any = new Proxy({}, {
+        get: (_t, method: string | symbol) => {
+          // 'then'(+ 심볼 프로퍼티) 을 다른 메서드처럼 함수로 반환하면, 이 Proxy 를 resolve() 한
+          // Promise 가 "thenable" 로 오인해 즉시 sftpProxy.then(resolveFn, rejectFn) 을 호출해버린다 —
+          // 그러면 resolveFn(네이티브 함수)이 postMessage args 로 들어가 DataCloneError 로 죽는다.
+          // (실제로 겪은 버그: getSftp() 의 Promise 가 resolve(sftpProxy) 하는 순간 재현됨.)
+          if (method === 'then' || typeof method === 'symbol') return undefined;
+          // 'on'(이벤트 리스너 등록)은 콜백형 RPC 패턴에 안 맞음(제네릭 트랩이 마지막 인자를
+          // "완료 콜백"으로 오인해 엉뚱하게 forward 해버림) — getSftp() 가 이 마커로 이 프록시를
+          // 식별해서 close/end 리스너 등록 자체를 건너뛰게 한다(패널 정리는 다른 경로가 이미 처리).
+          if (method === '__isWorkerSftpProxy') return true;
+          return (...args: any[]) => {
+            const callback = args.pop();
+            const reqId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const reqs = this.terminalWorkerSftpReqs.get(panelId);
+            reqs?.set(reqId, {
+              resolve: (result: any) => callback(null, result),
+              reject: (e: Error) => callback(e),
+            });
+            worker.postMessage({ type: 'sftp-call', reqId, method, args });
+          };
+        },
+      });
+      cb(null, sftpProxy);
+    };
+
+    worker.on('message', (msg: any) => {
+      switch (msg.type) {
+        case 'log':
+          this.emit('message', { type: 'data', panelId, data: `\r\n\x1b[96m${msg.data}\x1b[0m\r\n` });
+          break;
+        case 'log-inline':
+          this.emit('message', { type: 'data', panelId, data: `\x1b[90m${msg.data}\x1b[0m` });
+          break;
+        case 'connected':
+          this.clients.set(panelId, { conn: connProxy, stream: streamProxy, encoding: session?.encoding || 'utf-8' });
+          this.emit('message', { type: 'connected', panelId });
+          break;
+        case 'data':
+          this.emit('message', { type: 'data', panelId, data: msg.data });
+          break;
+        case 'closed':
+          this.clients.delete(panelId);
+          this.emit('message', { type: 'closed', panelId });
+          break;
+        case 'error':
+          this.clients.delete(panelId);
+          this.emit('message', { type: 'error', panelId, error: msg.error });
+          break;
+        case 'auth-prompt':
+          this.emit('message', { type: 'auth-prompt', panelId, prompts: msg.prompts });
+          this.pendingAuth.set(panelId, (responses: string[]) => {
+            worker.postMessage({ type: 'auth-response', responses });
+          });
+          break;
+        case 'pwd':
+          if (this.autoTrackOn.has(panelId)) this._applyTrackedCwd(panelId, msg.data);
+          break;
+        case 'exec-done': {
+          const reqs = this.terminalWorkerExecReqs.get(panelId);
+          reqs?.get(msg.reqId)?.resolve(msg.data);
+          reqs?.delete(msg.reqId);
+          break;
+        }
+        case 'exec-error': {
+          const reqs = this.terminalWorkerExecReqs.get(panelId);
+          reqs?.get(msg.reqId)?.reject(new Error(msg.error));
+          reqs?.delete(msg.reqId);
+          break;
+        }
+        case 'sftp-reply': {
+          const reqs = this.terminalWorkerSftpReqs.get(panelId);
+          const pending = reqs?.get(msg.reqId);
+          if (pending) { if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(rehydrateSftpAttrs(msg.result)); }
+          reqs?.delete(msg.reqId);
+          break;
+        }
+        default:
+          break;
+      }
+    });
+    worker.on('error', (e: any) => {
+      this.clients.delete(panelId);
+      this.emit('message', { type: 'error', panelId, error: String(e?.message || e) });
+    });
+
+    // pwd 자동추적 — 세션 옵션 그대로 반영(기존 handleConnect 경로와 동일 조건). worker 자신도
+    // autoTrack 플래그를 받아야 parsePromptCwd 가 동작한다(안 그러면 pwd 이벤트가 전혀 안 와서
+    // 파일전송이 항상 홈 디렉토리로만 열림 — worker 이관 시 빠졌던 부분).
+    // 필드가 아예 없는(레거시) 세션은 명시적으로 false 로 꺼둔 게 아니므로 기본 켜짐으로 취급.
+    const autoTrack = session.autoTrackPwd !== false && session.fileTreeEnabled !== false;
+    if (autoTrack) {
+      this.autoTrackOn.add(panelId);
+      this.emit('message', { type: 'auto-track', panelId, enabled: true });
+    }
+
+    worker.postMessage({ type: 'connect', session, cols, rows, x11Display, autoTrack });
   }
 
   // transport 연결 위에 TCP 터널 + 새 SSH 핸드셰이크를 1회 수행해서 점프 conn 을 만든다.
@@ -588,8 +777,9 @@ class SSHBridge extends EventEmitter {
       this.clients.set(panelId, { conn, stream, encoding: initialEncoding, primaryConn, transportConns });
 
       // 세션 옵션 autoTrackPwd — fileTreeEnabled 가 켜져 있을 때만 의미가 있어 의존성 강제.
+      // 필드가 아예 없는(레거시) 세션은 명시적으로 false 로 꺼둔 게 아니므로 기본 켜짐으로 취급.
       // 켜져 있으면 즉시 UI 인디케이터 ON + 프롬프트 파싱 활성 (PID 탐지는 백그라운드).
-      if (session.autoTrackPwd && session.fileTreeEnabled) {
+      if (session.autoTrackPwd !== false && session.fileTreeEnabled !== false) {
         this.autoTrackOn.add(panelId);
         // UI 인디케이터 즉시 ON — 프롬프트 파싱은 PID 탐지 없이도 바로 동작하므로 지연 없이 활성 표시
         this.emit('message', { type: 'auto-track', panelId, enabled: true });
@@ -758,6 +948,13 @@ class SSHBridge extends EventEmitter {
   private promptCwdActive: Set<string> = new Set();
   // PWD 자동추적이 켜진 패널 — 꺼지면 /proc 폴링 + 프롬프트 파싱 모두 중지
   private autoTrackOn: Set<string> = new Set();
+  // _detectAndApplyPromptCwd 디바운스 타이머 — heavy tail -F 처럼 데이터가 초당 수십~수백 번
+  // 오는 스트림에서 매 청크마다 4KB 버퍼 전체를 정규식으로 스캔하면(O(버퍼길이) × 호출 빈도) 메인
+  // 프로세스가 막혀서, 이 패널뿐 아니라 동시에 열린 다른 SSH 세션/IPC 라우팅까지 버벅이게 만든다
+  // (실측 CPU 프로파일에서 메인 프로세스 self-time 의 약 25% 를 이 함수가 차지하는 것으로 확인됨).
+  // 프롬프트는 보통 출력이 잠깐 멈추는 시점에 나타나므로, 짧은 조용한 구간(80ms)까지 기다렸다가
+  // 마지막 상태로 한 번만 스캔해도 정확도 손실 없이 스캔 횟수를 크게 줄일 수 있다.
+  private promptCwdDebounce: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // 터미널 출력에서 프롬프트의 cwd(및 ClearCase 뷰태그)를 추출 → /proc 추적이 불가한 환경 보조.
   // 지원 패턴: "(viewtag):/path " (ClearCase) 및 일반 ":/path " / "/path $" / "/path #" 등 프롬프트 말미 경로.
@@ -769,8 +966,14 @@ class SSHBridge extends EventEmitter {
     let buf = (this.promptTail.get(panelId) || '') + clean;
     if (buf.length > 4096) buf = buf.slice(-4096);
     this.promptTail.set(panelId, buf);
-    // emit 은 자동추적이 켜진 경우에만
-    if (this.autoTrackOn.has(panelId)) this._detectAndApplyPromptCwd(panelId);
+    // emit 은 자동추적이 켜진 경우에만 — 그리고 매 청크 즉시가 아니라 디바운스해서 스캔.
+    if (!this.autoTrackOn.has(panelId)) return;
+    const existing = this.promptCwdDebounce.get(panelId);
+    if (existing) clearTimeout(existing);
+    this.promptCwdDebounce.set(panelId, setTimeout(() => {
+      this.promptCwdDebounce.delete(panelId);
+      this._detectAndApplyPromptCwd(panelId);
+    }, 80));
   }
 
   // 현재 promptTail 버퍼 전체에서 "마지막" 프롬프트 매치를 찾아 cwd/뷰태그 적용.
@@ -1078,6 +1281,10 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   setAutoTrack(panelId: string, enabled: boolean): { success: boolean; error?: string } {
     const rec = this.clients.get(panelId);
     if (!rec?.conn) return { success: false, error: 'not connected' };
+    // worker 스레드 경로(X11 세션 등)는 pwd 파싱 자체가 worker 안에서 일어나므로, 거기 자신의
+    // autoTrackOn 플래그도 같이 갱신해야 실제로 켜지고/꺼진다(main 쪽 Set 만 바꾸면 worker 는 모름).
+    const termWorker = this.terminalWorkers.get(panelId);
+    if (termWorker) { try { termWorker.postMessage({ type: 'set-autotrack', enabled }); } catch {} }
     if (enabled) {
       this.autoTrackOn.add(panelId);
       // 재활성화 — 꺼져 있는 동안 쌓인 최신 프롬프트로 cwd 즉시 반영
@@ -1123,6 +1330,14 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
       try { rec.conn.end(); } catch {}
       this.clients.delete(panelId);
     }
+    const termWorker = this.terminalWorkers.get(panelId);
+    if (termWorker) {
+      try { termWorker.postMessage({ type: 'shutdown' }); } catch {}
+      try { termWorker.terminate(); } catch {}
+      this.terminalWorkers.delete(panelId);
+    }
+    this.terminalWorkerExecReqs.delete(panelId);
+    this.terminalWorkerSftpReqs.delete(panelId);
     // 아직 ready 안 된 pending 연결도 정리
     const pending = this.pendingConnects.get(panelId);
     if (pending) {
@@ -1141,6 +1356,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     this.promptTail.delete(panelId);
     this.promptCwdActive.delete(panelId);
     this.autoTrackOn.delete(panelId);
+    { const t = this.promptCwdDebounce.get(panelId); if (t) clearTimeout(t); this.promptCwdDebounce.delete(panelId); }
     this.homeDirs.delete(panelId);
     this.homeFetching.delete(panelId);
     for (const [forwardId, f] of [...this.localForwards.entries()]) {
@@ -1631,8 +1847,13 @@ probe_curl || probe_wget || probe_python
       rec.conn.sftp((err: any, sftp: any) => {
         if (err) return reject(err);
         this.sftpCache.set(panelId, sftp);
-        sftp.on('close', () => this.sftpCache.delete(panelId));
-        sftp.on('end', () => this.sftpCache.delete(panelId));
+        // worker 경로의 제네릭 RPC 프록시는 'on' 도 콜백형 메서드로 오인해 forward 해버리므로
+        // (이벤트 리스너 등록 자체가 안 맞는 패턴) 여기서는 건너뛴다 — 패널 정리는 disconnect
+        // 경로가 이미 sftpCache.delete 를 호출하므로 문제 없음.
+        if (!sftp.__isWorkerSftpProxy) {
+          sftp.on('close', () => this.sftpCache.delete(panelId));
+          sftp.on('end', () => this.sftpCache.delete(panelId));
+        }
         resolve(sftp);
       });
     });
@@ -1931,8 +2152,11 @@ probe_curl || probe_wget || probe_python
         if (err) return reject(err);
         resolve(list.map((item: any) => {
           const attrs = item.attrs;
-          const isDir = attrs.isDirectory();
-          const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : false;
+          // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
+          // 이미 boolean 값으로 치환돼 있음(sshTerminalWorker.cjs 의 sanitizeForClone 참고) — 두
+          // 형태(메서드 or 값) 모두 처리.
+          const isDir = typeof attrs.isDirectory === 'function' ? attrs.isDirectory() : !!attrs.isDirectory;
+          const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : !!attrs.isSymbolicLink;
           // POSIX mode → drwxr-xr-x 형식 문자열
           const m = attrs.mode || 0;
           const typeChar = isLink ? 'l' : isDir ? 'd' : '-';
@@ -2230,7 +2454,8 @@ probe_curl || probe_wget || probe_python
     // 재귀 구현 — 폴더는 내부 파일/하위폴더 먼저 삭제 후 rmdir
     const deleteRecursive = async (p: string): Promise<void> => {
       const stats: any = await new Promise((res, rej) => sftp.stat(p, (e: any, s: any) => e ? rej(e) : res(s)));
-      if (stats.isDirectory()) {
+      const statsIsDir = typeof stats.isDirectory === 'function' ? stats.isDirectory() : !!stats.isDirectory;
+      if (statsIsDir) {
         const entries: any[] = await new Promise((res, rej) => sftp.readdir(p, (e: any, l: any) => e ? rej(e) : res(l)));
         for (const entry of entries) {
           if (entry.filename === '.' || entry.filename === '..') continue;

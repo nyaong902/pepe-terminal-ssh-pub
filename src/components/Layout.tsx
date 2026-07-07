@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { LayoutNode, ContainerNode } from '../utils/layoutUtils';
 import { TerminalPanel, refitAllTerms, setSuppressPtyResize } from './TerminalPanel';
+import IsolatedPanelSlot from './IsolatedPanelSlot';
 
 type CommonHandlers = {
   selectedPanelId?: string | null;
@@ -35,6 +36,10 @@ type CommonHandlers = {
   onMoveSessionToWorkspace?: (fromNodeId: string, termId: string, targetTabId: string) => void;
   // 컨테이너 노드의 자식 분할 비율 변경 알림 — 사용자가 drag 로 조절 시
   onContainerResize?: (containerNodeId: string, sizes: number[]) => void;
+  // 패널 단위 프로세스 격리 — 이 nodeId 가 들어있으면 TerminalPanel 대신 IsolatedPanelSlot 렌더.
+  // 기본은 undefined(격리 없음, 기존 동작 100% 유지). tabId 는 그 격리 뷰가 속한 탭 식별용.
+  isolatedPanelNodeIds?: Set<string>;
+  ownerTabId?: string;
 };
 
 type Props = CommonHandlers & { root: LayoutNode };
@@ -64,6 +69,9 @@ const NodeView: React.FC<NodeProps> = ({ node, ...h }) => {
         <div className={`layout-leaf-inner ${h.selectedPanelId === node.id ? 'selected' : ''}`}
           onDragOver={e => e.preventDefault()} onDrop={handleDrop}
         >
+          {h.isolatedPanelNodeIds?.has(node.id) ? (
+            <IsolatedPanelSlot nodeId={node.id} panel={node.panel} tabId={h.ownerTabId || 'host'} />
+          ) : (
           <TerminalPanel
             nodeId={node.id} panel={node.panel}
             onSplit={h.onSplit} onClose={h.onClose} onSelect={h.onSelectPanel}
@@ -84,6 +92,7 @@ const NodeView: React.FC<NodeProps> = ({ node, ...h }) => {
             currentWorkspaceId={h.currentWorkspaceId}
             onMoveSessionToWorkspace={h.onMoveSessionToWorkspace}
           />
+          )}
         </div>
       </div>
     );
