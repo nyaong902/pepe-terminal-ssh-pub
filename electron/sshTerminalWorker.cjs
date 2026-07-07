@@ -154,6 +154,9 @@ function handleSftpCall(reqId, method, args) {
       parentPort.postMessage({ type: 'sftp-reply', reqId, error: `unsupported sftp method in worker mode: ${method}` });
       return;
     }
+    // postMessage 구조적 복제를 거치며 Buffer 인자(예: writeFile 의 content)가 평범한
+    // Uint8Array 로 바뀐다 — ssh2 내부가 Buffer 전용 동작(slice 등)을 기대하므로 여기서 복원.
+    args = args.map(a => (a instanceof Uint8Array && !Buffer.isBuffer(a)) ? Buffer.from(a) : a);
     try {
       s[method](...args, (cbErr, result) => {
         parentPort.postMessage({ type: 'sftp-reply', reqId, error: cbErr ? String(cbErr) : undefined, result: sanitizeForClone(result) });

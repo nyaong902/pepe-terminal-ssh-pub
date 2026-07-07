@@ -41,6 +41,7 @@ export function xferLog(msg: string) {
 // 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
 // 그래서 worker 경로(X11 세션 등)든 일반 경로든 소비 코드는 전혀 손댈 필요가 없다.
 function rehydrateSftpAttrs(value: any): any {
+  if (Buffer.isBuffer(value)) return value;
   if (Array.isArray(value)) { value.forEach(rehydrateSftpAttrs); return value; }
   if (value && typeof value === 'object') {
     for (const key of Object.keys(value)) rehydrateSftpAttrs(value[key]);
@@ -495,7 +496,19 @@ class SSHBridge extends EventEmitter {
         case 'sftp-reply': {
           const reqs = this.terminalWorkerSftpReqs.get(panelId);
           const pending = reqs?.get(msg.reqId);
-          if (pending) { if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(rehydrateSftpAttrs(msg.result)); }
+          if (pending) {
+            if (msg.error) pending.reject(new Error(msg.error));
+            else {
+              // readFile 결과(Buffer)는 worker_threads postMessage 구조적 복제를 거치면 Buffer
+              // 서브클래스가 유지되지 않고 평범한 Uint8Array 로 도착한다 — 이후 소비 코드가
+              // buf.toString('utf-8') 처럼 Buffer 전용 시그니처로 호출하면 인코딩 인자가 무시되고
+              // "35,105,110,..." 식 숫자 나열이 되어버린다(파일비교 등에서 실제로 겪은 버그).
+              // 여기서 다시 Buffer 로 감싸 이후 어떤 소비 코드든 그대로 동작하게 한다.
+              let result = msg.result;
+              if (result instanceof Uint8Array && !Buffer.isBuffer(result)) result = Buffer.from(result);
+              pending.resolve(rehydrateSftpAttrs(result));
+            }
+          }
           reqs?.delete(msg.reqId);
           break;
         }
