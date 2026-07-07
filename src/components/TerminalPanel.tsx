@@ -11,6 +11,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { SerializeAddon } from 'xterm-addon-serialize';
 import { Unicode11Addon } from 'xterm-addon-unicode11';
+import { WebglAddon } from 'xterm-addon-webgl';
 import { getThemeByName, terminalThemes } from '../utils/terminalThemes';
 import { getTerminalSettings, type MouseButtonAction } from '../utils/terminalSettings';
 import { matchKeybinding, isKeybindingListening } from '../utils/keybindings';
@@ -55,6 +56,49 @@ let currentWordSeparator = localStorage.getItem('terminalWordSeparator') ?? DEFA
 const termFontSizes: Map<string, number> = new Map();
 
 export const termStore: Map<string, { term: Terminal; fit: FitAddon; search: SearchAddon }> = new Map();
+// termId가 이 프로세스에 없으면(=다른 탭/패널 프로세스가 소유) term:call relay 로 넘긴다.
+// App.tsx/TabApp.tsx 는 항상 같은 이름으로 이 함수들을 부르면 되고, 소유 프로세스 판별과
+// IPC 왕복은 함수 내부에서 처리된다 — 호출부(App.tsx) 는 전혀 손댈 필요 없음.
+function relayIfRemote(termId: string, fn: string, args: any[]): boolean {
+  if (termStore.has(termId)) return false;
+  try { (window as any).api?.termCall?.(termId, fn, args); } catch {}
+  return true;
+}
+// 반환값이 실제로 쓰이는 함수(Category C)용 — 원격이면 invoke relay 를 Promise 로 반환하고,
+// 로컬이면 null 을 반환해 호출부가 원래 동기 로직을 그대로 이어가게 한다.
+function invokeIfRemote<T>(termId: string, fn: string, args: any[], fallback: T): Promise<T> | null {
+  if (termStore.has(termId)) return null;
+  try { return ((window as any).api?.termInvoke?.(termId, fn, args) ?? Promise.resolve(fallback)) as Promise<T>; } catch { return Promise.resolve(fallback); }
+}
+// getOrCreateTerm 이 termStore 에 실제로 entry 를 넣는 시점(termStore.set 직후)에 1회성으로
+// 깨워주는 waiter — split 직후 "termStore 에 생길 때까지 30ms 씩 폴링" 하던 App.tsx 코드를
+// 대체한다(같은 프로세스 안에서 React 마운트 타이밍만 기다리면 되는 경우, 폴링 대신 이벤트로).
+const termMountWaiters: Map<string, Array<() => void>> = new Map();
+function notifyTermMounted(termId: string) {
+  const waiters = termMountWaiters.get(termId);
+  if (!waiters) return;
+  termMountWaiters.delete(termId);
+  for (const w of waiters) { try { w(); } catch {} }
+}
+/** termId 가 이 프로세스의 termStore 에 마운트될 때까지 대기(이미 있으면 즉시 resolve).
+ * timeoutMs 안에 안 생기면 그냥 resolve — 호출부는 이후 termStore.get() 이 여전히 없을
+ * 가능성을 감안해 기존처럼 처리(예: connectSSH 가 조용히 아무 것도 안 함). */
+export function waitForTermMount(termId: string, timeoutMs = 600): Promise<void> {
+  if (termStore.has(termId)) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; resolve(); };
+    const list = termMountWaiters.get(termId) || [];
+    list.push(finish);
+    termMountWaiters.set(termId, list);
+    setTimeout(finish, timeoutMs);
+  });
+}
+// 이 프로세스가 어느 탭인지 — host(App.tsx) 는 기본값 'host' 그대로 두고, TabApp.tsx(격리된 탭
+// 프로세스)는 마운트 시 자신의 tabId 로 설정한다. ensureSSHSetup/ensurePtySetup 이 termId 를
+// term:register-term relay 에 등록할 때 이 값을 써야 host 로 잘못 덮어써지지 않는다.
+let currentTabId = 'host';
+export function setCurrentTabId(id: string) { currentTabId = id; }
 // 현재 selectAll 상태인 termId 들 — 스크롤/사용자 입력 시 자동 해제 (disposeTermFully 가 참조하므로 hoist)
 const selectAllActive: Set<string> = new Set();
 // 마지막 PTY/SSH resize 크기 — 변경 없을 때 SIGWINCH 송신 안 하기 위함 (vim W11 경고 회피)
@@ -274,6 +318,9 @@ export function stashXtermDom(termId: string) {
   if (el && el.parentNode && el.parentNode !== getXtermStash()) {
     getXtermStash().appendChild(el);
   }
+  visibleTermIds.delete(termId);
+  try { (window as any).api?.setTermVisibility?.(termId, false); } catch {}
+  scheduleCompaction(termId);
 }
 
 // stash 에서 꺼낸 후 refit 이 안정화된 시점에 호출 — 저장된 논리 라인 위치로 복원.
@@ -297,6 +344,148 @@ function restoreSavedScroll(termId: string) {
       }
     }
   } catch {}
+}
+
+// 현재 화면에 보이는(stash 되지 않은) termId 집합 — 앱 포커스와 무관하게, 패널 안에서 실제로
+// 선택된 세션 탭인지만 따진다. 안 보이는 탭은 sshDataHandlers/ptyDataHandlers 에서 즉시 이
+// termCompactedBuffer 로 데이터를 모으고 실시간 파싱/렌더는 건너뛴다 (탭이 여러 개 열려 있을 때
+// 안 보이는 탭까지 매번 렌더링해서 버벅이는 문제 방지 — 앱 자체 포커스 유무와는 무관, 그건
+// backgroundThrottling:false + 커맨드라인 플래그로 항상 실시간 유지).
+const visibleTermIds: Set<string> = new Set();
+
+// WebGL 렌더러는 타이핑 반응성(커서/글자 렌더)에 확실히 유리하지만, GPU 컨텍스트를 쓰기 때문에
+// 창이 백그라운드로 가면(포커스 상실/최소화) OS/드라이버가 컨텍스트를 드롭하는 경우가 흔하다
+// (Tabby 등 다른 xterm 기반 터미널도 동일 — "The GPU context is often dropped while the app is
+// in the background"). 컨텍스트가 죽은 채로 계속 그리려 하면 버벅임의 원인이 되므로, 컨텍스트
+// 손실 시 addon 을 버리고 xterm 기본 DOM 렌더러로 잠깐 폴백해두고, 창이 다시 포커스를 받거나
+// 이 탭이 다시 보일 때만(visible && focused 상태에서만 새 GPU 컨텍스트 생성 가능) 재부착한다.
+const termWebglPendingRecovery: Set<string> = new Set();
+// 개발용 진단 스위치 — GPU 프로세스(모든 렌더러 공유) 의 WebGL 커맨드 처리가 병목인지 확인하기
+// 위해 임시로 WebGL 자체를 아예 끄고 xterm 기본 DOM 렌더러로 비교 테스트할 때 사용.
+let webglDisabledForTesting = false;
+export function setWebglDisabledForTesting(disabled: boolean) { webglDisabledForTesting = disabled; }
+function attachWebglAddon(termId: string) {
+  if (webglDisabledForTesting) return;
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  const term: any = entry.term;
+  if (term.__webglAddon) return;
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      try { webgl.dispose(); } catch {}
+      term.__webglAddon = null;
+      termWebglPendingRecovery.add(termId);
+    });
+    term.loadAddon(webgl);
+    term.__webglAddon = webgl;
+    termWebglPendingRecovery.delete(termId);
+  } catch {}
+}
+function tryRecoverWebgl(termId: string) {
+  if (!termWebglPendingRecovery.has(termId)) return;
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  const el = (entry.term as any).element as HTMLElement | undefined;
+  // 새 GPU 컨텍스트는 실제로 화면에 보이는 상태에서만 안정적으로 생성 가능 — 그렇지 않으면
+  // 재생성하자마자 또 죽는 경우가 있어 조건을 걸어둔다. 원래는 document.hasFocus() 도 요구했는데,
+  // 격리된 탭/패널 프로세스(WebContentsView)는 OS 포커스를 절대 못 받으므로(항상 false) 그 조건이면
+  // 영원히 복구가 안 됨 — document.hidden(페이지 가시성, Electron 의 setVisible 과 연동)만 체크.
+  if (!el || el.offsetParent === null || document.hidden) return;
+  attachWebglAddon(termId);
+  try {
+    const core = (entry.term as any)._core;
+    core?._renderService?.clear?.();
+    core?._renderService?.handleResize?.(entry.term.cols, entry.term.rows);
+  } catch {}
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', () => {
+    for (const termId of visibleTermIds) tryRecoverWebgl(termId);
+  });
+  // 격리된 탭/패널 프로세스는 'focus' 이벤트가 절대 안 오므로(포커스 자체가 없음), Electron 이
+  // setVisible(true) 할 때 Chromium 이 쏘는 visibilitychange 를 추가 트리거로 사용.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    for (const termId of visibleTermIds) tryRecoverWebgl(termId);
+  });
+}
+
+// 안 보이는 동안 모아둔(또는 60초 이상 안 보여서 압축된) 데이터 — termId → 청크 배열.
+// 문자열을 매번 이어붙이면(+=) V8 이 매번 새 문자열을 통째로 복사해야 해서, heavy tail -f 처럼
+// 자주 append 될 때 큰 문자열 복사가 반복되며 GC 압박 → 버벅임(멈칫)으로 이어진다.
+// 청크를 배열에 push(O(1))만 하고, 실제 하나의 문자열로 합치는 건 flush 시점에 한 번만 한다.
+const termCompactedChunks: Map<string, string[]> = new Map();
+const termCompactedLen: Map<string, number> = new Map();
+const termCompactTimer: Map<string, ReturnType<typeof setTimeout>> = new Map();
+const COMPACT_IDLE_MS = 60_000; // 안 보이는 채로 이 시간 이상 지나면 xterm 버퍼 자체도 비워 메모리 회수
+
+function cancelCompaction(termId: string) {
+  const t = termCompactTimer.get(termId);
+  if (t) { clearTimeout(t); termCompactTimer.delete(termId); }
+}
+
+// 안 보이는 탭이 tail -f 처럼 아주 오래 heavy 출력을 계속 내면 청크가 무한정 쌓일 수 있어서
+// (백그라운드 방치 = 메모리 무한 증가) 총 길이 상한을 두고, 넘으면 오래된 청크부터 버린다 —
+// 어차피 scrollback 한도 때문에 다시 볼 때도 다 안 보일 내용이라 안전. 청크 단위 제거라 O(k).
+const COMPACT_BUFFER_MAX_CHARS = 2_000_000; // 대략 수 MB 수준으로 캡
+// 청크 하나가 너무 크면(예: 60초 idle 압축 시 직렬화된 스크롤백 전체) 복원할 때 xterm.write() 가
+// 그 큰 덩어리를 한 번의 "action" 으로 처리하며 자체 12ms 양보 로직을 건너뛰고 통째로 파싱해
+// 멈칫거림 — 그래서 저장 시점에 미리 작은 조각으로 쪼개 둔다 (main.ts 의 IPC 청크 상한과 동일 취지).
+const COMPACT_CHUNK_MAX_CHARS = 32_768;
+function appendCompactedBuffer(termId: string, data: string) {
+  if (!data) return;
+  const chunks = termCompactedChunks.get(termId) || [];
+  for (let i = 0; i < data.length; i += COMPACT_CHUNK_MAX_CHARS) {
+    chunks.push(data.slice(i, i + COMPACT_CHUNK_MAX_CHARS));
+  }
+  let total = (termCompactedLen.get(termId) || 0) + data.length;
+  while (total > COMPACT_BUFFER_MAX_CHARS && chunks.length > 1) {
+    total -= chunks.shift()!.length;
+  }
+  termCompactedChunks.set(termId, chunks);
+  termCompactedLen.set(termId, total);
+}
+
+function clearCompactedBuffer(termId: string) {
+  termCompactedChunks.delete(termId);
+  termCompactedLen.delete(termId);
+}
+
+function scheduleCompaction(termId: string) {
+  cancelCompaction(termId);
+  const timer = setTimeout(() => {
+    termCompactTimer.delete(termId);
+    if (visibleTermIds.has(termId)) return; // 그 사이 다시 보임
+    const entry = termStore.get(termId);
+    if (!entry) return;
+    try {
+      const scrollback = (entry.term as any).options?.scrollback ?? 5000;
+      // 안 보이는 동안엔 실시간 write 를 건너뛰므로 xterm 버퍼는 stash 시점 상태 그대로 — 그걸
+      // 직렬화한 뒤 reset() 으로 메모리를 회수하고, 그 사이 모아둔(더 최신) 청크들 앞에 끼워넣는다.
+      // 이 시점엔 이미 entry 존재를 확인했으므로(위 termStore.get) 로컬 호출만 발생 — 항상 string.
+      const serialized = serializeTermBuffer(termId, scrollback) as string;
+      (entry.term as any).reset();
+      const already = termCompactedChunks.get(termId) || [];
+      clearCompactedBuffer(termId);
+      appendCompactedBuffer(termId, serialized);
+      for (const chunk of already) appendCompactedBuffer(termId, chunk);
+    } catch {}
+  }, COMPACT_IDLE_MS);
+  termCompactTimer.set(termId, timer);
+}
+
+// 압축된 termId 에 새 출력이 도착하거나 다시 화면에 보이게 되면, 비워둔 버퍼에 저장해둔
+// 내용을 먼저 복원해서 순서를 보존한다 (이후 이어지는 새 데이터가 뒤에 붙도록).
+// 청크 단위로 나눠서 write() — 하나로 합쳐서 한 번에 넘기면 xterm 이 그 거대한 문자열을
+// 자체 12ms 양보 없이 통째로 파싱해 멈칫거린다 (프로파일링으로 확인된 patrern).
+export function flushCompactedBuffer(termId: string) {
+  const chunks = termCompactedChunks.get(termId);
+  if (chunks === undefined) return;
+  clearCompactedBuffer(termId);
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  try { for (const chunk of chunks) entry.term.write(chunk); } catch {}
 }
 
 // xterm 5.3 의 rows 증가 시 grow bug 수동 보정.
@@ -350,6 +539,7 @@ export function applyXtermGrowFix(term: any, prevRows: number) {
 
 // 외부에서 termId 의 fit + resize 강제 — 워크스페이스 전환 후 풀스크린 터미널 크기 보정 등
 export function refitTerm(termId: string) {
+  if (relayIfRemote(termId, 'refitTerm', [])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   try {
@@ -421,6 +611,10 @@ export function toggleTreeVisibleForTerm(_termId: string) {
 const termCurrentPwd: Map<string, string> = new Map();
 const pwdChangeListeners: Map<string, Set<(pwd: string) => void>> = new Map();
 export function getCurrentPwdForTerm(termId: string): string | undefined {
+  if (!termStore.has(termId)) {
+    const cached = termStateCache.get(termId);
+    if (cached && typeof cached.pwd === 'string') return cached.pwd;
+  }
   return termCurrentPwd.get(termId);
 }
 export function subscribePwdChange(termId: string, fn: (pwd: string) => void): () => void {
@@ -434,6 +628,7 @@ export function subscribePwdChange(termId: string, fn: (pwd: string) => void): (
 }
 function notifyPwdChange(termId: string, pwd: string) {
   pwdChangeListeners.get(termId)?.forEach(fn => { try { fn(pwd); } catch {} });
+  try { (window as any).api?.pushTermState?.(termId, { pwd }); } catch {}
 }
 
 const termIMEComposing: Map<string, boolean> = new Map();
@@ -443,6 +638,10 @@ const termJustComposed: Map<string, { text: string; at: number }> = new Map();
 function notifyConnectedChange() { connectedListeners.forEach(fn => fn()); }
 
 export function isTermConnected(termId: string): boolean {
+  if (!termStore.has(termId)) {
+    const cached = termStateCache.get(termId);
+    if (cached && typeof cached.connected === 'boolean') return cached.connected;
+  }
   return globalConnected.has(termId);
 }
 
@@ -451,6 +650,7 @@ export function isTermConnected(termId: string): boolean {
 export function markTermConnected(termId: string) {
   globalConnected.add(termId);
   try { notifyConnectedChange(); } catch {}
+  pushConnectedState(termId);
 }
 
 // 복제→새 창 분리 시 — 원본 화면 버퍼만 표시하고 SSH 연결은 하지 말라는 플래그.
@@ -469,7 +669,9 @@ export function setPendingRestoreBuffer(termId: string, data: string) {
   if (data) pendingRestoreBuffers.set(termId, data);
 }
 // 현재 터미널 화면을 escape 시퀀스 문자열로 직렬화 (scrollback 일부 포함). 없으면 빈 문자열.
-export function serializeTermBuffer(termId: string, scrollback = 1500): string {
+export function serializeTermBuffer(termId: string, scrollback = 1500): string | Promise<string> {
+  const relayed = invokeIfRemote<string>(termId, 'serializeTermBuffer', [scrollback], '');
+  if (relayed) return relayed;
   const entry = termStore.get(termId);
   if (!entry) return '';
   try {
@@ -487,6 +689,8 @@ export function setPendingRestoreStyle(termId: string, style: any) {
   if (style) pendingRestoreStyles.set(termId, style);
 }
 export function getTermStyle(termId: string): any {
+  const relayed = invokeIfRemote<any>(termId, 'getTermStyle', [], null);
+  if (relayed) return relayed;
   const entry = termStore.get(termId);
   if (!entry) return null;
   const o: any = entry.term.options || {};
@@ -931,6 +1135,7 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
     });
     entry = { term, fit, search };
     termStore.set(termId, entry);
+    notifyTermMounted(termId);
     // 분리/재부착 시 원본 스타일(테마/폰트/커서) 먼저 적용 후 화면 버퍼 복원
     applyPendingStyle(termId, term);
     const restore = pendingRestoreBuffers.get(termId);
@@ -1472,6 +1677,7 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
 // 모두 PARTICLE_THEMES + setupParticleMode 로 통합됨 — 이전 구현 제거.
 
 export function applyCursorStyleToTerm(termId: string, style?: 'block' | 'underline' | 'bar' | CustomCursorStyle, blink?: boolean) {
+  if (relayIfRemote(termId, 'applyCursorStyleToTerm', [style, blink])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   if (style) termCursorStyleCache.set(termId, style);
@@ -1574,6 +1780,7 @@ export function applyCursorStyleToTerm(termId: string, style?: 'block' | 'underl
 }
 
 export function applyThemeToTerm(termId: string, themeName: string) {
+  if (relayIfRemote(termId, 'applyThemeToTerm', [themeName])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   termThemeCache.set(termId, themeName);
@@ -1583,6 +1790,7 @@ export function applyThemeToTerm(termId: string, themeName: string) {
 }
 
 export function clearHighlights(termId: string) {
+  if (relayIfRemote(termId, 'clearHighlights', [])) return;
   const container = highlightOverlays.get(termId);
   if (container) container.innerHTML = '';
   const cleanup = highlightListeners.get(termId);
@@ -1646,7 +1854,9 @@ function restoreToAnchor(termId: string) {
   } catch {}
 }
 
-export function searchFromTop(termId: string, query: string, regex = false, caseSensitive = false): boolean {
+export function searchFromTop(termId: string, query: string, regex = false, caseSensitive = false): boolean | Promise<boolean> {
+  const relayed = invokeIfRemote<boolean>(termId, 'searchFromTop', [query, regex, caseSensitive], false);
+  if (relayed) return relayed;
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
@@ -1660,7 +1870,9 @@ export function searchFromTop(termId: string, query: string, regex = false, case
   } catch { return false; }
 }
 
-export function searchInTerm(termId: string, query: string, regex = false, caseSensitive = false): boolean {
+export function searchInTerm(termId: string, query: string, regex = false, caseSensitive = false): boolean | Promise<boolean> {
+  const relayed = invokeIfRemote<boolean>(termId, 'searchInTerm', [query, regex, caseSensitive], false);
+  if (relayed) return relayed;
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
@@ -1672,6 +1884,7 @@ export function searchInTerm(termId: string, query: string, regex = false, caseS
 }
 
 export function searchNextInTerm(termId: string, query: string, regex = false, caseSensitive = false): boolean {
+  if (relayIfRemote(termId, 'searchNextInTerm', [query, regex, caseSensitive])) return false;
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
@@ -1682,6 +1895,7 @@ export function searchNextInTerm(termId: string, query: string, regex = false, c
 }
 
 export function searchPrevInTerm(termId: string, query: string, regex = false, caseSensitive = false): boolean {
+  if (relayIfRemote(termId, 'searchPrevInTerm', [query, regex, caseSensitive])) return false;
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
@@ -1692,6 +1906,7 @@ export function searchPrevInTerm(termId: string, query: string, regex = false, c
 }
 
 export function clearSearchInTerm(termId: string) {
+  if (relayIfRemote(termId, 'clearSearchInTerm', [])) return;
   try {
     clearHighlights(termId);
     const entry = termStore.get(termId);
@@ -1708,6 +1923,13 @@ export function getAllTermIds(): string[] {
 // 호출처: App.tsx releaseTermResources 끝, closeTab/closePanel/handleCloseSession
 export function disposeTermFully(termId: string) {
   if (!termId) return;
+  if (relayIfRemote(termId, 'disposeTermFully', [])) return;
+  // 0) 백그라운드 압축 스케줄/버퍼 정리
+  cancelCompaction(termId);
+  clearCompactedBuffer(termId);
+  visibleTermIds.delete(termId);
+  termWebglPendingRecovery.delete(termId);
+  try { (window as any).api?.setTermVisibility?.(termId, false); } catch {}
   // 1) flame/prism cursor overlay (setInterval) 정리
   try { flameOverlayCleanup.get(termId)?.(); } catch {}
   flameOverlayCleanup.delete(termId);
@@ -1785,6 +2007,7 @@ export function disposeTermFully(termId: string) {
 
 // Ctrl+Shift+B: 현재 보이는 화면은 유지, 안 보이는 스크롤 버퍼만 삭제
 export function clearScrollbackInTerm(termId: string) {
+  if (relayIfRemote(termId, 'clearScrollbackInTerm', [])) return;
   try {
     const entry = termStore.get(termId);
     if (!entry) return;
@@ -1797,6 +2020,7 @@ export function clearScrollbackInTerm(termId: string) {
 
 // Ctrl+Shift+L: 현재 화면만 지우기 (스크롤 버퍼는 유지 — 빈 줄로 밀어냄)
 export function clearScreenInTerm(termId: string) {
+  if (relayIfRemote(termId, 'clearScreenInTerm', [])) return;
   try {
     const entry = termStore.get(termId);
     if (!entry) return;
@@ -1809,6 +2033,7 @@ export function clearScreenInTerm(termId: string) {
 
 // Ctrl+Shift+A: 현재 화면 + 스크롤 버퍼 모두 지우기
 export function clearAllInTerm(termId: string) {
+  if (relayIfRemote(termId, 'clearAllInTerm', [])) return;
   try {
     const entry = termStore.get(termId);
     if (!entry) return;
@@ -1891,13 +2116,92 @@ export function disposeSSHHandlers(termId: string) {
   sshAuthPromptHandlers.delete(termId);
   sshInitialized.delete(termId);
   quickConnectPlaceholderShown.delete(termId);
+  try { window.api?.termUnregisterTerm?.(termId); } catch {}
 }
+
+// ── 탭별 프로세스 분리(Wave Terminal 방식) relay 수신부 ───────────────────────
+// 이 프로세스가 나중에 "탭 프로세스"로 분리되면, host(App.tsx)가 보내는 term:call/
+// term:dispatch-invoke 를 여기서 받아 실제 함수를 실행한다. 지금은 host==이 프로세스라
+// 자기 자신에게 IPC 왕복하는 형태로, relay 프로토콜만 먼저 검증한다(1단계 스캐폴드).
+const termCallWhitelist: Record<string, (...args: any[]) => any> = {
+  focusTerm: (termId: string) => focusTerm(termId),
+  writeToTerm: (termId: string, text: string) => writeToTerm(termId, text),
+  clearScrollbackInTerm: (termId: string) => clearScrollbackInTerm(termId),
+  clearScreenInTerm: (termId: string) => clearScreenInTerm(termId),
+  clearAllInTerm: (termId: string) => clearAllInTerm(termId),
+  disposeTermFully: (termId: string) => disposeTermFully(termId),
+  applyThemeToTerm: (termId: string, themeName: string) => applyThemeToTerm(termId, themeName),
+  applyCursorStyleToTerm: (termId: string, style?: any, blink?: boolean) => applyCursorStyleToTerm(termId, style, blink),
+  selectAllInTerm: (termId: string) => selectAllInTerm(termId),
+  clearHighlights: (termId: string) => clearHighlights(termId),
+  clearSearchInTerm: (termId: string) => clearSearchInTerm(termId),
+  searchNextInTerm: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
+    searchNextInTerm(termId, query, regex, caseSensitive),
+  searchPrevInTerm: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
+    searchPrevInTerm(termId, query, regex, caseSensitive),
+};
+const termInvokeWhitelist: Record<string, (...args: any[]) => any> = {
+  searchInTerm: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
+    searchInTerm(termId, query, regex, caseSensitive),
+  searchFromTop: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
+    searchFromTop(termId, query, regex, caseSensitive),
+  getSelectionFromTerm: (termId: string) => getSelectionFromTerm(termId),
+  serializeTermBuffer: (termId: string, scrollback?: number) => serializeTermBuffer(termId, scrollback),
+  getTermStyle: (termId: string) => getTermStyle(termId),
+};
+let termRelayDispatchersInstalled = false;
+function installTermRelayDispatchers() {
+  if (termRelayDispatchersInstalled) return;
+  termRelayDispatchersInstalled = true;
+  window.api?.onTermDispatch?.(({ termId, fn, args }: { termId: string; fn: string; args: any[] }) => {
+    try { termCallWhitelist[fn]?.(termId, ...(args || [])); } catch {}
+  });
+  window.api?.onTermDispatchInvoke?.(({ termId, fn, args, requestId }: { termId: string; fn: string; args: any[]; requestId: string }) => {
+    let result: any;
+    try { result = termInvokeWhitelist[fn]?.(termId, ...(args || [])); } catch { result = undefined; }
+    window.api?.termInvokeReply?.(requestId, result);
+  });
+}
+/** connected/connecting/isPty 상태가 바뀔 때마다 host 의 termStateCache 로 push (폴링 대체) —
+ * notifyConnectedChange() 호출부마다 같이 불러준다. 로컬(host) 프로세스에서 호출돼도 해가 없음
+ * (자기 자신에게 IPC 왕복 — termStateCache 읽기는 원격 termId 에만 그 값을 쓴다). */
+function pushConnectedState(termId: string) {
+  try {
+    window.api?.pushTermState?.(termId, {
+      connected: globalConnected.has(termId),
+      connecting: sshConnecting.has(termId),
+      isPty: ptyConnected.has(termId),
+    });
+  } catch {}
+}
+
+// host 쪽에서 받는 termStateCache — 탭 프로세스가 push 한 상태를 동기 조회 가능하게 캐싱.
+// (지금은 host==탭 프로세스라 자기 자신이 보낸 걸 자기가 받는 형태로 relay 자체를 검증한다.)
+export const termStateCache: Map<string, any> = new Map();
+let termStateCacheSubscribed = false;
+function ensureTermStateCacheSubscribed() {
+  if (termStateCacheSubscribed) return;
+  termStateCacheSubscribed = true;
+  window.api?.onTermStateUpdate?.(({ termId, patch }: { termId: string; patch: any }) => {
+    const prev = termStateCache.get(termId) || {};
+    termStateCache.set(termId, { ...prev, ...patch });
+    // 원격(다른 탭/패널 프로세스) 소유 termId 라도 subscribePwdChange 로 구독 중인 UI(예: 경로
+    // breadcrumb)가 있으면 갱신 — 로컬 notifyPwdChange 경로는 원격 프로세스에서 도니 여기서 대신.
+    if (typeof patch?.pwd === 'string' && !termStore.has(termId)) {
+      pwdChangeListeners.get(termId)?.forEach(fn => { try { fn(patch.pwd); } catch {} });
+    }
+    if (typeof patch?.connected === 'boolean' && !termStore.has(termId)) notifyConnectedChange();
+  });
+}
+ensureTermStateCacheSubscribed();
 
 /** termId별로 SSH 리스너를 한 번만 설정 (컴포넌트 lifecycle 밖) */
 function ensureSSHSetup(termId: string) {
   if (sshInitialized.has(termId)) return;
   sshInitialized.add(termId);
   installGlobalSshDispatchers();
+  installTermRelayDispatchers();
+  try { window.api?.termRegisterTerm?.(termId, currentTabId); } catch {}
 
   const { term, fit } = getOrCreateTerm(termId);
 
@@ -1936,6 +2240,7 @@ function ensureSSHSetup(termId: string) {
     clearInitialConnectWatchdog(termId);
     reconnectUserCancelled.delete(termId);
     notifyConnectedChange();
+    pushConnectedState(termId);
     // 연결 직후 fit — 초기 1회는 force=true 로 dedup 우회 (PTY 초기 사이즈가
     // 기본 80x24 로 잡힌 케이스 보정. 이전 [r artifact 는 FitAddon 패치로 별도 차단됨)
     setTimeout(() => {
@@ -1949,6 +2254,15 @@ function ensureSSHSetup(termId: string) {
 
   sshDataHandlers.set(termId, (p: any) => {
     try {
+      // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면(다른 세션
+      // 탭이 활성 상태) 굳이 실시간으로 파싱/렌더할 필요가 없다 — 문자열로만 모아두고 그 탭을
+      // 다시 볼 때 한 번에 반영. 앱 자체의 포커스 유무와는 무관 (그건 항상 실시간 유지).
+      if (!visibleTermIds.has(termId)) {
+        appendCompactedBuffer(termId, p.data || '');
+        return;
+      }
+      // 백그라운드 압축 상태에서 새 출력이 왔으면, 순서 보존을 위해 압축 해제(복원)부터.
+      flushCompactedBuffer(termId);
       // 사용자가 스크롤 위로 올렸을 때 새 출력으로 scrollback 증가하면서 viewport 가 따라 움직이지
       // 않도록 ydisp 를 안정화. write 전후로 끝에서부터의 라인 offset 을 보존.
       const core = (term as any)._core;
@@ -1983,6 +2297,7 @@ function ensureSSHSetup(termId: string) {
     globalConnected.delete(termId);
     sshConnecting.delete(termId);
     notifyConnectedChange();
+    pushConnectedState(termId);
     if (recordingState.has(termId)) {
       recordMark(termId, `disconnected at ${new Date().toLocaleString()}`);
     }
@@ -2001,6 +2316,7 @@ function ensureSSHSetup(termId: string) {
     sshConnecting.delete(termId);
     globalConnected.delete(termId);
     notifyConnectedChange();
+    pushConnectedState(termId);
     const errMsg = String(p.error || '');
     // 인증 실패 (캐시된/방금 입력한 비밀번호가 틀림) — 자동 재시도 대신 비밀번호 다시 묻기
     const isAuthFailure = /authentication\s+methods\s+failed|all\s+configured\s+authentication|permission\s+denied/i.test(errMsg);
@@ -2219,11 +2535,20 @@ function ensurePtySetup(termId: string) {
   if (ptyInitialized.has(termId)) return;
   ptyInitialized.add(termId);
   installGlobalPtyDispatchers();
+  try { window.api?.termRegisterTerm?.(termId, currentTabId); } catch {}
 
   const { term } = getOrCreateTerm(termId);
 
   ptyDataHandlers.set(termId, (p: any) => {
     try {
+      // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면 실시간
+      // 파싱/렌더 없이 문자열로만 모아두고 다시 볼 때 반영.
+      if (!visibleTermIds.has(termId)) {
+        appendCompactedBuffer(termId, p.data || '');
+        return;
+      }
+      // 백그라운드 압축 상태에서 새 출력이 왔으면, 순서 보존을 위해 압축 해제(복원)부터.
+      flushCompactedBuffer(termId);
       const data: string = p.data;
       // ConPTY drop window: PTY resize 직후 오는 전체화면 repaint 를 억제해 커서 위치 깨짐 방지.
       // ConPTY/PSReadLine 이 보내는 full-screen repaint 시그니처 패턴들:
@@ -2273,6 +2598,7 @@ function ensurePtySetup(termId: string) {
   ptyExitHandlers.set(termId, () => {
     ptyConnected.delete(termId);
     notifyConnectedChange();
+    pushConnectedState(termId);
     // SSH takeover 등으로 suppress 표식이 있으면 메시지 생략
     if (ptyExitSuppressed.has(termId)) {
       ptyExitSuppressed.delete(termId);
@@ -2286,6 +2612,7 @@ function ensurePtySetup(termId: string) {
 let _skipAutoCopyOnSelect = false;
 export function isSelectAllSkippingAutoCopy(): boolean { return _skipAutoCopyOnSelect; }
 export function selectAllInTerm(termId: string) {
+  if (relayIfRemote(termId, 'selectAllInTerm', [])) return;
   try {
     _skipAutoCopyOnSelect = true;
     const entry = termStore.get(termId);
@@ -2382,7 +2709,9 @@ export function selectAllInTerm(termId: string) {
     _skipAutoCopyOnSelect = false;
   }
 }
-export function getSelectionFromTerm(termId: string): string {
+export function getSelectionFromTerm(termId: string): string | Promise<string> {
+  const relayed = invokeIfRemote<string>(termId, 'getSelectionFromTerm', [], '');
+  if (relayed) return relayed;
   try {
     const entry = termStore.get(termId);
     if (!entry) return '';
@@ -2407,12 +2736,20 @@ export function pasteToTerm(termId: string, text: string) {
 }
 
 export function isTermPty(termId: string): boolean {
+  if (!termStore.has(termId)) {
+    const cached = termStateCache.get(termId);
+    if (cached && typeof cached.isPty === 'boolean') return cached.isPty;
+  }
   return ptyConnected.has(termId);
 }
 
 // SSH 연결 시작 추적
 const sshConnecting = new Set<string>();
 export function isTermConnecting(termId: string): boolean {
+  if (!termStore.has(termId)) {
+    const cached = termStateCache.get(termId);
+    if (cached && typeof cached.connecting === 'boolean') return cached.connecting;
+  }
   // 비밀번호 프롬프트 대기 중 / 빠른연결 대기 중도 "연결 중" 으로 간주 — 다른 세션이
   // 이 termId 를 재사용해버리면 사용자가 입력 중이던 흐름이 끊김.
   return sshConnecting.has(termId) || activePasswordPrompt.has(termId) || quickConnectPending.has(termId);
@@ -2791,12 +3128,14 @@ const MultiPasteModal: React.FC<MultiPasteModalProps> = ({ text, onChange, onCan
 
 // 외부에서 특정 termId 의 xterm 에 문자열을 직접 write — 시스템 안내 메시지 출력용
 export function writeToTerm(termId: string, text: string) {
+  if (relayIfRemote(termId, 'writeToTerm', [text])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   try { entry.term.write(text); } catch {}
 }
 
 export function focusTerm(termId: string) {
+  if (relayIfRemote(termId, 'focusTerm', [])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   try {
@@ -2944,6 +3283,11 @@ export const TerminalPanel: React.FC<Props> = ({
     // 이미 같은 터미널이 마운트되어 있으면 다시 그리지 않음
     if (mountedTermRef.current === activeTermId) return;
     mountedTermRef.current = activeTermId;
+    visibleTermIds.add(activeTermId);
+    try { (window as any).api?.setTermVisibility?.(activeTermId, true); } catch {}
+    cancelCompaction(activeTermId);
+    // 백그라운드로 오래 있어서 버퍼가 압축(직렬화 후 비움)됐었다면 복귀 시 먼저 복원.
+    flushCompactedBuffer(activeTermId);
 
     const { term, fit } = getOrCreateTerm(activeTermId);
 
@@ -2958,6 +3302,7 @@ export const TerminalPanel: React.FC<Props> = ({
       requestAnimationFrame(() => {
         refitTerm(activeTermId);
         restoreSavedScroll(activeTermId);
+        tryRecoverWebgl(activeTermId); // 백그라운드에 있는 동안 GPU 컨텍스트가 죽었을 수 있음
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 50);
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 200);
         setTimeout(() => { restoreSavedScroll(activeTermId); termSavedScroll.delete(activeTermId); }, 350);
@@ -2965,6 +3310,7 @@ export const TerminalPanel: React.FC<Props> = ({
     } else {
       containerRef.current.innerHTML = '';
       term.open(containerRef.current);
+      attachWebglAddon(activeTermId);
     }
     applyTermOpacity(activeTermId, containerRef.current);
 
@@ -3079,6 +3425,7 @@ export const TerminalPanel: React.FC<Props> = ({
           if (cwd) { try { (window as any).api?.clearStartupCwd?.(); } catch {} }
           ptyConnected.add(activeTermId);
           notifyConnectedChange();
+          pushConnectedState(activeTermId);
           setTimeout(() => {
             try {
               fit.fit();

@@ -1,10 +1,11 @@
 // electron/main.ts
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
 // dev 실행 시에만 [claude]/[codex]/[mcp-control] 등 디버그 로그 출력. console.error/warn 은 유지.
 if (app.isPackaged) { console.log = () => {}; }
 
+if (process.env.PEPE_CDP_DEBUG) app.commandLine.appendSwitch('remote-debugging-port', '9333');
 // 백그라운드/blur 상태에서도 렌더러가 정상 동작하도록
 // (Windows 에서 자식 프로세스 spawn 이 잠깐 foreground 를 뺏어가도 input/caret 영향 최소화)
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -15,7 +16,9 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 // (3개 HWND 모두 IDropTarget COM 등록 성공해도 OS 가 GPU 프로세스 합성 윈도우로 라우팅)
 // disable-direct-composition 은 캐시 에러만 만들고 효과 없어 적용 안 함.
 // 사용자는 Ctrl+V (paste) 또는 📄+ 버튼(파일 픽커) 으로 첨부 가능.
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// IntensiveWakeUpThrottling: Chromium 이 5분 넘게 안 보이는 프레임의 setTimeout/setInterval 을
+// 1분에 1번으로 강하게 몰아버리는 기능 — 백그라운드에서도 SSH 로그가 실시간으로 나와야 하므로 끔.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,IntensiveWakeUpThrottling');
 // ── 다중 인스턴스 캐시 충돌 제거 ────────────────────────────────────────────
 // 여러 PePe 인스턴스를 동시에 띄우면 같은 userData 의 캐시 디렉토리를 두고 충돌해
 // 'Unable to move the cache (0x5) / Gpu Cache Creation failed / Unable to create cache' 가
@@ -75,9 +78,213 @@ const detachedWindows = new Set<BrowserWindow>();
 // 터미널/SFTP 데이터를 메인 + 모든 분리 창에 전달한다. 수신 측 렌더러는 자기 termId 만 처리하므로
 // (모르는 panelId 는 무시) 전체 broadcast 해도 안전하다. 창이 하나뿐이면 기존과 동일하게 동작.
 function termBroadcast(channel: string, payload: any) {
+  // payload.panelId(=termId) 가 격리된 탭 프로세스에 등록돼 있으면 그 탭에만 보낸다 —
+  // 그래야 백그라운드 탭의 대량 출력이 host/다른 탭 프로세스를 깨우지 않는다(오늘 세션에서
+  // 측정한 실제 병목: 여러 패널이 같은 프로세스에서 동시에 write() 를 하는 것 자체).
+  const panelId = payload?.panelId;
+  const tabId = panelId ? termIdToTabId.get(panelId) : undefined;
+  if (tabId && tabId !== 'host') {
+    try { tabWebContentsMap.get(tabId)?.send(channel, payload); } catch {}
+    return;
+  }
   try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); } catch {}
   for (const w of detachedWindows) { try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch {} }
 }
+// tail -f 같은 고빈도 출력은 stream 'data' 이벤트가 초당 수백 번씩 발생 — 매번 개별 IPC 로
+// 보내면 (구조적 복제 비용 + 렌더러 쪽 xterm 파싱/렌더 1회씩) 탭이 많아질수록 렌더러 메인
+// 스레드가 포화되어 버벅임. 짧은 시간창(8ms) 동안 같은 패널의 데이터를 합쳐 IPC 1회로 축소.
+//
+// 렌더러가 지금 화면에 실제로 보여주고 있는 패널(termId)을 알려주면(term:set-visibility),
+// 안 보이는 패널은 배치 주기를 훨씬 길게(300ms) 늘려서 IPC wake-up 빈도 자체를 줄인다.
+// 앱이 포커스를 잃으면 Windows 가 렌더러 프로세스에 주는 CPU 타임슬라이스가 줄어드는데,
+// 이때 탭이 여러 개 다 8ms 마다 IPC 를 깨우면 (안 보이는 탭은 어차피 xterm.write 도 안 하면서)
+// 컨텍스트 스위칭 오버헤드만 늘어 활성 탭 렌더링까지 버벅이게 만든다.
+const visiblePanelIds = new Set<string>();
+const dataBatchBuf = new Map<string, string>();
+const dataBatchScheduled = new Set<string>();
+const DATA_BATCH_MS_VISIBLE = 8;
+const DATA_BATCH_MS_HIDDEN = 300;
+// SSH 연결이 여러 개 동시에 활발하면 메인 프로세스 이벤트 루프가 그 사이를 오가면서 타이밍이
+// 밀리고, 그 결과 배치 타이머가 늦게 발동해 한 번에 훨씬 큰 덩어리가 쌓일 수 있다. xterm.js 는
+// 한 번의 write() 로 들어온 텍스트를 파싱하는 데 실제로 CPU 시간이 들기 때문에(렌더링이 아니라
+// 파싱 자체가 비용), 덩어리가 커질수록 그걸 한 번에 처리하며 눈에 띄게 멈칫거린다(프로파일링으로
+// 확인됨: xterm 내부 _innerWrite 가 self time 대부분을 차지). IPC 로 보내는 조각 크기 자체에
+// 상한을 둬서, 아무리 밀렸어도 한 번의 write() 가 처리할 양은 항상 작게 유지한다.
+const DATA_CHUNK_MAX_CHARS = 32_768;
+function queueTermData(channel: 'ssh:data' | 'pty:data', panelId: string, data: string) {
+  const key = `${channel}:${panelId}`;
+  dataBatchBuf.set(key, (dataBatchBuf.get(key) || '') + data);
+  if (dataBatchScheduled.has(key)) return;
+  dataBatchScheduled.add(key);
+  const delay = visiblePanelIds.has(panelId) ? DATA_BATCH_MS_VISIBLE : DATA_BATCH_MS_HIDDEN;
+  setTimeout(() => {
+    dataBatchScheduled.delete(key);
+    const merged = dataBatchBuf.get(key);
+    dataBatchBuf.delete(key);
+    if (!merged) return;
+    if (merged.length <= DATA_CHUNK_MAX_CHARS) {
+      termBroadcast(channel, { panelId, data: merged });
+      return;
+    }
+    for (let i = 0; i < merged.length; i += DATA_CHUNK_MAX_CHARS) {
+      termBroadcast(channel, { panelId, data: merged.slice(i, i + DATA_CHUNK_MAX_CHARS) });
+    }
+  }, delay);
+}
+// ── 탭별 프로세스 분리(Wave Terminal 방식) 준비 — 제네릭 relay ──────────────────
+// 실제 WebContentsView 는 아직 만들지 않는다(그건 tab lifecycle 단계에서 추가).
+// 지금은 모든 termId 를 'host' 탭(=mainWindow 자신)에 매핑해두어, 탭 프로세스가
+// 실제로 분리되기 전에 relay 프로토콜(term:call / term:invoke / term:state-update)
+// 자체가 올바르게 동작하는지 같은 프로세스 안에서 먼저 검증한다. 나중에 진짜 탭
+// WebContentsView 가 생기면 termIdToTabId 매핑만 바꿔주면 되고 relay 코드는 그대로 재사용된다.
+const tabWebContentsMap = new Map<string, Electron.WebContents>(); // tabId -> webContents ('host' 는 mainWindow)
+const termIdToTabId = new Map<string, string>(); // termId -> tabId
+const pendingTermInvokes = new Map<string, (result: any) => void>(); // requestId -> resolve
+
+function getTabWebContentsFor(termId: string): Electron.WebContents | undefined {
+  const tabId = termIdToTabId.get(termId) || 'host';
+  if (tabId === 'host') return mainWindow?.webContents;
+  return tabWebContentsMap.get(tabId);
+}
+
+ipcMain.on('term:register-term', (_event, { termId, tabId }: { termId: string; tabId?: string }) => {
+  termIdToTabId.set(termId, tabId || 'host');
+});
+ipcMain.on('term:unregister-term', (_event, { termId }: { termId: string }) => {
+  termIdToTabId.delete(termId);
+});
+// fire-and-forget 커맨드 relay (Category B/E) — 호출부가 반환값을 안 쓰는 함수들
+ipcMain.on('term:call', (_event, { termId, fn, args }: { termId: string; fn: string; args: any[] }) => {
+  const wc = getTabWebContentsFor(termId);
+  try { wc?.send('term:dispatch', { termId, fn, args }); } catch {}
+});
+// 반환값이 필요한 커맨드 relay (Category C: searchInTerm 등) — request/reply
+ipcMain.handle('term:invoke', (_event, { termId, fn, args }: { termId: string; fn: string; args: any[] }) => {
+  const wc = getTabWebContentsFor(termId);
+  if (!wc) return Promise.resolve(undefined);
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve) => {
+    pendingTermInvokes.set(requestId, resolve);
+    try { wc.send('term:dispatch-invoke', { termId, fn, args, requestId }); } catch { pendingTermInvokes.delete(requestId); resolve(undefined); }
+    // 탭 프로세스가 죽어있거나 응답이 없는 극단적 상황 대비 타임아웃
+    setTimeout(() => { if (pendingTermInvokes.has(requestId)) { pendingTermInvokes.delete(requestId); resolve(undefined); } }, 5000);
+  });
+});
+ipcMain.on('term:invoke-reply', (_event, { requestId, result }: { requestId: string; result: any }) => {
+  const resolve = pendingTermInvokes.get(requestId);
+  if (resolve) { pendingTermInvokes.delete(requestId); resolve(result); }
+});
+// 상태 캐시 push (Category A: isTermConnected 등) — 탭 프로세스가 상태 변경 시점마다 보내고,
+// host 는 이걸 termStateCache 에 반영만 한다(폴링 없음).
+ipcMain.on('term:state-update', (_event, { termId, patch }: { termId: string; patch: any }) => {
+  try { mainWindow?.webContents.send('term:state-update', { termId, patch }); } catch {}
+});
+// ── 탭 간 세션 이동(release/adopt) ────────────────────────────────────────
+// 세션을 옮길 때 원본/대상 둘 중 하나라도 격리된 탭/패널 프로세스면, 레이아웃 트리를
+// 직접 조작(같은 프로세스 가정)할 수 없다 — 실제 소유 프로세스에 release(내보내기)/
+// adopt(받기)를 relay 해서, 그 프로세스 자신의 React 상태를 직접 바꾸게 한다.
+function getWebContentsForTabId(tabId: string): Electron.WebContents | undefined {
+  if (tabId === 'host') return mainWindow?.webContents;
+  return tabWebContentsMap.get(tabId);
+}
+ipcMain.on('tab:release-session', (_event, { tabId, payload }: { tabId: string; payload: any }) => {
+  try { getWebContentsForTabId(tabId)?.send('tab:release-session', payload); } catch {}
+});
+ipcMain.on('tab:adopt-session', (_event, { tabId, payload }: { tabId: string; payload: any }) => {
+  try { getWebContentsForTabId(tabId)?.send('tab:adopt-session', payload); } catch {}
+});
+
+// ── 개발용 PoC: 이 frameless/transparent BrowserWindow 위에 실제 WebContentsView 가
+// 붙고 렌더링되는지 먼저 검증(6단계 본 작업 전 최대 리스크 지점 선확인). 앱 UI 는 전혀
+// 건드리지 않는 별도 경로 — dev:toggle-poc-view IPC 로만 생성/토글된다.
+let pocView: InstanceType<typeof WebContentsView> | null = null;
+ipcMain.handle('dev:toggle-poc-view', () => {
+  if (!mainWindow) return false;
+  if (pocView) {
+    mainWindow.contentView.removeChildView(pocView);
+    pocView.webContents.close();
+    pocView = null;
+    return false;
+  }
+  pocView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  pocView.setBounds({ x: 60, y: 120, width: 640, height: 420 });
+  mainWindow.contentView.addChildView(pocView);
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
+  if (!app.isPackaged && devServerUrl) {
+    pocView.webContents.loadURL(devServerUrl + '#tab-poc');
+  } else {
+    pocView.webContents.loadFile(path.join(__dirname, '../dist/index.html'), { hash: 'tab-poc' });
+  }
+  return true;
+});
+
+// ── 실제 탭 프로세스 분리 lifecycle ────────────────────────────────────────
+// 워크스페이스 탭 하나를 별도 WebContentsView 프로세스로 분리한다. 여러 개가 동시에
+// tabViews 에 있을 수 있지만(백그라운드 탭도 살아있어야 하므로), setVisible 로 현재
+// activeTabId 인 것만 보이게 하고 나머지는 숨긴다 — 다만 숨겨도 프로세스/렌더는 계속 돈다
+// (backgroundThrottling: false 로 백그라운드 SSH 출력도 실시간 유지, 사용자 요구사항).
+const tabViews = new Map<string, InstanceType<typeof WebContentsView>>();
+
+function loadTabView(view: InstanceType<typeof WebContentsView>, viewId: string, route?: string) {
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
+  const hash = route || `tab-app?tabId=${encodeURIComponent(viewId)}`;
+  if (!app.isPackaged && devServerUrl) {
+    view.webContents.loadURL(devServerUrl + '#' + hash);
+  } else {
+    view.webContents.loadFile(path.join(__dirname, '../dist/index.html'), { hash });
+  }
+}
+
+// viewId 는 탭 격리든(예: 'tab-1') 패널 격리든(예: 'panel:node-abc') 그냥 문자열 키 —
+// tabViews/tabWebContentsMap 은 어느 쪽이든 동일하게 다룬다. route 를 넘기면 그 해시로 로드
+// (패널 격리는 '#panel-app?...', 탭 격리는 기본 '#tab-app?tabId=...').
+ipcMain.handle('tab:create-view', (_event, { tabId, route }: { tabId: string; route?: string }) => {
+  if (!mainWindow || tabViews.has(tabId)) return false;
+  // backgroundThrottling:false — mainWindow 와 동일하게, 안 보이는 동안에도 GPU/타이머가
+  // 죽지 않게(격리된 탭/패널은 백그라운드에서도 실시간 출력을 유지해야 하는 요구사항).
+  const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), backgroundThrottling: false } });
+  view.setVisible(false);
+  mainWindow.contentView.addChildView(view);
+  loadTabView(view, tabId, route);
+  tabViews.set(tabId, view);
+  tabWebContentsMap.set(tabId, view.webContents); // term:call/term:invoke relay 가 이 뷰를 찾을 수 있도록
+  return true;
+});
+// 개발용 검증 헬퍼 — 격리된 탭들이 실제로 서로 다른 OS 프로세스인지 확인용 (host+각 탭의 PID).
+ipcMain.handle('dev:get-tab-pids', () => {
+  const result: Record<string, number> = {};
+  if (mainWindow) result['host'] = mainWindow.webContents.getOSProcessId();
+  for (const [tabId, view] of tabViews) result[tabId] = view.webContents.getOSProcessId();
+  return result;
+});
+// 개발용 — termId->tabId 라우팅 매핑 확인 (SSH 이벤트가 엉뚱한 프로세스로 가는지 디버깅용).
+ipcMain.handle('dev:get-term-tab-map', () => Object.fromEntries(termIdToTabId));
+// 실제 탭이 닫힐 때만 호출 — 탭 전환(다른 탭으로 이동)으로는 절대 호출되지 않는다.
+// (뷰 생성/파괴는 isolatedTabIds 멤버십 + 실제 탭 존재 여부로만 결정 — 렌더 마운트/언마운트와 무관.)
+ipcMain.on('tab:destroy-view', (_event, { tabId }: { tabId: string }) => {
+  const view = tabViews.get(tabId);
+  if (!view || !mainWindow) return;
+  try { mainWindow.contentView.removeChildView(view); } catch {}
+  try { view.webContents.close(); } catch {}
+  tabViews.delete(tabId);
+  tabWebContentsMap.delete(tabId);
+  // 이 탭이 소유했던 termId 매핑도 정리 (누수 방지)
+  for (const [termId, tid] of termIdToTabId) if (tid === tabId) termIdToTabId.delete(termId);
+});
+// 탭이 화면에 실제로 보이는지(활성 탭 또는 split-right 탭) 여부만 다룬다 — 안 보인다고
+// 뷰를 파괴하지 않는다(백그라운드에서도 세션이 살아있어야 하므로). 여러 탭이 동시에
+// visible=true 일 수 있음(activeTab + splitRightTab 동시 표시).
+ipcMain.on('tab:set-visibility', (_event, { tabId, visible, bounds }: { tabId: string; visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => {
+  const view = tabViews.get(tabId);
+  if (!view) return;
+  view.setVisible(visible);
+  if (visible && bounds) view.setBounds(bounds);
+});
+
 let sessionsData: SessionsData = { folders: [], sessions: [] };
 const connectedPanels = new Set<string>();
 const connectingPanels = new Set<string>();
@@ -417,6 +624,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       webviewTag: true, // 브라우저 워크스페이스 (<webview>) 활성화
+      // 창이 포커스를 잃거나 다른 창에 가려져도 Chromium 이 setTimeout/rAF 를 스로틀링하지
+      // 않도록 — 꺼두지 않으면 백그라운드에서 SSH 로그 출력이 버벅이며 지연됨.
+      backgroundThrottling: false,
     },
   });
 
@@ -426,6 +636,7 @@ function createWindow() {
     // Aero Snap 미리보기 창 사전 생성 + 로드 — 첫 드래그 시 BrowserWindow 생성 지연(수백ms) 제거
     setTimeout(() => ensureSnapPreview(), 500);
   });
+
 
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
   if (!app.isPackaged && devServerUrl) {
@@ -844,7 +1055,7 @@ app.whenReady().then(() => {
     if (!mainWindow) return;
     switch (msg.type) {
       case 'data':
-        termBroadcast('ssh:data', { panelId: msg.panelId, data: msg.data });
+        queueTermData('ssh:data', msg.panelId, msg.data);
         break;
       case 'connected':
         connectingPanels.delete(msg.panelId);
@@ -870,7 +1081,7 @@ app.whenReady().then(() => {
 
     switch (msg.type) {
       case 'data':
-        termBroadcast('ssh:data', { panelId: msg.panelId, data: msg.data });
+        if (msg.panelId) queueTermData('ssh:data', msg.panelId, msg.data || '');
         break;
       case 'connected':
         connectingPanels.delete(msg.panelId);
@@ -6050,6 +6261,13 @@ ipcMain.handle('telnet:connect', (_e, { panelId, host, port, cols, rows, encodin
   return 'ok';
 });
 
+// 렌더러가 지금 실제로 화면에 보여주고 있는 패널을 알려줌 — queueTermData 배치 주기 조절용.
+ipcMain.on('term:set-visibility', (_e, { panelId, visible }: { panelId: string; visible: boolean }) => {
+  if (!panelId) return;
+  if (visible) visiblePanelIds.add(panelId);
+  else visiblePanelIds.delete(panelId);
+});
+
 ipcMain.on('ssh:input', (_e, { panelId, data, b64 }) => {
   if (telnetPanels.has(panelId)) { getTelnetBridge().input(panelId, data, b64); return; }
   getSSHBridge().handleInput(panelId, data, b64);
@@ -6312,7 +6530,7 @@ ipcMain.handle('pty:spawn', (_e, { panelId, shell: shellPath, cols, rows, cwd }:
   }
   ptyProcesses.set(panelId, proc);
   proc.onData((data: string) => {
-    termBroadcast('pty:data', { panelId, data });
+    queueTermData('pty:data', panelId, data);
   });
   proc.onExit(({ exitCode }: { exitCode: number }) => {
     ptyProcesses.delete(panelId);

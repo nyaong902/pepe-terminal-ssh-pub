@@ -190,7 +190,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           onClose={() => setContextMenu(null)}
           items={[
             { icon: '✏️', label: tc('rename'), onClick: () => startRename(contextMenu.tabId) },
-            ...(onDetachTab ? [{ icon: '🪟', label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
+            ...(onDetachTab && tabs.length > 1 ? [{ icon: '🪟', label: t('openInNewWindow'), onClick: () => onDetachTab(contextMenu.tabId) }] : []),
             ...((() => {
               const target = tabs.find(t2 => t2.id === contextMenu.tabId);
               if (!target || !onSplitRight || !onUnsplitRight) return [];

@@ -310,6 +310,62 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('telnet:connect', { panelId, host, port, cols, rows, encoding }),
   isSSHConnected: (panelId: string) =>
     ipcRenderer.invoke('ssh:is-connected', panelId),
+  setTermVisibility: (panelId: string, visible: boolean) =>
+    ipcRenderer.send('term:set-visibility', { panelId, visible }),
+  // ── 탭별 프로세스 분리(Wave Terminal 방식) relay ──────────────────────────
+  // host(App.tsx) 쪽에서 사용: 탭 프로세스에 등록된 termId 를 향한 커맨드/쿼리 전송.
+  termRegisterTerm: (termId: string, tabId?: string) =>
+    ipcRenderer.send('term:register-term', { termId, tabId }),
+  termUnregisterTerm: (termId: string) =>
+    ipcRenderer.send('term:unregister-term', { termId }),
+  termCall: (termId: string, fn: string, args: any[]) =>
+    ipcRenderer.send('term:call', { termId, fn, args }),
+  termInvoke: (termId: string, fn: string, args: any[]) =>
+    ipcRenderer.invoke('term:invoke', { termId, fn, args }),
+  onTermStateUpdate: (cb: (p: { termId: string; patch: any }) => void) => {
+    const handler = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('term:state-update', handler);
+    return () => ipcRenderer.removeListener('term:state-update', handler);
+  },
+  // 탭 프로세스 쪽에서 사용: host 가 보낸 커맨드/쿼리 수신 + 상태 push.
+  onTermDispatch: (cb: (p: { termId: string; fn: string; args: any[] }) => void) => {
+    const handler = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('term:dispatch', handler);
+    return () => ipcRenderer.removeListener('term:dispatch', handler);
+  },
+  onTermDispatchInvoke: (cb: (p: { termId: string; fn: string; args: any[]; requestId: string }) => void) => {
+    const handler = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('term:dispatch-invoke', handler);
+    return () => ipcRenderer.removeListener('term:dispatch-invoke', handler);
+  },
+  termInvokeReply: (requestId: string, result: any) =>
+    ipcRenderer.send('term:invoke-reply', { requestId, result }),
+  pushTermState: (termId: string, patch: any) =>
+    ipcRenderer.send('term:state-update', { termId, patch }),
+  // 탭 간 세션 이동(release/adopt) — 어느 한쪽이라도 격리된 탭/패널 프로세스면 레이아웃
+  // 트리 조작만으로는 안 되고, 실제 소유 프로세스에 release/adopt 를 relay 해야 한다.
+  sendReleaseSession: (tabId: string, payload: any) =>
+    ipcRenderer.send('tab:release-session', { tabId, payload }),
+  onReleaseSession: (cb: (payload: any) => void) => {
+    const handler = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('tab:release-session', handler);
+    return () => ipcRenderer.removeListener('tab:release-session', handler);
+  },
+  sendAdoptSession: (tabId: string, payload: any) =>
+    ipcRenderer.send('tab:adopt-session', { tabId, payload }),
+  onAdoptSession: (cb: (payload: any) => void) => {
+    const handler = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('tab:adopt-session', handler);
+    return () => ipcRenderer.removeListener('tab:adopt-session', handler);
+  },
+  devToggleTabPocView: () => ipcRenderer.invoke('dev:toggle-poc-view'),
+  devGetTabPids: () => ipcRenderer.invoke('dev:get-tab-pids'),
+  devGetTermTabMap: () => ipcRenderer.invoke('dev:get-term-tab-map'),
+  // ── 실제 탭 프로세스 분리 lifecycle (host 쪽에서 사용) ──────────────────
+  tabCreateView: (tabId: string, route?: string) => ipcRenderer.invoke('tab:create-view', { tabId, route }),
+  tabDestroyView: (tabId: string) => ipcRenderer.send('tab:destroy-view', { tabId }),
+  tabSetVisibility: (tabId: string, visible: boolean, bounds?: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.send('tab:set-visibility', { tabId, visible, bounds }),
   sendSSHInput: (panelId: string, data?: string, b64?: string) =>
     ipcRenderer.send('ssh:input', { panelId, data, b64 }),
   disconnectSSH: (panelId: string) =>

@@ -15,11 +15,11 @@
     "download:jdbc": "node scripts/download-jdbc-drivers.js",
     "download:rg": "node scripts/download-ripgrep.js",
     "check:rg": "node scripts/download-ripgrep.js --check",
-    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
-    "build:skip-vpn": "node scripts/verify-openvpn-bundle.js --skip && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
-    "build:win:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
-    "build:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
-    "build:dev": "node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs')\" && node scripts/run-electron-builder.js --dir",
+    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
+    "build:skip-vpn": "node scripts/verify-openvpn-bundle.js --skip && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
+    "build:win:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
+    "build:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
+    "build:dev": "node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/run-electron-builder.js --dir",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
@@ -45,7 +45,8 @@
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-search": "^0.13.0",
     "xterm-addon-serialize": "^0.11.0",
-    "xterm-addon-unicode11": "^0.6.0"
+    "xterm-addon-unicode11": "^0.6.0",
+    "xterm-addon-webgl": "^0.16.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.64",
@@ -146,9 +147,11 @@
         "portable"
       ],
       "icon": "public/icon.ico",
-      "certificateFile": "cert/PePeTerminal_v2.pfx",
-      "certificatePassword": "pepe1234",
-      "sign": "./scripts/sign-with-retry.js",
+      "signtoolOptions": {
+        "certificateFile": "cert/PePeTerminal_v2.pfx",
+        "certificatePassword": "pepe1234",
+        "sign": "./scripts/sign-with-retry.js"
+      },
       "extraResources": [
         {
           "from": "resources/openvpn-win",
@@ -187,8 +190,18 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "dmg", "arch": ["x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "public/icon-mac.png",
       "category": "public.app-category.developer-tools",

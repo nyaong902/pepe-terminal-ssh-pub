@@ -6,6 +6,7 @@ import { TabBar } from './components/TabBar';
 import { MenuBar } from './components/MenuBar';
 import type { MenuDef } from './components/MenuBar';
 import { Layout } from './components/Layout';
+import IsolatedTabSlot from './components/IsolatedTabSlot';
 import { SearchBar } from './components/SearchBar';
 import { FileExplorer } from './components/FileExplorer';
 import { ConflictDialogQueue } from './components/ConflictDialog';
@@ -24,7 +25,7 @@ import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
 import { StatusBar } from './components/StatusBar';
 import { RemoteShareDialog } from './components/RemoteShareDialog';
-import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle } from './components/TerminalPanel';
+import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle, waitForTermMount } from './components/TerminalPanel';
 import { marked } from 'marked';
 // @ts-ignore — vite ?raw 로 docs/MANUAL.md 를 번들 문자열로 임베드
 import manualMd from '../docs/MANUAL.md?raw';
@@ -803,6 +804,39 @@ function App() {
   const [remoteTreeVisible, setRemoteTreeVisible] = useState<boolean>(true);
   const [terminalPinned, setTerminalPinned] = useState<boolean>(true);
   const [terminalVisible, setTerminalVisible] = useState<boolean>(true);
+  // Wave-Terminal 스타일 탭별 프로세스 분리 — 이 Set 에 들어간 tabId 는 Layout 을 이 프로세스에서
+  // 직접 렌더하지 않고 별도 WebContentsView(TabApp.tsx) 에 위임한다. 기본은 빈 Set(기존 동작 100% 유지) —
+  // 개발 중 devtools 콘솔에서 window.__pepeIsolateTab('tab-1') 로 옵트인해서 테스트한다.
+  const [isolatedTabIds, setIsolatedTabIds] = useState<Set<TabId>>(() => new Set());
+  useEffect(() => {
+    (window as any).__pepeIsolateTab = (id: TabId) => setIsolatedTabIds(prev => new Set(prev).add(id));
+    (window as any).__pepeUnisolateTab = (id: TabId) => setIsolatedTabIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+    (window as any).__pepeActiveTabId = () => activeTabId;
+    (window as any).__pepeIsolateActiveTab = () => setIsolatedTabIds(prev => new Set(prev).add(activeTabId));
+    (window as any).__pepeSetSplitRight = (id: TabId | null) => setSplitRightTabId(id);
+    return () => { delete (window as any).__pepeIsolateTab; delete (window as any).__pepeUnisolateTab; delete (window as any).__pepeActiveTabId; delete (window as any).__pepeIsolateActiveTab; delete (window as any).__pepeSetSplitRight; };
+  }, [activeTabId]);
+  // 격리된 탭의 WebContentsView 생성/파괴는 렌더 마운트/언마운트(IsolatedTabSlot)와 완전히
+  // 분리한다 — isolatedTabIds 에 들어간 순간 딱 한 번 생성하고, 탭이 "실제로 닫힐 때"만 파괴한다.
+  // 탭 전환으로 화면에서 안 보이게 되는 것(IsolatedTabSlot 언마운트)은 tabSetVisibility(false) 로만
+  // 처리되어 세션은 백그라운드에서 계속 살아있는다.
+  const createdIsolatedViewsRef = useRef<Set<TabId>>(new Set());
+  useEffect(() => {
+    for (const id of isolatedTabIds) {
+      if (!createdIsolatedViewsRef.current.has(id)) {
+        createdIsolatedViewsRef.current.add(id);
+        try { (window as any).api?.tabCreateView?.(id); } catch {}
+      }
+    }
+    const existingTabIds = new Set(tabs.map(t => t.id));
+    for (const id of Array.from(createdIsolatedViewsRef.current)) {
+      if (!existingTabIds.has(id)) {
+        createdIsolatedViewsRef.current.delete(id);
+        try { (window as any).api?.tabDestroyView?.(id); } catch {}
+        setIsolatedTabIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      }
+    }
+  }, [isolatedTabIds, tabs]);
   const terminalPinnedLoadedRef = useRef(false);
   const terminalHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminalHoverShowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -842,16 +876,26 @@ function App() {
       setLeftDockWidth(Math.max(0, Math.round(sessionW + fileTreeW + fileTreeNudge)));
       setSessionSidebarUnpinned(!!document.querySelector('.session-sidebar-inner.auto-hide'));
     };
+    // document.body 전체를 subtree 로 감시하다 보니 터미널(xterm) 내부 DOM 변화(로그 출력마다의
+    // 줄 갱신, 접근성용 텍스트 업데이트 등)까지 다 잡혀서, 로그가 많이 찍힐 때 콜백이 초당 수백~
+    // 수천 번 실행되며 매번 setState 를 여러 개씩 호출 — React 업데이트 객체가 폭증하는 원인이었음.
+    // rAF 로 묶어서 프레임당 최대 1번만 실제 measure() 가 돌도록 코얼레싱.
+    let rafId = 0;
+    const scheduleMeasure = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => { rafId = 0; measure(); });
+    };
     measure();
     const t1 = setTimeout(measure, 100);
     const t2 = setTimeout(measure, 500);
-    window.addEventListener('resize', measure);
-    const mo = new MutationObserver(measure);
+    window.addEventListener('resize', scheduleMeasure);
+    const mo = new MutationObserver(scheduleMeasure);
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
     return () => {
       clearTimeout(t1); clearTimeout(t2);
-      window.removeEventListener('resize', measure);
+      window.removeEventListener('resize', scheduleMeasure);
       mo.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, []);
   useEffect(() => {
@@ -1484,7 +1528,7 @@ function App() {
       return ids;
     };
     const st = searchStateRef.current;
-    const runSearch = (q: string, ureg: boolean, cs: boolean, mode: 'current' | 'all') => {
+    const runSearch = async (q: string, ureg: boolean, cs: boolean, mode: 'current' | 'all') => {
       st.lastQuery = q; st.lastCs = cs; st.lastRe = ureg; st.lastMode = mode;
       // 모든 터미널의 기존 하이라이트 정리
       for (const t of getAllTermIds()) { try { clearHighlights(t); } catch {} }
@@ -1498,7 +1542,7 @@ function App() {
         if (!tid) { api.sendSearchResult?.({ current: 0, total: 0 }); return; }
         try {
           highlightAllMatches(tid, q, ureg, cs);
-          const found = searchFromTop(tid, q, ureg, cs);
+          const found = await searchFromTop(tid, q, ureg, cs);
           api.sendSearchResult?.({ current: found ? 1 : 0, total: found ? 1 : 0 });
         } catch {}
       } else {
@@ -1506,7 +1550,7 @@ function App() {
         for (const tid of getAllVisibleTermIds()) {
           try {
             highlightAllMatches(tid, q, ureg, cs);
-            if (searchInTerm(tid, q, ureg, cs)) totalTerms++;
+            if (await searchInTerm(tid, q, ureg, cs)) totalTerms++;
           } catch {}
         }
         api.sendSearchResult?.({ current: totalTerms > 0 ? 1 : 0, total: totalTerms });
@@ -2226,8 +2270,10 @@ function App() {
       if (isEditable) return;
       if (!termId) return;
       if (matchKeybinding(e, 'copy')) {
-        const sel = getSelectionFromTerm(termId);
-        if (sel) { e.preventDefault(); navigator.clipboard.writeText(sel).catch(() => {}); }
+        Promise.resolve(getSelectionFromTerm(termId)).then(sel => {
+          if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+        });
+        e.preventDefault();
       }
       else if (matchKeybinding(e, 'paste')) {
         e.preventDefault();
@@ -2550,8 +2596,9 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
-            // 탭바 위 드롭 — kind 무관, 가져온 모든 세션을 활성 탭의 첫 leaf 에 미니탭으로 병합.
-            if (onChrome && allSess.length > 0 && curTabId) {
+            // 탭바 위 드롭 — 단일 세션(kind='session')만 활성 탭의 첫 leaf 에 미니탭으로 병합.
+            // 워크스페이스 전체(kind='workspace')는 탭바에 드롭해도 병합하지 않고 새 탭으로 복원(폴백)돼야 함.
+            if (onChrome && payload.kind === 'session' && allSess.length > 0 && curTabId) {
               const curTab = tabsRef.current.find(t => t.id === curTabId);
               const targetLeafId = curTab ? findFirstLeafId(curTab.layout) : null;
               console.log('[adopt-tab] tabbar→merge', { curTab: !!curTab, targetLeafId, sessions: allSess.length });
@@ -2563,8 +2610,9 @@ function App() {
               }
             }
             // 패널 미니탭바(panel-header / panel-session-tabs)에 드롭 → 그 패널에 미니탭 병합 (split 금지)
+            // 워크스페이스 전체를 여기 드롭하면 세션 하나만 남기고 나머지가 사라지므로 session 일 때만.
             const onPanelTabBar = !!el?.closest('.panel-header, .panel-session-tabs, .panel-session-tabs-wrapper');
-            if (onPanelTabBar && leafId && sess && curTabId) {
+            if (onPanelTabBar && payload.kind === 'session' && leafId && sess && curTabId) {
               console.log('[adopt-tab] panel-tabbar→merge', { leafId });
               updateLayout(curTabId, l => appendSessionsToPanel(l, leafId, [sess], true));
               setSelectedPanelId(leafId);
@@ -2612,7 +2660,7 @@ function App() {
       for (const s of collectAllSessions(tab.layout)) {
         if (!s.termId) continue;
         const b = serializeTermBuffer(s.termId);
-        if (b) buffers[s.termId] = b;
+        if (typeof b === 'string' && b) buffers[s.termId] = b;
       }
     } catch {}
     return buffers;
@@ -2689,6 +2737,8 @@ function App() {
   const detachTabToNewWindow = useCallback(async (tabId: TabId, screenX?: number, screenY?: number) => {
     const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
+    // 워크스페이스가 하나뿐이면 분리 금지 — 분리하면 이 창에 탭이 하나도 안 남게 됨.
+    if (tabsRef.current.length <= 1) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
     // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
@@ -2776,11 +2826,9 @@ function App() {
       }, 200);
       try {
         // 분할로 새 leaf 가 생기는 경우(레이아웃 트리 재구성) 기존 패널에 추가하는 경우보다 실제
-        // 터미널 컴포넌트 마운트(termStore 등록)가 늦을 수 있음 — 마운트될 때까지 잠깐 대기 후 연결
+        // 터미널 컴포넌트 마운트(termStore 등록)가 늦을 수 있음 — 마운트될 때까지 대기 후 연결
         // (promptPasswordAndConnect 는 termStore 에 없으면 조용히 아무 것도 안 하고 리턴함).
-        for (let i = 0; i < 20 && !termStore.get(newTermId); i++) {
-          await new Promise(res => setTimeout(res, 30));
-        }
+        await waitForTermMount(newTermId);
         const r = await (window as any).api.connectSSH(newTermId, target.sessionId);
         if (r === 'need-password') promptPasswordAndConnect(newTermId, target.sessionId);
       } catch {}
@@ -2863,6 +2911,13 @@ function App() {
       return;
     }
     if (fromTabId === targetTabId) return;
+    // 원본/대상 둘 중 하나라도 격리된 탭(별도 WebContentsView 프로세스)이면 레이아웃 트리를
+    // 직접 조작할 수 없다 — 실제 소유 프로세스에 release/adopt 를 relay 해야 한다.
+    if (isolatedTabIds.has(fromTabId) || isolatedTabIds.has(targetTabId)) {
+      moveSessionAcrossProcesses(fromNodeId, termId, fromTabId, targetTabId);
+      setActiveTabId(targetTabId);
+      return;
+    }
     setTabs(prev => {
       const fromTab = prev.find(t => t.id === fromTabId);
       const toTab = prev.find(t => t.id === targetTabId);
@@ -2890,6 +2945,49 @@ function App() {
     });
     // 타겟 워크스페이스로 전환
     setActiveTabId(targetTabId);
+  };
+
+  // 격리된 탭이 얽힌 세션 이동 — release(원본에서 제거)/adopt(대상에 삽입) 를 실제 소유
+  // 프로세스에 relay 한다. 세션 메타데이터는 host 의 tabs 사본에서 찾는데, 원본이 격리된
+  // 탭이면 이 사본이 격리 시점 이후로 갱신되지 않은 스냅샷이라(v1 한계) 최근에 그 탭 안에서
+  // 세션을 옮기거나 닫았다면 못 찾을 수 있다 — 그 경우 조용히 아무 것도 안 하고 리턴한다.
+  const moveSessionAcrossProcesses = async (fromNodeId: string, termId: string, fromTabId: TabId, targetTabId: string) => {
+    const fromTab = tabsRef.current.find(t => t.id === fromTabId);
+    if (!fromTab) return;
+    const findSess = (node: LayoutNode): PanelSession | null => {
+      if (node.type === 'leaf' && node.id === fromNodeId) return node.panel.sessions.find(s => s.termId === termId) ?? null;
+      if (node.type !== 'leaf') for (const c of node.children) { const r = findSess(c); if (r) return r; }
+      return null;
+    };
+    const sess = findSess(fromTab.layout);
+    if (!sess) return;
+    // 버퍼/스타일 직렬화 — termId 가 원격(격리된 탭) 소유면 자동으로 invoke relay 를 타고,
+    // 로컬 소유면 즉시 동기 값이 온다(Promise.resolve 로 양쪽 다 동일하게 처리).
+    const [buffer, style] = await Promise.all([
+      Promise.resolve(serializeTermBuffer(termId)),
+      Promise.resolve(getTermStyle(termId)),
+    ]);
+    // 원본에서 제거
+    if (isolatedTabIds.has(fromTabId)) {
+      (window as any).api?.sendReleaseSession?.(fromTabId, { termId });
+    } else {
+      setTabs(prev => prev.map(t => (t.id === fromTabId
+        ? { ...t, layout: cleanEmptyLeaf(removeSessionFromPanel(t.layout, fromNodeId, termId), fromNodeId) }
+        : t)));
+    }
+    // 대상에 삽입
+    if (isolatedTabIds.has(targetTabId)) {
+      (window as any).api?.sendAdoptSession?.(targetTabId, { session: sess, buffer, style });
+    } else {
+      setTabs(prev => prev.map(t => {
+        if (t.id !== targetTabId) return t;
+        const targetLeafId = findFirstLeafId(t.layout);
+        if (!targetLeafId) return t;
+        return { ...t, layout: appendSessionsToPanel(t.layout, targetLeafId, [sess], true) };
+      }));
+      if (style) setPendingRestoreStyle(termId, style);
+      if (buffer) setPendingRestoreBuffer(termId, buffer);
+    }
   };
 
   const handleMoveSession = (fromNodeId: string, termId: string, toNodeId: string, tabId?: TabId) => {
@@ -5021,8 +5119,14 @@ function App() {
                     if (terminalHideTimer.current) { clearTimeout(terminalHideTimer.current); terminalHideTimer.current = null; }
                   }}
                 >
-                  {/* shellPrefsLoaded 전에 마운트되면 shellPath=undefined 로 PowerShell 폴백되므로 지연 렌더 */}
-                  {shellPrefsLoaded && <Layout root={tab.layout}
+                  {/* Wave-Terminal 스타일 탭별 프로세스 분리 — 이 tab.id 가 격리 대상이면 Layout 을
+                      이 프로세스에서 그리지 않고, 실제 WebContentsView(TabApp.tsx, 별도 프로세스)가
+                      이 자리 위에 겹쳐 그리도록 자리만 내준다. 기본은 빈 Set 이라 아래 분기는 타지 않음. */}
+                  {isolatedTabIds.has(tab.id) ? (
+                    <IsolatedTabSlot tabId={tab.id} isActive={splitRightSlot ? tab.id === splitRightTabId : tab.id === activeTabId} />
+                  ) : (
+                  /* shellPrefsLoaded 전에 마운트되면 shellPath=undefined 로 PowerShell 폴백되므로 지연 렌더 */
+                  shellPrefsLoaded && <Layout root={tab.layout}
                     selectedPanelId={panelId}
                     onSplit={(nodeId, dir) => openSplitSessionPicker(dir, nodeId, tab.id)}
                     onSplitWithPicker={(nodeId, dir) => openSplitSessionPickerWithPrompt(dir, nodeId, tab.id)}
@@ -5084,7 +5188,7 @@ function App() {
                     }}
                     onOpenRemoteFile={handleOpenRemoteFile}
                     onAttachToClaude={handleAttachToClaude}
-                  />}
+                  />)}
                 </div>
               </div>
               </div>
@@ -6870,7 +6974,7 @@ export default App;
 
 // ── 패널 이동 헬퍼 ──
 
-function removeLeafFromTree(root: LayoutNode, targetId: string): { root: LayoutNode; removed?: LayoutNode } {
+export function removeLeafFromTree(root: LayoutNode, targetId: string): { root: LayoutNode; removed?: LayoutNode } {
   if (root.type === 'leaf') {
     if (root.id === targetId) return { root: { ...root }, removed: root };
     return { root };
@@ -6886,12 +6990,12 @@ function removeLeafFromTree(root: LayoutNode, targetId: string): { root: LayoutN
   return { root: { ...root, children }, removed };
 }
 
-function replaceLeaf(root: LayoutNode, targetId: string, leaf: LayoutNode): LayoutNode {
+export function replaceLeaf(root: LayoutNode, targetId: string, leaf: LayoutNode): LayoutNode {
   if (root.type === 'leaf') return root.id === targetId ? leaf : root;
   return { ...root, children: root.children.map(c => replaceLeaf(c, targetId, leaf)) };
 }
 
-function insertNear(root: LayoutNode, targetId: string, leaf: LayoutNode, pos: 'before' | 'after'): LayoutNode {
+export function insertNear(root: LayoutNode, targetId: string, leaf: LayoutNode, pos: 'before' | 'after'): LayoutNode {
   if (root.type === 'leaf') return root;
   const nc: LayoutNode[] = [];
   for (const c of root.children) {
