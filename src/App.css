@@ -3594,8 +3594,18 @@ body.popout-options .session-editor h3:first-child {
 }
 
 .fe-file-row.selected {
-  background: var(--win-accent, #2b6b9b)33;
+  background:
+    linear-gradient(90deg, rgba(63, 132, 182, 0.52), rgba(43, 107, 155, 0.30)) !important;
   color: var(--win-text, #fff);
+  box-shadow:
+    inset 3px 0 0 var(--win-accent, #2b6b9b),
+    inset 0 0 0 1px rgba(111, 191, 255, 0.18);
+  font-weight: 700;
+}
+
+.fe-file-row.selected:hover {
+  background:
+    linear-gradient(90deg, rgba(74, 146, 197, 0.58), rgba(52, 124, 177, 0.34)) !important;
 }
 
 .fe-file-icon {

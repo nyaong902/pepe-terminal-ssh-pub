@@ -69,7 +69,8 @@
     "ignoreAll": "تجاهل جميع المسافات",
     "showEol": "إظهار نهايات الأسطر",
     "collapseUnchanged": "طي المناطق غير المتغيرة",
-    "ignoreBinaryFiles": "تجاهل الملفات الثنائية"
+    "ignoreBinaryFiles": "تجاهل الملفات الثنائية",
+    "skipOrphanDirectories": "تخطي محتوى المجلدات الموجودة في جهة واحدة"
   },
   "filePathPlaceholderLocal": "مسار الملف...",
   "filePathPlaceholderRemote": "مسار الملف البعيد...",
@@ -93,6 +94,7 @@
   "downloadOk": "✓ تم التنزيل: {{path}}",
   "downloadFailed": "✕ فشل التنزيل: {{error}}",
   "collapse": "طي",
+  "stop": "إيقاف",
   "expandFolder": "توسيع",
   "expandFullScreen": "توسيع إلى ملء الشاشة",
   "allMatchTitle": "تطابق كامل — الملفان متطابقان",

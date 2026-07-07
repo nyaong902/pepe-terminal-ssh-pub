@@ -80,6 +80,7 @@
   "downloadOk": "✓ 다운로드: {{path}}",
   "downloadFailed": "✕ 다운로드 실패: {{error}}",
   "collapse": "축소",
+  "stop": "멈춤",
   "expandFolder": "펼치기",
   "expandFullScreen": "전체 화면으로 확대",
   "allMatchTitle": "All match — 두 파일이 완전히 일치합니다",
@@ -96,6 +97,7 @@
     "ignoreAll": "모든 공백 무시",
     "showEol": "줄 끝 문자 표시",
     "collapseUnchanged": "변경 없는 영역 접기",
-    "ignoreBinaryFiles": "바이너리 파일 무시"
+    "ignoreBinaryFiles": "바이너리 파일 무시",
+    "skipOrphanDirectories": "한쪽만 있는 폴더 내부 건너뛰기"
   }
 }

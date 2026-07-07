@@ -80,6 +80,7 @@
   "downloadOk": "✓ Downloaded: {{path}}",
   "downloadFailed": "✕ Download failed: {{error}}",
   "collapse": "Collapse",
+  "stop": "Stop",
   "expandFolder": "Expand",
   "expandFullScreen": "Expand to full screen",
   "allMatchTitle": "All match — the two files are identical",
@@ -96,6 +97,7 @@
     "ignoreAll": "Ignore all whitespace",
     "showEol": "Show line endings",
     "collapseUnchanged": "Collapse unchanged regions",
-    "ignoreBinaryFiles": "Ignore binary files"
+    "ignoreBinaryFiles": "Ignore binary files",
+    "skipOrphanDirectories": "Skip contents of one-sided folders"
   }
 }

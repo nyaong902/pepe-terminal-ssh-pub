@@ -69,7 +69,8 @@
     "ignoreAll": "Ignorer tous les espaces",
     "showEol": "Afficher les fins de ligne",
     "collapseUnchanged": "Réduire les zones inchangées",
-    "ignoreBinaryFiles": "Ignorer les fichiers binaires"
+    "ignoreBinaryFiles": "Ignorer les fichiers binaires",
+    "skipOrphanDirectories": "Ignorer le contenu des dossiers d'un seul côté"
   },
   "filePathPlaceholderLocal": "Chemin du fichier...",
   "filePathPlaceholderRemote": "Chemin du fichier distant...",
@@ -93,6 +94,7 @@
   "downloadOk": "✓ Téléchargé : {{path}}",
   "downloadFailed": "✕ Échec du téléchargement : {{error}}",
   "collapse": "Réduire",
+  "stop": "Arrêter",
   "expandFolder": "Développer",
   "expandFullScreen": "Agrandir en plein écran",
   "allMatchTitle": "Tout correspond — les deux fichiers sont identiques",

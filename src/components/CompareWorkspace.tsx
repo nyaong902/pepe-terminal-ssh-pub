@@ -22,7 +22,6 @@ type Source = {
   label: string;
   basePath: string;
 };
-type WalkEntry = { relPath: string; isDir: boolean; size: number; mtime: number };
 type DiffStatus = 'same' | 'changed' | 'left-only' | 'right-only';
 type DiffRow = {
   relPath: string;
@@ -44,6 +43,7 @@ type Props = {
     compareMode?: 'dir' | 'file';
     leftDirSrc?: any; rightDirSrc?: any; leftFileSrc?: any; rightFileSrc?: any;
     ignoreBinaryFiles?: boolean;
+    skipOrphanDirectories?: boolean;
     expandedDirs?: string[];
   } | null;
   onStateChange?: (state: any) => void;
@@ -130,7 +130,10 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
   const [sortBy, setSortBy] = useState<'path' | 'status' | 'leftSize' | 'rightSize'>('path');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [ignoreBinaryFiles, setIgnoreBinaryFiles] = useState(initialState?.ignoreBinaryFiles ?? true);
+  const [skipOrphanDirectories, setSkipOrphanDirectories] = useState(initialState?.skipOrphanDirectories ?? true);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set(initialState?.expandedDirs || []));
+  const compareRequestIdRef = useRef<string | null>(null);
+  const compareStopRequestedRef = useRef(false);
 
   const [selectedRel, setSelectedRel] = useState<string | null>(initialState?.selectedRel ?? null);
   const [leftContent, setLeftContent] = useState<string>(initialState?.leftContent || '');
@@ -198,13 +201,13 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
         leftEol, rightEol, leftEnc, rightEnc,
         compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc,
-        ignoreBinaryFiles, expandedDirs: [...expandedDirs].sort(),
+        ignoreBinaryFiles, skipOrphanDirectories, expandedDirs: [...expandedDirs].sort(),
       });
     } catch {}
   }, [leftFilePath, rightFilePath, filterText, hideSame, hideUnpaired,
       rows, selectedRel, leftContent, rightContent, leftOriginal, rightOriginal,
       leftEol, rightEol, leftEnc, rightEnc,
-      compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc, ignoreBinaryFiles, expandedDirs, onStateChange]);
+      compareMode, leftDirSrc, rightDirSrc, leftFileSrc, rightFileSrc, ignoreBinaryFiles, skipOrphanDirectories, expandedDirs, onStateChange]);
   // 현재 모드에 따른 활성 소스 (읽기 전용 — 쓰기는 updateSrc 사용)
   const leftSrc  = compareMode === 'dir' ? leftDirSrc  : leftFileSrc;
   const rightSrc = compareMode === 'dir' ? rightDirSrc : rightFileSrc;
@@ -412,45 +415,20 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     if (!leftSrc.basePath || !rightSrc.basePath) { setScanError(t('enterBothPaths')); return; }
     if (leftSrc.mode === 'remote' && !leftSrc.termId) { setScanError(t('sourceNoSession')); return; }
     if (rightSrc.mode === 'remote' && !rightSrc.termId) { setScanError(t('targetNoSession')); return; }
+    const requestId = `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    compareRequestIdRef.current = requestId;
+    compareStopRequestedRef.current = false;
     setScanning(true);
     try {
-      const [lRes, rRes] = await Promise.all([
-        api.compareWalk?.(leftSrc.mode, leftSrc.basePath, leftSrc.termId, undefined, ignoreBinaryFiles),
-        api.compareWalk?.(rightSrc.mode, rightSrc.basePath, rightSrc.termId, undefined, ignoreBinaryFiles),
-      ]);
-      if (lRes?.error) throw new Error(t('sourceErrorPrefix', { error: lRes.error }));
-      if (rRes?.error) throw new Error(t('targetErrorPrefix', { error: rRes.error }));
-      const lEntries: WalkEntry[] = lRes?.entries || [];
-      const rEntries: WalkEntry[] = rRes?.entries || [];
-      setTruncated(!!(lRes?.truncated || rRes?.truncated));
-
-      const lMap = new Map<string, WalkEntry>();
-      for (const e of lEntries) lMap.set(e.relPath, e);
-      const rMap = new Map<string, WalkEntry>();
-      for (const e of rEntries) rMap.set(e.relPath, e);
-
-      const allKeys = new Set<string>([...lMap.keys(), ...rMap.keys()]);
-      const merged: DiffRow[] = [];
-      for (const k of allKeys) {
-        const l = lMap.get(k);
-        const r = rMap.get(k);
-        if (l && r) {
-          // 둘 다 존재
-          if (l.isDir && r.isDir) {
-            merged.push({ relPath: k, isDir: true, status: 'same' });
-          } else if (l.isDir !== r.isDir) {
-            // 한쪽은 폴더, 한쪽은 파일 → changed 로 분류
-            merged.push({ relPath: k, isDir: false, status: 'changed', leftSize: l.size, rightSize: r.size });
-          } else {
-            const same = l.size === r.size; // 1차 휴리스틱
-            merged.push({ relPath: k, isDir: false, status: same ? 'same' : 'changed', leftSize: l.size, rightSize: r.size });
-          }
-        } else if (l) {
-          merged.push({ relPath: k, isDir: l.isDir, status: 'left-only', leftSize: l.size });
-        } else if (r) {
-          merged.push({ relPath: k, isDir: r.isDir, status: 'right-only', rightSize: r.size });
-        }
-      }
+      const res = await api.compareDirCompare?.(
+        leftSrc.mode, leftSrc.basePath, leftSrc.termId,
+        rightSrc.mode, rightSrc.basePath, rightSrc.termId,
+        undefined, ignoreBinaryFiles, skipOrphanDirectories, requestId,
+      );
+      if (compareStopRequestedRef.current || res?.stopped) return;
+      if (res?.error) throw new Error(res.error);
+      const merged: DiffRow[] = Array.isArray(res?.entries) ? res.entries : [];
+      setTruncated(!!res?.truncated);
       merged.sort((a, b) => a.relPath.localeCompare(b.relPath));
       setRows(merged);
       setExpandedDirs(defaultExpandedFromRows(merged));
@@ -462,6 +440,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         && (r.leftSize ?? 0) > 0 && (r.rightSize ?? 0) > 0
         && (r.leftSize ?? 0) <= HASH_CAP && (r.rightSize ?? 0) <= HASH_CAP
       );
+      if (compareStopRequestedRef.current) return;
       if (candidates.length > 0) {
         const sep = (m: SourceMode) => m === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
         const join = (base: string, mode: SourceMode, rel: string) => base.endsWith(sep(mode)) ? base + rel.replace(/\//g, sep(mode)) : base + sep(mode) + rel.replace(/\//g, sep(mode));
@@ -469,7 +448,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         let cursor = 0;
         const sameSet = new Set<string>();
         const runOne = async () => {
-          while (cursor < candidates.length) {
+          while (!compareStopRequestedRef.current && cursor < candidates.length) {
             const i = cursor++;
             const row = candidates[i];
             try {
@@ -486,12 +465,13 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
           setRows(prev => prev.map(r => sameSet.has(r.relPath) && r.status === 'changed' ? { ...r, status: 'same' as DiffStatus } : r));
         }
         // 남은 진짜 'changed' 행에 대해 diff line count 계산 (양쪽 ≤ HASH_CAP)
+        if (compareStopRequestedRef.current) return;
         const stillChanged = candidates.filter(r => !sameSet.has(r.relPath));
         if (stillChanged.length > 0) {
           setRows(prev => prev.map(r => stillChanged.find(s => s.relPath === r.relPath) ? { ...r, changesPending: true } : r));
           let cursor2 = 0;
           const runCount = async () => {
-            while (cursor2 < stillChanged.length) {
+            while (!compareStopRequestedRef.current && cursor2 < stillChanged.length) {
               const i = cursor2++;
               const row = stillChanged[i];
               try {
@@ -514,11 +494,20 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         }
       }
     } catch (err: any) {
+      if (compareStopRequestedRef.current) return;
       setScanError(String(err?.message || err));
     } finally {
+      if (compareRequestIdRef.current === requestId) compareRequestIdRef.current = null;
       setScanning(false);
     }
-  }, [leftSrc, rightSrc, ignoreBinaryFiles, wsMode, t]);
+  }, [leftSrc, rightSrc, ignoreBinaryFiles, skipOrphanDirectories, wsMode, t]);
+
+  const stopCompare = useCallback(async () => {
+    const requestId = compareRequestIdRef.current;
+    if (!requestId) return;
+    compareStopRequestedRef.current = true;
+    try { await api.compareStop?.(requestId); } catch {}
+  }, []);
 
   const detectEol = (raw: string): string => {
     if (!raw) return '';
@@ -1025,6 +1014,35 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
     return { c, l, r, s };
   }, [visibleRows]);
 
+  const renderTreePathCell = (node: TreeNode & { visible?: boolean; hasDiff?: boolean; displayStatus?: DiffStatus }, row: DiffRow, side: 'source' | 'target', isOpen: boolean, isAncestorSelected: boolean) => {
+    const isMissing = side === 'source' ? row.status === 'right-only' : row.status === 'left-only';
+    const textColor = node.isDir ? (isAncestorSelected ? '#fff' : '#9bd1ff') : 'inherit';
+    return (
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingLeft: node.depth * 14 }}>
+        {node.isDir && (
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpandedDirs(prev => {
+                const next = new Set(prev);
+                if (next.has(node.path)) next.delete(node.path);
+                else next.add(node.path);
+                return next;
+              });
+            }}
+            style={{ display: 'inline-flex', width: 14, marginLeft: -14, marginRight: 2, cursor: 'pointer', color: node.isDir ? '#8bbcff' : 'inherit' }}
+            title={isOpen ? t('collapse') : t('expandFolder')}
+          >
+            {isOpen ? '▾' : '▸'}
+          </span>
+        )}
+        <span style={{ color: textColor }}>
+          {isMissing ? '' : `${node.isDir ? '📁' : '📄'} ${node.path}`}
+        </span>
+      </span>
+    );
+  };
+
   useEffect(() => {
     setExpandedDirs(prev => pruneExpanded(prev, rows));
   }, [rows]);
@@ -1094,8 +1112,17 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
           {compareMode === 'dir' ? (
             <>
-              <button className="primary" onClick={startCompare} disabled={scanning} style={{ padding: '4px 14px' }}>
-                {scanning ? t('comparing') : t('compare')}
+              <button
+                className="primary"
+                onClick={scanning ? stopCompare : startCompare}
+                style={{
+                  padding: '4px 14px',
+                  background: scanning ? 'linear-gradient(180deg, #862828, #5f1f1f)' : undefined,
+                  borderColor: scanning ? '#b65b5b' : undefined,
+                  color: scanning ? '#fff' : undefined,
+                }}
+              >
+                {scanning ? t('stop') : t('compare')}
               </button>
               <button onClick={() => {
                 setLeftDirSrc(rightDirSrc); setRightDirSrc(leftDirSrc);
@@ -1108,7 +1135,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
               {/* 비교 옵션 — Araxis Merge 스타일 */}
               <button
                 ref={wsMenuButtonRef}
-                className={`compare-options-button ${wsMode !== 'significant' || showEol || !collapseUnchanged || ignoreBinaryFiles ? 'active' : ''}`}
+                className={`compare-options-button ${wsMode !== 'significant' || showEol || !collapseUnchanged || ignoreBinaryFiles || skipOrphanDirectories ? 'active' : ''}`}
                 onClick={() => {
                   const rect = wsMenuButtonRef.current?.getBoundingClientRect();
                   if (rect) {
@@ -1153,6 +1180,10 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   <label className="compare-options-row">
                     <input type="checkbox" checked={ignoreBinaryFiles} onChange={e => setIgnoreBinaryFiles(e.target.checked)} />
                     <span>{t('options.ignoreBinaryFiles')}</span>
+                  </label>
+                  <label className="compare-options-row">
+                    <input type="checkbox" checked={skipOrphanDirectories} onChange={e => setSkipOrphanDirectories(e.target.checked)} />
+                    <span>{t('options.skipOrphanDirectories')}</span>
                   </label>
                 </div>,
                 document.body,
@@ -1333,28 +1364,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   <span style={{ width: 70, color: statusColor(status), fontSize: 11, flexShrink: 0 }}>{statusLabel(status, t)}</span>
                   {/* Source side */}
                   <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', minWidth: 0, opacity: row.status === 'right-only' ? 0.25 : 1 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingLeft: node.depth * 14 }}>
-                      {node.isDir && (
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedDirs(prev => {
-                              const next = new Set(prev);
-                              if (next.has(node.path)) next.delete(node.path);
-                              else next.add(node.path);
-                              return next;
-                            });
-                          }}
-                          style={{ display: 'inline-flex', width: 14, marginLeft: -14, marginRight: 2, cursor: 'pointer', color: node.isDir ? '#8bbcff' : 'inherit' }}
-                          title={entry.isOpen ? t('collapse') : t('expandFolder')}
-                        >
-                          {entry.isOpen ? '▾' : '▸'}
-                        </span>
-                      )}
-                      <span style={{ color: node.isDir ? (entry.isAncestorSelected ? '#fff' : '#9bd1ff') : 'inherit' }}>
-                        {row.status === 'right-only' ? '' : `${node.isDir ? '📁' : '📄'} ${node.path}`}
-                      </span>
-                    </span>
+                    {renderTreePathCell(node, row, 'source', entry.isOpen, entry.isAncestorSelected)}
                     <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
                       {node.isDir || row.status === 'right-only' ? '' : formatSize(row.leftSize)}
                     </span>
@@ -1365,9 +1375,7 @@ export const CompareWorkspace: React.FC<Props> = ({ sessions, initialState, onSt
                   </span>
                   {/* Target side */}
                   <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', minWidth: 0, opacity: row.status === 'left-only' ? 0.25 : 1 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                      {row.status === 'left-only' ? '' : `${node.isDir ? '📁' : '📄'} ${node.path}`}
-                    </span>
+                    {renderTreePathCell(node, row, 'target', entry.isOpen, entry.isAncestorSelected)}
                     <span style={{ width: 50, textAlign: 'right', color: 'var(--win-text-dim, #888)', fontSize: 11, flexShrink: 0 }}>
                       {node.isDir || row.status === 'left-only' ? '' : formatSize(row.rightSize)}
                     </span>

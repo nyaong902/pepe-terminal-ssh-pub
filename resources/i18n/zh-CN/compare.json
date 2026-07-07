@@ -69,7 +69,8 @@
     "ignoreAll": "忽略所有空白",
     "showEol": "显示行尾符",
     "collapseUnchanged": "折叠未更改区域",
-    "ignoreBinaryFiles": "忽略二进制文件"
+    "ignoreBinaryFiles": "忽略二进制文件",
+    "skipOrphanDirectories": "跳过单边文件夹内容"
   },
   "filePathPlaceholderLocal": "文件路径...",
   "filePathPlaceholderRemote": "远程文件路径...",

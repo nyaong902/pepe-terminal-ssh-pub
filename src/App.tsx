@@ -869,7 +869,7 @@ function App() {
     }, ms));
   }, [terminalPinned]);
   const [showClaudeChat, setShowClaudeChat] = useState(true);
-  const [claudeChatView, setClaudeChatView] = useState<'ai' | 'messenger'>('ai');
+  const [claudeChatView, setClaudeChatView] = useState<'ai' | 'messenger' | 'worklog'>('ai');
   const claudeChatViewLoadedRef = useRef(false);
   const [messengerPopup, setMessengerPopup] = useState<{
     peerId: string;
@@ -960,7 +960,7 @@ function App() {
       setMessengerUnreadCount(0);
     }
   }, [showClaudeChat, claudeChatView, claudeChatPinned, claudeChatVisible]);
-  const openClaudeChatView = (view: 'ai' | 'messenger') => {
+  const openClaudeChatView = (view: 'ai' | 'messenger' | 'worklog') => {
     setShowClaudeChat(true);
     setClaudeChatView(view);
     if (!claudeChatPinned) setClaudeChatVisible(true);

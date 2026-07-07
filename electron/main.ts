@@ -32,6 +32,7 @@ import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
+import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
 import { getTelnetBridge } from './telnetBridge';
@@ -1027,6 +1028,9 @@ ipcMain.handle('sessions:open-editor', () => {
 
 ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
+// 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소.
+ipcMain.handle('worklog:get-all', () => loadWorklog());
+ipcMain.handle('worklog:save-day', (_e, { date, day }: { date: string; day: WorklogDay }) => { saveWorklogDay(date, day); return true; });
 // 윈도우 테마 변경 — 저장 후 모든 창(메인/옵션·세션편집 팝아웃/분리된 탭)에 broadcast → 라이브 반영.
 ipcMain.handle('window-theme:set', (_e, id: string) => {
   const themeId = String(id || '');
@@ -3508,6 +3512,168 @@ ipcMain.handle('compare:walk', async (_e, { mode, termId, basePath, maxEntries, 
   } catch (err: any) {
     return { entries: out, truncated, error: String(err) };
   }
+});
+
+type CompareRow = {
+  relPath: string;
+  isDir: boolean;
+  status: 'same' | 'changed' | 'left-only' | 'right-only';
+  leftSize?: number;
+  rightSize?: number;
+};
+type CompareNode = { name: string; relPath: string; isDir: boolean; size: number; mtime: number };
+const stoppedCompareRequests: Set<string> = new Set();
+function markCompareStopped(requestId: string) {
+  if (!requestId) return;
+  stoppedCompareRequests.add(requestId);
+  setTimeout(() => stoppedCompareRequests.delete(requestId), 60_000);
+}
+function isCompareStopped(requestId?: string): boolean {
+  return !!requestId && stoppedCompareRequests.has(requestId);
+}
+
+ipcMain.handle('compare:dir-compare', async (_e, {
+  leftMode, leftTermId, leftBasePath,
+  rightMode, rightTermId, rightBasePath,
+  maxEntries, ignoreBinaryFiles, skipOrphanDirectories, requestId,
+}: {
+  leftMode: string; leftTermId?: string; leftBasePath: string;
+  rightMode: string; rightTermId?: string; rightBasePath: string;
+  maxEntries?: number; ignoreBinaryFiles?: boolean; skipOrphanDirectories?: boolean; requestId?: string;
+  }) => {
+  const cap = Math.min(maxEntries || COMPARE_WALK_MAX_ENTRIES, COMPARE_WALK_MAX_ENTRIES);
+  const out: CompareRow[] = [];
+  let truncated = false;
+  try {
+    const bridge = getSSHBridge();
+    const sep = (mode: string) => mode === 'local' && process.platform === 'win32' ? '\\' : '/';
+    const join = (a: string, b: string, mode: string) => a.endsWith(sep(mode)) ? a + b : a + sep(mode) + b;
+
+    const listDir = async (mode: string, termId: string | undefined, dirPath: string): Promise<CompareNode[]> => {
+      let entries: any[];
+      try {
+        entries = mode === 'local' ? await bridge.handleLocalListDir(dirPath) : await bridge.handleSFTPListDir(termId!, dirPath);
+      } catch {
+        return [];
+      }
+      entries.sort((a, b) => (a.isDir !== b.isDir) ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name));
+      return entries
+        .filter(e => e.name !== '.' && e.name !== '..')
+        .map(e => ({
+          name: e.name,
+          relPath: '',
+          isDir: !!e.isDir,
+          size: e.size ?? 0,
+          mtime: e.mtime ?? 0,
+        }));
+    };
+
+    const emit = (entry: CompareRow) => {
+      if (isCompareStopped(requestId)) return false;
+      if (out.length >= cap) {
+        truncated = true;
+        return false;
+      }
+      out.push(entry);
+      return true;
+    };
+
+    const emitOrphanTree = async (
+      mode: string,
+      termId: string | undefined,
+      dirPath: string,
+      rel: string,
+      side: 'left' | 'right',
+    ): Promise<void> => {
+      if (truncated || isCompareStopped(requestId)) return;
+      const entries = await listDir(mode, termId, dirPath);
+      for (const entry of entries) {
+        if (truncated || isCompareStopped(requestId)) return;
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entry.isDir) {
+          if (!emit({ relPath: childRel, isDir: true, status: side === 'left' ? 'left-only' : 'right-only' })) return;
+          if (!skipOrphanDirectories) {
+            await emitOrphanTree(mode, termId, join(dirPath, entry.name, mode), childRel, side);
+          }
+        } else {
+          if (ignoreBinaryFiles && isBinaryComparePath(childRel)) continue;
+          if (!emit({
+            relPath: childRel,
+            isDir: false,
+            status: side === 'left' ? 'left-only' : 'right-only',
+            ...(side === 'left' ? { leftSize: entry.size } : { rightSize: entry.size }),
+          })) return;
+        }
+      }
+    };
+
+    const compareDir = async (
+      leftDir: string,
+      rightDir: string,
+      rel: string,
+    ): Promise<void> => {
+      if (truncated || isCompareStopped(requestId)) return;
+      const [leftEntries, rightEntries] = await Promise.all([
+        listDir(leftMode, leftTermId, leftDir),
+        listDir(rightMode, rightTermId, rightDir),
+      ]);
+      if (truncated || isCompareStopped(requestId)) return;
+
+      const leftMap = new Map(leftEntries.map(e => [e.name, e]));
+      const rightMap = new Map(rightEntries.map(e => [e.name, e]));
+      const names = [...new Set([...leftMap.keys(), ...rightMap.keys()])].sort((a, b) => {
+        const la = leftMap.get(a);
+        const ra = rightMap.get(a);
+        const aDir = !!la?.isDir || !!ra?.isDir;
+        const bDir = !!leftMap.get(b)?.isDir || !!rightMap.get(b)?.isDir;
+        if (aDir !== bDir) return aDir ? -1 : 1;
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      for (const name of names) {
+        if (truncated || isCompareStopped(requestId)) return;
+        const l = leftMap.get(name);
+        const r = rightMap.get(name);
+        const childRel = rel ? `${rel}/${name}` : name;
+        if (l && r) {
+          if (l.isDir && r.isDir) {
+            if (!emit({ relPath: childRel, isDir: true, status: 'same' })) return;
+            await compareDir(join(leftDir, name, leftMode), join(rightDir, name, rightMode), childRel);
+          } else if (l.isDir !== r.isDir) {
+            if (ignoreBinaryFiles && ((!l.isDir && isBinaryComparePath(childRel)) || (!r.isDir && isBinaryComparePath(childRel)))) continue;
+            if (!emit({ relPath: childRel, isDir: false, status: 'changed', leftSize: l.size, rightSize: r.size })) return;
+          } else {
+            if (ignoreBinaryFiles && isBinaryComparePath(childRel)) continue;
+            const same = l.size === r.size;
+            if (!emit({ relPath: childRel, isDir: false, status: same ? 'same' : 'changed', leftSize: l.size, rightSize: r.size })) return;
+          }
+        } else if (l) {
+          if (ignoreBinaryFiles && !l.isDir && isBinaryComparePath(childRel)) continue;
+          if (!emit({ relPath: childRel, isDir: l.isDir, status: 'left-only', leftSize: l.size })) return;
+          if (l.isDir && !skipOrphanDirectories) {
+            await emitOrphanTree(leftMode, leftTermId, join(leftDir, name, leftMode), childRel, 'left');
+          }
+        } else if (r) {
+          if (ignoreBinaryFiles && !r.isDir && isBinaryComparePath(childRel)) continue;
+          if (!emit({ relPath: childRel, isDir: r.isDir, status: 'right-only', rightSize: r.size })) return;
+          if (r.isDir && !skipOrphanDirectories) {
+            await emitOrphanTree(rightMode, rightTermId, join(rightDir, name, rightMode), childRel, 'right');
+          }
+        }
+      }
+    };
+
+    await compareDir(leftBasePath, rightBasePath, '');
+    return { entries: out, truncated, stopped: isCompareStopped(requestId) };
+  } catch (err: any) {
+    if (isCompareStopped(requestId)) return { entries: out, truncated, stopped: true };
+    return { entries: out, truncated, error: String(err) };
+  }
+});
+
+ipcMain.handle('compare:stop', (_e, { requestId }: { requestId: string }) => {
+  markCompareStopped(String(requestId || ''));
+  return { success: true };
 });
 
 // 파일 쓰기 — Compare 에디터에서 수정 후 저장. 로컬은 fs, 원격은 SFTP.
