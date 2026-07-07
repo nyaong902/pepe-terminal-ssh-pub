@@ -2596,8 +2596,9 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
-            // 탭바 위 드롭 — kind 무관, 가져온 모든 세션을 활성 탭의 첫 leaf 에 미니탭으로 병합.
-            if (onChrome && allSess.length > 0 && curTabId) {
+            // 탭바 위 드롭 — 단일 세션(kind='session')만 활성 탭의 첫 leaf 에 미니탭으로 병합.
+            // 워크스페이스 전체(kind='workspace')는 탭바에 드롭해도 병합하지 않고 새 탭으로 복원(폴백)돼야 함.
+            if (onChrome && payload.kind === 'session' && allSess.length > 0 && curTabId) {
               const curTab = tabsRef.current.find(t => t.id === curTabId);
               const targetLeafId = curTab ? findFirstLeafId(curTab.layout) : null;
               console.log('[adopt-tab] tabbar→merge', { curTab: !!curTab, targetLeafId, sessions: allSess.length });
@@ -2609,8 +2610,9 @@ function App() {
               }
             }
             // 패널 미니탭바(panel-header / panel-session-tabs)에 드롭 → 그 패널에 미니탭 병합 (split 금지)
+            // 워크스페이스 전체를 여기 드롭하면 세션 하나만 남기고 나머지가 사라지므로 session 일 때만.
             const onPanelTabBar = !!el?.closest('.panel-header, .panel-session-tabs, .panel-session-tabs-wrapper');
-            if (onPanelTabBar && leafId && sess && curTabId) {
+            if (onPanelTabBar && payload.kind === 'session' && leafId && sess && curTabId) {
               console.log('[adopt-tab] panel-tabbar→merge', { leafId });
               updateLayout(curTabId, l => appendSessionsToPanel(l, leafId, [sess], true));
               setSelectedPanelId(leafId);
