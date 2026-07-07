@@ -446,6 +446,9 @@ class SSHBridge extends EventEmitter {
         case 'log-inline':
           this.emit('message', { type: 'data', panelId, data: `\x1b[90m${msg.data}\x1b[0m` });
           break;
+        case 'log-inline-green':
+          this.emit('message', { type: 'data', panelId, data: `\x1b[92m${msg.data}\x1b[0m` });
+          break;
         case 'connected':
           this.clients.set(panelId, { conn: connProxy, stream: streamProxy, encoding: session?.encoding || 'utf-8' });
           this.emit('message', { type: 'connected', panelId });

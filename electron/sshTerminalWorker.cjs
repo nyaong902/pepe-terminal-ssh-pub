@@ -177,6 +177,9 @@ function connectSimple(session, cols, rows, x11Display) {
   if (x11Enabled) setupX11Forwarding(conn, x11Display);
 
   conn.on('ready', () => {
+    // 일반(non-worker) 경로의 logInline('92', '[SSH 연결 완료]\r\n') 과 동일 — 이 줄바꿈이
+    // 없으면 handshake/banner 인라인 메시지 바로 뒤에 첫 셸 프롬프트가 같은 줄에 붙어버림.
+    parentPort.postMessage({ type: 'log-inline-green', data: '[SSH 연결 완료]\r\n' });
     parentPort.postMessage({ type: 'connected' });
     const shellOpts = { cols: cols || 120, rows: rows || 24, term: 'xterm-256color' };
     if (x11Enabled) {
