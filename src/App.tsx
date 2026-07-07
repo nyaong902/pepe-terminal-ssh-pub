@@ -2737,6 +2737,8 @@ function App() {
   const detachTabToNewWindow = useCallback(async (tabId: TabId, screenX?: number, screenY?: number) => {
     const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
+    // 워크스페이스가 하나뿐이면 분리 금지 — 분리하면 이 창에 탭이 하나도 안 남게 됨.
+    if (tabsRef.current.length <= 1) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
     // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
