@@ -4571,7 +4571,10 @@ body.popout-options .session-editor h3:first-child {
   background: #181828;
   border-top: 1px solid var(--win-border, #333);
   font-size: 12px;
-  z-index: 1201;
+  /* position:fixed + z-index 는 자체 스태킹 컨텍스트를 만들어, 안에 있는 빠른 명령
+     드롭다운(inline zIndex:9991)도 이 값 기준으로만 비교된다 — .claude-chat-sidebar
+     (z-index:1300) 보다 낮아서 드롭다운이 그 뒤로 숨어버리는 문제가 있었다. */
+  z-index: 1350;
 }
 .broadcast-label {
   color: #e0a000;

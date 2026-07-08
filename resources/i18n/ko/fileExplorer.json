@@ -57,6 +57,7 @@
   "transferToRight": "오른쪽으로 전송",
   "transferToLeft": "왼쪽으로 전송",
   "transferFail": "전송 실패: {{name}}\n{{err}}",
+  "transferFailSummary": "파일 전송 실패 {{count}}건",
   "fileTransferConnectFail": "파일 전송 연결 실패 ({{name}})\n\n{{msg}}",
   "fileTransferConnectFailWithDevtools": "파일 전송 연결 실패 ({{name}})\n\n{{msg}}\n\nDevTools Console 에 [sftp-connect] 로그 확인 권장.",
   "fileTransferConnectException": "파일 전송 연결 예외: {{err}}",

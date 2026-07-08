@@ -109,6 +109,13 @@ class SSHBridge extends EventEmitter {
   private sftpWorkerOps: Map<string, Map<string, { resolve:(r:any)=>void; reject:(e:Error)=>void }>> = new Map();
   // 생성 중인 worker promise — 동일 panelId로 중복 생성 방지
   private sftpWorkerPromises: Map<string, Promise<Worker>> = new Map();
+  // 연결 실패 서킷브레이커 — 원인이 뭐든(예: 서버가 우리 build 가 실제로는 구현 안 한
+  // 알고리즘을 골라버리는 경우) worker 연결이 매번 즉시 실패하면, 재시도할 때마다 진짜 OS
+  // 스레드를 새로 만들었다 죽였다 반복하며 폭주할 수 있다(실제로 겪음 — 초당 수십 회 재시도가
+  // 메인 프로세스를 계속 바쁘게 만들어 터미널 입력이 멎은 것처럼 보였다). 최근에 실패한
+  // panelId 는 짧은 쿨다운 동안 재시도 자체를 건너뛴다.
+  private sftpWorkerFailedAt: Map<string, number> = new Map();
+  private readonly SFTP_WORKER_RETRY_COOLDOWN_MS = 3000;
   private scriptRunners: Map<string, ExpectSendRunner> = new Map();
   // X11 서버 측 실패 hint 중복 방지 — panelId 별 1회만.
   private x11HintEmitted: Set<string> = new Set();
@@ -1937,6 +1944,11 @@ probe_curl || probe_wget || probe_python
     // 이미 연결 중인 promise 재사용 — fire-and-forget + 실제 전송 동시에 호출 시 중복 생성 방지
     const pending = this.sftpWorkerPromises.get(panelId);
     if (pending) { xferLog(`worker connect already in-flight panelId=${panelId}`); return pending; }
+    const failedAt = this.sftpWorkerFailedAt.get(panelId);
+    if (failedAt && Date.now() - failedAt < this.SFTP_WORKER_RETRY_COOLDOWN_MS) {
+      xferLog(`worker skip — 최근 실패 쿨다운 중 panelId=${panelId}`);
+      return Promise.reject(new Error('SFTP worker 최근 연결 실패 — 잠시 후 재시도'));
+    }
     const session = this.sessionStore.get(panelId);
     if (!session) { xferLog(`worker skip — no sessionStore entry for panelId=${panelId}`); return Promise.reject(new Error('세션 정보 없음')); }
     xferLog(`worker spawn panelId=${panelId} host=${session.host}`);
@@ -1953,11 +1965,13 @@ probe_curl || probe_wget || probe_python
           resolved = true;
           xferLog(`worker ready panelId=${panelId}`);
           this.sftpWorkerPromises.delete(panelId);
+          this.sftpWorkerFailedAt.delete(panelId);
           this.sftpWorkers.set(panelId, worker);
           if (!this.sftpWorkerOps.has(panelId)) this.sftpWorkerOps.set(panelId, new Map());
           resolve(worker);
         } else if (msg.type === 'connect-error') {
           xferLog(`worker connect-error panelId=${panelId}: ${msg.error}`);
+          this.sftpWorkerFailedAt.set(panelId, Date.now());
           if (!resolved) reject(new Error(msg.error));
         } else if (msg.type === 'progress') {
           reqs.get(msg.id)?.onProgress(msg.transferred, msg.total);
@@ -1977,6 +1991,7 @@ probe_curl || probe_wget || probe_python
       });
       worker.on('error', (e: Error) => {
         xferLog(`worker error panelId=${panelId}: ${e?.message || e}`);
+        this.sftpWorkerFailedAt.set(panelId, Date.now());
         this.sftpWorkerPromises.delete(panelId);
         if (!resolved) reject(e);
         for (const r of reqs.values()) r.reject(e);
@@ -1989,6 +2004,7 @@ probe_curl || probe_wget || probe_python
       });
       worker.on('exit', () => {
         xferLog(`worker exit panelId=${panelId}`);
+        if (!this.sftpWorkers.has(panelId)) this.sftpWorkerFailedAt.set(panelId, Date.now());
         this.sftpWorkerPromises.delete(panelId);
         const ops = this.sftpWorkerOps.get(panelId);
         if (ops) { for (const p of ops.values()) p.reject(new Error('Worker exited')); ops.clear(); }
@@ -3217,7 +3233,10 @@ probe_curl || probe_wget || probe_python
       let channelOpened = false;
       const to = setTimeout(() => {
         xferLog(`exec timeout panelId=${panelId} channelOpened=${channelOpened} isProxy=${!!conn.__isWorkerConnProxy} cmd="${command.slice(0, 120)}" — 원격 프로세스 종료 시도`);
-        try { liveStream?.signal?.('KILL'); } catch {}
+        // signal('KILL') 은 서버/중간 프록시마다 지원이 들쭉날쭉해서, 잘못 처리되면 이 채널뿐
+        // 아니라 같은 연결을 공유하는 인터랙티브 터미널 채널까지 통째로 먹통이 될 위험이 있다
+        // (실제로 겪음 — exec 타임아웃 이후 터미널 입력이 전혀 안 먹히는 증상). close() 만으로
+        // 채널 종료는 충분하므로 signal 은 보내지 않는다.
         try { liveStream?.close?.(); } catch {}
         reject(new Error('exec timeout'));
       }, timeoutMs);

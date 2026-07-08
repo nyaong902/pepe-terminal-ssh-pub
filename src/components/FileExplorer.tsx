@@ -558,6 +558,14 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     if (selected.size === 0) return;
     setTransferring(true);
 
+    // 실패할 때마다 모달을 하나씩 띄우면(예: 연결이 끊긴 채로 수백~수천 개 파일을 계속
+    // 시도) 사용자가 그 개수만큼 "확인"을 눌러야 하는 문제가 있었다 — 실패는 모아뒀다가
+    // 끝나고 한 번만 요약해서 보여준다. 또한 같은 에러가 연속으로 반복되면(연결 끊김처럼
+    // 남은 파일도 다 실패할 게 뻔한 경우) 나머지를 무의미하게 다 시도하지 않고 중단한다.
+    const failures: { name: string; err: string }[] = [];
+    let consecutiveSameError = 0;
+    let lastError = '';
+    let aborted = false;
     for (const name of selected) {
       const srcFull = srcPath.endsWith(srcSep) ? srcPath + name : srcPath + srcSep + name;
       const dstFull = dstPath.endsWith(dstSep) ? dstPath + name : dstPath + dstSep + name;
@@ -566,7 +574,18 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         { mode: dstSource.mode, termId: dstSource.termId, path: dstFull },
         name,
       );
-      if (!result.success) notifyError(t('transferFail', { name, err: result.error }));
+      if (!result.success) {
+        const err = String(result.error || '');
+        failures.push({ name, err });
+        if (err && err === lastError) consecutiveSameError++; else { consecutiveSameError = 1; lastError = err; }
+        if (consecutiveSameError >= 5) { aborted = true; break; }
+      }
+    }
+    if (failures.length > 0) {
+      const preview = failures.slice(0, 5).map(f => `${f.name}: ${f.err}`).join('\n');
+      const more = failures.length > 5 ? `\n... 외 ${failures.length - 5}개` : '';
+      const abortedNote = aborted ? `\n\n(동일 오류 반복 감지 — 남은 파일 전송을 중단했습니다)` : '';
+      notifyError(t('transferFailSummary', { count: failures.length, defaultValue: `파일 전송 실패 ${failures.length}건` }), `${preview}${more}${abortedNote}`);
     }
 
     setTransferring(false);
@@ -580,6 +599,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const srcSep = srcMode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
 
     setTransferring(true);
+    const failures: { name: string; err: string }[] = [];
+    let consecutiveSameError = 0;
+    let lastError = '';
+    let aborted = false;
     for (const name of fileNames) {
       const srcFull = (srcPath || '').endsWith(srcSep) ? (srcPath || '') + name : (srcPath || '') + srcSep + name;
       const dstFull = dstPath.endsWith(dstSep) ? dstPath + name : dstPath + dstSep + name;
@@ -588,7 +611,18 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         { mode: dstSource.mode, termId: dstSource.termId, path: dstFull },
         name,
       );
-      if (!result.success) notifyError(t('transferFail', { name, err: result.error }));
+      if (!result.success) {
+        const err = String(result.error || '');
+        failures.push({ name, err });
+        if (err && err === lastError) consecutiveSameError++; else { consecutiveSameError = 1; lastError = err; }
+        if (consecutiveSameError >= 5) { aborted = true; break; }
+      }
+    }
+    if (failures.length > 0) {
+      const preview = failures.slice(0, 5).map(f => `${f.name}: ${f.err}`).join('\n');
+      const more = failures.length > 5 ? `\n... 외 ${failures.length - 5}개` : '';
+      const abortedNote = aborted ? `\n\n(동일 오류 반복 감지 — 남은 파일 전송을 중단했습니다)` : '';
+      notifyError(t('transferFailSummary', { count: failures.length, defaultValue: `파일 전송 실패 ${failures.length}건` }), `${preview}${more}${abortedNote}`);
     }
     setTransferring(false);
     setRefreshKey(k => k + 1);
