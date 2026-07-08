@@ -32,9 +32,13 @@ type Props = {
   initialState?: { leftTabs?: any[]; rightTabs?: any[]; leftActive?: number; rightActive?: number; lazyConns?: string[] } | null;
   // 상태가 바뀔 때마다 부모(App.tsx)에 보고 — 분리 시 직렬화하기 위해.
   onStateChange?: (state: { leftTabs: any[]; rightTabs: any[]; leftActive: number; rightActive: number; lazyConns: string[] }) => void;
+  // true면 "이미 연결된 세션 중 첫 번째를 자동으로 우측 패널에 연결"하는 로직을 건너뜀.
+  // 세션 우클릭 "파일전송"처럼 fe-sftp-connected 이벤트로 명시적 연결이 곧 도착하는 경우 사용 —
+  // 아니면 그 명시적 연결과 별개로 다른(관련 없는) 세션이 함께 자동 연결돼버림.
+  suppressAutoSelect?: boolean;
 };
 
-export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId, initialState, onStateChange }) => {
+export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId, initialState, onStateChange, suppressAutoSelect }) => {
   // 이 FileExplorer 인스턴스의 고유 ID — 전송 이벤트 필터링에 사용
   const workspaceIdRef = React.useRef(`fe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const { t } = useTranslation('fileExplorer');
@@ -67,9 +71,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   useEffect(() => { rightActiveRef.current = rightActive; }, [rightActive]);
   const rightTabsRef = useRef<PanelTab[]>([]);
   useEffect(() => { rightTabsRef.current = rightTabs; });
+  const leftTabsRef = useRef<PanelTab[]>([]);
+  useEffect(() => { leftTabsRef.current = leftTabs; });
+  // 한쪽 패널의 탭이 전부 닫혀있을 때를 대비한 더미 — 실제로는 그 패널(FilePanel)이 렌더링되지 않으므로 값 자체는 쓰이지 않는다.
+  const emptyTab: PanelTab = { id: '', source: { mode: 'local', label: localLabel }, path: '', selected: new Set() };
   // 활성 탭의 source/path/selected 를 derived 로 노출 — 기존 코드 호환
-  const leftTab = leftTabs[leftActive] || leftTabs[0];
-  const rightTab = rightTabs[rightActive] || rightTabs[0];
+  const leftTab = leftTabs[leftActive] || leftTabs[0] || emptyTab;
+  const rightTab = rightTabs[rightActive] || rightTabs[0] || emptyTab;
   const leftSource = leftTab.source;
   const rightSource = rightTab.source;
   const leftPath = leftTab.path;
@@ -95,7 +103,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // initialState 로 시작했으면(분리 창에서 복원) 자동 우측-원격-설정 effect 비활성 — 복원 상태 우선.
-  const rightSourceSetRef = React.useRef<boolean>(!!(initialState && (initialState.rightTabs?.length || initialState.leftTabs?.length)));
+  const rightSourceSetRef = React.useRef<boolean>(!!suppressAutoSelect || !!(initialState && (initialState.rightTabs?.length || initialState.leftTabs?.length)));
   const [showSftpConnect, setShowSftpConnect] = useState<'left' | 'right' | null>(null);
   const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left');
   const [sftpHost, setSftpHost] = useState('');
@@ -237,6 +245,28 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return () => { try { unsub2?.(); } catch {} };
   }, [bootReady]);
 
+  // 새 세션 탭을 열 패널 결정 — 비어있는(닫힌) 패널이 있으면 그쪽을 채워 자동으로 좌우 분할되게 하고,
+  // 둘 다 이미 차 있으면 기존처럼 오른쪽에 추가한다.
+  const pickNewSessionSide = (): 'left' | 'right' => {
+    if (rightTabsRef.current.length === 0) return 'right';
+    if (leftTabsRef.current.length === 0) return 'left';
+    return 'right';
+  };
+  // 이미 열려있는 termId 를 좌/우 어느 쪽이든 찾는다 (중복 탭 생성 방지)
+  const findExistingTabIndex = (termId: string): { side: 'left' | 'right'; idx: number } | null => {
+    let idx = leftTabsRef.current.findIndex(t => t.source.termId === termId);
+    if (idx >= 0) return { side: 'left', idx };
+    idx = rightTabsRef.current.findIndex(t => t.source.termId === termId);
+    if (idx >= 0) return { side: 'right', idx };
+    return null;
+  };
+  const addTabToSide = (side: 'left' | 'right', newTab: PanelTab) => {
+    const newIndex = (side === 'left' ? leftTabsRef : rightTabsRef).current.length;
+    if (side === 'left') { setLeftTabs(prev => [...prev, newTab]); setLeftActive(newIndex); }
+    else { setRightTabs(prev => [...prev, newTab]); setRightActive(newIndex); }
+    setSelectedSide(side);
+  };
+
   // 파일 전송 탭에서 세션 더블클릭으로 SFTP 연결된 이벤트 수신
   useEffect(() => {
     if (!bootReady) return;
@@ -245,7 +275,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       // 특정 파일 전송 탭을 대상으로 한 이벤트면 그 탭의 인스턴스만 처리 (중복 추가 방지)
       if (feTabId && tabId && feTabId !== tabId) return;
       // 이미 추가된 연결이면 무시
-      if (rightTabsRef.current.some(t => t.source.termId === connId)) return;
+      if (findExistingTabIndex(connId)) return;
       const sameNameCount = sources.filter(s => s.label?.includes(sessionName)).length;
       const num = sameNameCount + 1;
       const label = `🌐 ${sessionName} #${num} (${host})`;
@@ -258,16 +288,43 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
         return arr;
       });
-      // 오른쪽 패널에 '신규 탭'으로 연다 — 홈 경로 확보 후 탭 생성/활성화
+      // 홈 경로 확보 후 탭 생성/활성화 — 비어있는 패널이 있으면 그쪽에 열어 자동 분할
       const home = await getHomeWithRetry('remote', connId);
-      const newIndex = rightTabsRef.current.length;
-      setRightTabs(prev => [...prev, makeTab(newSrc, home)]);
-      setRightActive(newIndex);
-      setSelectedSide('right');
+      addTabToSide(pickNewSessionSide(), makeTab(newSrc, home));
     };
     window.addEventListener('fe-sftp-connected', handler);
     return () => window.removeEventListener('fe-sftp-connected', handler);
-  }, [rightSource.mode, bootReady]);
+  }, [bootReady]);
+
+  // 이미 열린 파일 전송 워크스페이스에서, 터미널의 "파일전송" 버튼/단축키로 활성 세션을 여는 이벤트 수신
+  // (fe-sftp-connected 와 달리 별도 SFTP 연결을 새로 만들지 않고, 이미 연결된 터미널의 SSH 세션을 그대로 재사용)
+  useEffect(() => {
+    if (!bootReady) return;
+    const handler = async (e: Event) => {
+      const { termId: tid, remotePath, feTabId } = (e as CustomEvent).detail || {};
+      if (!tid) return;
+      // 특정 파일 전송 탭을 대상으로 한 이벤트면 그 탭의 인스턴스만 처리
+      if (feTabId && tabId && feTabId !== tabId) return;
+      // 이미 그 세션이 열려있으면 새로 만들지 않고 그 탭으로 포커스만 이동
+      const existing = findExistingTabIndex(tid);
+      if (existing) {
+        if (existing.side === 'left') setLeftActive(existing.idx); else setRightActive(existing.idx);
+        setSelectedSide(existing.side);
+        if (remotePath && remotePath.trim() && remotePath !== '/') {
+          const setter = existing.side === 'left' ? setLeftTabs : setRightTabs;
+          setter(prev => prev.map((t, i) => i === existing.idx ? { ...t, path: remotePath.trim() } : t));
+        }
+        return;
+      }
+      const sess = sessions.find(s => s.termId === tid);
+      const label = sess ? `🌐 ${sess.sessionName}` : `🌐 ${tid}`;
+      const newSrc: PanelSource = { mode: 'remote', termId: tid, sessionId: sess?.sessionId, label };
+      const path = (remotePath && remotePath.trim() && remotePath !== '/') ? remotePath.trim() : await getHomeWithRetry('remote', tid);
+      addTabToSide(pickNewSessionSide(), makeTab(newSrc, path));
+    };
+    window.addEventListener('fe-open-session', handler);
+    return () => window.removeEventListener('fe-open-session', handler);
+  }, [sessions, bootReady]);
 
   // 빠른 연결 바에서 들어오는 SFTP 직접 연결 요청 처리
   useEffect(() => {
@@ -281,7 +338,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       try {
         const result = await api.feSftpConnect?.(connId, info.host, Number(info.port) || 22, info.username, { type: 'password', password: info.auth?.password ?? '' });
         if (!result?.success) { notifyError(t('connectFail', { err: result?.error || t('unknownError') })); return; }
-        if (rightTabsRef.current.some(t => t.source.termId === connId)) return;
+        if (findExistingTabIndex(connId)) return;
         const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${info.username}@${info.host}` };
         setSources(prev => {
           if (prev.find(s => s.termId === connId)) return prev;
@@ -290,18 +347,14 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
           return arr;
         });
-        // 오른쪽 패널에 '신규 탭'으로 연다
         let home = '/';
         try { home = (await api.feHomeDir('remote', connId)) || '/'; } catch {}
-        const newIndex = rightTabsRef.current.length;
-        setRightTabs(prev => [...prev, makeTab(newSrc, home)]);
-        setRightActive(newIndex);
-        setSelectedSide('right');
+        addTabToSide(pickNewSessionSide(), makeTab(newSrc, home));
       } catch (err: any) { notifyError(t('connectFail', { err })); }
     };
     window.addEventListener('fe-quick-sftp-connect', handler);
     return () => window.removeEventListener('fe-quick-sftp-connect', handler);
-  }, [selectedSide, bootReady]);
+  }, [bootReady]);
 
   // sessions prop 변경 시 소스 목록 갱신
   const sessKey = sessions.map(s => s.termId).join(',');
@@ -610,7 +663,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   };
   const closePanelTab = (side: 'left' | 'right', idx: number) => {
     const tabs = side === 'left' ? leftTabs : rightTabs;
-    if (tabs.length <= 1) return; // 최소 한 탭은 유지
+    const otherTabs = side === 'left' ? rightTabs : leftTabs;
+    // 이 탭이 마지막이고 반대쪽 패널도 비어있다면 — 전체가 빈 상태가 되므로 닫기 금지.
+    // 반대쪽에 탭이 있다면 이 패널을 완전히 닫아 반대쪽 패널만 남기는 것(동적 단일 패널 전환)을 허용한다.
+    if (tabs.length <= 1 && otherTabs.length === 0) return;
     const active = side === 'left' ? leftActive : rightActive;
     const next = tabs.filter((_, i) => i !== idx);
     let newActive = active;
@@ -618,16 +674,35 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     else if (idx === active) newActive = Math.min(active, next.length - 1);
     if (side === 'left') { setLeftTabs(next); setLeftActive(newActive); }
     else { setRightTabs(next); setRightActive(newActive); }
+    if (next.length === 0 && selectedSide === side) {
+      setSelectedSide(side === 'left' ? 'right' : 'left');
+    }
   };
   // 탭 라벨 — path 의 basename, 빈 경로면 source label 약식
+  // source.label 맨 앞 상태 아이콘(🟢/⚪/🌐/🔌) 추출 — u 플래그로 서로게이트 페어 안전하게 매칭. 로컬은 💻 고정.
+  const tabIcon = (tab: PanelTab): string => {
+    if (tab.source.mode === 'local') return '💻';
+    const m = (tab.source.label || '').match(/^[🟢⚪🌐🔌]/u);
+    return m ? m[0] : '🌐';
+  };
+  // 로컬 탭은 폴더명(기존 방식), 원격 탭은 항상 접속 세션명 — 폴더명 기준이면 같은 이름 디렉토리에서
+  // 서로 다른 세션이 구분 안 되므로, 원격은 "어느 세션인지"가 우선이다.
   const tabLabel = (tab: PanelTab): string => {
-    const p = tab.path || '';
-    if (p) {
-      const m = p.match(/[^\\/]+$/);
-      if (m) return m[0];
+    if (tab.source.mode === 'local') {
+      const p = tab.path || '';
+      if (p) {
+        const m = p.match(/[^\\/]+$/);
+        if (m) return m[0];
+      }
+      return '~';
     }
     const lbl = tab.source.label || '';
-    return lbl.replace(/^[🟢⚪🌐🔌🔒]\s*/, '').split(/\s+\[/)[0].slice(0, 24) || '~';
+    return lbl
+      .replace(/^[🟢⚪🌐🔌🔒]\s*/u, '')
+      .replace(/\s*\[[^\]]*\]/, '')
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      .trim()
+      .slice(0, 24) || '~';
   };
 
   // 드래그 상태 — fromSide 와 overSide 분리: 한 패널 내 reorder + 좌↔우 이동 모두 지원
@@ -678,6 +753,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   const renderPanelTabs = (side: 'left' | 'right') => {
     const tabs = side === 'left' ? leftTabs : rightTabs;
+    const otherTabs = side === 'left' ? rightTabs : leftTabs;
     const active = side === 'left' ? leftActive : rightActive;
     return (
       <div className="fe-panel-tabs">
@@ -715,10 +791,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
               setTabDrag(null);
             }}
             onDragEnd={() => setTabDrag(null)}
-            title={tab.path || tab.source.label}
+            title={tab.path ? `${tab.source.label}\n${tab.path}` : tab.source.label}
           >
-            <span className="fe-panel-tab-label">{tabLabel(tab)}</span>
-            {tabs.length > 1 && (
+            <span className="fe-panel-tab-label">{tabIcon(tab) ? `${tabIcon(tab)} ` : ''}{tabLabel(tab)}</span>
+            {(tabs.length > 1 || otherTabs.length > 0) && (
               <button
                 className="fe-panel-tab-close"
                 onClick={e => { e.stopPropagation(); closePanelTab(side, idx); }}
@@ -786,32 +862,38 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   try { return (
     <div className="fe-container">
       <div className="fe-dual">
-        <div className={`fe-panel-wrap ${selectedSide === 'left' ? 'selected' : ''}`} onMouseDownCapture={() => setSelectedSide('left')}>
-          {renderPanelTabs('left')}
-          <FilePanel panelId="left" refreshKey={refreshKey}
-            source={leftSource} sources={sources} onSourceChange={handleLeftSourceChange}
-            selectedFiles={leftSelected} onSelectionChange={setLeftSelected}
-            currentPath={leftPath} onPathChange={setLeftPath}
-            onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop('left', files, srcMode, srcTermId, srcPath)}
-            onDisconnect={() => handleDisconnect(leftSource)}
-            workspaceId={workspaceIdRef.current}
-          />
-        </div>
-        <div className="fe-transfer-btns">
-          <button className="fe-transfer-btn" onClick={() => transferFiles('left-to-right')} disabled={transferring || leftSelected.size === 0} title={t('transferToRight')}>→</button>
-          <button className="fe-transfer-btn" onClick={() => transferFiles('right-to-left')} disabled={transferring || rightSelected.size === 0} title={t('transferToLeft')}>←</button>
-        </div>
-        <div className={`fe-panel-wrap ${selectedSide === 'right' ? 'selected' : ''}`} onMouseDownCapture={() => setSelectedSide('right')}>
-          {renderPanelTabs('right')}
-          <FilePanel panelId="right" refreshKey={refreshKey}
-            source={rightSource} sources={sources} onSourceChange={handleRightSourceChange}
-            selectedFiles={rightSelected} onSelectionChange={setRightSelected}
-            currentPath={rightPath} onPathChange={setRightPath}
-            onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop('right', files, srcMode, srcTermId, srcPath)}
-            onDisconnect={() => handleDisconnect(rightSource)}
-            workspaceId={workspaceIdRef.current}
-          />
-        </div>
+        {leftTabs.length > 0 && (
+          <div className={`fe-panel-wrap ${selectedSide === 'left' ? 'selected' : ''}`} onMouseDownCapture={() => setSelectedSide('left')}>
+            {renderPanelTabs('left')}
+            <FilePanel panelId="left" refreshKey={refreshKey}
+              source={leftSource} sources={sources} onSourceChange={handleLeftSourceChange}
+              selectedFiles={leftSelected} onSelectionChange={setLeftSelected}
+              currentPath={leftPath} onPathChange={setLeftPath}
+              onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop('left', files, srcMode, srcTermId, srcPath)}
+              onDisconnect={() => handleDisconnect(leftSource)}
+              workspaceId={workspaceIdRef.current}
+            />
+          </div>
+        )}
+        {leftTabs.length > 0 && rightTabs.length > 0 && (
+          <div className="fe-transfer-btns">
+            <button className="fe-transfer-btn" onClick={() => transferFiles('left-to-right')} disabled={transferring || leftSelected.size === 0} title={t('transferToRight')}>→</button>
+            <button className="fe-transfer-btn" onClick={() => transferFiles('right-to-left')} disabled={transferring || rightSelected.size === 0} title={t('transferToLeft')}>←</button>
+          </div>
+        )}
+        {rightTabs.length > 0 && (
+          <div className={`fe-panel-wrap ${selectedSide === 'right' ? 'selected' : ''}`} onMouseDownCapture={() => setSelectedSide('right')}>
+            {renderPanelTabs('right')}
+            <FilePanel panelId="right" refreshKey={refreshKey}
+              source={rightSource} sources={sources} onSourceChange={handleRightSourceChange}
+              selectedFiles={rightSelected} onSelectionChange={setRightSelected}
+              currentPath={rightPath} onPathChange={setRightPath}
+              onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop('right', files, srcMode, srcTermId, srcPath)}
+              onDisconnect={() => handleDisconnect(rightSource)}
+              workspaceId={workspaceIdRef.current}
+            />
+          </div>
+        )}
       </div>
       <div className="fe-transfers-resize" onMouseDown={onResizeStart} />
       <div className="fe-transfers" style={{ height: transfersHeight }}>
