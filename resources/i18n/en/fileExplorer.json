@@ -57,6 +57,7 @@
   "transferToRight": "Transfer to right",
   "transferToLeft": "Transfer to left",
   "transferFail": "Transfer failed: {{name}}\n{{err}}",
+  "transferFailSummary": "{{count}} file transfer(s) failed",
   "fileTransferConnectFail": "File transfer connection failed ({{name}})\n\n{{msg}}",
   "fileTransferConnectFailWithDevtools": "File transfer connection failed ({{name}})\n\n{{msg}}\n\nCheck [sftp-connect] log in DevTools Console.",
   "fileTransferConnectException": "File transfer connection exception: {{err}}",

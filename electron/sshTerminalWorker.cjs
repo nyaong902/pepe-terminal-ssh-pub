@@ -119,7 +119,8 @@ function handleExecRequest(reqId, command) {
   const to = setTimeout(() => {
     if (settled) return;
     settled = true;
-    try { liveStream?.signal?.('KILL'); } catch (_e) {}
+    // signal('KILL') 은 서버/프록시 지원이 들쭉날쭉해 잘못 처리되면 이 채널뿐 아니라 conn 을
+    // 공유하는 인터랙티브 셸 채널까지 먹통이 될 수 있다(실제로 겪음) — close() 만 보낸다.
     try { liveStream?.close?.(); } catch (_e) {}
     parentPort.postMessage({ type: 'exec-error', reqId, error: 'exec timeout (worker)' });
   }, EXEC_TIMEOUT_MS);

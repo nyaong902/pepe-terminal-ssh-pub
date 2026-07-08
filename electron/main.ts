@@ -5742,6 +5742,12 @@ function detectSnapZone(mouseX: number, mouseY: number): { zone: SnapZone; workA
 function winOf(e: any): BrowserWindow | null {
   try { return BrowserWindow.fromWebContents(e.sender) || mainWindow; } catch { return mainWindow; }
 }
+
+// 렌더러가 완전히 멈춰 Ctrl+Shift+I(전역 키 핸들러 포함) 조차 안 먹는 경우를 대비해,
+// 툴바 버튼으로도 개발자도구를 열 수 있게 — 키보드 경로에 의존하지 않는 별도 진입점.
+ipcMain.handle('window:toggle-devtools', (e) => {
+  try { winOf(e)?.webContents.toggleDevTools(); return true; } catch { return false; }
+});
 // 현재 타이틀바 드래그 중인 창 (분리 창도 드래그 가능하도록 추적)
 let draggingWin: BrowserWindow | null = null;
 

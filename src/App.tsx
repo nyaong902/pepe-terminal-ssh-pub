@@ -4923,6 +4923,11 @@ function App() {
             try { const p = await (window as any).api.getSessionsPath(); setSessionsPathDisplay(p || ''); } catch {}
             setShowOptions(true);
           }}>⚙️</button>
+          <button
+            className="tool-btn"
+            title={tApp('toolbar.devTools', { defaultValue: '개발자도구' })}
+            onClick={() => { try { (window as any).api?.windowToggleDevTools?.(); } catch {} }}
+          >🛠️</button>
             </div>
           );
           return (

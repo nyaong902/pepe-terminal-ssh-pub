@@ -277,6 +277,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('remote-share:start', options),
   remoteShareStop: () => ipcRenderer.invoke('remote-share:stop'),
   windowIsMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  windowToggleDevTools: () => ipcRenderer.invoke('window:toggle-devtools'),
   // 탭 분리(멀티 윈도우)
   detachTab: (payload: any, bounds?: any) => ipcRenderer.invoke('window:detach-tab', { payload, bounds }),
   dropTab: (payload: any, point?: any) => ipcRenderer.invoke('window:drop-tab', { payload, point }),

@@ -916,17 +916,25 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
             }
             if (e.key === 'ArrowDown' && !e.ctrlKey && !e.altKey && !e.metaKey) {
               e.preventDefault();
+              e.stopPropagation();
               moveSelectionBy(1);
               return;
             }
             if (e.key === 'ArrowUp' && !e.ctrlKey && !e.altKey && !e.metaKey) {
               e.preventDefault();
+              e.stopPropagation();
               moveSelectionBy(-1);
               return;
             }
             if (e.key === 'Enter' && !e.shiftKey) {
               if (selectedType === 'session' && selectedId) {
                 e.preventDefault();
+                // stopPropagation 없이 preventDefault 만 하면, 이 Enter 키다운 이벤트가 세션을
+                // 연결한 뒤에도 계속 버블링돼 다른 전역 keydown 리스너(window, capture 단계에서
+                // 이미 한 번 지나갔더라도 bubble 단계 리스너는 여전히 남아있음)로 새어나간다 —
+                // 방향키+Enter로 새 세션을 열면 "이전" 터미널의 입력이 막혀버리던 원인 중 하나로
+                // 의심되는 지점이라 완전히 막는다.
+                e.stopPropagation();
                 connectSelectedSession();
               }
               return;

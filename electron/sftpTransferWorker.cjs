@@ -27,9 +27,16 @@ const FAST_ALGORITHMS = (() => {
   const fastCipher = ['aes128-gcm@openssh.com', 'aes256-gcm@openssh.com', 'aes128-ctr', 'aes192-ctr', 'aes256-ctr', 'chacha20-poly1305@openssh.com'];
   const fastKex = ['curve25519-sha256', 'curve25519-sha256@libssh.org', 'ecdh-sha2-nistp256', 'ecdh-sha2-nistp384', 'ecdh-sha2-nistp521'];
   if (!SUP) return { cipher: fastCipher, kex: fastKex };
+  // dedup 은 순서만 조정할 뿐 필터링을 안 해서, 이 하드코딩된 "빠른" 목록에 이 ssh2 빌드가
+  // 실제로는 구현 안 한 알고리즘(예: chacha20-poly1305@openssh.com — libsodium 미탑재 빌드)이
+  // 섞여 있으면 서버에 "지원한다"고 광고해버린다. 서버가 그걸 골라버리면 매 연결마다
+  // "Unsupported algorithm" 으로 실패 → 호출부가 계속 재시도해서 무한 재접속 폭주로 이어졌다
+  // (실제로 겪음 — 터미널 입력이 멈춘 것처럼 보이던 원인). SUPPORTED_* 에 실제로 있는 것만 남긴다.
+  const supportedFastCipher = fastCipher.filter(c => SUP.SUPPORTED_CIPHER.includes(c));
+  const supportedFastKex = fastKex.filter(c => SUP.SUPPORTED_KEX.includes(c));
   return {
-    cipher: dedup(fastCipher, SUP.SUPPORTED_CIPHER),
-    kex: dedup(fastKex, SUP.SUPPORTED_KEX),
+    cipher: dedup(supportedFastCipher, SUP.SUPPORTED_CIPHER),
+    kex: dedup(supportedFastKex, SUP.SUPPORTED_KEX),
     serverHostKey: SUP.SUPPORTED_SERVER_HOST_KEY,
     hmac: SUP.SUPPORTED_MAC,
   };

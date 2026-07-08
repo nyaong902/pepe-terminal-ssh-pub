@@ -122,6 +122,7 @@
     "xStop": "Stop X server",
     "xStatus": "X server status",
     "options": "Options",
+    "devTools": "Developer Tools",
     "dragTargetTop": "Top",
     "dragTargetQcLeft": "Left of quick-connect",
     "dragTargetQcRight": "Right of quick-connect",

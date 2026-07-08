@@ -1017,6 +1017,12 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
       }
       // 찾기/클리어 관련 단축키를 터미널에서 가로채지 않고 앱으로 전달
       if (matchKeybinding(e, 'find') || matchKeybinding(e, 'clearScrollback') || matchKeybinding(e, 'clearScreen') || matchKeybinding(e, 'clearAll')) return false;
+      // 커맨드 팔레트(기본 Ctrl+W) — 이 목록에 빠져있으면 앱의 전역 캡처 핸들러가
+      // preventDefault 를 걸어도 xterm 자체 키 처리는 막히지 않아(stopPropagation 이 아니므로)
+      // 그대로 진행돼 Ctrl+W 의 원시 바이트(0x17, 대부분 셸에서 "이전 단어 삭제")가 그대로 PTY 로
+      // 전송돼버린다 — 팔레트가 열리면서 동시에 터미널 라인이 지워지고, 그 직후 입력이 먹통처럼
+      // 보이는 원인이었다.
+      if (matchKeybinding(e, 'commandPalette')) return false;
       // 세션 복제 분할 단축키도 앱으로 전달
       if (matchKeybinding(e, 'cloneSplitH') || matchKeybinding(e, 'cloneSplitV')) return false;
       // 연결된 세션 분할 단축키도 앱으로 전달
