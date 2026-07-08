@@ -5921,6 +5921,18 @@ ipcMain.handle('window:detach-tab', (_e, { payload, bounds }: { payload: any; bo
 // stickyNotesStore.ts 에 즉시 저장되어 앱을 껐다 켜도 마지막 위치에 그대로 복원된다.
 const stickyNoteWindows = new Map<string, BrowserWindow>();
 const stickyNoteBoundsSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// "최소화"된 포스트잇 — OS 작업표시줄 대신 메인 창 우측 사이드바(스티커 메모 패널)에서 관리한다
+// (skipTaskbar 라 OS 최소화로는 복구할 방법이 없었음). 창을 파괴하지 않고 숨기기만 한다.
+const minimizedStickyNoteIds = new Set<string>();
+// 사이드바 패널은 최소화 여부와 무관하게 전체 포스트잇 목록을 보여준다(Windows 스티커 메모 앱 패턴) —
+// 만들기/수정/삭제/최소화/복구 어느 쪽이든 바뀔 때마다 전체 목록을 다시 브로드캐스트.
+function broadcastStickyNoteList() {
+  try {
+    const { notes } = loadStickyNotes();
+    const list = notes.map(n => ({ id: n.id, html: n.html, updatedAt: n.updatedAt, minimized: minimizedStickyNoteIds.has(n.id) }));
+    mainWindow?.webContents.send('sticky-note:list', list);
+  } catch {}
+}
 
 function loadStickyNoteWindow(url: string, win: BrowserWindow) {
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
@@ -5970,6 +5982,7 @@ function createStickyNoteWindow(note: StickyNote, focus: boolean) {
     const timer = stickyNoteBoundsSaveTimers.get(note.id);
     if (timer) clearTimeout(timer);
     stickyNoteBoundsSaveTimers.delete(note.id);
+    if (minimizedStickyNoteIds.delete(note.id)) broadcastStickyNoteList();
   });
   loadStickyNoteWindow(`#sticky-note?id=${encodeURIComponent(note.id)}`, win);
   return win;
@@ -6000,6 +6013,7 @@ ipcMain.handle('sticky-note:create', () => {
   };
   addStickyNote(note);
   createStickyNoteWindow(note, true);
+  broadcastStickyNoteList();
   return note;
 });
 
@@ -6007,6 +6021,7 @@ ipcMain.handle('sticky-note:get', (_e, id: string) => getStickyNote(id) || null)
 
 ipcMain.handle('sticky-note:update-content', (_e, { id, html }: { id: string; html: string }) => {
   try { updateStickyNote(id, { html }); } catch {}
+  broadcastStickyNoteList();
 });
 
 ipcMain.handle('sticky-note:delete', (_e, id: string) => {
@@ -6014,6 +6029,36 @@ ipcMain.handle('sticky-note:delete', (_e, id: string) => {
   if (win && !win.isDestroyed()) win.destroy();
   stickyNoteWindows.delete(id);
   try { removeStickyNote(id); } catch {}
+  minimizedStickyNoteIds.delete(id);
+  broadcastStickyNoteList();
+});
+
+// 사이드바 패널로 최소화 — 창을 숨기고(파괴 아님) id 를 목록에 추가.
+ipcMain.handle('sticky-note:minimize-to-sidebar', (_e, id: string) => {
+  const win = stickyNoteWindows.get(id);
+  if (win && !win.isDestroyed()) win.hide();
+  minimizedStickyNoteIds.add(id);
+  broadcastStickyNoteList();
+});
+
+// 사이드바 패널에서 특정 포스트잇을 클릭 — 최소화 여부와 무관하게 보이고 포커스.
+ipcMain.handle('sticky-note:focus', (_e, id: string) => {
+  const win = stickyNoteWindows.get(id);
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  } else {
+    // 창이 (Alt+F4 등으로) 닫혔지만 데이터는 남아있는 경우 — 다시 띄운다.
+    const note = getStickyNote(id);
+    if (note) createStickyNoteWindow(note, true);
+  }
+  minimizedStickyNoteIds.delete(id);
+  broadcastStickyNoteList();
+});
+
+ipcMain.handle('sticky-note:get-list', () => {
+  const { notes } = loadStickyNotes();
+  return notes.map(n => ({ id: n.id, html: n.html, updatedAt: n.updatedAt, minimized: minimizedStickyNoteIds.has(n.id) }));
 });
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
 ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {
