@@ -328,11 +328,8 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         if (fileExts.size > 0) {
           const exts = Array.from(fileExts);
           exts.forEach(e => extRequestedRef.current.add('file:' + e));
-          console.log(`[ps-dbg] remote ext-icon CALLING feGetIconsByExt (${exts.length} exts) hasFocus=${document.hasFocus()}`);
-          const t0 = Date.now();
           try {
             const r: any = await api.feGetIconsByExt?.(exts, false);
-            console.log(`[ps-dbg] remote ext-icon RESOLVED ${Date.now() - t0}ms hasFocus=${document.hasFocus()}`);
             if (r?.icons) {
               setExtIconCache(prev => {
                 const next = new Map(prev);
@@ -346,10 +343,8 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         }
         if (needsDirIcon && !extRequestedRef.current.has('dir:')) {
           extRequestedRef.current.add('dir:');
-          console.log(`[ps-dbg] remote dir-icon CALLING feGetIconsByExt hasFocus=${document.hasFocus()}`);
           try {
             const r: any = await api.feGetIconsByExt?.([''], true);
-            console.log(`[ps-dbg] remote dir-icon RESOLVED hasFocus=${document.hasFocus()}`);
             if (r?.icons && r.icons['']) {
               setExtIconCache(prev => { const next = new Map(prev); next.set('dir:', r.icons['']); return next; });
             }
@@ -840,7 +835,6 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // 새 폴더 — 중복 안 되는 자동 이름으로 생성. 중복 있었으면 rename 모드 진입해서 사용자가 바꿀 수 있게.
   const handleMkdir = async () => {
     const { name, hadConflict } = findFreshName('New Folder');
-    console.log(`[ps-dbg] handleMkdir START name="${name}" hadConflict=${hadConflict} hasFocus=${document.hasFocus()}`);
     try {
       const dirPath = currentPath.endsWith(sep) ? currentPath + name : currentPath + sep + name;
       const r = await api.feMkdir?.(source.mode, dirPath, source.termId);
@@ -848,15 +842,12 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         setErrorMessage(t('createFolderFail', { err: r.error }));
         return;
       }
-      console.log(`[ps-dbg] handleMkdir feMkdir DONE hasFocus=${document.hasFocus()}`);
       // ★ 모달 먼저 띄움 (loadDir → 아이콘 PowerShell spawn 보다 먼저)
       if (hadConflict) {
-        console.log(`[ps-dbg] handleMkdir setRenamingFile (BEFORE loadDir) hasFocus=${document.hasFocus()}`);
         setRenamingFile(name);
         setRenameValue(name);
       }
       await loadDir(currentPath);
-      console.log(`[ps-dbg] handleMkdir loadDir DONE hasFocus=${document.hasFocus()}`);
       onSelectionChange(new Set([name]));
       setTimeout(() => {
         const el = document.querySelector(`.fe-file-row[data-name="${CSS.escape(name)}"]`) as HTMLElement | null;

@@ -19,20 +19,18 @@ export const RenameDialog: React.FC<Props> = ({ initialName, isDir, onConfirm, o
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    console.log(`[ps-dbg] RenameDialog MOUNT initialName="${initialName}" isDir=${isDir} hasFocus=${document.hasFocus()} activeEl=${document.activeElement?.tagName}/${(document.activeElement as any)?.className || ''}`);
-    const focus = (tag: string) => {
+    const focus = () => {
       try {
         el.focus();
         const v = el.value;
         const isDotfile = v.startsWith('.');
         const dot = (isDir || isDotfile) ? -1 : v.lastIndexOf('.');
         el.setSelectionRange(0, dot > 0 ? dot : v.length);
-        console.log(`[ps-dbg] RenameDialog focus[${tag}] hasFocus=${document.hasFocus()} activeIsInput=${document.activeElement === el}`);
       } catch {}
     };
-    focus('sync');
-    const t = setTimeout(() => focus('t30'), 30);
-    return () => { console.log('[ps-dbg] RenameDialog UNMOUNT'); clearTimeout(t); };
+    focus();
+    const t = setTimeout(() => focus(), 30);
+    return () => { clearTimeout(t); };
   }, [isDir, initialName]);
 
   const submit = () => {

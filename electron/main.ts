@@ -4230,14 +4230,11 @@ $results | ConvertTo-Json -Compress`;
     const tmpPs = path.join(os.tmpdir(), `pepe-ext-icons-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
-      console.log(`[ps-dbg main] SPAWN PowerShell (ext-icons) exts=${remaining.length} isDir=${isDir} mainHasFocus=${mainWindow?.isFocused()}`);
-      const psStart = Date.now();
       const out: string = await new Promise<string>((resolve, reject) => {
         execFile('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
         ], { windowsHide: true, timeout: 30000, encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
         (err: any, stdout: string) => {
-          console.log(`[ps-dbg main] PowerShell (ext-icons) DONE ${Date.now() - psStart}ms mainHasFocus=${mainWindow?.isFocused()} err=${!!err}`);
           if (err) reject(err);
           else resolve((stdout || '').trim());
         });
@@ -4351,15 +4348,12 @@ $results | ConvertTo-Json -Compress`;
     const tmpPs = path.join(os.tmpdir(), `pepe-icons-batch-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
-      console.log(`[ps-dbg main] SPAWN PowerShell (icons-batch) paths=${remaining.length} mainHasFocus=${mainWindow?.isFocused()} at=${new Date().toISOString()}`);
-      const psStart = Date.now();
       // async execFile — main process 블록 안 함 → 렌더러의 windowFocus 요청 등이 즉시 처리됨
       const out: string = await new Promise<string>((resolve, reject) => {
         execFile('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
         ], { windowsHide: true, timeout: 30000, encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
         (err: any, stdout: string) => {
-          console.log(`[ps-dbg main] PowerShell (icons-batch) DONE ${Date.now() - psStart}ms mainHasFocus=${mainWindow?.isFocused()} err=${!!err}`);
           if (err) reject(err);
           else resolve((stdout || '').trim());
         });
@@ -5836,7 +5830,6 @@ ipcMain.handle('window:close', (e) => winOf(e)?.close());
 ipcMain.handle('window:focus', (e) => {
   const w = winOf(e);
   if (!w) return;
-  console.log(`[ps-dbg main] window:focus IPC received hasFocus(before)=${w.isFocused()} minimized=${w.isMinimized()}`);
   try {
     if (w.isMinimized()) w.restore();
     // Windows 에서 백그라운드 process(PowerShell 등) 가 잠시 foreground 를 채간 경우,
@@ -5859,8 +5852,7 @@ ipcMain.handle('window:focus', (e) => {
     }
     // app.focus() 도 추가 — Electron 앱 자체를 foreground 로
     try { app.focus({ steal: true }); } catch {}
-    console.log(`[ps-dbg main] window:focus IPC DONE hasFocus(after)=${w.isFocused()}`);
-  } catch (err) { console.log('[ps-dbg main] window:focus IPC ERR', err); }
+  } catch (err) { console.error('[window:focus] failed', err); }
 });
 
 // ── 탭 분리(멀티 윈도우) ─────────────────────────────────────────────

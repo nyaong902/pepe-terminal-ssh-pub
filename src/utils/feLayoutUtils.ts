@@ -1,0 +1,164 @@
+// src/utils/feLayoutUtils.ts
+// 파일 전송 워크스페이스의 상하좌우 분할 레이아웃 트리 유틸리티.
+// src/utils/layoutUtils.ts(터미널 세션용)와 동일한 트리 구조(row/column 분할, sizes)를 쓰되,
+// leaf 의 payload 가 PanelSession[] 대신 파일 브라우저 탭(FeTab[])이라는 점만 다르다.
+import { makeId } from './layoutUtils';
+import type { PanelSource } from '../components/FilePanel';
+
+export type FeTab = { id: string; source: PanelSource; path: string; selected: Set<string> };
+export type FePanel = { id: string; tabs: FeTab[]; activeIdx: number };
+
+export type FeLeafNode = { id: string; type: 'leaf'; panel: FePanel };
+export type FeContainerNode = {
+  id: string;
+  type: 'row' | 'column';
+  children: FeLayoutNode[];
+  sizes?: number[];
+};
+export type FeLayoutNode = FeLeafNode | FeContainerNode;
+
+export function makeFeTab(source: PanelSource, path = ''): FeTab {
+  return { id: makeId('fetab'), source, path, selected: new Set() };
+}
+
+export function createInitialFeLayout(localLabel: string): FeLayoutNode {
+  return {
+    id: makeId('fenode-root'),
+    type: 'leaf',
+    panel: { id: makeId('fepanel'), tabs: [makeFeTab({ mode: 'local', label: localLabel })], activeIdx: 0 },
+  };
+}
+
+/**
+ * 타겟 leaf 를 row/column 컨테이너로 교체. 새 leaf 는 localLabel 탭 하나로 시작.
+ * newLeafId 를 지정하면 새로 생긴 leaf 의 id 를 호출부에서 미리 알 수 있어(예: 분할 직후 자동 포커스/탭 채우기).
+ */
+export function splitFeNode(
+  root: FeLayoutNode,
+  targetId: string,
+  direction: 'row' | 'column',
+  localLabel: string,
+  insertBefore: boolean,
+  newLeafId: string = makeId('fenode'),
+): FeLayoutNode {
+  if (root.id === targetId && root.type === 'leaf') {
+    const existing: FeLeafNode = { id: root.id, type: 'leaf', panel: { ...root.panel } };
+    const newLeaf: FeLeafNode = {
+      id: newLeafId, type: 'leaf',
+      panel: { id: makeId('fepanel'), tabs: [makeFeTab({ mode: 'local', label: localLabel })], activeIdx: 0 },
+    };
+    const children = insertBefore ? [newLeaf, existing] : [existing, newLeaf];
+    return { id: makeId('fecontainer'), type: direction, children };
+  }
+  if (root.type === 'leaf') return root;
+  return { ...root, children: root.children.map(child => splitFeNode(child, targetId, direction, localLabel, insertBefore, newLeafId)) };
+}
+
+/** leaf 제거 — 컨테이너가 자식 1개만 남으면 그 자식으로 대체(트리 자동 축약). */
+export function removeFeLeafNode(root: FeLayoutNode, targetId: string): FeLayoutNode {
+  if (root.type === 'leaf') return root;
+  const children = root.children
+    .map(child => removeFeLeafNode(child, targetId))
+    .filter(child => !(child.type === 'leaf' && child.id === targetId));
+  if (children.length === 0) return root;
+  if (children.length === 1) return children[0];
+  return { ...root, children };
+}
+
+/** 지정한 leaf 의 panel 을 updater 로 갱신 */
+export function updateFeLeafPanel(root: FeLayoutNode, targetId: string, updater: (p: FePanel) => FePanel): FeLayoutNode {
+  if (root.type === 'leaf') {
+    if (root.id !== targetId) return root;
+    return { ...root, panel: updater(root.panel) };
+  }
+  return { ...root, children: root.children.map(child => updateFeLeafPanel(child, targetId, updater)) };
+}
+
+export function resetFeLayoutSizes(node: FeLayoutNode): FeLayoutNode {
+  if (node.type === 'leaf') return node;
+  const { sizes: _drop, ...rest } = node;
+  return { ...rest, children: node.children.map(resetFeLayoutSizes) };
+}
+
+export function countFeLeaves(node: FeLayoutNode): number {
+  if (node.type === 'leaf') return 1;
+  return node.children.reduce((sum, child) => sum + countFeLeaves(child), 0);
+}
+
+export function findFirstFeLeafId(node: FeLayoutNode): string | null {
+  if (node.type === 'leaf') return node.id;
+  for (const child of node.children) {
+    const found = findFirstFeLeafId(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** 트리 안의 모든 leaf 를 DFS 순서로 수집 (id + panel) */
+export function collectFeLeaves(node: FeLayoutNode): { id: string; panel: FePanel }[] {
+  if (node.type === 'leaf') return [{ id: node.id, panel: node.panel }];
+  return node.children.flatMap(collectFeLeaves);
+}
+
+/** 전체 트리에서 특정 termId 를 가진 탭을 찾아 {leafId, idx} 반환 */
+export function findFeTabByTermId(node: FeLayoutNode, termId: string): { leafId: string; idx: number } | null {
+  for (const leaf of collectFeLeaves(node)) {
+    const idx = leaf.panel.tabs.findIndex(t => t.source.termId === termId);
+    if (idx >= 0) return { leafId: leaf.id, idx };
+  }
+  return null;
+}
+
+/** 트리 전체의 모든 탭을 fn 으로 매핑 (예: 특정 termId 연결 해제 시 로컬로 되돌리기) */
+export function mapAllFeTabs(root: FeLayoutNode, fn: (tab: FeTab) => FeTab): FeLayoutNode {
+  if (root.type === 'leaf') return { ...root, panel: { ...root.panel, tabs: root.panel.tabs.map(fn) } };
+  return { ...root, children: root.children.map(child => mapAllFeTabs(child, fn)) };
+}
+
+/** 특정 컨테이너 노드의 분할 비율(sizes) 갱신 — 드래그로 divider 조절 시 사용 */
+export function setFeContainerSizes(root: FeLayoutNode, containerId: string, sizes: number[]): FeLayoutNode {
+  if (root.type === 'leaf') return root;
+  if (root.id === containerId) return { ...root, sizes };
+  return { ...root, children: root.children.map(child => setFeContainerSizes(child, containerId, sizes)) };
+}
+
+/** 상태 저장(창 분리/재도킹)을 위한 직렬화 — Set → Array */
+export function serializeFeLayout(node: FeLayoutNode): any {
+  if (node.type === 'leaf') {
+    return {
+      id: node.id, type: 'leaf',
+      panel: {
+        id: node.panel.id, activeIdx: node.panel.activeIdx,
+        tabs: node.panel.tabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected) })),
+      },
+    };
+  }
+  return { id: node.id, type: node.type, sizes: node.sizes, children: node.children.map(serializeFeLayout) };
+}
+
+/** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null. */
+export function reviveFeLayout(saved: any, localLabel: string): FeLayoutNode | null {
+  if (!saved || typeof saved !== 'object') return null;
+  if (saved.type === 'leaf') {
+    const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
+    const tabs: FeTab[] = rawTabs.map((t: any) => ({
+      id: String(t?.id || makeId('fetab')),
+      source: t?.source || { mode: 'local', label: localLabel },
+      path: String(t?.path || ''),
+      selected: new Set<string>(Array.isArray(t?.selected) ? t.selected : []),
+    }));
+    if (tabs.length === 0) return null;
+    const activeIdx = Math.min(Math.max(0, Number(saved.panel?.activeIdx) || 0), tabs.length - 1);
+    return { id: String(saved.id || makeId('fenode')), type: 'leaf', panel: { id: String(saved.panel?.id || makeId('fepanel')), tabs, activeIdx } };
+  }
+  if (saved.type === 'row' || saved.type === 'column') {
+    const children = (Array.isArray(saved.children) ? saved.children : [])
+      .map((c: any) => reviveFeLayout(c, localLabel))
+      .filter((c: FeLayoutNode | null): c is FeLayoutNode => !!c);
+    if (children.length === 0) return null;
+    if (children.length === 1) return children[0];
+    const sizes = Array.isArray(saved.sizes) && saved.sizes.length === children.length ? saved.sizes : undefined;
+    return { id: String(saved.id || makeId('fecontainer')), type: saved.type, children, sizes };
+  }
+  return null;
+}

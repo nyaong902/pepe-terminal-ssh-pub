@@ -3347,6 +3347,11 @@ body.popout-options .session-editor h3:first-child {
   overflow: hidden;
 }
 
+/* leaf/divider 를 절대좌표로 배치하는 기준 컨테이너 — FileExplorer.tsx 의 computeFeGeometry 참고 */
+.fe-dual-flat {
+  position: relative;
+}
+
 .fe-panel-wrap {
   flex: 1;
   display: flex;
@@ -3434,6 +3439,24 @@ body.popout-options .session-editor h3:first-child {
 .fe-panel-tab-add:hover {
   background: rgba(255,255,255,0.1);
   color: var(--win-text, #fff);
+}
+.fe-panel-split-btn, .fe-panel-close-btn {
+  width: 22px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.fe-panel-split-btn:hover, .fe-panel-close-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--win-text, #fff);
+}
+.fe-panel-close-btn:hover {
+  background: rgba(255, 80, 80, 0.25);
+  color: #ff8a8a;
 }
 .fe-panel-wrap.selected::after {
   content: '';
@@ -3751,36 +3774,6 @@ body.popout-options .session-editor h3:first-child {
   color: #e74c3c;
 }
 
-.fe-transfer-btns {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  padding: 0 3px;
-  flex-shrink: 0;
-  background: var(--win-bg, #0d0f10);
-}
-
-.fe-transfer-btn {
-  background: var(--win-accent, #2b6b9b);
-  color: var(--win-text, #fff);
-  border: none;
-  border-radius: 3px;
-  padding: 4px 6px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-
-.fe-transfer-btn:hover {
-  background: var(--win-accent, #3a8bc5);
-}
-
-.fe-transfer-btn:disabled {
-  background: var(--win-border, #333);
-  color: #666;
-  cursor: default;
-}
 
 .fe-file-list.fe-drop-target {
   background: rgba(43, 107, 155, 0.1);

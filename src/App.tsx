@@ -67,7 +67,7 @@ export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from '.
 export type TabId = string;
 export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'customWorkspace';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
@@ -579,10 +579,13 @@ function App() {
   const [broadcastScope, setBroadcastScope] = useState<'current' | 'visible' | 'connected'>('visible');
   const [broadcastShowHistory, setBroadcastShowHistory] = useState(false);
   // 빠른 명령 버튼 — 사용자가 미리 정의한 명령을 원클릭으로 전송. UI prefs 에 영속.
-  type QuickCmd = { id: string; label: string; cmd: string };
+  type QuickCmd = { id: string; label: string; cmd: string; icon?: string };
   const [quickCmds, setQuickCmds] = useState<QuickCmd[]>([]);
   const [quickCmdEditor, setQuickCmdEditor] = useState<QuickCmd | null>(null);
   const [quickCmdMenuOpen, setQuickCmdMenuOpen] = useState(false);
+  const [quickCmdIconPickerOpen, setQuickCmdIconPickerOpen] = useState(false);
+  const [quickCmdIconCategory, setQuickCmdIconCategory] = useState(0);
+  const closeQuickCmdEditor = useCallback(() => { setQuickCmdEditor(null); setQuickCmdIconPickerOpen(false); setQuickCmdIconCategory(0); }, []);
   const quickCmdsLoadedRef = useRef(false);
   useEffect(() => {
     if (!quickCmdsLoadedRef.current) return;
@@ -2112,6 +2115,15 @@ function App() {
         const r: any = await (window as any).api?.sshGetShellCwd?.({ termId: tid });
         if (r?.ok && r.pwd) remotePath = r.pwd;
       } catch {}
+    }
+    // 이미 열린 파일 전송 워크스페이스가 있으면 재사용 — 새 탭 대신 그 안에 현재 세션을 연결.
+    const existingFe = tabsRef.current.find(t => t.type === 'fileExplorer');
+    if (existingFe) {
+      setActiveTabId(existingFe.id);
+      if (tid) {
+        window.dispatchEvent(new CustomEvent('fe-open-session', { detail: { termId: tid, remotePath, feTabId: existingFe.id } }));
+      }
+      return;
     }
     const id = `tab-fe-${Date.now()}`;
     setTabs(prev => {
@@ -4642,7 +4654,9 @@ function App() {
             feTabId = id;
             setTabs(prev => {
               const color = pickWorkspaceColor(prev, prev.length);
-              return [...prev, { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType, color }];
+              // noAutoSelectSession: 우클릭한 세션 외에 이미 열려있는 다른 터미널 세션이
+              // "최초 자동 연결" 대상으로 잡혀 함께 연결되는 것을 방지 (fe-sftp-connected 이벤트로 명시적 연결이 뒤따름).
+              return [...prev, { id, title: tApp('tabs.fileTransfer'), layout: createInitialLayout(id), type: 'fileExplorer' as TabType, color, noAutoSelectSession: true }];
             });
             setActiveTabId(id);
           }
@@ -5028,6 +5042,7 @@ function App() {
               })()}
               initialTermId={t.initialTermId}
               initialRemotePath={t.initialRemotePath}
+              suppressAutoSelect={t.noAutoSelectSession}
               tabId={t.id}
               initialState={t.fileExplorerState}
               onStateChange={(st) => {
@@ -5658,7 +5673,7 @@ function App() {
                         </span>
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: '#9cdcfe', fontWeight: 600 }}>{qc.label}</div>
+                        <div style={{ fontSize: 12, color: '#9cdcfe', fontWeight: 600 }}>{qc.icon ? `${qc.icon} ` : ''}{qc.label}</div>
                         <div style={{ fontSize: 10, color: '#888', fontFamily: 'monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{qc.cmd}</div>
                       </div>
                       <button onClick={e => { e.stopPropagation(); setQuickCmdMenuOpen(false); setQuickCmdEditor(qc); }}
@@ -5683,12 +5698,71 @@ function App() {
       )}
       {/* 빠른 명령 편집 모달 */}
       {quickCmdEditor && (
-        <div onClick={() => setQuickCmdEditor(null)}
+        <div onClick={closeQuickCmdEditor}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: '#252526', border: '1px solid #444', borderRadius: 6, padding: 20, minWidth: 360, boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
+            style={{ background: '#252526', border: '1px solid #444', borderRadius: 6, padding: 20, minWidth: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
             <h3 style={{ margin: '0 0 12px', color: '#e0e0e0', fontSize: 14 }}>{quickCmdEditor.id ? '빠른 명령 편집' : '빠른 명령 추가'}</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <label style={{ fontSize: 11, color: '#aaa' }}>
+                아이콘 (선택)
+                <div style={{ position: 'relative', marginTop: 4 }}>
+                  <button type="button"
+                    onClick={() => setQuickCmdIconPickerOpen(v => !v)}
+                    title="아이콘 선택"
+                    style={{
+                      width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: '1px solid #444', borderRadius: 6, background: '#1e1e1e',
+                      color: quickCmdEditor.icon ? '#eee' : '#666', cursor: 'pointer', fontSize: 17, padding: 0,
+                    }}
+                  >{quickCmdEditor.icon || '✕'}</button>
+                  {quickCmdIconPickerOpen && (() => {
+                    const iconBtnStyle = (selected: boolean, small?: boolean): React.CSSProperties => ({
+                      width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: selected ? '1px solid #4a8fd6' : '1px solid transparent',
+                      borderRadius: 8, background: selected ? '#2a4a6a' : '#22242a',
+                      color: small ? '#888' : undefined, cursor: 'pointer', fontSize: small ? 13 : 16, padding: 0, flexShrink: 0,
+                    });
+                    const pick = (ic: string) => { setQuickCmdEditor(q => q ? { ...q, icon: ic } : q); setQuickCmdIconPickerOpen(false); };
+                    const categories: { name: string; tabIcon: string; icons: string[] }[] = [
+                      { name: '제어/실행', tabIcon: '🚀', icons: ['🚀', '⚡', '▶️', '⏸️', '🛑', '🔄'] },
+                      { name: '도구', tabIcon: '🔧', icons: ['🔧', '⚙️', '🔍', '🔨', '🔑', '🧪'] },
+                      { name: '파일', tabIcon: '📁', icons: ['🗑️', '💾', '📋', '📁', '📦', '💽'] },
+                      { name: '네트워크/보안', tabIcon: '🌐', icons: ['🌐', '🔒', '🔌', '🛰️'] },
+                      { name: '동물', tabIcon: '🐸', icons: ['🐛', '🐸', '🐧', '🐍'] },
+                      { name: '기타', tabIcon: '⭐', icons: ['⭐', '⏱️', '💻', '⌨️', '🧙', '🔥'] },
+                      { name: '색상', tabIcon: '🔴', icons: ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '🟤', '⚪', '⚫'] },
+                    ];
+                    const active = categories[quickCmdIconCategory] || categories[0];
+                    return (
+                      <>
+                        <div onClick={() => setQuickCmdIconPickerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10000 }} />
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, marginTop: 4,
+                          border: '1px solid #444', borderRadius: 6, padding: 8, background: '#1a1a1c',
+                          boxShadow: '0 8px 24px rgba(0,0,0,0.5)', zIndex: 10001,
+                          width: 280, maxWidth: 'calc(100vw - 48px)', boxSizing: 'border-box',
+                        }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, paddingBottom: 8, marginBottom: 8, borderBottom: '1px solid #333' }}>
+                            <button type="button" onClick={() => pick('')} title="아이콘 없음"
+                              style={iconBtnStyle(!quickCmdEditor.icon, true)}>✕</button>
+                            {categories.map((c, i) => (
+                              <button key={c.name} type="button" onClick={() => setQuickCmdIconCategory(i)} title={c.name}
+                                style={iconBtnStyle(i === quickCmdIconCategory)}>{c.tabIcon}</button>
+                            ))}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 32px)', gap: 6, minHeight: 32 }}>
+                            {active.icons.map(ic => (
+                              <button key={ic} type="button" onClick={() => pick(ic)} title={ic}
+                                style={iconBtnStyle(quickCmdEditor.icon === ic)}>{ic}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </label>
               <label style={{ fontSize: 11, color: '#aaa' }}>
                 라벨 (버튼 표시)
                 <input value={quickCmdEditor.label}
@@ -5707,10 +5781,10 @@ function App() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
               {quickCmdEditor.id && (
-                <button onClick={() => { setQuickCmds(prev => prev.filter(q => q.id !== quickCmdEditor.id)); setQuickCmdEditor(null); }}
+                <button onClick={() => { setQuickCmds(prev => prev.filter(q => q.id !== quickCmdEditor.id)); closeQuickCmdEditor(); }}
                   style={{ background: '#7a3a3a', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12, marginRight: 'auto' }}>삭제</button>
               )}
-              <button onClick={() => setQuickCmdEditor(null)}
+              <button onClick={closeQuickCmdEditor}
                 style={{ background: '#444', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>취소</button>
               <button onClick={() => {
                 if (!quickCmdEditor.label.trim() || !quickCmdEditor.cmd) return;
@@ -5719,7 +5793,7 @@ function App() {
                 } else {
                   setQuickCmds(prev => [...prev, { ...quickCmdEditor, id: `qc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }]);
                 }
-                setQuickCmdEditor(null);
+                closeQuickCmdEditor();
               }}
                 disabled={!quickCmdEditor.label.trim() || !quickCmdEditor.cmd}
                 style={{ background: '#0e639c', color: '#fff', border: 0, padding: '5px 14px', borderRadius: 3, cursor: 'pointer', fontSize: 12 }}>저장</button>
