@@ -32,6 +32,16 @@
   "saveFailed": "✕ {{side}} save failed: {{reason}}",
   "directoryPicker": "Select directory",
   "local": "🖥️ Local",
+  "groupConnected": "🟢 Connected",
+  "groupNotConnected": "⚪ Not connected",
+  "connectFail": "Connection failed: {{err}}",
+  "credModalTitle": "Enter credentials",
+  "credModalConnectTo": "— connect to",
+  "cancel": "Cancel",
+  "connecting": "Connecting...",
+  "connect": "Connect",
+  "hide": "Hide",
+  "show": "Show",
   "pathPlaceholderLocal": "C:\\path\\to\\dir",
   "pathPlaceholderRemote": "/remote/path",
   "hideUnpairedTitle": "Hide files present on only one side — focus on changed files",
@@ -80,6 +90,7 @@
   "downloadOk": "✓ Downloaded: {{path}}",
   "downloadFailed": "✕ Download failed: {{error}}",
   "collapse": "Collapse",
+  "stop": "Stop",
   "expandFolder": "Expand",
   "expandFullScreen": "Expand to full screen",
   "allMatchTitle": "All match — the two files are identical",
@@ -96,6 +107,7 @@
     "ignoreAll": "Ignore all whitespace",
     "showEol": "Show line endings",
     "collapseUnchanged": "Collapse unchanged regions",
-    "ignoreBinaryFiles": "Ignore binary files"
+    "ignoreBinaryFiles": "Ignore binary files",
+    "skipOrphanDirectories": "Skip contents of one-sided folders"
   }
 }

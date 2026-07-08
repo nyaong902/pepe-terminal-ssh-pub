@@ -29,11 +29,19 @@ import type { LoginScriptRule } from './sessionsStore';
 import { startEmbeddedX11 } from './x11Server';
 import { startBundledX11 } from './x11Bundled';
 
+// 파일 전송 과정을 런타임 로그 패널(옵션 > 디버그)에 실시간 노출 — 다운로드/업로드가 "조용히
+// 멈추는" 증상을 사용자가 직접 어느 단계에서 막히는지 확인할 수 있게 한다.
+export function xferLog(msg: string) {
+  console.log(`[xfer] ${msg}`);
+  try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[xfer] ${msg}`); } catch {}
+}
+
 // sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
 // (구조적 복제 불가능한 함수라서) 같은 이름의 boolean 값으로 치환해 보낸 결과를, 이 아래 수십 곳의
 // 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
 // 그래서 worker 경로(X11 세션 등)든 일반 경로든 소비 코드는 전혀 손댈 필요가 없다.
 function rehydrateSftpAttrs(value: any): any {
+  if (Buffer.isBuffer(value)) return value;
   if (Array.isArray(value)) { value.forEach(rehydrateSftpAttrs); return value; }
   if (value && typeof value === 'object') {
     for (const key of Object.keys(value)) rehydrateSftpAttrs(value[key]);
@@ -188,15 +196,16 @@ class SSHBridge extends EventEmitter {
     this.emit('message', { type: 'sftp-complete', panelId: 'transfer', data: JSON.stringify({ filename: '', direction: 'cancelled', transferId, rel: '', rootName: '' }) });
   }
 
-  // 충돌 다이얼로그 뮤텍스 — 한 번에 하나의 다이얼로그만 표시
-  private async acquireConflictLock(transferId: string): Promise<() => void> {
+  // 충돌 다이얼로그 뮤텍스 — 한 번에 하나의 다이얼로그만 표시.
+  // 키는 (같은 일괄전송 batch 를 공유하는) workspaceId, 없으면 transferId.
+  private async acquireConflictLock(lockKey: string): Promise<() => void> {
     // 이전 락이 풀릴 때까지 대기
-    while (this.conflictLock.has(transferId)) {
-      try { await this.conflictLock.get(transferId); } catch {}
+    while (this.conflictLock.has(lockKey)) {
+      try { await this.conflictLock.get(lockKey); } catch {}
     }
     let release!: () => void;
-    this.conflictLock.set(transferId, new Promise<void>(res => { release = res; }));
-    return () => { this.conflictLock.delete(transferId); release(); };
+    this.conflictLock.set(lockKey, new Promise<void>(res => { release = res; }));
+    return () => { this.conflictLock.delete(lockKey); release(); };
   }
 
   private requestConflictDecision(meta: any): Promise<any> {
@@ -396,16 +405,32 @@ class SSHBridge extends EventEmitter {
     };
 
     const connProxy = new EventEmitter() as any;
+    connProxy.__isWorkerConnProxy = true;
     connProxy.end = () => { try { worker.postMessage({ type: 'disconnect' }); } catch {} };
-    connProxy.exec = (command: string, cb: (err: any, stream: any) => void) => {
+    connProxy.exec = (command: string, optionsOrCb: any, maybeCb?: (err: any, stream: any) => void) => {
+      // handleExec 는 conn.exec(command, {pty:false}, cb) 처럼 3-인자(ssh2 Client 시그니처)로
+      // 호출한다 — 원래 이 프록시는 (command, cb) 2-인자만 받아, options 객체가 cb 자리에
+      // 잘못 들어가 "cb is not a function" 으로 죽던 버그가 있었다. 인자 개수에 맞춰 받는다.
+      const cb: (err: any, stream: any) => void = typeof optionsOrCb === 'function' ? optionsOrCb : (maybeCb as any);
       const reqId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const execStream = new EventEmitter() as any;
+      // handleExec 의 _handleExecInner 는 real ssh2 ChannelStream 처럼 stream.stderr.on(...) 를
+      // 무조건 호출한다 — 이 프록시 스트림엔 .stderr 가 없어서 "Cannot read properties of
+      // undefined (reading 'on')" 으로 콜백 안에서 죽었고, 그 에러가 mcp-control 응답의 id:null
+      // 버그와 겹쳐 클라이언트에 전달도 안 되고 조용히 타임아웃날 때까지 멈춰있던 원인이었다.
+      execStream.stderr = new EventEmitter();
       const reqs = this.terminalWorkerExecReqs.get(panelId);
       reqs?.set(reqId, {
         resolve: (out: string) => { execStream.emit('data', Buffer.from(out, 'utf8')); execStream.emit('close'); },
         reject: (e: Error) => execStream.emit('error', e),
       });
-      cb(null, execStream);
+      try {
+        cb(null, execStream);
+      } catch (e: any) {
+        xferLog(`connProxy.exec 콜백 실행 중 오류 panelId=${panelId}: ${e?.message || e}`);
+        reqs?.delete(reqId);
+        return;
+      }
       worker.postMessage({ type: 'exec', reqId, command });
     };
     connProxy.sftp = (cb: (err: any, sftp: any) => void) => {
@@ -488,7 +513,19 @@ class SSHBridge extends EventEmitter {
         case 'sftp-reply': {
           const reqs = this.terminalWorkerSftpReqs.get(panelId);
           const pending = reqs?.get(msg.reqId);
-          if (pending) { if (msg.error) pending.reject(new Error(msg.error)); else pending.resolve(rehydrateSftpAttrs(msg.result)); }
+          if (pending) {
+            if (msg.error) pending.reject(new Error(msg.error));
+            else {
+              // readFile 결과(Buffer)는 worker_threads postMessage 구조적 복제를 거치면 Buffer
+              // 서브클래스가 유지되지 않고 평범한 Uint8Array 로 도착한다 — 이후 소비 코드가
+              // buf.toString('utf-8') 처럼 Buffer 전용 시그니처로 호출하면 인코딩 인자가 무시되고
+              // "35,105,110,..." 식 숫자 나열이 되어버린다(파일비교 등에서 실제로 겪은 버그).
+              // 여기서 다시 Buffer 로 감싸 이후 어떤 소비 코드든 그대로 동작하게 한다.
+              let result = msg.result;
+              if (result instanceof Uint8Array && !Buffer.isBuffer(result)) result = Buffer.from(result);
+              pending.resolve(rehydrateSftpAttrs(result));
+            }
+          }
           reqs?.delete(msg.reqId);
           break;
         }
@@ -800,6 +837,18 @@ class SSHBridge extends EventEmitter {
     if (finish) {
       finish(responses);
       this.pendingAuth.delete(panelId);
+    }
+    // 비밀번호를 저장하지 않은 세션은 sessionStore 에 빈 auth 로만 캐시돼 있어, 이후 SFTP
+    // 전용 연결(worker/dedicated)이 "새로" 열릴 때 재인증에 실패해 결국 worker RPC 프록시로
+    // 떨어지며 파일 전송이 막힌다. keyboard-interactive 로 받은 비밀번호를 캐시에 채워 넣어
+    // 재사용 가능하게 한다.
+    const pw = responses?.[0];
+    if (pw) {
+      const session = this.sessionStore.get(panelId);
+      if (session && !session.auth?.password) {
+        this.sessionStore.set(panelId, { ...session, auth: { ...(session.auth || {}), type: session.auth?.type || 'password', password: pw } });
+        xferLog(`auth-response: cached password for panelId=${panelId} (was unsaved) — SFTP transfer will now be able to reconnect`);
+      }
     }
   }
 
@@ -1311,7 +1360,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   // 외부에서 명시적으로 panel 의 dedicated SFTP 만 종료 (SSH 메인 연결은 유지) — 파일트리 unmount 등에서 호출
   public releaseDedicatedSftp(panelId: string) {
-    try { this._cleanupDedicatedSftp(panelId); } catch {}
+    xferLog(`releaseDedicatedSftp panelId=${panelId} (세션 정보는 유지 — 터미널 연결 살아있음)`);
+    try { this._cleanupDedicatedSftp(panelId, false); } catch {}
     try { const s = this.sftpCache.get(panelId); if (s) { s.end?.(); this.sftpCache.delete(panelId); } } catch {}
   }
 
@@ -1863,7 +1913,12 @@ probe_curl || probe_wget || probe_python
   }
 
   // 전용 SFTP 연결 해제 헬퍼
-  private _cleanupDedicatedSftp(panelId: string) {
+  // clearSessionStore=false — releaseDedicatedSftp(파일트리 unmount 등, 터미널 연결은 유지)
+  // 에서 호출될 때는 sessionStore 를 지우면 안 된다: 지우면 이후 다운로드/업로드가 worker/dedicated
+  // SFTP 를 "새로" 열 때 필요한 세션 정보(호스트/인증)를 잃어버려 재연결에 실패하고, 결국 스트림
+  // 전송을 지원하지 않는 터미널 worker RPC 프록시로 폴백되어 파일 전송이 조용히/명시적으로 막힌다.
+  // 실제 연결 종료(handleDisconnect, conn 에러 등)에서는 그대로 true 로 세션 정보도 정리한다.
+  private _cleanupDedicatedSftp(panelId: string, clearSessionStore = true) {
     const subsys = this.sftpDedicatedSubsys.get(panelId);
     if (subsys) { try { subsys.end(); } catch {} this.sftpDedicatedSubsys.delete(panelId); }
     const conn = this.sftpDedicatedConn.get(panelId);
@@ -1872,34 +1927,37 @@ probe_curl || probe_wget || probe_python
     const worker = this.sftpWorkers.get(panelId);
     if (worker) { try { worker.postMessage({ type: 'shutdown' }); } catch {} this.sftpWorkers.delete(panelId); }
     this.sftpWorkerReqs.delete(panelId);
-    this.sessionStore.delete(panelId);
+    if (clearSessionStore) this.sessionStore.delete(panelId);
   }
 
   // Worker thread 생성/재사용 — 최초 1회만 SSH 연결, 이후 transfer 요청 처리
   private getOrCreateSftpWorker(panelId: string): Promise<Worker> {
     const existing = this.sftpWorkers.get(panelId);
-    if (existing) return Promise.resolve(existing);
+    if (existing) { xferLog(`worker reuse panelId=${panelId}`); return Promise.resolve(existing); }
     // 이미 연결 중인 promise 재사용 — fire-and-forget + 실제 전송 동시에 호출 시 중복 생성 방지
     const pending = this.sftpWorkerPromises.get(panelId);
-    if (pending) return pending;
+    if (pending) { xferLog(`worker connect already in-flight panelId=${panelId}`); return pending; }
     const session = this.sessionStore.get(panelId);
-    if (!session) return Promise.reject(new Error('세션 정보 없음'));
+    if (!session) { xferLog(`worker skip — no sessionStore entry for panelId=${panelId}`); return Promise.reject(new Error('세션 정보 없음')); }
+    xferLog(`worker spawn panelId=${panelId} host=${session.host}`);
     const promise = new Promise<Worker>((resolve, reject) => {
       const workerPath = path.join(__dirname, 'sftpTransferWorker.cjs');
       let worker: Worker;
       try { worker = new Worker(workerPath, { workerData: { session } }); }
-      catch (e) { return reject(e); }
+      catch (e) { xferLog(`worker spawn FAILED panelId=${panelId}: ${e}`); return reject(e); }
       const reqs = new Map<string, { onProgress:(t:number,total:number)=>void; resolve:()=>void; reject:(e:Error)=>void }>();
       this.sftpWorkerReqs.set(panelId, reqs);
       let resolved = false;
       worker.on('message', (msg: any) => {
         if (msg.type === 'ready') {
           resolved = true;
+          xferLog(`worker ready panelId=${panelId}`);
           this.sftpWorkerPromises.delete(panelId);
           this.sftpWorkers.set(panelId, worker);
           if (!this.sftpWorkerOps.has(panelId)) this.sftpWorkerOps.set(panelId, new Map());
           resolve(worker);
         } else if (msg.type === 'connect-error') {
+          xferLog(`worker connect-error panelId=${panelId}: ${msg.error}`);
           if (!resolved) reject(new Error(msg.error));
         } else if (msg.type === 'progress') {
           reqs.get(msg.id)?.onProgress(msg.transferred, msg.total);
@@ -1918,6 +1976,7 @@ probe_curl || probe_wget || probe_python
         }
       });
       worker.on('error', (e: Error) => {
+        xferLog(`worker error panelId=${panelId}: ${e?.message || e}`);
         this.sftpWorkerPromises.delete(panelId);
         if (!resolved) reject(e);
         for (const r of reqs.values()) r.reject(e);
@@ -1929,6 +1988,7 @@ probe_curl || probe_wget || probe_python
         this.sftpWorkerOps.delete(panelId);
       });
       worker.on('exit', () => {
+        xferLog(`worker exit panelId=${panelId}`);
         this.sftpWorkerPromises.delete(panelId);
         const ops = this.sftpWorkerOps.get(panelId);
         if (ops) { for (const p of ops.values()) p.reject(new Error('Worker exited')); ops.clear(); }
@@ -2048,11 +2108,13 @@ probe_curl || probe_wget || probe_python
   async handleSFTPDownload(panelId: string, remotePath: string, localPath: string, ctx?: any): Promise<void> {
     const filename = remotePath.split('/').pop() || remotePath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: remotePath, dstPath: localPath } : {};
+    xferLog(`download start panelId=${panelId} remote=${remotePath} local=${localPath}`);
     // Worker thread 사용 (메인 이벤트 루프 보호)
     let worker: Worker | null = null;
-    try { worker = await this.getOrCreateSftpWorker(panelId); } catch { /* fallback */ }
+    try { worker = await this.getOrCreateSftpWorker(panelId); } catch (e: any) { xferLog(`download: worker unavailable (${e?.message || e}) — falling back`); }
     if (worker) {
       const reqId = `dl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      xferLog(`download via worker reqId=${reqId}`);
       return new Promise((resolve, reject) => {
         let lastProgressEmit = 0;
         this.sftpWorkerReqs.get(panelId)?.set(reqId, {
@@ -2062,22 +2124,33 @@ probe_curl || probe_wget || probe_python
             lastProgressEmit = now;
             this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred: t, total, filename, direction: 'download', ...extra }) });
           },
-          resolve: () => { this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve(); },
-          reject: (e) => { this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); reject(e); },
+          resolve: () => { xferLog(`download done (worker) reqId=${reqId}`); this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve(); },
+          reject: (e) => { xferLog(`download FAILED (worker) reqId=${reqId}: ${e}`); this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); reject(e); },
         });
         worker!.postMessage({ type: 'transfer', id: reqId, action: 'download', srcPath: remotePath, dstPath: localPath });
       });
     }
     // Fallback: 전용 SFTP 직접 사용
+    xferLog(`download via dedicated/shared sftp fallback panelId=${panelId}`);
     const sftp = await this.getDedicatedSftp(panelId);
+    xferLog(`download fallback sftp obtained (proxy=${!!sftp.__isWorkerSftpProxy}) panelId=${panelId}`);
     try {
       const stat: any = await new Promise((res, rej) => sftp.stat(remotePath, (e: any, s: any) => e ? rej(e) : res(s)));
       if (stat.size === 0) {
         fs.writeFileSync(localPath, Buffer.alloc(0));
+        xferLog(`download done (0-byte fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) });
         return;
       }
     } catch { /* stat 실패하면 일반 다운로드 시도 */ }
+    if (sftp.__isWorkerSftpProxy) {
+      // 이 프록시는 콜백형 RPC 만 지원 — fastGet 의 함수 인자(step)는 구조적 복제가 안 돼
+      // worker.postMessage 에서 조용히 죽는다(DataCloneError). 여기서 명시적으로 에러 처리.
+      xferLog(`download ABORT — fallback sftp is a worker-RPC proxy (stream transfer unsupported) panelId=${panelId}`);
+      const err = new Error('이 세션은 대용량 파일 전송을 지원하지 않는 연결 방식입니다 (worker RPC proxy)');
+      this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) });
+      throw err;
+    }
     return new Promise((resolve, reject) => {
       let lastStepEmit = 0;
       sftp.fastGet(remotePath, localPath, {
@@ -2089,7 +2162,8 @@ probe_curl || probe_wget || probe_python
           this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred, total, filename, direction: 'download', ...extra }) });
         },
       }, (err: any) => {
-        if (err) { this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); return reject(err); }
+        if (err) { xferLog(`download FAILED (fallback) panelId=${panelId}: ${err}`); this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'download', ...extra }) }); return reject(err); }
+        xferLog(`download done (fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'download', localPath, ...extra }) }); resolve();
       });
     });
@@ -2098,21 +2172,24 @@ probe_curl || probe_wget || probe_python
   async handleSFTPUpload(panelId: string, localPath: string, remotePath: string, ctx?: any): Promise<void> {
     const filename = localPath.replace(/\\/g, '/').split('/').pop() || localPath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: localPath, dstPath: remotePath } : {};
+    xferLog(`upload start panelId=${panelId} local=${localPath} remote=${remotePath}`);
     // 0바이트 파일은 sftp.open/close 사용
     try {
       const localStat = fs.statSync(localPath);
       if (localStat.size === 0) {
         const sftp0 = await this.getDedicatedSftp(panelId);
         await new Promise<void>((res, rej) => { sftp0.open(remotePath, 'w', (err: any, handle: any) => { if (err) return rej(err); sftp0.close(handle, (e: any) => e ? rej(e) : res()); }); });
+        xferLog(`upload done (0-byte) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) });
         return;
       }
     } catch { /* stat 실패하면 일반 업로드 시도 */ }
     // Worker thread 사용
     let worker: Worker | null = null;
-    try { worker = await this.getOrCreateSftpWorker(panelId); } catch { /* fallback */ }
+    try { worker = await this.getOrCreateSftpWorker(panelId); } catch (e: any) { xferLog(`upload: worker unavailable (${e?.message || e}) — falling back`); }
     if (worker) {
       const reqId = `ul-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      xferLog(`upload via worker reqId=${reqId}`);
       return new Promise((resolve, reject) => {
         let lastProgressEmit = 0;
         this.sftpWorkerReqs.get(panelId)?.set(reqId, {
@@ -2122,14 +2199,22 @@ probe_curl || probe_wget || probe_python
             lastProgressEmit = now;
             this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred: t, total, filename, direction: 'upload', ...extra }) });
           },
-          resolve: () => { this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve(); },
-          reject: (e) => { this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); reject(e); },
+          resolve: () => { xferLog(`upload done (worker) reqId=${reqId}`); this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve(); },
+          reject: (e) => { xferLog(`upload FAILED (worker) reqId=${reqId}: ${e}`); this.emit('message', { type: 'sftp-error', panelId, error: String(e), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); reject(e); },
         });
         worker!.postMessage({ type: 'transfer', id: reqId, action: 'upload', srcPath: localPath, dstPath: remotePath });
       });
     }
     // Fallback
+    xferLog(`upload via dedicated/shared sftp fallback panelId=${panelId}`);
     const sftp = await this.getDedicatedSftp(panelId);
+    xferLog(`upload fallback sftp obtained (proxy=${!!sftp.__isWorkerSftpProxy}) panelId=${panelId}`);
+    if (sftp.__isWorkerSftpProxy) {
+      xferLog(`upload ABORT — fallback sftp is a worker-RPC proxy (stream transfer unsupported) panelId=${panelId}`);
+      const err = new Error('이 세션은 대용량 파일 전송을 지원하지 않는 연결 방식입니다 (worker RPC proxy)');
+      this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) });
+      throw err;
+    }
     return new Promise((resolve, reject) => {
       let lastStepEmit = 0;
       sftp.fastPut(localPath, remotePath, {
@@ -2141,7 +2226,8 @@ probe_curl || probe_wget || probe_python
           this.emit('message', { type: 'sftp-progress', panelId, data: JSON.stringify({ transferred, total, filename, direction: 'upload', ...extra }) });
         },
       }, (err: any) => {
-        if (err) { this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); return reject(err); }
+        if (err) { xferLog(`upload FAILED (fallback) panelId=${panelId}: ${err}`); this.emit('message', { type: 'sftp-error', panelId, error: String(err), data: JSON.stringify({ filename, direction: 'upload', ...extra }) }); return reject(err); }
+        xferLog(`upload done (fallback) panelId=${panelId}`);
         this.emit('message', { type: 'sftp-complete', panelId, data: JSON.stringify({ filename, direction: 'upload', remotePath, ...extra }) }); resolve();
       });
     });
@@ -2711,8 +2797,14 @@ probe_curl || probe_wget || probe_python
         this.transferDefaults.set(ctx!.transferId, cur);
         if (ctx!.workspaceId) this.setWorkspaceConflictDefault(ctx!.workspaceId, kind, action);
       } else {
-        // 뮤텍스 획득 — 한 번에 다이얼로그 하나만 표시
-        const release = await this.acquireConflictLock(ctx!.transferId);
+        // 뮤텍스 획득 — 한 번에 다이얼로그 하나만 표시.
+        // 일괄전송(bcastXfer)처럼 여러 파일이 동시에 handleTransfer 를 호출하면 각자 새
+        // transferId 를 받으므로, 락을 transferId 로 걸면 서로 다른 파일끼리는 전혀 직렬화가
+        //안 돼 "모두 적용"을 체크해도 이미 동시에 열려있던 다른 파일들의 다이얼로그는 그대로
+        // 뜬다. workspaceId(같은 일괄전송 1회 전체에 공유)가 있으면 그걸로 락을 걸어야
+        // 진짜로 한 번에 하나씩만 물어보고, 나머지는 방금 저장된 "모두 적용" 값을 재사용한다.
+        const lockKey = ctx!.workspaceId || ctx!.transferId;
+        const release = await this.acquireConflictLock(lockKey);
         try {
           // 락 대기 중 다른 워커가 "모두 적용" 결정했을 수 있음 — 재확인
           const def = (this.transferDefaults.get(ctx!.transferId) || {})[kind]
@@ -3117,15 +3209,36 @@ probe_curl || probe_wget || probe_python
     const commandToSend: string | Buffer = useIconv ? commandBuf : command;
 
     return new Promise((resolve, reject) => {
-      const to = setTimeout(() => reject(new Error('exec timeout')), timeoutMs);
+      let liveStream: any = null;
+      // 타임아웃 시 우리 쪽에서 기다리기만 포기하고 원격 프로세스는 그대로 살려두면(예: 큰
+      // ClearCase VOB 를 훑는 find/grep), 이후 재시도가 쌓일 때마다 원격에 겹치는 무거운
+      // 프로세스가 계속 늘어나 점점 더 느려지다가 결국 매번 타임아웃나는 악순환이 생긴다
+      // ("아까는 되다가 갑자기 안 됨" 증상). 채널을 닫아 원격 프로세스도 같이 끝낸다.
+      let channelOpened = false;
+      const to = setTimeout(() => {
+        xferLog(`exec timeout panelId=${panelId} channelOpened=${channelOpened} isProxy=${!!conn.__isWorkerConnProxy} cmd="${command.slice(0, 120)}" — 원격 프로세스 종료 시도`);
+        try { liveStream?.signal?.('KILL'); } catch {}
+        try { liveStream?.close?.(); } catch {}
+        reject(new Error('exec timeout'));
+      }, timeoutMs);
+      xferLog(`exec channel-open 요청 panelId=${panelId} isProxy=${!!conn.__isWorkerConnProxy} cmd="${command.slice(0, 120)}"`);
       conn.exec(commandToSend as any, { pty: false }, (err: any, stream: any) => {
-        if (err) { clearTimeout(to); return reject(err); }
+        channelOpened = true;
+        if (err) { xferLog(`exec channel-open 실패 panelId=${panelId}: ${err?.message || err}`); clearTimeout(to); return reject(err); }
+        xferLog(`exec channel opened panelId=${panelId}`);
+        liveStream = stream;
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
         let exitCode: number | null = null;
         stream.on('data', (data: Buffer) => { stdoutChunks.push(data); });
         stream.stderr.on('data', (data: Buffer) => { stderrChunks.push(data); });
         stream.on('exit', (code: number) => { exitCode = code; });
+        // pty 없는(비대화형) exec 채널은 원격 셸이 접속 시 "계속하려면 Enter" 같은 배너/확인
+        // 프롬프트로 stdin 을 기다리는 서버에서 명령이 시작도 못 하고 영원히 멈춘다 — 실제
+        // 터미널(pty 있음)에서는 같은 명령이 바로 되는데 MCP exec 에서만 매번 타임아웃나는
+        // 증상으로 확인됨. 채널을 열자마자 개행 1개를 보내 그런 프롬프트를 통과시키고, 우리
+        // 명령은 stdin 을 쓰지 않으므로 곧바로 EOF 로 닫아 정상적인 명령엔 영향이 없게 한다.
+        try { stream.write('\n'); stream.end(); } catch {}
         stream.on('close', () => {
           clearTimeout(to);
           const outBuf = Buffer.concat(stdoutChunks);

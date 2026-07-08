@@ -3,14 +3,29 @@
 // 필드별 멀티셀렉트 드롭다운 + 가상화 테이블 + 상세 패널.
 // 파싱 포맷 (제시된 로그 전용):
 //   MMDD HH:MM:SS.ffff TID (file, line) LEVEL <function> message
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
 import type { PanelSession } from '../utils/layoutUtils';
 import { RemotePathPicker } from './RemotePathPicker';
+import { setTermFocusBlocked } from './TerminalPanel';
+import { notifyError } from './Notify';
 
 const api = (window as any).api || {};
+
+// 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
+// (FileExplorer.tsx / MessengerWorkspace.tsx / CompareWorkspace.tsx 와 동일 로직 — lazy 세션 연결에 필요)
+function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
+  const arr = Array.isArray(sess?.jumps) ? sess.jumps : [];
+  const out: { host: string; user?: string; port?: number; password?: string }[] = [];
+  for (const j of arr) {
+    const host = (j && typeof j.host === 'string') ? j.host.trim() : '';
+    if (!host) break;
+    out.push({ host, user: j.user || 'root', port: Number(j.port) || 22, password: j.password || undefined });
+  }
+  return out;
+}
 
 // AI 에이전트 브랜드 아이콘 (ClaudeChat 탭과 동일)
 const ClaudeIcon = () => (
@@ -234,16 +249,79 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
   const [srcPath, setSrcPath] = useState<string>(initialState?.srcPath || '');
   // sessions.json 메타데이터 캐시 — 세션 선택 시 logPath 자동 입력용
   const sessionMetaRef = useRef<Map<string, any>>(new Map());
+  // 파일전송 워크스페이스(FileExplorer)와 동일한 서버 목록 형태 — 로컬 드라이브 트리 +
+  // 연결됨(🟢)/연결 안됨(⚪, 저장된 세션 전체) 그룹. 연결 안됨 세션은 선택 시 백그라운드로
+  // lazy SFTP 연결을 수립한다(connectLazySession).
+  const [allSessionsList, setAllSessionsList] = useState<any[]>([]);
+  const [drives, setDrives] = useState<{ path: string; label: string; depth?: number }[]>([]);
+  // 세션 id → 소속 폴더 경로("부모/자식" 형태) — FileExplorer.tsx 의 sessionFolderMap 과 동일
+  const [sessionFolderMap, setSessionFolderMap] = useState<Record<string, string>>({});
+  // 이 워크스페이스가 직접(lazy) 연결한 세션들 — sessions prop(터미널로 연결된 것) 과는 별개 목록.
+  // 여기 없으면 select 의 value(remote:connId) 와 매칭되는 <option> 이 없어 "선택해도 반영 안 되는"
+  // 것처럼 보였다 — 연결은 백그라운드로 잘 됐어도 드롭다운에 나타나지 않는 버그.
+  const [ownConnectedSessions, setOwnConnectedSessions] = useState<{ sessionId: string; termId: string; label: string }[]>([]);
+  const [lazyConnecting, setLazyConnecting] = useState(false);
+  const lazyConnsRef = useRef<Set<string>>(new Set());
+  // 자격증명 입력 프롬프트 — 저장된 비밀번호/키가 없는 세션 lazy 연결 시 표시 (FileExplorer.tsx 와 동일)
+  const [credPrompt, setCredPrompt] = useState<{ sess: any; jumps: any[] } | null>(null);
+  const [credUser, setCredUser] = useState('');
+  const [credPass, setCredPass] = useState('');
+  const [credShowPass, setCredShowPass] = useState(false);
+  const [credConnecting, setCredConnecting] = useState(false);
+  const credUserInputRef = useRef<HTMLInputElement>(null);
+  const credModalRef = useRef<HTMLDivElement>(null);
+  // 모달이 뜨는 동안 터미널이 포커스를 가로채지 못하도록 차단 + input 에 포커스 유지
+  useLayoutEffect(() => {
+    if (!credPrompt) { setTermFocusBlocked(false); return; }
+    credUserInputRef.current?.focus();
+    const trap = (e: FocusEvent) => {
+      const modal = credModalRef.current;
+      const input = credUserInputRef.current;
+      if (!modal || !input) return;
+      if (!modal.contains(e.target as Node)) { e.stopImmediatePropagation(); input.focus(); }
+    };
+    document.addEventListener('focusin', trap, true);
+    return () => { document.removeEventListener('focusin', trap, true); };
+  }, [credPrompt]);
   useEffect(() => {
     (async () => {
       try {
         const data: any = await (window as any).api?.listSessions?.();
         const list: any[] = data?.sessions || [];
+        const folders: any[] = data?.folders || [];
         const m = new Map<string, any>();
         for (const sess of list) m.set(sess.id, sess);
         sessionMetaRef.current = m;
+        setAllSessionsList(list);
+        const folderById: Record<string, any> = {};
+        for (const f of folders) folderById[f.id] = f;
+        const folderPath = (fid?: string): string => {
+          if (!fid) return '';
+          const f = folderById[fid];
+          if (!f) return '';
+          const parent = folderPath(f.parentId);
+          return parent ? `${parent}/${f.name}` : f.name;
+        };
+        const map: Record<string, string> = {};
+        for (const s of list) map[s.id] = folderPath(s.folderId);
+        setSessionFolderMap(map);
       } catch {}
     })();
+    (async () => {
+      try {
+        const list: any = await api.feGetDrives?.();
+        if (Array.isArray(list)) {
+          setDrives(list.map((x: any) => typeof x === 'string' ? { path: x, label: x } : x).filter((x: any) => x && x.path));
+        }
+      } catch {}
+    })();
+  }, []);
+  // 언마운트 시 이 워크스페이스가 자체적으로 연 lazy SFTP 연결 정리 (터미널로 연결된 세션은 그대로 둠).
+  useEffect(() => () => {
+    for (const cid of lazyConnsRef.current) {
+      try { api.feSftpDisconnect?.(cid); } catch {}
+    }
+    lazyConnsRef.current.clear();
   }, []);
   const [loading, setLoading] = useState(false);
   const [loadErr, setLoadErr] = useState<string>('');
@@ -307,14 +385,100 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
     return () => window.removeEventListener('click', close);
   }, [aiAgentMenu]);
 
+  // 라벨은 FileExplorer.tsx 와 동일 형식 (🟢 세션명 [폴더경로]) — 세션이 속한 폴더가 있으면 붙인다.
   const sourceOptions = useMemo(() => {
     const opts: { termId: string; label: string }[] = [];
     for (const s of sessions) {
       if (!s.termId) continue;
-      opts.push({ termId: s.termId, label: `🟢 ${s.sessionName}` });
+      const folder = s.sessionId ? sessionFolderMap[s.sessionId] : '';
+      const label = folder ? `🟢 ${s.sessionName}  [${folder}]` : `🟢 ${s.sessionName}`;
+      opts.push({ termId: s.termId, label });
     }
+    for (const o of ownConnectedSessions) opts.push({ termId: o.termId, label: o.label });
     return opts;
-  }, [sessions.map(s => s.termId).join(',')]);
+  }, [sessions.map(s => s.termId).join(','), sessionFolderMap, ownConnectedSessions]);
+
+  // 파일전송 워크스페이스와 동일한 "연결 안됨" 그룹 — 저장된 세션 중 현재 연결이 없는 것들.
+  // 라벨 형식도 FileExplorer.tsx 와 동일: ⚪ 세션명 [폴더경로] (host)
+  // — ownConnectedSessions(직접 lazy 연결한 것)도 제외해야 연결 후 "연결 안됨"에 중복으로 안 남는다.
+  const notConnectedOptions = useMemo(() => {
+    const connectedSessionIds = new Set([
+      ...sessions.map(s => s.sessionId).filter(Boolean),
+      ...ownConnectedSessions.map(o => o.sessionId),
+    ]);
+    return allSessionsList
+      .filter(s => !connectedSessionIds.has(s.id))
+      .map(s => {
+        const folder = sessionFolderMap[s.id];
+        const label = folder ? `⚪ ${s.name}  [${folder}] (${s.host})` : `⚪ ${s.name} (${s.host})`;
+        return { sessionId: s.id as string, label };
+      });
+  }, [sessions.map(s => s.sessionId).join(','), allSessionsList, sessionFolderMap, ownConnectedSessions]);
+
+  // 연결 안됨(lazy) 세션을 선택했을 때 — 저장된 자격증명으로 백그라운드 SFTP 연결을 수립.
+  // 저장된 비밀번호/키가 없으면 자격증명 입력 모달을 띄운다 (FileExplorer.tsx 와 동일 동작).
+  const connectLazySession = async (sessionId: string) => {
+    const sess = allSessionsList.find(s => s.id === sessionId);
+    if (!sess) { setLoadErr(t('selectRemote')); return; }
+    const jumps = buildJumpChain(sess);
+    const auth = sess.auth;
+    const hasCredential = auth?.type === 'key' || (auth?.type === 'password' && auth?.password);
+    if (!hasCredential) {
+      setTermFocusBlocked(true); // 렌더 전에 동기 차단 — useLayoutEffect 보다 먼저 실행됨
+      setCredPrompt({ sess, jumps });
+      setCredUser(sess.username || '');
+      setCredPass('');
+      setCredShowPass(false);
+      return;
+    }
+    setLazyConnecting(true);
+    setLoadErr('');
+    try {
+      const connId = `loganalyzer-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const r: any = await api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, auth, undefined, jumps.length ? jumps : undefined);
+      if (!r?.success) { setLoadErr(t('connectFail', { err: r?.error || 'unknown' })); return; }
+      lazyConnsRef.current.add(connId);
+      const folder = sessionFolderMap[sess.id];
+      const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
+      setOwnConnectedSessions(prev => [...prev.filter(o => o.sessionId !== sess.id), { sessionId: sess.id, termId: connId, label }]);
+      setSrcMode('remote');
+      setSrcTermId(connId);
+      const meta = sessionMetaRef.current.get(sess.id);
+      if (meta?.logPath) setSrcPath(meta.logPath);
+    } catch (err: any) {
+      setLoadErr(t('connectFail', { err: String(err?.message || err) }));
+    } finally {
+      setLazyConnecting(false);
+    }
+  };
+
+  // 자격증명 모달 확인 — 입력된 id/비밀번호로 연결 재시도 (FileExplorer.tsx 의 handleCredSubmit 과 동일)
+  const handleCredSubmit = async () => {
+    if (!credPrompt) return;
+    const { sess, jumps } = credPrompt;
+    setCredConnecting(true);
+    try {
+      const connId = `loganalyzer-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const r: any = await api.feSftpConnect?.(connId, sess.host, sess.port || 22, credUser, { type: 'password', password: credPass }, undefined, jumps.length ? jumps : undefined);
+      if (!r?.success) {
+        notifyError(t('connectFail', { err: r?.error || 'unknown' }));
+        setCredConnecting(false);
+        return;
+      }
+      lazyConnsRef.current.add(connId);
+      const folder = sessionFolderMap[sess.id];
+      const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
+      setOwnConnectedSessions(prev => [...prev.filter(o => o.sessionId !== sess.id), { sessionId: sess.id, termId: connId, label }]);
+      setSrcMode('remote');
+      setSrcTermId(connId);
+      const meta = sessionMetaRef.current.get(sess.id);
+      if (meta?.logPath) setSrcPath(meta.logPath);
+      setCredPrompt(null);
+    } catch (err: any) {
+      notifyError(t('connectFail', { err: String(err?.message || err) }));
+    }
+    setCredConnecting(false);
+  };
 
   const loadFile = useCallback(async () => {
     setLoadErr('');
@@ -657,15 +821,21 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
       {/* 헤더 — 소스 + 로드 */}
       <div style={{ padding: '8px 10px', background: 'var(--win-surface, #222)', borderBottom: '1px solid var(--win-border, #333)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-          <select value={srcMode === 'remote' ? srcTermId : 'local'}
+          {/* 서버 선택 — 파일전송 워크스페이스(FileExplorer/FilePanel)와 동일한 형태:
+              로컬 + 로컬 드라이브 트리(들여쓰기) + 연결됨(🟢)/연결 안됨(⚪) 그룹. */}
+          <select value={srcMode === 'remote' ? `remote:${srcTermId}` : 'local'}
+            disabled={lazyConnecting}
             onChange={e => {
               const v = e.target.value;
-              if (v === 'local') { setSrcMode('local'); setSrcTermId(''); }
-              else {
-                setSrcMode('remote'); setSrcTermId(v);
+              if (v === 'local') { setSrcMode('local'); setSrcTermId(''); return; }
+              if (v.startsWith('local-drive:')) { setSrcMode('local'); setSrcTermId(''); setSrcPath(v.slice('local-drive:'.length)); return; }
+              if (v.startsWith('lazy:')) { void connectLazySession(v.slice('lazy:'.length)); return; }
+              if (v.startsWith('remote:')) {
+                const termId = v.slice('remote:'.length);
+                setSrcMode('remote'); setSrcTermId(termId);
                 // 세션의 logPath 가 지정되어 있고 현재 path 가 비어있거나 다른 자동값이면 자동 입력
                 try {
-                  const sess = sessions.find(x => x.termId === v);
+                  const sess = sessions.find(x => x.termId === termId);
                   if (sess && sess.sessionId) {
                     const meta = sessionMetaRef.current.get(sess.sessionId);
                     if (meta?.logPath) setSrcPath(meta.logPath);
@@ -675,7 +845,20 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
             }}
             style={{ width: 220, fontSize: 12 }}>
             <option value="local">{t('local')}</option>
-            {sourceOptions.map(o => <option key={o.termId} value={o.termId}>{o.label}</option>)}
+            {drives.map(d => {
+              const depth = (d.depth ?? 0) + 1;
+              return <option key={`local-drive:${d.path}`} value={`local-drive:${d.path}`}>{'    '.repeat(depth) + d.label}</option>;
+            })}
+            {sourceOptions.length > 0 && (
+              <optgroup label={t('groupConnected')}>
+                {sourceOptions.map(o => <option key={o.termId} value={`remote:${o.termId}`}>{o.label}</option>)}
+              </optgroup>
+            )}
+            {notConnectedOptions.length > 0 && (
+              <optgroup label={t('groupNotConnected')}>
+                {notConnectedOptions.map(o => <option key={o.sessionId} value={`lazy:${o.sessionId}`}>{o.label}</option>)}
+              </optgroup>
+            )}
           </select>
           <input type="text" value={srcPath} placeholder={srcMode === 'local' ? t('pathPlaceholderLocal') : t('pathPlaceholderRemote')}
             onChange={e => setSrcPath(e.target.value)}
@@ -887,6 +1070,52 @@ export const LogAnalyzer: React.FC<LogProps> = ({ sessions, initialState, onStat
           onPick={(p) => setSrcPath(p)}
           onClose={() => setFilePickerOpen(false)}
         />
+      )}
+      {/* 자격증명 입력 모달 — 저장된 비밀번호/키가 없는 세션 lazy 연결 시 (FileExplorer.tsx 와 동일) */}
+      {credPrompt && (
+        <div className="session-editor-backdrop" onClick={() => setCredPrompt(null)}>
+          <div className="cred-modal" ref={credModalRef} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ outline: 'none' }}>
+            <div className="cred-modal-header">
+              <span className="cred-modal-title">🔒 {t('credModalTitle')}</span>
+              <button className="cred-modal-close" onClick={() => setCredPrompt(null)}>✕</button>
+            </div>
+            <div className="cred-modal-host">{credPrompt.sess.host} {t('credModalConnectTo')}</div>
+            <div className="cred-modal-fields">
+              <input
+                ref={credUserInputRef}
+                className="cred-modal-input"
+                placeholder="username"
+                value={credUser}
+                onChange={e => setCredUser(e.target.value)}
+              />
+              <div className="cred-modal-pass-wrap">
+                <input
+                  className="cred-modal-input"
+                  type={credShowPass ? 'text' : 'password'}
+                  placeholder="password"
+                  value={credPass}
+                  onChange={e => setCredPass(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleCredSubmit(); }}
+                />
+                <button
+                  type="button"
+                  className="cred-modal-eye-btn"
+                  tabIndex={-1}
+                  onClick={() => setCredShowPass(v => !v)}
+                  title={credShowPass ? t('hide') : t('show')}
+                >
+                  {credShowPass ? '🙈' : '👁'}
+                </button>
+              </div>
+            </div>
+            <div className="cred-modal-actions">
+              <button className="btn-cancel" onClick={() => setCredPrompt(null)}>{t('cancel')}</button>
+              <button className="btn-save" onClick={handleCredSubmit} disabled={credConnecting}>
+                {credConnecting ? t('connecting') : t('connect')}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {/* AI 에이전트 선택 메뉴 — portal 로 body 에 렌더 (overflow 클리핑 회피). 버튼 위쪽 정렬. */}
       {aiAgentMenu && createPortal(

@@ -115,6 +115,7 @@
     "quickConnectHide": "Hide quick-connect bar",
     "broadcastShow": "Show broadcast bar",
     "broadcastHide": "Hide broadcast bar",
+    "stickyNote": "Add sticky note",
     "terminalPin": "Pin terminal panel",
     "terminalUnpin": "Unpin terminal panel (minimize to vertical tab)",
     "xStart": "Start X server (DISPLAY=:0)",

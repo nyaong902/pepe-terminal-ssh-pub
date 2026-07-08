@@ -105,14 +105,42 @@ function fetchHomeDir() {
 }
 
 // ── exec RPC (메인의 execCommand/getShellCwd 등이 conn.exec() 을 이 worker 로 위임) ──
+// panelId 별 sshBridge.ts 의 _handleExecInner 와 동일한 목적의 pty:false 채널 — 원격 셸이
+// 접속 시 "계속하려면 Enter" 류의 확인 프롬프트로 stdin 을 기다리면 명령이 시작도 못 하고
+// 영원히 멈춘다(실제 pty 있는 터미널에서는 같은 명령이 바로 됨). 채널을 열자마자 개행 1개를
+// 보내고 곧바로 EOF 로 닫아 그런 프롬프트를 통과시킨다 — stdin 을 안 쓰는 일반 명령엔 영향 없음.
+// 또한 이 worker 쪽엔 기존에 타임아웃이 전혀 없어, 메인 프로세스가 먼저 포기해도 여기 stream 은
+// 계속 열려 원격 프로세스가 안 끝나면 계속 남아있었다 — 여기서도 타임아웃 + kill 을 건다.
+const EXEC_TIMEOUT_MS = 55000; // 메인 쪽 handleExec 기본 타임아웃(60s)보다 짧게 — 여기서 먼저 정리.
 function handleExecRequest(reqId, command) {
   if (!conn) { parentPort.postMessage({ type: 'exec-error', reqId, error: '연결되지 않음' }); return; }
-  conn.exec(command, (err, s) => {
-    if (err) { parentPort.postMessage({ type: 'exec-error', reqId, error: String(err) }); return; }
+  let settled = false;
+  let liveStream = null;
+  const to = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    try { liveStream?.signal?.('KILL'); } catch (_e) {}
+    try { liveStream?.close?.(); } catch (_e) {}
+    parentPort.postMessage({ type: 'exec-error', reqId, error: 'exec timeout (worker)' });
+  }, EXEC_TIMEOUT_MS);
+  conn.exec(command, { pty: false }, (err, s) => {
+    if (err) { if (!settled) { settled = true; clearTimeout(to); parentPort.postMessage({ type: 'exec-error', reqId, error: String(err) }); } return; }
+    liveStream = s;
+    try { s.write('\n'); s.end(); } catch (_e) {}
     let out = '';
     s.on('data', (d) => { out += d.toString('utf8'); });
-    s.on('close', () => { parentPort.postMessage({ type: 'exec-done', reqId, data: out }); });
-    s.on('error', (e) => { parentPort.postMessage({ type: 'exec-error', reqId, error: String(e) }); });
+    s.on('close', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      parentPort.postMessage({ type: 'exec-done', reqId, data: out });
+    });
+    s.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      parentPort.postMessage({ type: 'exec-error', reqId, error: String(e) });
+    });
   });
 }
 
@@ -154,6 +182,9 @@ function handleSftpCall(reqId, method, args) {
       parentPort.postMessage({ type: 'sftp-reply', reqId, error: `unsupported sftp method in worker mode: ${method}` });
       return;
     }
+    // postMessage 구조적 복제를 거치며 Buffer 인자(예: writeFile 의 content)가 평범한
+    // Uint8Array 로 바뀐다 — ssh2 내부가 Buffer 전용 동작(slice 등)을 기대하므로 여기서 복원.
+    args = args.map(a => (a instanceof Uint8Array && !Buffer.isBuffer(a)) ? Buffer.from(a) : a);
     try {
       s[method](...args, (cbErr, result) => {
         parentPort.postMessage({ type: 'sftp-reply', reqId, error: cbErr ? String(cbErr) : undefined, result: sanitizeForClone(result) });

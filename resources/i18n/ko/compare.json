@@ -32,6 +32,16 @@
   "saveFailed": "✕ {{side}} 저장 실패: {{reason}}",
   "directoryPicker": "디렉토리 선택",
   "local": "🖥️ 로컬",
+  "groupConnected": "🟢 연결됨",
+  "groupNotConnected": "⚪ 연결 안됨",
+  "connectFail": "연결 실패: {{err}}",
+  "credModalTitle": "자격증명 입력",
+  "credModalConnectTo": "에 연결",
+  "cancel": "취소",
+  "connecting": "연결 중...",
+  "connect": "연결",
+  "hide": "숨기기",
+  "show": "보이기",
   "pathPlaceholderLocal": "C:\\path\\to\\dir",
   "pathPlaceholderRemote": "/remote/path",
   "hideUnpairedTitle": "한쪽 폴더에만 있는 파일은 표시하지 않음 — 변경된 파일만 집중해서 볼 때",
@@ -80,6 +90,7 @@
   "downloadOk": "✓ 다운로드: {{path}}",
   "downloadFailed": "✕ 다운로드 실패: {{error}}",
   "collapse": "축소",
+  "stop": "멈춤",
   "expandFolder": "펼치기",
   "expandFullScreen": "전체 화면으로 확대",
   "allMatchTitle": "All match — 두 파일이 완전히 일치합니다",
@@ -96,6 +107,7 @@
     "ignoreAll": "모든 공백 무시",
     "showEol": "줄 끝 문자 표시",
     "collapseUnchanged": "변경 없는 영역 접기",
-    "ignoreBinaryFiles": "바이너리 파일 무시"
+    "ignoreBinaryFiles": "바이너리 파일 무시",
+    "skipOrphanDirectories": "한쪽만 있는 폴더 내부 건너뛰기"
   }
 }

@@ -59,6 +59,7 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   'prevTab': 'Ctrl+Shift+Tab',
   'cloneSplitV': 'Ctrl+Alt+V',
   'cloneSplitH': 'Ctrl+Alt+H',
+  'commandPalette': 'Ctrl+W',
   'find': 'Ctrl+Shift+F',
   'clearScrollback': 'Ctrl+Shift+B',
   'clearScreen': 'Ctrl+Shift+L',
@@ -100,6 +101,7 @@ export const KEYBINDING_LABELS: Record<string, string> = {
   // 현재 활성 세션을 복제한 분할 — 그냥 "세션 ..." 으로 표기
   'cloneSplitV': '세션 가로 분할 (좌/우)',
   'cloneSplitH': '세션 세로 분할 (상/하)',
+  'commandPalette': '커맨드 팔레트 (메뉴/워크스페이스 검색)',
   'find': '찾기',
   'clearScrollback': '스크롤백 지우기',
   'clearScreen': '화면 지우기',

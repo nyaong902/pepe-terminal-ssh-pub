@@ -681,8 +681,12 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             setCtxMenu(null);
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              await (window as any).api?.sftpDownload?.(termId, node.path, node.isDir);
-            } catch {}
+              const r = await (window as any).api?.sftpDownload?.(termId, node.path, node.isDir);
+              // r === null 은 사용자가 저장 다이얼로그를 취소한 정상 케이스 — 에러 아님.
+              if (r && r.success === false) notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), r.error || t('unknownError'));
+            } catch (err: any) {
+              notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
+            }
           }}>{t('downloadMenu')}{ctxMenu.node.isDir ? t('downloadRecursive') : ''}</div>
           {ctxMenu.node.isDir && (
             <>
@@ -693,7 +697,10 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const r = await (window as any).api?.sftpUpload?.(termId, node.path, 'file');
                   if (r?.success) navigateTo(node.path);
-                } catch {}
+                  else if (r && r.success === false) notifyError(t('uploadFail', { defaultValue: '업로드 실패' }), r.error || t('unknownError'));
+                } catch (err: any) {
+                  notifyError(t('uploadFail', { defaultValue: '업로드 실패' }), String(err?.message || err));
+                }
               }}>{t('uploadFileMenu')}</div>
               <div className="remote-file-ctx-item" onClick={async () => {
                 const node = ctxMenu.node;

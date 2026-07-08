@@ -5,7 +5,9 @@ import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 import { MessengerWorkspace } from './MessengerWorkspace';
+import { WorkLogWorkspace } from './WorkLogWorkspace';
 import { adjustClaudeFontSize } from '../utils/claudeFont';
+import { useWorkLogAutoRecorder } from '../hooks/useWorkLogAutoRecorder';
 
 // Mermaid 다이어그램 초기화 (모듈 로드 시 1회)
 mermaid.initialize({
@@ -1127,8 +1129,8 @@ const MarkdownMessage = React.memo(({ id, content, className }: MarkdownMessageP
   <div className={className} dangerouslySetInnerHTML={{ __html: renderMdCached(id, content) }} />
 ), (prev, next) => prev.id === next.id && prev.content === next.content && prev.className === next.className);
 
-type AgentType = 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
-type Message = {
+export type AgentType = 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
+export type Message = {
   role: 'user' | 'assistant';
   content: string;
   id: string;
@@ -1136,7 +1138,7 @@ type Message = {
   agent?: AgentType; // 응답한 에이전트 (assistant 메시지에만)
 };
 type ToolTimelineItem = { id: string; name?: string; label: string; labelShort?: string; status: 'running' | 'done' | 'error'; resultPreview?: string; detail?: string; seq?: number };
-type ChatHistoryEntry = {
+export type ChatHistoryEntry = {
   id: string; // 로컬 고유 id
   claudeSessionId?: string | null; // Claude CLI session_id (resume 용)
   title: string;
@@ -1180,8 +1182,8 @@ type Props = {
   pinned?: boolean;
   onTogglePin?: () => void;
   visible?: boolean;
-  view?: 'ai' | 'messenger';
-  onViewChange?: (view: 'ai' | 'messenger') => void;
+  view?: 'ai' | 'messenger' | 'worklog';
+  onViewChange?: (view: 'ai' | 'messenger' | 'worklog') => void;
   aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
   onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity') => void;
 };
@@ -1576,6 +1578,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   const claudeSessionIdRef = useRef<string | null>(null);
   // 대화 이력 목록 (UIPrefs 영속화)
   const [chatHistory, setChatHistory] = useState<ChatHistoryEntry[]>([]);
+  // 작업일지 자동 기록 — AI Chat 대화를 하루 중 지정 시각에 1번 주제별로 정리해 작업일지에 반영.
+  const workLogAutoRecord = useWorkLogAutoRecorder(chatHistory, currentAgent);
+  const [workLogAutoRecordMenuOpen, setWorkLogAutoRecordMenuOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [deleteHistoryConfirm, setDeleteHistoryConfirm] = useState<{ id: string; title: string } | null>(null);
@@ -4325,16 +4330,17 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     document.body,
   ) : null;
 
-  // AI Chat / 메신저 전환 탭 바 — 로딩/미설치 안내 페이지에서도 탭이 가려지지 않도록 공통 사용.
+  // AI Chat / 메신저 / 작업일지 전환 탭 바 — 로딩/미설치 안내 페이지에서도 탭이 가려지지 않도록 공통 사용.
   const viewTabsBar = (
     <div className="claude-chat-view-tabs">
       <button className={`claude-chat-view-tab ${activeView === 'ai' ? 'active' : ''}`} onClick={() => onViewChange?.('ai')}>🤖 AI Chat</button>
       <button className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`} onClick={() => onViewChange?.('messenger')}>💬 {tt('messenger')}</button>
+      <button className={`claude-chat-view-tab ${activeView === 'worklog' ? 'active' : ''}`} onClick={() => onViewChange?.('worklog')}>🗓 {tt('workLog')}</button>
     </div>
   );
 
-  // 메신저 뷰는 AI 에이전트 설치/로딩 상태와 무관하게 항상 표시 (custom LLM 등 미설정 시에도 메신저 탭 유지).
-  if (activeView !== 'messenger' && installed === null) {
+  // 메신저/작업일지 뷰는 AI 에이전트 설치/로딩 상태와 무관하게 항상 표시 (custom LLM 등 미설정 시에도 탭 유지).
+  if (activeView !== 'messenger' && activeView !== 'worklog' && installed === null) {
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4358,7 +4364,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       </div>
     );
   }
-  if (activeView !== 'messenger' && !installed) {
+  if (activeView !== 'messenger' && activeView !== 'worklog' && !installed) {
     const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? tt('notInstalledCustom') : currentAgent === 'antigravity' ? tt('notInstalledAntigravity') : tt('notInstalled');
     return (
       <div className="claude-chat-container">
@@ -4456,6 +4462,42 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             title={shareContext ? tt('shareContextOn') : tt('shareContextOff')}
             className={`claude-chat-share-toggle ${shareContext ? 'on' : 'off'}`}
           >🔗</button>
+          <div style={{ position: 'relative', display: 'inline-flex' }}>
+            <button
+              onClick={() => setWorkLogAutoRecordMenuOpen(v => !v)}
+              title={tt('workLogAutoRecordTooltip')}
+              className={`claude-chat-share-toggle ${workLogAutoRecord.enabled ? 'on' : 'off'}`}
+            >🗓️</button>
+            {workLogAutoRecordMenuOpen && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 4000 }} onClick={() => setWorkLogAutoRecordMenuOpen(false)} />
+                <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 4001, width: 240, background: 'var(--win-surface, #1a1a2e)', border: '1px solid var(--win-border, #333)', borderRadius: 8, boxShadow: '0 12px 28px rgba(0,0,0,0.5)', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--win-text, #fff)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={workLogAutoRecord.enabled} onChange={e => workLogAutoRecord.setEnabled(e.target.checked)} />
+                    {tt('workLogAutoRecordLabel')}
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa)' }}>{tt('workLogAutoRecordTimeLabel')}</span>
+                    <input
+                      type="time"
+                      value={workLogAutoRecord.time}
+                      onChange={e => workLogAutoRecord.setTime(e.target.value)}
+                      style={{ flex: 1, background: 'var(--win-bg, #0d0f10)', color: 'var(--win-text, #fff)', border: '1px solid var(--win-border, #333)', borderRadius: 4, padding: '3px 6px', fontSize: 12 }}
+                    />
+                  </div>
+                  <button
+                    onClick={() => void workLogAutoRecord.runNow()}
+                    disabled={workLogAutoRecord.running}
+                    className="claude-chat-modal-btn"
+                    style={{ fontSize: 12 }}
+                  >{workLogAutoRecord.running ? tt('workLogAutoRecordRunning') : tt('workLogAutoRecordRunNow')}</button>
+                  <div style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa)' }}>
+                    {workLogAutoRecord.lastRunDate ? tt('workLogAutoRecordLastRun', { date: workLogAutoRecord.lastRunDate }) : tt('workLogAutoRecordNeverRun')}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <div className="claude-chat-header-center">
           <div className="claude-chat-agent-switcher">
@@ -4506,6 +4548,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`}
           onClick={() => onViewChange?.('messenger')}
         >💬 {tt('messenger')}</button>
+        <button
+          className={`claude-chat-view-tab ${activeView === 'worklog' ? 'active' : ''}`}
+          onClick={() => onViewChange?.('worklog')}
+        >🗓 {tt('workLog')}</button>
       </div>
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
@@ -4518,7 +4564,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           }))}
         />
       </div>
-      {activeView === 'messenger' ? null : (
+      {/* 작업일지도 동일하게 항상 마운트 + CSS 로만 숨김 — 탭 전환 시 날짜/입력 상태 보존. */}
+      <div className="claude-chat-messenger-pane" style={{ display: activeView === 'worklog' ? 'flex' : 'none' }}>
+        <WorkLogWorkspace visible={visible && activeView === 'worklog'} aiAgent={currentAgent} />
+      </div>
+      {(activeView === 'messenger' || activeView === 'worklog') ? null : (
       <>
       {showUsagePanel && (
         <div className="claude-chat-usage-panel claude-chat-usage-popup"

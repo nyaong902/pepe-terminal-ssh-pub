@@ -11,6 +11,10 @@ type Props = {
   // 새 창 분리/병합 시 상태 복원용.
   initialState?: { editUrl?: string; zoom?: number; targetSessionId?: string; targetPanelId?: string } | null;
   onStateChange?: (state: { editUrl: string; zoom: number; targetSessionId: string; targetPanelId: string }) => void;
+  // 커스텀 워크스페이스 그리드 슬롯 안에 배치된 경우 true. 일반 브라우저 탭(전체 탭 하나를 차지)은
+  // 기존 sizing 로직을 그대로 쓰고, 커스텀 워크스페이스 슬롯(그리드 셀, 크기가 작고 자주 리사이즈됨)만
+  // 별도 sizing 로직을 쓴다 — 기존 탭 동작에 영향 없이 커스텀 워크스페이스의 "150px 고정" 버그만 고친다.
+  embedded?: boolean;
 };
 
 type ActiveSshTarget = {
@@ -31,9 +35,23 @@ type StoredSession = {
   hasJumps?: boolean;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, embedded = false }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
+  const webviewWrapRef = useRef<HTMLDivElement | null>(null);
+  const browserPaneRef = useRef<HTMLDivElement | null>(null);
+  const lastAppliedWebviewHeightRef = useRef<number>(-1);
+  const webviewDomReadyRef = useRef(false);
+  const lastGuestResizeKeyRef = useRef('');
+  const lastExpectedHeightRef = useRef<number>(0);
+  const recoveryAttemptRef = useRef(0);
+  const lastRecoveryAtRef = useRef(0);
+  const [webviewNonce, setWebviewNonce] = useState(0);
+  const activeTabIdRef = useRef<string>('');
+  const tabsRef = useRef<BrowserTab[]>([]);
+  const activeTargetPanelIdRef = useRef<string>('');
+  const zoomRef = useRef<number>(1);
+  const onTitleChangeRef = useRef<Props['onTitleChange']>(onTitleChange);
   const urlHistoryKey = 'pepe-browser-url-history';
   const partitionName = useMemo(
     () => `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -112,6 +130,216 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const proxySeqRef = useRef(0);
   const lastAutoLoadedRef = useRef<string>('');
   const liveTargets = connectedSessions.length > 0 ? connectedSessions : sshTargets;
+  const emitDebugLog = useCallback((...parts: any[]) => {
+    const line = parts.map(p => {
+      if (typeof p === 'string') return p;
+      try { return JSON.stringify(p); } catch { return String(p); }
+    }).join(' ');
+    try { (window as any).api?.debugLog?.(line); } catch {}
+    try { console.log(line); } catch {}
+  }, []);
+
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+    tabsRef.current = tabs;
+    activeTargetPanelIdRef.current = activeTargetPanelId;
+    zoomRef.current = zoom;
+    onTitleChangeRef.current = onTitleChange;
+  }, [activeTabId, tabs, activeTargetPanelId, zoom, onTitleChange]);
+
+  // embedded(커스텀 워크스페이스 그리드 슬롯)일 때만 아래 새 sizing 로직을 쓴다. 일반 브라우저 탭은
+  // 기존 로직(occupied 계산 + wrap 고정 px + autosize 핀)을 그대로 유지 — 기존 동작 무변경 보장.
+  const syncWebviewHeightEmbedded = useCallback((tag: string) => {
+    const root = browserPaneRef.current;
+    const wrap = webviewWrapRef.current;
+    const wv: any = webviewRef.current;
+    if (!root || !wrap || !wv) return;
+    try {
+      // 래퍼(wrap)는 flex:1 로 CSS 가 실제 가용 영역을 채운다. 그 실측값을 기준으로 삼는다.
+      // (기존 로직은 root.clientHeight - 형제높이 로 계산해 wrap 을 flex:none + 고정 px 로 얼렸는데,
+      //  커스텀 워크스페이스 그리드 안에서 최초 측정이 작게 잡히면 이후 root/wrap 둘 다 리사이즈가
+      //  안 일어나 ~150px 로 굳어버리는 버그가 있었다. webview 는 position:absolute; inset:0 이라
+      //  wrap 만 자연스럽게 flex 로 채워지면 화면도 꽉 찬다.)
+      //
+      // 중요: <webview autosize="on"> 는 호스트 CSS 박스를 무시하고 게스트를 컨텐츠 크기 기준
+      // (minwidth~maxwidth / minheight~maxheight 범위)으로 스스로 맞춘다. min/max 를 안 주면
+      // Chromium 의 대체 요소 기본 크기(300x150)로 폴백되는데, 이게 바로 "150px 고정" 의 원인이었다.
+      // autosize 를 아예 쓰지 않고(off) CSS 로만 크기를 주면, non-autosize <webview> 는 호스트
+      // 엘리먼트의 실제 렌더 박스 크기를 게스트에 자동으로 동기화한다 — 이게 표준 동작이다.
+      const wrapRect = wrap.getBoundingClientRect();
+      const nextHeight = Math.max(1, Math.floor(wrapRect.height || 0));
+      const nextWidth = Math.max(1, Math.floor(wrapRect.width || 0));
+      lastExpectedHeightRef.current = nextHeight;
+      const sizeChanged = lastAppliedWebviewHeightRef.current !== nextHeight;
+      const shouldNudge = sizeChanged || /mount|dom-ready|did-stop-loading|active-tab-changed/.test(tag);
+      if (sizeChanged) {
+        lastAppliedWebviewHeightRef.current = nextHeight;
+        wv.style.position = 'absolute';
+        wv.style.inset = '0';
+        wv.style.width = '100%';
+        wv.style.height = '100%';
+        wv.style.minWidth = '0';
+        wv.style.minHeight = '0';
+        wv.style.maxWidth = 'none';
+        wv.style.maxHeight = 'none';
+        // display 는 반드시 flex 여야 함 — block/inline-block 이면 <webview> 내부 게스트(object)가
+        // 세로로 늘어나지 않고 크롭돼 렌더된다 (Electron 공식 문서/이슈에 명시된 동작).
+        wv.style.display = 'flex';
+        wv.style.background = '#ffffff';
+      }
+      if (shouldNudge && nextHeight > 1) {
+        // hidden→visible 전환 / 그리드 리사이즈 직후 게스트 컴포지터가 새 크기를 놓치는 경우가
+        // 있어, wrap 높이를 1px 흔들어 실측 가능한 layout 변화를 강제로 한 번 더 일으킨다.
+        // (webview 는 wrap 을 inset:0 로 채우므로 wrap 이 흔들리면 webview 도 함께 흔들린다.)
+        const prevHeight = wrap.style.height;
+        wrap.style.height = `${nextHeight - 1}px`;
+        window.requestAnimationFrame(() => {
+          if (webviewWrapRef.current === wrap) wrap.style.height = prevHeight;
+        });
+      }
+      emitDebugLog('[cw-debug][browser-webview-size]', {
+        tag,
+        wrapWidth: nextWidth,
+        nextHeight,
+        sizeChanged,
+        shouldNudge,
+        currentUrl: webviewDomReadyRef.current ? String(wv.getURL?.() || '') : '',
+      });
+    } catch (err: any) {
+      emitDebugLog('[cw-debug][browser-webview-size-error]', { tag, error: String(err?.message || err || '') });
+    }
+  }, [emitDebugLog]);
+
+  // 일반 브라우저 탭(전체 탭 하나를 차지, 리사이즈가 드묾)에서 쓰던 기존 로직 — 그대로 보존.
+  const syncWebviewHeightDefault = useCallback((tag: string) => {
+    const root = browserPaneRef.current;
+    const wrap = webviewWrapRef.current;
+    const wv: any = webviewRef.current;
+    if (!root || !wrap || !wv) return;
+    try {
+      const rootHeight = root.clientHeight || root.getBoundingClientRect().height || 0;
+      const children = Array.from(root.children) as HTMLElement[];
+      let occupied = 0;
+      for (const child of children) {
+        if (child === wrap) break;
+        occupied += child.getBoundingClientRect().height;
+      }
+      const nextHeight = Math.max(120, Math.floor(rootHeight - occupied));
+      lastExpectedHeightRef.current = nextHeight;
+      const sizeChanged = lastAppliedWebviewHeightRef.current !== nextHeight;
+      const shouldForceGuestResize = sizeChanged || /mount|dom-ready|did-stop-loading|active-tab-changed/.test(tag);
+      if (sizeChanged) {
+        lastAppliedWebviewHeightRef.current = nextHeight;
+        const nextWidth = Math.max(1, Math.floor(root.clientWidth || root.getBoundingClientRect().width || 0));
+        wrap.style.flex = 'none';
+        wrap.style.width = '100%';
+        wrap.style.height = `${nextHeight}px`;
+        wrap.style.minHeight = `${nextHeight}px`;
+        wrap.style.maxHeight = `${nextHeight}px`;
+        wrap.style.background = '#ffffff';
+        wv.style.position = 'absolute';
+        wv.style.inset = '0';
+        wv.style.width = `${nextWidth}px`;
+        wv.style.height = `${nextHeight}px`;
+        wv.style.minWidth = `${nextWidth}px`;
+        wv.style.minHeight = `${nextHeight}px`;
+        wv.style.maxWidth = `${nextWidth}px`;
+        wv.style.maxHeight = `${nextHeight}px`;
+        wv.style.display = 'block';
+        wv.style.background = '#ffffff';
+      }
+      if (shouldForceGuestResize) {
+        try {
+          const nextWidth = Math.max(1, Math.floor(root.clientWidth || root.getBoundingClientRect().width || 0));
+          try {
+            wv.setAttribute?.('autosize', 'on');
+            wv.setAttribute?.('width', String(nextWidth));
+            wv.setAttribute?.('height', String(nextHeight));
+            wv.setAttribute?.('minwidth', String(nextWidth));
+            wv.setAttribute?.('maxwidth', String(nextWidth));
+            wv.setAttribute?.('minheight', String(nextHeight));
+            wv.setAttribute?.('maxheight', String(nextHeight));
+          } catch {}
+          // Hidden pane -> visible pane 전환 시 guest viewport 가 이전 높이에 머무는 문제가 있어
+          // 래퍼 높이를 한 번 흔들어 실제 resize 를 유도한다.
+          wrap.style.height = `${Math.max(120, nextHeight - 1)}px`;
+          window.requestAnimationFrame(() => {
+            if (webviewWrapRef.current === wrap) {
+              wrap.style.height = `${nextHeight}px`;
+            }
+          });
+          if (webviewDomReadyRef.current) {
+            const guestKey = `${nextWidth}x${nextHeight}:${tag}`;
+            if (lastGuestResizeKeyRef.current !== guestKey) {
+              lastGuestResizeKeyRef.current = guestKey;
+              const webContentsId = typeof wv.getWebContentsId === 'function' ? wv.getWebContentsId() : null;
+              if (webContentsId) {
+                [0, 80, 220].forEach(delay => {
+                  window.setTimeout(() => {
+                    try {
+                      void (window as any).api?.resizeBrowserGuest?.({
+                        webContentsId,
+                        width: nextWidth,
+                        height: nextHeight,
+                      });
+                    } catch {}
+                  }, delay);
+                });
+              }
+            }
+          }
+        } catch {}
+      }
+      emitDebugLog('[cw-debug][browser-webview-size]', {
+        tag,
+        rootHeight,
+        occupied,
+        nextHeight,
+        sizeChanged,
+        shouldForceGuestResize,
+        currentUrl: webviewDomReadyRef.current ? String(wv.getURL?.() || '') : '',
+      });
+    } catch (err: any) {
+      emitDebugLog('[cw-debug][browser-webview-size-error]', { tag, error: String(err?.message || err || '') });
+    }
+  }, [emitDebugLog]);
+
+  const syncWebviewHeight = embedded ? syncWebviewHeightEmbedded : syncWebviewHeightDefault;
+
+  useEffect(() => {
+    emitDebugLog('[cw-debug][browser-state]', {
+      activeTabId,
+      tabsLength: tabs.length,
+      activeTabUrl: activeTab?.url || '',
+      activeTargetSessionId,
+      activeTargetPanelId,
+    });
+  }, [activeTabId, tabs.length, activeTab?.url, activeTargetSessionId, activeTargetPanelId]);
+
+  useEffect(() => {
+    const el = browserPaneRef.current;
+    if (!el) return;
+    const logSize = (tag: string) => {
+      syncWebviewHeight(tag);
+      const wv: any = webviewRef.current;
+      const rect = el.getBoundingClientRect();
+      const wrect = wv?.getBoundingClientRect?.();
+      emitDebugLog('[cw-debug][browser-size]', tag, {
+        pane: { clientWidth: el.clientWidth, clientHeight: el.clientHeight, rectW: Math.round(rect.width), rectH: Math.round(rect.height) },
+        webview: wrect ? { width: Math.round(wrect.width), height: Math.round(wrect.height) } : null,
+      });
+    };
+    logSize('mount');
+    const ro = new ResizeObserver(() => logSize('resize'));
+    ro.observe(el);
+    if (embedded) {
+      // embedded 는 wrap 이 flex 로 실제 가용 영역을 채우므로 직접 관찰 — 그리드/분할 리사이즈에 확실히 추종.
+      const wrapEl = webviewWrapRef.current;
+      if (wrapEl && wrapEl !== el) ro.observe(wrapEl);
+    }
+    const timer = window.setTimeout(() => logSize('delayed-200ms'), 200);
+    return () => { ro.disconnect(); window.clearTimeout(timer); };
+  }, [syncWebviewHeight]);
 
   // 언마운트(탭 닫힘) 시 활성 프록시/전용 백그라운드 SSH 연결 정리 — 누수 방지.
   const proxyStateRef = useRef(proxyState);
@@ -289,6 +517,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         setProxyState(null);
         return;
       }
+      emitDebugLog('[cw-debug][browser-proxy-panel]', { panelId, localPort: r.localPort, webContentsId });
       // bypass 비움 → 원격지 기준 127.0.0.1/localhost 도 SOCKS(점프 SSH) 를 타게 함
       await (window as any).api?.setWebviewProxy?.({ webContentsId, proxyRules: `socks5://127.0.0.1:${r.localPort}`, proxyBypassRules: '' });
       if (seq !== proxySeqRef.current) return;
@@ -349,6 +578,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         setProxyState(null);
         return;
       }
+      emitDebugLog('[cw-debug][browser-proxy-dedicated]', { sessionId, localPort: r.localPort, connId: r.connId, webContentsId });
       // bypass 비움 → 원격지 기준 127.0.0.1/localhost 도 SOCKS(점프 SSH) 를 타게 함
       await (window as any).api?.setWebviewProxy?.({ webContentsId, proxyRules: `socks5://127.0.0.1:${r.localPort}`, proxyBypassRules: '' });
       if (seq !== proxySeqRef.current) return;
@@ -406,6 +636,15 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       if (!activeTargetPanelId) return;
       try { webviewRef.current?.loadURL?.(resolveBrowserUrl(browserUrl)).catch(() => {}); } catch {}
     }, 100);
+    emitDebugLog('[cw-debug][browser-auto-load]', {
+      activeTabId,
+      tabsLength: tabs.length,
+      activeTargetSessionId,
+      activeTargetPanelId,
+      browserUrl,
+      normalizedTarget,
+      normalizedCurrent,
+    });
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedSessions, liveTargets, activeTargetSessionId]);
@@ -413,16 +652,30 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
+    const prevOnReady = wv.__pepeOnReadyHandler;
+    if (prevOnReady) {
+      try { wv.removeEventListener('dom-ready', prevOnReady); } catch {}
+    }
     const onReady = () => {
-      if (activeTargetPanelId) void applyProxyForPanel(activeTargetPanelId);
+      webviewDomReadyRef.current = true;
+      lastGuestResizeKeyRef.current = '';
+      const currentTargetPanelId = activeTargetPanelIdRef.current;
+      if (currentTargetPanelId) void applyProxyForPanel(currentTargetPanelId);
       void forceBrowserLightTheme();
+      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
+      syncWebviewHeight('dom-ready');
+      window.setTimeout(() => syncWebviewHeight('dom-ready-late'), 60);
     };
+    wv.__pepeOnReadyHandler = onReady;
     wv.addEventListener('dom-ready', onReady);
     return () => {
       try { wv.removeEventListener('dom-ready', onReady); } catch {}
+      webviewDomReadyRef.current = false;
+      if (wv.__pepeOnReadyHandler === onReady) {
+        try { delete wv.__pepeOnReadyHandler; } catch {}
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTargetPanelId, proxyState, sshTargets]);
+  }, [syncWebviewHeight]);
 
   // activeTab 변경 시 그 탭의 URL 로 로드 — 기존 webview 재사용.
   const lastLoadedTabRef = useRef<string>(activeTabId);
@@ -435,24 +688,106 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     if (!url) return;
     setEditUrl(url);
     try { wv.loadURL(resolveBrowserUrl(url)).catch(() => {}); } catch {}
+    syncWebviewHeight('active-tab-changed');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId]);
+  }, [activeTabId, syncWebviewHeight]);
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
+    const prevHandlers = wv.__pepeLifecycleHandlers;
+    if (prevHandlers) {
+      try { wv.removeEventListener('did-navigate', prevHandlers.onNav); } catch {}
+      try { wv.removeEventListener('did-navigate-in-page', prevHandlers.onNav); } catch {}
+      try { wv.removeEventListener('did-start-loading', prevHandlers.onStart); } catch {}
+      try { wv.removeEventListener('did-stop-loading', prevHandlers.onStop); } catch {}
+      try { wv.removeEventListener('page-title-updated', prevHandlers.onTitle); } catch {}
+      try { wv.removeEventListener('did-fail-load', prevHandlers.onFail); } catch {}
+      try { wv.removeEventListener('new-window', prevHandlers.onNewWindow); } catch {}
+      try { prevHandlers.offBrowserNewWindow?.(); } catch {}
+    }
     const onNav = () => {
       try {
         const u = wv.getURL();
         setEditUrl(u);
-        setTabUrl(activeTabId, u);
+        setTabUrl(activeTabIdRef.current, u);
         void loadBrowserCredentialsForUrl(u);
       } catch {}
       void forceBrowserLightTheme();
+      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
       try { setCanBack(wv.canGoBack()); setCanFwd(wv.canGoForward()); } catch {}
     };
     const onStart = () => setLoading(true);
-    const onStop = () => { setLoading(false); onNav(); };
-    const onTitle = (e: any) => { onTitleChange?.(e.title || ''); setTabTitle(activeTabId, e.title || ''); };
+    const onStop = () => {
+      setLoading(false);
+      onNav();
+      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
+      syncWebviewHeight('did-stop-loading');
+      try {
+        const url = String(wv.getURL?.() || '');
+        Promise.resolve(wv.executeJavaScript?.(`
+          (() => {
+            try {
+              const body = document.body;
+              const docEl = document.documentElement;
+              return {
+                bodyScrollHeight: body ? body.scrollHeight : 0,
+                bodyOffsetHeight: body ? body.offsetHeight : 0,
+                docScrollHeight: docEl ? docEl.scrollHeight : 0,
+                docOffsetHeight: docEl ? docEl.offsetHeight : 0,
+                innerHeight: window.innerHeight || 0,
+                innerWidth: window.innerWidth || 0,
+              };
+            } catch {
+              return { bodyScrollHeight: 0, bodyOffsetHeight: 0, docScrollHeight: 0, docOffsetHeight: 0, innerHeight: 0, innerWidth: 0 };
+            }
+          })();
+        `, true)).then((doc: any) => {
+          const innerHeight = Number(doc?.innerHeight || 0);
+          const expectedHeight = Math.max(0, lastExpectedHeightRef.current || 0);
+          const shouldRecoverViewport =
+            expectedHeight >= 240 &&
+            innerHeight > 0 &&
+            innerHeight < Math.floor(expectedHeight * 0.5) &&
+            recoveryAttemptRef.current < 2 &&
+            (Date.now() - lastRecoveryAtRef.current) > 800;
+          if (shouldRecoverViewport) {
+            recoveryAttemptRef.current += 1;
+            lastRecoveryAtRef.current = Date.now();
+            webviewDomReadyRef.current = false;
+            lastGuestResizeKeyRef.current = '';
+            lastAppliedWebviewHeightRef.current = -1;
+            window.setTimeout(() => setWebviewNonce(prev => prev + 1), 0);
+          }
+          emitDebugLog('[cw-debug][browser-stop-loading]', {
+            activeTabId: activeTabIdRef.current,
+            tabsLength: tabsRef.current.length,
+            url,
+            doc,
+            expectedHeight,
+            shouldRecoverViewport,
+            recoveryAttempt: recoveryAttemptRef.current,
+          });
+        }).catch((err: any) => {
+          emitDebugLog('[cw-debug][browser-stop-loading-error]', {
+            activeTabId: activeTabIdRef.current,
+            tabsLength: tabsRef.current.length,
+            url,
+            error: String(err?.message || err || ''),
+          });
+        });
+      } catch (err: any) {
+        emitDebugLog('[cw-debug][browser-stop-loading-error]', {
+          activeTabId: activeTabIdRef.current,
+          tabsLength: tabsRef.current.length,
+          url: '',
+          error: String(err?.message || err || ''),
+        });
+      }
+    };
+    const onTitle = (e: any) => {
+      onTitleChangeRef.current?.(e.title || '');
+      setTabTitle(activeTabIdRef.current, e.title || '');
+    };
     // 링크 클릭이 새 창을 요청하면 새 탭으로 열기.
     // Electron 25+ 에서 <webview> 의 new-window preventDefault 가 무시되므로
     // main process 의 setWindowOpenHandler 가 URL 을 IPC 로 전달 → 여기서 새 탭으로.
@@ -479,6 +814,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         setTestResult(t('browserLoadFailedUrl', { msg, url: url ? ` (${url})` : '' }));
       }
     };
+    wv.__pepeLifecycleHandlers = { onNav, onStart, onStop, onTitle, onFail, onNewWindow, offBrowserNewWindow };
     wv.addEventListener('did-navigate', onNav);
     wv.addEventListener('did-navigate-in-page', onNav);
     wv.addEventListener('did-start-loading', onStart);
@@ -497,9 +833,11 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         wv.removeEventListener('new-window', onNewWindow);
       } catch {}
       try { offBrowserNewWindow?.(); } catch {}
+      if (wv.__pepeLifecycleHandlers?.onStop === onStop) {
+        try { delete wv.__pepeLifecycleHandlers; } catch {}
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onTitleChange, activeTabId]);
+  }, [emitDebugLog, syncWebviewHeight]);
 
   const resolveBrowserUrl = (target: string) => {
     let t = target.trim();
@@ -519,11 +857,15 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     const wv: any = webviewRef.current;
     if (!wv) return;
     const css = `
-      html, body {
+      :root,
+      html,
+      body {
         background: #fff !important;
         color-scheme: light !important;
+        min-height: 100vh !important;
       }
       body {
+        height: auto !important;
         -webkit-text-fill-color: initial !important;
       }
     `;
@@ -533,7 +875,10 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         (function() {
           try { document.documentElement.style.colorScheme = 'light'; } catch {}
           try { document.documentElement.style.background = '#fff'; } catch {}
+          try { document.documentElement.style.minHeight = '100vh'; } catch {}
           try { document.body && (document.body.style.background = '#fff'); } catch {}
+          try { document.body && (document.body.style.minHeight = '100vh'); } catch {}
+          try { document.body && (document.body.style.height = 'auto'); } catch {}
         })();
       `, true);
     } catch {}
@@ -730,23 +1075,19 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const zoomReset = () => applyZoom(1.0);
 
   // 페이지 로드 / 네비게이션 후 zoom factor 가 리셋되므로 다시 적용
-  useEffect(() => {
-    const wv: any = webviewRef.current;
-    if (!wv) return;
-    const reapply = () => { try { wv.setZoomFactor?.(zoom); } catch {} };
-    wv.addEventListener('did-stop-loading', reapply);
-    wv.addEventListener('did-navigate', reapply);
-    return () => {
-      try { wv.removeEventListener('did-stop-loading', reapply); wv.removeEventListener('did-navigate', reapply); } catch {}
-    };
-  }, [zoom]);
-
   // Ctrl/Cmd + (+/-/0) 단축키 + Ctrl/Cmd + 휠 줌 — webview 외부에서 입력 받을 때만 동작.
   // webview 내부에서 받은 휠/키는 페이지가 자체 처리하므로 별도 처리 필요.
   // → webview 의 'before-input-event' 로 Ctrl+= / Ctrl+- 가로채서 줌 변경.
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
+    const prevZoomHandlers = wv.__pepeZoomHandlers;
+    if (prevZoomHandlers) {
+      try { wv.removeEventListener('before-input-event', prevZoomHandlers.onInput); } catch {}
+      try { wv.removeEventListener('dom-ready', prevZoomHandlers.injectWheelZoom); } catch {}
+      try { wv.removeEventListener('did-navigate', prevZoomHandlers.injectWheelZoom); } catch {}
+      try { wv.removeEventListener('console-message', prevZoomHandlers.onConsole); } catch {}
+    }
     const onInput = (e: any) => {
       if (e.type !== 'keyDown') return;
       const ctrl = e.control || e.meta;
@@ -792,6 +1133,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         } catch {}
       }
     };
+    wv.__pepeZoomHandlers = { onInput, injectWheelZoom, onConsole };
     try { wv.addEventListener('before-input-event', onInput); } catch {}
     try { wv.addEventListener('dom-ready', injectWheelZoom); } catch {}
     try { wv.addEventListener('did-navigate', injectWheelZoom); } catch {}
@@ -801,11 +1143,14 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       try { wv.removeEventListener('dom-ready', injectWheelZoom); } catch {}
       try { wv.removeEventListener('did-navigate', injectWheelZoom); } catch {}
       try { wv.removeEventListener('console-message', onConsole); } catch {}
+      if (wv.__pepeZoomHandlers?.onInput === onInput) {
+        try { delete wv.__pepeZoomHandlers; } catch {}
+      }
     };
   }, [zoom]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#1a1a1a' }}>
+    <div ref={browserPaneRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, height: '100%', background: '#1a1a1a', overflow: 'hidden' }}>
       {/* 탭 바 — 링크가 새 창을 요청하면 새 탭으로 열림. + 로 빈 탭 추가. */}
       <div style={{ display: 'flex', alignItems: 'stretch', background: '#1e1e1e', borderBottom: '1px solid #333', overflowX: 'auto', minHeight: 28 }}>
         {tabs.map(tab => {
@@ -949,16 +1294,20 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           {testResult}
         </div>
       ) : null}
-      {/* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */}
-      <webview
-        ref={webviewRef as any}
-        src={initialSrcRef.current}
-        partition={partitionName as any}
-        // display: flex 는 webview 렌더링과 호환성 문제 (내부 페이지 스크롤/포커스 안 됨).
-        // inline-flex 또는 명시적 flex:1 + width/height 100% 로 처리.
-        style={{ flex: '1 1 auto', width: '100%', minHeight: 0, display: 'inline-flex' } as any}
-        allowpopups={'true' as any}
-      />
+      <div ref={webviewWrapRef} style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+        {/* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */}
+        <webview
+          key={`browser-webview-${webviewNonce}`}
+          ref={webviewRef as any}
+          src={initialSrcRef.current}
+          partition={partitionName as any}
+          // embedded(커스텀 워크스페이스)만 display:flex — block/inline-block 이면 내부 게스트(object)가
+          // 세로로 늘어나지 않고 크롭돼 렌더된다 (Electron 공식 문서/이슈에 명시된 동작). 일반 탭은
+          // 기존 동작 그대로 block 유지.
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', minHeight: 0, display: embedded ? 'flex' : 'block' } as any}
+          allowpopups={'true' as any}
+        />
+      </div>
     </div>
   );
 };

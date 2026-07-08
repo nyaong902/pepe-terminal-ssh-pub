@@ -40,6 +40,8 @@ type CommonHandlers = {
   // 기본은 undefined(격리 없음, 기존 동작 100% 유지). tabId 는 그 격리 뷰가 속한 탭 식별용.
   isolatedPanelNodeIds?: Set<string>;
   ownerTabId?: string;
+  // 커스텀 워크스페이스 터미널 슬롯 — 싱글탭 전용. 미니탭/툴바 아이콘 숨김.
+  singleSessionMode?: boolean;
 };
 
 type Props = CommonHandlers & { root: LayoutNode };
@@ -91,6 +93,7 @@ const NodeView: React.FC<NodeProps> = ({ node, ...h }) => {
             workspaceList={h.workspaceList}
             currentWorkspaceId={h.currentWorkspaceId}
             onMoveSessionToWorkspace={h.onMoveSessionToWorkspace}
+            singleSessionMode={h.singleSessionMode}
           />
           )}
         </div>

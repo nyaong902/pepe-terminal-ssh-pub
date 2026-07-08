@@ -35,6 +35,9 @@ import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
+import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
+import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
+import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
 import { getTelnetBridge } from './telnetBridge';
@@ -300,6 +303,9 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
   try { mainWindow?.webContents.send('debug:log', `[unhandledRejection] ${(reason as any)?.message || reason}`); } catch {}
+});
+ipcMain.on('debug:log', (_e, msg: any) => {
+  try { mainWindow?.webContents.send('debug:log', String(msg ?? '')); } catch {}
 });
 
 // 커맨드라인에서 전달된 초기 경로 (탐색기 우클릭 → "터미널에서 열기")
@@ -1024,6 +1030,7 @@ app.whenReady().then(() => {
   cleanupAiMirrorTempRoots(false);
   registerPepeInstance();
   createWindow();
+  restoreStickyNotes();
   installX11DisplayHook();
   void messengerStartService();
 
@@ -1238,6 +1245,9 @@ ipcMain.handle('sessions:open-editor', () => {
 
 ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
+// 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소.
+ipcMain.handle('worklog:get-all', () => loadWorklog());
+ipcMain.handle('worklog:save-day', (_e, { date, day }: { date: string; day: WorklogDay }) => { saveWorklogDay(date, day); return true; });
 // 윈도우 테마 변경 — 저장 후 모든 창(메인/옵션·세션편집 팝아웃/분리된 탭)에 broadcast → 라이브 반영.
 ipcMain.handle('window-theme:set', (_e, id: string) => {
   const themeId = String(id || '');
@@ -3721,6 +3731,168 @@ ipcMain.handle('compare:walk', async (_e, { mode, termId, basePath, maxEntries, 
   }
 });
 
+type CompareRow = {
+  relPath: string;
+  isDir: boolean;
+  status: 'same' | 'changed' | 'left-only' | 'right-only';
+  leftSize?: number;
+  rightSize?: number;
+};
+type CompareNode = { name: string; relPath: string; isDir: boolean; size: number; mtime: number };
+const stoppedCompareRequests: Set<string> = new Set();
+function markCompareStopped(requestId: string) {
+  if (!requestId) return;
+  stoppedCompareRequests.add(requestId);
+  setTimeout(() => stoppedCompareRequests.delete(requestId), 60_000);
+}
+function isCompareStopped(requestId?: string): boolean {
+  return !!requestId && stoppedCompareRequests.has(requestId);
+}
+
+ipcMain.handle('compare:dir-compare', async (_e, {
+  leftMode, leftTermId, leftBasePath,
+  rightMode, rightTermId, rightBasePath,
+  maxEntries, ignoreBinaryFiles, skipOrphanDirectories, requestId,
+}: {
+  leftMode: string; leftTermId?: string; leftBasePath: string;
+  rightMode: string; rightTermId?: string; rightBasePath: string;
+  maxEntries?: number; ignoreBinaryFiles?: boolean; skipOrphanDirectories?: boolean; requestId?: string;
+  }) => {
+  const cap = Math.min(maxEntries || COMPARE_WALK_MAX_ENTRIES, COMPARE_WALK_MAX_ENTRIES);
+  const out: CompareRow[] = [];
+  let truncated = false;
+  try {
+    const bridge = getSSHBridge();
+    const sep = (mode: string) => mode === 'local' && process.platform === 'win32' ? '\\' : '/';
+    const join = (a: string, b: string, mode: string) => a.endsWith(sep(mode)) ? a + b : a + sep(mode) + b;
+
+    const listDir = async (mode: string, termId: string | undefined, dirPath: string): Promise<CompareNode[]> => {
+      let entries: any[];
+      try {
+        entries = mode === 'local' ? await bridge.handleLocalListDir(dirPath) : await bridge.handleSFTPListDir(termId!, dirPath);
+      } catch {
+        return [];
+      }
+      entries.sort((a, b) => (a.isDir !== b.isDir) ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name));
+      return entries
+        .filter(e => e.name !== '.' && e.name !== '..')
+        .map(e => ({
+          name: e.name,
+          relPath: '',
+          isDir: !!e.isDir,
+          size: e.size ?? 0,
+          mtime: e.mtime ?? 0,
+        }));
+    };
+
+    const emit = (entry: CompareRow) => {
+      if (isCompareStopped(requestId)) return false;
+      if (out.length >= cap) {
+        truncated = true;
+        return false;
+      }
+      out.push(entry);
+      return true;
+    };
+
+    const emitOrphanTree = async (
+      mode: string,
+      termId: string | undefined,
+      dirPath: string,
+      rel: string,
+      side: 'left' | 'right',
+    ): Promise<void> => {
+      if (truncated || isCompareStopped(requestId)) return;
+      const entries = await listDir(mode, termId, dirPath);
+      for (const entry of entries) {
+        if (truncated || isCompareStopped(requestId)) return;
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entry.isDir) {
+          if (!emit({ relPath: childRel, isDir: true, status: side === 'left' ? 'left-only' : 'right-only' })) return;
+          if (!skipOrphanDirectories) {
+            await emitOrphanTree(mode, termId, join(dirPath, entry.name, mode), childRel, side);
+          }
+        } else {
+          if (ignoreBinaryFiles && isBinaryComparePath(childRel)) continue;
+          if (!emit({
+            relPath: childRel,
+            isDir: false,
+            status: side === 'left' ? 'left-only' : 'right-only',
+            ...(side === 'left' ? { leftSize: entry.size } : { rightSize: entry.size }),
+          })) return;
+        }
+      }
+    };
+
+    const compareDir = async (
+      leftDir: string,
+      rightDir: string,
+      rel: string,
+    ): Promise<void> => {
+      if (truncated || isCompareStopped(requestId)) return;
+      const [leftEntries, rightEntries] = await Promise.all([
+        listDir(leftMode, leftTermId, leftDir),
+        listDir(rightMode, rightTermId, rightDir),
+      ]);
+      if (truncated || isCompareStopped(requestId)) return;
+
+      const leftMap = new Map(leftEntries.map(e => [e.name, e]));
+      const rightMap = new Map(rightEntries.map(e => [e.name, e]));
+      const names = [...new Set([...leftMap.keys(), ...rightMap.keys()])].sort((a, b) => {
+        const la = leftMap.get(a);
+        const ra = rightMap.get(a);
+        const aDir = !!la?.isDir || !!ra?.isDir;
+        const bDir = !!leftMap.get(b)?.isDir || !!rightMap.get(b)?.isDir;
+        if (aDir !== bDir) return aDir ? -1 : 1;
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      for (const name of names) {
+        if (truncated || isCompareStopped(requestId)) return;
+        const l = leftMap.get(name);
+        const r = rightMap.get(name);
+        const childRel = rel ? `${rel}/${name}` : name;
+        if (l && r) {
+          if (l.isDir && r.isDir) {
+            if (!emit({ relPath: childRel, isDir: true, status: 'same' })) return;
+            await compareDir(join(leftDir, name, leftMode), join(rightDir, name, rightMode), childRel);
+          } else if (l.isDir !== r.isDir) {
+            if (ignoreBinaryFiles && ((!l.isDir && isBinaryComparePath(childRel)) || (!r.isDir && isBinaryComparePath(childRel)))) continue;
+            if (!emit({ relPath: childRel, isDir: false, status: 'changed', leftSize: l.size, rightSize: r.size })) return;
+          } else {
+            if (ignoreBinaryFiles && isBinaryComparePath(childRel)) continue;
+            const same = l.size === r.size;
+            if (!emit({ relPath: childRel, isDir: false, status: same ? 'same' : 'changed', leftSize: l.size, rightSize: r.size })) return;
+          }
+        } else if (l) {
+          if (ignoreBinaryFiles && !l.isDir && isBinaryComparePath(childRel)) continue;
+          if (!emit({ relPath: childRel, isDir: l.isDir, status: 'left-only', leftSize: l.size })) return;
+          if (l.isDir && !skipOrphanDirectories) {
+            await emitOrphanTree(leftMode, leftTermId, join(leftDir, name, leftMode), childRel, 'left');
+          }
+        } else if (r) {
+          if (ignoreBinaryFiles && !r.isDir && isBinaryComparePath(childRel)) continue;
+          if (!emit({ relPath: childRel, isDir: r.isDir, status: 'right-only', rightSize: r.size })) return;
+          if (r.isDir && !skipOrphanDirectories) {
+            await emitOrphanTree(rightMode, rightTermId, join(rightDir, name, rightMode), childRel, 'right');
+          }
+        }
+      }
+    };
+
+    await compareDir(leftBasePath, rightBasePath, '');
+    return { entries: out, truncated, stopped: isCompareStopped(requestId) };
+  } catch (err: any) {
+    if (isCompareStopped(requestId)) return { entries: out, truncated, stopped: true };
+    return { entries: out, truncated, error: String(err) };
+  }
+});
+
+ipcMain.handle('compare:stop', (_e, { requestId }: { requestId: string }) => {
+  markCompareStopped(String(requestId || ''));
+  return { success: true };
+});
+
 // 파일 쓰기 — Compare 에디터에서 수정 후 저장. 로컬은 fs, 원격은 SFTP.
 ipcMain.handle('compare:write', async (_e, { mode, termId, filePath, content }: { mode: string; termId?: string; filePath: string; content: string }) => {
   try {
@@ -5133,39 +5305,48 @@ ipcMain.handle('fe:connected-sessions', () => {
 // ── SFTP IPC ──
 
 ipcMain.handle('sftp:download', async (_e, { panelId, remotePath, isDir }: { panelId: string; remotePath: string; isDir?: boolean }) => {
-  if (!mainWindow) return null;
+  xferLog(`ipc sftp:download 요청 panelId=${panelId} remotePath=${remotePath} isDir=${!!isDir}`);
+  if (!mainWindow) { xferLog('ipc sftp:download 중단 — mainWindow 없음'); return null; }
   const bridge = getSSHBridge();
   const baseName = remotePath.split('/').filter(Boolean).pop() || 'download';
   if (isDir) {
     // 폴더 다운로드 — 부모 폴더 고른 뒤 그 안에 원격 폴더 이름으로 재귀 복사
+    xferLog('ipc sftp:download 폴더 저장 위치 선택 다이얼로그 표시');
     const pick = await dialog.showOpenDialog(mainWindow, {
       title: t('dialog.saveDownloadLocation'),
       properties: ['openDirectory', 'createDirectory'],
     });
-    if (pick.canceled || pick.filePaths.length === 0) return null;
+    if (pick.canceled || pick.filePaths.length === 0) { xferLog('ipc sftp:download 폴더 선택 취소됨'); return null; }
     const parentDir = pick.filePaths[0];
     const localDst = path.join(parentDir, baseName);
+    xferLog(`ipc sftp:download 폴더 선택됨 → ${localDst}`);
     try {
       await bridge.handleTransfer(
         { mode: 'remote', termId: panelId, path: remotePath },
         { mode: 'local', path: localDst },
         baseName,
       );
+      xferLog('ipc sftp:download 폴더 다운로드 완료');
       return { success: true, localPath: localDst };
     } catch (err: any) {
+      xferLog(`ipc sftp:download 폴더 다운로드 실패: ${err?.message || err}`);
       return { success: false, error: String(err) };
     }
   }
   // 파일 다운로드 — 저장 이름까지 지정
+  xferLog('ipc sftp:download 파일 저장 위치 선택 다이얼로그 표시');
   const result = await dialog.showSaveDialog(mainWindow, {
     title: t('dialog.saveRemoteFile'),
     defaultPath: baseName,
   });
-  if (result.canceled || !result.filePath) return null;
+  if (result.canceled || !result.filePath) { xferLog('ipc sftp:download 저장 취소됨'); return null; }
+  xferLog(`ipc sftp:download 저장 위치 선택됨 → ${result.filePath}`);
   try {
     await bridge.handleSFTPDownload(panelId, remotePath, result.filePath);
+    xferLog('ipc sftp:download 완료');
     return { success: true, localPath: result.filePath };
   } catch (err: any) {
+    xferLog(`ipc sftp:download 실패: ${err?.message || err}`);
     return { success: false, error: String(err) };
   }
 });
@@ -5736,6 +5917,103 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
 ipcMain.handle('window:detach-tab', (_e, { payload, bounds }: { payload: any; bounds?: any }) => {
   try { createDetachedWindow(payload, bounds); return true; } catch (err) { console.error('[detach] fail', err); return false; }
 });
+
+// ── 포스트잇(Sticky Note) — 화면 어디든 붙일 수 있는 독립 창들 ───────────────
+// 각 노트는 frameless/transparent/always-on-top 인 별도 BrowserWindow. 위치/크기/내용은
+// stickyNotesStore.ts 에 즉시 저장되어 앱을 껐다 켜도 마지막 위치에 그대로 복원된다.
+const stickyNoteWindows = new Map<string, BrowserWindow>();
+const stickyNoteBoundsSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function loadStickyNoteWindow(url: string, win: BrowserWindow) {
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
+  if (!app.isPackaged && devServerUrl) {
+    win.loadURL(devServerUrl + url);
+  } else {
+    win.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url.replace(/^#/, '') });
+  }
+}
+
+function createStickyNoteWindow(note: StickyNote, focus: boolean) {
+  const existing = stickyNoteWindows.get(note.id);
+  if (existing && !existing.isDestroyed()) { if (focus) { existing.show(); existing.focus(); } return existing; }
+  const win = new BrowserWindow({
+    x: Math.round(note.x), y: Math.round(note.y),
+    width: Math.round(note.width), height: Math.round(note.height),
+    minWidth: 240, minHeight: 220,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  stickyNoteWindows.set(note.id, win);
+  win.once('ready-to-show', () => { try { win.show(); if (focus) win.focus(); } catch {} });
+  const saveBoundsDebounced = () => {
+    const timer = stickyNoteBoundsSaveTimers.get(note.id);
+    if (timer) clearTimeout(timer);
+    stickyNoteBoundsSaveTimers.set(note.id, setTimeout(() => {
+      if (win.isDestroyed()) return;
+      const b = win.getBounds();
+      try { updateStickyNote(note.id, { x: b.x, y: b.y, width: b.width, height: b.height }); } catch {}
+    }, 300));
+  };
+  win.on('move', saveBoundsDebounced);
+  win.on('resize', saveBoundsDebounced);
+  win.on('closed', () => {
+    stickyNoteWindows.delete(note.id);
+    const timer = stickyNoteBoundsSaveTimers.get(note.id);
+    if (timer) clearTimeout(timer);
+    stickyNoteBoundsSaveTimers.delete(note.id);
+  });
+  loadStickyNoteWindow(`#sticky-note?id=${encodeURIComponent(note.id)}`, win);
+  return win;
+}
+
+function restoreStickyNotes() {
+  try {
+    const { notes } = loadStickyNotes();
+    for (const note of notes) createStickyNoteWindow(note, false);
+  } catch (err) { console.error('[sticky-note] restore failed:', err); }
+}
+
+ipcMain.handle('sticky-note:create', () => {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x: ax, y: ay, width: aw, height: ah } = display.workArea;
+  const count = stickyNoteWindows.size;
+  const defaultWidth = 380;
+  const defaultHeight = 380;
+  const note: StickyNote = {
+    id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    x: ax + Math.min(60 + (count % 8) * 28, aw - defaultWidth),
+    y: ay + Math.min(60 + (count % 8) * 28, ah - defaultHeight),
+    width: defaultWidth,
+    height: defaultHeight,
+    html: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  addStickyNote(note);
+  createStickyNoteWindow(note, true);
+  return note;
+});
+
+ipcMain.handle('sticky-note:get', (_e, id: string) => getStickyNote(id) || null);
+
+ipcMain.handle('sticky-note:update-content', (_e, { id, html }: { id: string; html: string }) => {
+  try { updateStickyNote(id, { html }); } catch {}
+});
+
+ipcMain.handle('sticky-note:delete', (_e, id: string) => {
+  const win = stickyNoteWindows.get(id);
+  if (win && !win.isDestroyed()) win.destroy();
+  stickyNoteWindows.delete(id);
+  try { removeStickyNote(id); } catch {}
+});
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
 ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {
   try {
@@ -5975,6 +6253,18 @@ ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; pr
     const proxyBypassRules = typeof args.proxyBypassRules === 'string' ? args.proxyBypassRules : 'localhost,127.0.0.1,::1';
     await session.setProxy({ mode: 'fixed_servers', proxyRules: args.proxyRules, proxyBypassRules });
     try { await session.closeAllConnections?.(); } catch {}
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('browser:resize-guest', async (_e, args: { webContentsId: number; width: number; height: number }) => {
+  try {
+    const wc: any = webContents.fromId(args.webContentsId);
+    if (!wc) return { success: false, error: 'webContents not found' };
+    const width = Math.max(1, Math.floor(Number(args?.width || 0)));
+    const height = Math.max(1, Math.floor(Number(args?.height || 0)));
+    wc.setSize?.({ normal: { width, height } });
     return { success: true };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };
@@ -7224,8 +7514,15 @@ const startMcpControl = async (): Promise<void> => {
           buf = buf.slice(idx + 1);
           if (!line.trim()) continue;
           (async () => {
+            // 실패 시 에러 응답의 id 매칭용 — try 안에서 req 파싱 자체가 실패하면 null 유지(그
+            // 경우 클라이언트도 이 요청의 id 를 모르므로 매칭 불가라 상관없음). 파싱 이후
+            // 단계(handleExec 등)에서 던지면 반드시 원래 req.id 를 써야 한다 — 이전엔 catch 블록이
+            // 항상 id:null 로 응답해서, mcpSshServer.cjs 의 pendingById.get(id) 매칭에 실패해
+            // 에러가 클라이언트에 전혀 전달되지 못하고 그냥 영원히 대기(=타임아웃)하는 버그가 있었다.
+            let reqId: any = null;
             try {
               const req = JSON.parse(line);
+              reqId = req.id;
               if (req.token !== mcpControlToken) {
                 sock.write(JSON.stringify({ id: req.id, error: 'invalid token' }) + '\n');
                 return;
@@ -7259,7 +7556,8 @@ const startMcpControl = async (): Promise<void> => {
                 sock.write(JSON.stringify({ id: req.id, error: 'unknown op' }) + '\n');
               }
             } catch (err: any) {
-              try { sock.write(JSON.stringify({ id: null, error: String(err) }) + '\n'); } catch {}
+              xferLog(`mcp-control op 처리 실패 reqId=${reqId}: ${err?.message || err}`);
+              try { sock.write(JSON.stringify({ id: reqId, error: String(err) }) + '\n'); } catch {}
             }
           })();
         }

@@ -19,6 +19,14 @@ contextBridge.exposeInMainWorld('api', {
   // UI Prefs (config.json 에 저장 — sessionData 멀티인스턴스 분리와 무관하게 영속)
   getUIPrefs: () => ipcRenderer.invoke('ui-prefs:get'),
   setUIPrefs: (prefs: Record<string, any>) => ipcRenderer.invoke('ui-prefs:set', prefs),
+  // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)
+  worklogGetAll: () => ipcRenderer.invoke('worklog:get-all'),
+  worklogSaveDay: (date: string, day: { todos: any[] }) => ipcRenderer.invoke('worklog:save-day', { date, day }),
+  // 포스트잇 — 화면 어디든 붙일 수 있는 독립 창 (stickyNotes.json)
+  stickyNoteCreate: () => ipcRenderer.invoke('sticky-note:create'),
+  stickyNoteGet: (id: string) => ipcRenderer.invoke('sticky-note:get', id),
+  stickyNoteUpdateContent: (id: string, html: string) => ipcRenderer.invoke('sticky-note:update-content', { id, html }),
+  stickyNoteDelete: (id: string) => ipcRenderer.invoke('sticky-note:delete', id),
   // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
   setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
   onWindowTheme: (cb: (id: string) => void) => {
@@ -280,6 +288,7 @@ contextBridge.exposeInMainWorld('api', {
   getDetachedInit: () => ipcRenderer.invoke('window:get-detached-init'),
   getConnectedPanels: () => ipcRenderer.invoke('ssh:connected-panels'),
   setWebviewProxy: (args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => ipcRenderer.invoke('browser:set-proxy', args),
+  resizeBrowserGuest: (args: { webContentsId: number; width: number; height: number }) => ipcRenderer.invoke('browser:resize-guest', args),
   agentIsRunning: (args: { sessionId?: string; requestId?: string }) => ipcRenderer.invoke('agent:is-running', args),
   getCursorPoint: () => ipcRenderer.invoke('window:cursor-point'),
   getWindowBounds: () => ipcRenderer.invoke('window:get-bounds'),
@@ -293,6 +302,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('debug:log', listener);
     return () => ipcRenderer.removeListener('debug:log', listener);
   },
+  debugLog: (msg: string) => ipcRenderer.send('debug:log', msg),
 
   // SSH control
   resetSSHState: (panelId: string) => ipcRenderer.invoke('ssh:reset-state', panelId),
@@ -628,6 +638,17 @@ contextBridge.exposeInMainWorld('api', {
   // 파일 비교 (CompareWorkspace)
   compareWalk: (mode: string, basePath: string, termId?: string, maxEntries?: number, ignoreBinaryFiles?: boolean) =>
     ipcRenderer.invoke('compare:walk', { mode, termId, basePath, maxEntries, ignoreBinaryFiles }),
+  compareDirCompare: (
+    leftMode: string, leftBasePath: string, leftTermId: string | undefined,
+    rightMode: string, rightBasePath: string, rightTermId: string | undefined,
+    maxEntries?: number, ignoreBinaryFiles?: boolean, skipOrphanDirectories?: boolean, requestId?: string,
+  ) =>
+    ipcRenderer.invoke('compare:dir-compare', {
+      leftMode, leftBasePath, leftTermId,
+      rightMode, rightBasePath, rightTermId,
+      maxEntries, ignoreBinaryFiles, skipOrphanDirectories, requestId,
+    }),
+  compareStop: (requestId: string) => ipcRenderer.invoke('compare:stop', { requestId }),
   compareHash: (mode: string, filePath: string, termId?: string, maxBytes?: number, wsMode?: string) =>
     ipcRenderer.invoke('compare:hash', { mode, termId, filePath, maxBytes, wsMode }),
   compareDownload: (defaultName: string, content: string, encoding?: string) =>

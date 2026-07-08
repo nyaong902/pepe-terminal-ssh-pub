@@ -179,7 +179,10 @@ function defaultEndpoint(n: number): SipEndpoint {
 export const MicroSipWorkspace: React.FC<{
   initialView?: MicroSipView;
   onViewChange?: (view: MicroSipView) => void;
-}> = ({ initialView = 'phones', onViewChange }) => {
+  // 커스텀 워크스페이스 그리드 슬롯에 배치된 경우 true. 일반 MicroSIP 탭은 기존 동기화 로직을
+  // 그대로 쓰고, embedded 일 때만 에코 차단 가드를 추가한다 — 기존 탭 동작 무변경 보장.
+  embedded?: boolean;
+}> = ({ initialView = 'phones', onViewChange, embedded = false }) => {
   const [view, setView] = useState<MicroSipView>(initialView);
   const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string; body?: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
@@ -208,11 +211,23 @@ export const MicroSipWorkspace: React.FC<{
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
 
+  // 뷰(탭)는 부모(initialView) ↔ 내부(view) 양방향 바인딩이다. 커스텀 워크스페이스(embedded) 는
+  // 부모(CustomWorkspaceView)가 매 렌더마다 새 onViewChange 함수를 넘기고, 그 값을 다시 props 로
+  // 되돌려 받는 이중 바인딩 구조라 에코 타이밍이 겹치면 탭이 계속 튕기는(재전환) 문제가 있었다.
+  // embedded 일 때만 마지막으로 동기화한 뷰를 기억해 (1) 외부에서 실제로 바뀐 경우에만 setView,
+  // (2) 사용자가 실제로 뷰를 바꿨을 때만 onViewChange 를 호출하도록 에코를 차단한다. 일반 MicroSIP
+  // 탭(embedded=false)은 기존과 동일하게 매번 무조건 호출 — 기존 동작 무변경.
+  const lastSyncedViewRef = useRef<MicroSipView>(initialView);
   useEffect(() => {
+    if (embedded && initialView === lastSyncedViewRef.current) return;
+    lastSyncedViewRef.current = initialView;
     setView(initialView);
   }, [initialView]);
   useEffect(() => {
+    if (embedded && view === lastSyncedViewRef.current) return;
+    lastSyncedViewRef.current = view;
     onViewChange?.(view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, onViewChange]);
 
   // ── 영속(UI prefs) ──
