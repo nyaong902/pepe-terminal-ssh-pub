@@ -1262,6 +1262,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 대표 세션 (git bar 등 단일 참조용) — 첫 번째 선택
   const activeSshSession = selectedSshSessions[0] || null;
   const [installed, setInstalled] = useState<boolean | null>(null);
+  // 이번 세션에서 이미 설치 확인이 끝난 에이전트는 캐시 — 재전환 시 설치확인 완료까지 로딩 화면으로
+  // 전체 채팅 UI 가 통째로 바뀌었다 돌아오는 "흔들림"을 막는다(백그라운드 재확인은 계속 함).
+  const installedCacheRef = useRef<Partial<Record<AgentType, boolean>>>({});
   // 에이전트별 버전 캐시 — 탭 hover 시 플로팅 툴팁에 표시
   const [agentVersions, setAgentVersions] = useState<{ claude?: string; gemini?: string; codex?: string }>({});
   // 에이전트 탭 툴팁 — React 포털로 document.body 에 렌더 (overflow 클립 회피)
@@ -2059,7 +2062,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
 
   // CLI 설치 확인 (currentAgent 변경 시마다 재확인) + agentVersions 캐시 갱신
   useEffect(() => {
-    setInstalled(null); // 에이전트 전환 시 로딩 상태로 초기화
+    // 이미 확인된 적 있는 에이전트면 그 결과를 즉시 보여주고(로딩 화면 스킵), 백그라운드로만 재확인.
+    // 처음 보는 에이전트만 진짜 로딩 상태(null)를 거친다.
+    const cached = installedCacheRef.current[currentAgent];
+    setInstalled(cached !== undefined ? cached : null);
     (async () => {
       const res = currentAgent === 'gemini'
         ? await (window as any).api?.geminiCheck?.()
@@ -2070,23 +2076,34 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         : currentAgent === 'antigravity'
         ? await (window as any).api?.antigravityCheck?.()
         : await (window as any).api?.claudeCheck?.();
-      setInstalled(!!res?.installed);
+      const isInstalled = !!res?.installed;
+      installedCacheRef.current[currentAgent] = isInstalled;
+      setInstalled(isInstalled);
       const v = res?.version || '';
       setAgentVersions(prev => (prev as any)[currentAgent] === v ? prev : { ...prev, [currentAgent]: v });
     })();
   }, [currentAgent]);
 
-  // 마운트 시 모든 에이전트 버전 1회 백그라운드 조회 (탭 hover 툴팁 미리 채움)
+  // 마운트 시 모든 에이전트 설치여부/버전을 1회 백그라운드 조회 (탭 hover 툴팁 미리 채움 +
+  // installedCacheRef 선반영 — 처음 그 에이전트로 전환할 때도 로딩 화면 없이 바로 뜨게 한다).
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [c, g, cx] = await Promise.all([
+        const [c, g, cx, ag, cu] = await Promise.all([
           (window as any).api?.claudeCheck?.().catch(() => null),
           (window as any).api?.geminiCheck?.().catch(() => null),
           (window as any).api?.codexCheck?.().catch(() => null),
+          (window as any).api?.antigravityCheck?.().catch(() => null),
+          (window as any).api?.customCheck?.().catch(() => null),
         ]);
         if (!mounted) return;
+        installedCacheRef.current.claude = !!c?.installed;
+        installedCacheRef.current.gemini = !!g?.installed;
+        installedCacheRef.current.codex = !!cx?.installed;
+        installedCacheRef.current.antigravity = !!ag?.installed;
+        installedCacheRef.current.custom = !!cu?.installed;
+        // currentAgent 는 자기 자신의 개별 확인 effect 가 이미 진행 중일 수 있으니 건드리지 않는다.
         setAgentVersions(prev => ({
           claude: c?.version || prev.claude || '',
           gemini: g?.version || prev.gemini || '',
@@ -5381,6 +5398,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           })());
         })()}
       </div>
+      {/* 스트리밍/스티어링 배너 — 메시지 영역 바로 아래(입력창 위) 일반 흐름에 위치.
+          메시지 영역 안에 절대 위치로 겹쳐봤더니, 메시지 내용이 패널을 다 못 채울 때
+          배너가 실제 마지막 메시지와 떨어져 붕 뜨는 문제가 있어 원래 방식으로 되돌림. */}
       {currentAgentStreaming && !showHistoryPanel && (
         <div className="claude-chat-streaming">
           <span className="claude-chat-streaming-dots">●●●</span>

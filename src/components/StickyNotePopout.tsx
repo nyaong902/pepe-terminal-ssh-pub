@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 const StickyNotePopout: React.FC<{ noteId: string }> = ({ noteId }) => {
   const editableRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [maximized, setMaximized] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -17,6 +18,18 @@ const StickyNotePopout: React.FC<{ noteId: string }> = ({ noteId }) => {
       setLoaded(true);
     })();
   }, [noteId]);
+
+  useEffect(() => {
+    const api = (window as any).api;
+    api?.windowIsMaximized?.().then((m: boolean) => setMaximized(!!m)).catch(() => {});
+    const unsub = api?.onWindowMaximized?.((m: boolean) => setMaximized(m));
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
+
+  // 최소화 — OS 최소화 대신 창을 숨기고 메인 앱 창의 우측 사이드바에서 관리한다.
+  // (skipTaskbar 라 OS 최소화로는 작업표시줄에도 안 잡혀 복구할 방법이 없었음)
+  const handleMinimize = () => { try { (window as any).api?.stickyNoteMinimizeToSidebar?.(noteId); } catch {} };
+  const handleToggleMaximize = () => { try { (window as any).api?.windowToggleMaximize?.(); } catch {} };
 
   const scheduleSave = () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -90,9 +103,33 @@ const StickyNotePopout: React.FC<{ noteId: string }> = ({ noteId }) => {
         style={{
           WebkitAppRegion: 'drag' as any,
           height: 30, minHeight: 30, boxSizing: 'border-box', flex: '0 0 30px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-          padding: '0 6px', background: 'rgba(0,0,0,0.06)', cursor: 'move',
+          padding: '0 6px', background: 'rgba(0,0,0,0.06)', cursor: 'move', gap: 4,
         } as React.CSSProperties}
       >
+        <button
+          onClick={handleMinimize}
+          title="최소화"
+          style={{
+            WebkitAppRegion: 'no-drag' as any,
+            flex: '0 0 auto', width: 22, height: 22, lineHeight: '22px', textAlign: 'center', padding: 0,
+            border: 'none', borderRadius: 4, background: 'rgba(0,0,0,0.12)', color: '#3a3320',
+            cursor: 'pointer', fontSize: 12, fontWeight: 700,
+          } as React.CSSProperties}
+        >
+          &#8211;
+        </button>
+        <button
+          onClick={handleToggleMaximize}
+          title={maximized ? '이전 크기로' : '최대화'}
+          style={{
+            WebkitAppRegion: 'no-drag' as any,
+            flex: '0 0 auto', width: 22, height: 22, lineHeight: '22px', textAlign: 'center', padding: 0,
+            border: 'none', borderRadius: 4, background: 'rgba(0,0,0,0.12)', color: '#3a3320',
+            cursor: 'pointer', fontSize: 11, fontWeight: 700,
+          } as React.CSSProperties}
+        >
+          {maximized ? '❐' : '□'}
+        </button>
         <button
           onClick={handleDelete}
           title="삭제"

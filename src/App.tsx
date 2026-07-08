@@ -366,6 +366,11 @@ function App() {
   const [customWorkspaces, setCustomWorkspaces] = useState<CustomWorkspaceTemplate[]>([]);
   const customWorkspacesLoadedRef = useRef(false);
   const [customWorkspaceDialog, setCustomWorkspaceDialog] = useState<{ open: boolean; template?: CustomWorkspaceTemplate | null }>({ open: false, template: null });
+  // 커스텀 워크스페이스 생성 다이얼로그를 열기 위해 옵션 창을 "강제로" 띄운 경우(툴바 +, 커맨드 팔레트 등
+  // 옵션이 원래 닫혀있던 상태)만 취소 시 옵션도 같이 닫는다 — 옵션 안의 "+추가" 버튼(이미 옵션이 열려있던
+  // 경우)에서는 취소해도 옵션 화면이 그대로 유지되어야 한다. 이미 열려있던 경우엔 원래 보고 있던 탭으로 복원.
+  const optionsForcedOpenForCustomWorkspaceRef = useRef(false);
+  const optionsPrevTabForCustomWorkspaceRef = useRef<typeof optionsTab | null>(null);
   const [keybindingsState, setKeybindingsState] = useState<Record<string, string>>({});
   const [keybindingsDraft, setKeybindingsDraft] = useState<Record<string, string>>({});
 
@@ -385,6 +390,20 @@ function App() {
   const [shellPrefsLoaded, setShellPrefsLoaded] = useState<boolean>(false);
   const [optDefaultShellPath, setOptDefaultShellPath] = useState('');
   const [showBroadcast, setShowBroadcast] = useState<boolean>(true);
+  // 스티커 메모 — 전체 포스트잇 목록(최소화 여부 무관, Windows 스티커 메모 앱 패턴)을 우측 사이드바에서 관리
+  const [stickyNotesList, setStickyNotesList] = useState<{ id: string; html: string; updatedAt: number; minimized: boolean }[]>([]);
+  useEffect(() => {
+    (window as any).api?.stickyNoteGetList?.().then((list: any) => {
+      if (Array.isArray(list)) setStickyNotesList(list);
+    }).catch(() => {});
+    const unsub = (window as any).api?.onStickyNoteList?.((list: any) => {
+      setStickyNotesList(list);
+    });
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
+  const [stickyNoteSidebarOpen, setStickyNoteSidebarOpen] = useState(false);
+  const [stickyNoteSearch, setStickyNoteSearch] = useState('');
+  const [stickyNoteMenuOpenId, setStickyNoteMenuOpenId] = useState<string | null>(null);
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [showRuntimeLogs, setShowRuntimeLogs] = useState<boolean>(() => {
     try {
@@ -1008,6 +1027,8 @@ function App() {
   const claudeChatPinnedLoadedRef = useRef(false);
   const claudeChatHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const claudeChatHoverShowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stickyNoteHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stickyNoteHoverShowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!showClaudeChatLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ showClaudeChat }); } catch {}
@@ -2533,8 +2554,8 @@ function App() {
     setActiveTabId(id);
   }, [customWorkspaces, tabs]);
   const openCustomWorkspaceCreator = useCallback(() => {
-    setShowOptions(true);
-    setOptionsTab('workspace');
+    setShowOptions(prev => { optionsForcedOpenForCustomWorkspaceRef.current = !prev; return true; });
+    setOptionsTab(prev => { optionsPrevTabForCustomWorkspaceRef.current = prev; return 'workspace'; });
     setCustomWorkspaceDialog({ open: true, template: null });
   }, []);
   const editCustomWorkspaceTemplate = useCallback((templateId: string) => {
@@ -4841,7 +4862,16 @@ function App() {
             }}
           >💬</button>
           <button className={`tool-btn ${showBroadcast ? 'active' : ''}`} title={showBroadcast ? tApp('toolbar.broadcastHide') : tApp('toolbar.broadcastShow')} onClick={() => setShowBroadcast(v => !v)}>📢</button>
-          <button className="tool-btn" title={tApp('toolbar.stickyNote', { defaultValue: '포스트잇' })} onClick={() => { try { (window as any).api?.stickyNoteCreate?.(); } catch {} }}>📝</button>
+          <button className="tool-btn" title={tApp('toolbar.stickyNote', { defaultValue: '포스트잇' })} onClick={() => { try { (window as any).api?.stickyNoteCreate?.(); } catch {} }}>
+            <svg width="15" height="15" viewBox="0 0 24 24">
+              <g transform="rotate(-8 12 14)">
+                <path d="M5 7 H19 V17 L15 21 H5 Z" fill="#ffe066" stroke="#c9a227" strokeWidth="1.1" strokeLinejoin="round" />
+                <path d="M19 17 L15 21 L19 21 Z" fill="#e0b93d" stroke="#c9a227" strokeWidth="0.8" strokeLinejoin="round" />
+                <circle cx="13.5" cy="5" r="2" fill="#b0b0b0" stroke="#7a7a7a" strokeWidth="0.8" />
+                <line x1="12.2" y1="6.6" x2="10.3" y2="9.6" stroke="#7a7a7a" strokeWidth="1.4" strokeLinecap="round" />
+              </g>
+            </svg>
+          </button>
           <button
             className={`tool-btn btn-pin${terminalPinned ? ' pinned' : ''}`}
             title={terminalPinned ? tApp('toolbar.terminalUnpin') : tApp('toolbar.terminalPin')}
@@ -6398,7 +6428,16 @@ function App() {
         <CustomWorkspaceDialog
           open={customWorkspaceDialog.open}
           initialTemplate={customWorkspaceDialog.template || null}
-          onCancel={() => setCustomWorkspaceDialog({ open: false, template: null })}
+          onCancel={() => {
+            setCustomWorkspaceDialog({ open: false, template: null });
+            if (optionsForcedOpenForCustomWorkspaceRef.current) {
+              optionsForcedOpenForCustomWorkspaceRef.current = false;
+              setShowOptions(false);
+            } else if (optionsPrevTabForCustomWorkspaceRef.current) {
+              setOptionsTab(optionsPrevTabForCustomWorkspaceRef.current);
+            }
+            optionsPrevTabForCustomWorkspaceRef.current = null;
+          }}
           onSave={saveCustomWorkspaceTemplate}
         />
         </>);
@@ -6484,7 +6523,7 @@ function App() {
               <div className="claude-chat-sidebar-trigger">
                 <div
                   className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-ai"
-                  onClick={() => { if (claudeChatView === 'ai' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('ai'); } }}
+                  onClick={() => { setStickyNoteSidebarOpen(false); if (claudeChatView === 'ai' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('ai'); } }}
                   onMouseEnter={onEnterTriggerHover}
                   onMouseLeave={onLeaveTriggerHover}
                   style={{ cursor: 'pointer' }}
@@ -6494,7 +6533,7 @@ function App() {
                 </div>
                 <div
                   className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-messenger"
-                  onClick={() => { if (claudeChatView === 'messenger' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('messenger'); } }}
+                  onClick={() => { setStickyNoteSidebarOpen(false); if (claudeChatView === 'messenger' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('messenger'); } }}
                   onMouseEnter={onEnterTriggerHover}
                   onMouseLeave={onLeaveTriggerHover}
                   style={{ cursor: 'pointer' }}
@@ -6502,9 +6541,143 @@ function App() {
                 >
                   <span className="claude-chat-sidebar-trigger-text">{tMsg('triggerTextMessenger')}</span>
                 </div>
+                <div
+                  className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-stickynote"
+                  onClick={() => {
+                    setClaudeChatVisible(false);
+                    if (stickyNoteHoverShowTimer.current) { clearTimeout(stickyNoteHoverShowTimer.current); stickyNoteHoverShowTimer.current = null; }
+                    setStickyNoteSidebarOpen(v => !v);
+                  }}
+                  onMouseEnter={() => {
+                    if (stickyNoteHideTimer.current) { clearTimeout(stickyNoteHideTimer.current); stickyNoteHideTimer.current = null; }
+                    if (stickyNoteHoverShowTimer.current) clearTimeout(stickyNoteHoverShowTimer.current);
+                    stickyNoteHoverShowTimer.current = setTimeout(() => setStickyNoteSidebarOpen(true), 2500);
+                  }}
+                  onMouseLeave={() => {
+                    if (stickyNoteHoverShowTimer.current) { clearTimeout(stickyNoteHoverShowTimer.current); stickyNoteHoverShowTimer.current = null; }
+                  }}
+                  style={{ cursor: 'pointer', flexDirection: 'column', gap: 5 }}
+                  title={tApp('claudeChat.triggerTooltip')}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                    <g transform="rotate(-8 12 14)">
+                      <path d="M5 7 H19 V17 L15 21 H5 Z" fill="#ffe066" stroke="#c9a227" strokeWidth="1.1" strokeLinejoin="round" />
+                      <path d="M19 17 L15 21 L19 21 Z" fill="#e0b93d" stroke="#c9a227" strokeWidth="0.8" strokeLinejoin="round" />
+                      <circle cx="13.5" cy="5" r="2" fill="#b0b0b0" stroke="#7a7a7a" strokeWidth="0.8" />
+                      <line x1="12.2" y1="6.6" x2="10.3" y2="9.6" stroke="#7a7a7a" strokeWidth="1.4" strokeLinecap="round" />
+                    </g>
+                  </svg>
+                  <span className="claude-chat-sidebar-trigger-text">스티커 메모</span>
+                </div>
                 <div className="claude-chat-sidebar-trigger-bottom" />
               </div>
             )}
+            {stickyNoteSidebarOpen && (() => {
+              const q = stickyNoteSearch.trim().toLowerCase();
+              const rows = stickyNotesList
+                .map(n => ({ ...n, preview: n.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() }))
+                .filter(n => !q || n.preview.toLowerCase().includes(q))
+                .sort((a, b) => b.updatedAt - a.updatedAt);
+              const fmtTime = (ts: number) => {
+                try { return new Date(ts).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }); }
+                catch { return ''; }
+              };
+              return (
+                <div
+                  className="claude-chat-sidebar"
+                  style={{ width: 280, right: '20px' }}
+                  onMouseEnter={() => { if (stickyNoteHideTimer.current) { clearTimeout(stickyNoteHideTimer.current); stickyNoteHideTimer.current = null; } }}
+                  onMouseLeave={() => {
+                    if (stickyNoteHideTimer.current) clearTimeout(stickyNoteHideTimer.current);
+                    stickyNoteHideTimer.current = setTimeout(() => setStickyNoteSidebarOpen(false), 500);
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderBottom: '1px solid var(--win-border, #333)' }}>
+                    <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--win-text, #ccc)' }}>스티커 메모</span>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={() => { (window as any).api?.stickyNoteCreate?.(); }}
+                        title="새 포스트잇"
+                        style={{ background: 'transparent', border: 0, color: 'var(--win-text-dim, #aaa)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 6px' }}
+                      >+</button>
+                      <button
+                        onClick={() => setStickyNoteSidebarOpen(false)}
+                        title="닫기"
+                        style={{ background: 'transparent', border: 0, color: 'var(--win-text-dim, #aaa)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 6px' }}
+                      >✕</button>
+                    </div>
+                  </div>
+                  <div style={{ padding: '8px 10px' }}>
+                    <input
+                      value={stickyNoteSearch}
+                      onChange={e => setStickyNoteSearch(e.target.value)}
+                      placeholder="검색..."
+                      style={{
+                        width: '100%', boxSizing: 'border-box', padding: '6px 8px', fontSize: 12,
+                        background: 'var(--win-surface, #1a1a1a)', border: '1px solid var(--win-border, #333)',
+                        borderRadius: 4, color: 'var(--win-text, #ccc)',
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {rows.length === 0 && (
+                      <div style={{ color: 'var(--win-text-dim, #888)', fontSize: 12, padding: 8 }}>
+                        {stickyNotesList.length === 0 ? '포스트잇이 없습니다.' : '검색 결과가 없습니다.'}
+                      </div>
+                    )}
+                    {rows.map(note => (
+                      <div
+                        key={note.id}
+                        onClick={() => { try { (window as any).api?.stickyNoteFocus?.(note.id); } catch {} }}
+                        style={{
+                          position: 'relative', textAlign: 'left', padding: '8px 10px', border: '1px solid #d8c95a', borderRadius: 4,
+                          background: '#fff6a8', color: '#3a3320', cursor: 'pointer', fontSize: 12, lineHeight: 1.4,
+                          minHeight: 44, overflow: 'visible', display: 'flex', flexDirection: 'column', gap: 4,
+                        }}
+                      >
+                        <button
+                          onClick={e => { e.stopPropagation(); setStickyNoteMenuOpenId(v => v === note.id ? null : note.id); }}
+                          title="더 보기"
+                          style={{
+                            position: 'absolute', top: 2, right: 2, background: 'transparent', border: 0,
+                            color: '#8a7f4a', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 6px',
+                          }}
+                        >⋯</button>
+                        {stickyNoteMenuOpenId === note.id && (
+                          <>
+                            <div onClick={e => { e.stopPropagation(); setStickyNoteMenuOpenId(null); }} style={{ position: 'fixed', inset: 0, zIndex: 9999 }} />
+                            <div
+                              onClick={e => e.stopPropagation()}
+                              style={{
+                                position: 'absolute', top: 20, right: 2, zIndex: 10000,
+                                background: '#252526', border: '1px solid #444', borderRadius: 4,
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.4)', minWidth: 110, overflow: 'hidden',
+                              }}
+                            >
+                              <button
+                                onClick={() => {
+                                  setStickyNoteMenuOpenId(null);
+                                  try { (window as any).api?.stickyNoteDelete?.(note.id); } catch {}
+                                }}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
+                                  background: 'transparent', border: 0, color: '#e57373', cursor: 'pointer',
+                                  fontSize: 12, padding: '7px 10px',
+                                }}
+                              >🗑 메모 삭제</button>
+                            </div>
+                          </>
+                        )}
+                        <span style={{ fontSize: 10, color: '#8a7f4a', alignSelf: 'flex-end', paddingRight: 14 }}>{fmtTime(note.updatedAt)}</span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' } as React.CSSProperties}>
+                          {note.preview || '메모를 작성하세요...'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             <div
               className={`claude-chat-sidebar ${!claudeChatPinned ? 'auto-hide' : ''} ${!claudeChatPinned && !claudeChatVisible ? 'hidden' : ''}`}
               style={{ width: `${claudeChatWidth}px`, right: claudeChatPinned ? '0px' : '20px' }}

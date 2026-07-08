@@ -27,6 +27,14 @@ contextBridge.exposeInMainWorld('api', {
   stickyNoteGet: (id: string) => ipcRenderer.invoke('sticky-note:get', id),
   stickyNoteUpdateContent: (id: string, html: string) => ipcRenderer.invoke('sticky-note:update-content', { id, html }),
   stickyNoteDelete: (id: string) => ipcRenderer.invoke('sticky-note:delete', id),
+  stickyNoteMinimizeToSidebar: (id: string) => ipcRenderer.invoke('sticky-note:minimize-to-sidebar', id),
+  stickyNoteFocus: (id: string) => ipcRenderer.invoke('sticky-note:focus', id),
+  stickyNoteGetList: () => ipcRenderer.invoke('sticky-note:get-list'),
+  onStickyNoteList: (cb: (list: { id: string; html: string; updatedAt: number; minimized: boolean }[]) => void) => {
+    const listener = (_e: any, list: any[]) => cb(list);
+    ipcRenderer.on('sticky-note:list', listener);
+    return () => ipcRenderer.removeListener('sticky-note:list', listener);
+  },
   // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
   setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
   onWindowTheme: (cb: (id: string) => void) => {
