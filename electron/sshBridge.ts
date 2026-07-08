@@ -541,8 +541,21 @@ class SSHBridge extends EventEmitter {
       }
     });
     worker.on('error', (e: any) => {
+      xferLog(`terminal worker error panelId=${panelId}: ${e?.message || e}`);
       this.clients.delete(panelId);
       this.emit('message', { type: 'error', panelId, error: String(e?.message || e) });
+    });
+    // worker 가 'error' 이벤트 없이(예: 내부에서 process.exit, 혹은 알 수 없는 크래시로) 그냥
+    // 종료돼버리면 this.clients 가 전혀 정리되지 않아, 렌더러는 계속 "연결됨"으로 알고 있고
+    // 화면엔 마지막 버퍼가 그대로 남아있는데 실제로는 입력을 보낼 곳이 없는 "유령 세션"이
+    // 영구히 남는다 — 사용자가 겪은 "포커스/onData 는 정상인데 화면 반응이 전혀 없음" 증상의
+    // 실제 원인으로 추정. SFTP 워커에는 있던 이 정리 로직이 터미널 워커에는 빠져있었다.
+    worker.on('exit', (code: number) => {
+      xferLog(`terminal worker exit panelId=${panelId} code=${code}`);
+      if (this.clients.get(panelId)?.conn === connProxy) {
+        this.clients.delete(panelId);
+        this.emit('message', { type: 'error', panelId, error: `터미널 워커가 예기치 않게 종료됐습니다 (code=${code})` });
+      }
     });
 
     // pwd 자동추적 — 세션 옵션 그대로 반영(기존 handleConnect 경로와 동일 조건). worker 자신도
@@ -861,7 +874,7 @@ class SSHBridge extends EventEmitter {
 
   handleInput(panelId: string, data?: string, b64?: string) {
     const rec = this.clients.get(panelId);
-    if (!rec?.stream) return;
+    if (!rec?.stream) { xferLog(`handleInput DROP — no client/stream for panelId=${panelId} (hasClient=${!!rec})`); return; }
 
     const enc = (rec.encoding || 'utf-8').toLowerCase();
     const isUtf8 = enc === 'utf-8' || enc === 'utf8';
