@@ -987,6 +987,9 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
       if (matchKeybinding(e, 'fullscreen')) return false;
       // 미니탭 전환 (앱 전역 핸들러로 위임)
       if (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab')) return false;
+      // Ctrl+S: 세션 목록 검색창 포커스(앱 전역 핸들러, App.tsx) — 여기서 막지 않으면 xterm 이
+      // 먼저 처리해 PTY 로 XOFF(0x13) 를 그대로 보내버려 그 터미널이 멈춰버린다(타이핑 불가).
+      if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.code === 'KeyS') return false;
       if (!(e.ctrlKey || e.metaKey)) return true;
       // Ctrl+L (Shift 없이): 커서 라인 위 내용을 스크롤 버퍼로 보존하며 밀어냄
       if (!e.shiftKey && e.code === 'KeyL') {
