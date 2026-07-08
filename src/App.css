@@ -3347,6 +3347,11 @@ body.popout-options .session-editor h3:first-child {
   overflow: hidden;
 }
 
+/* leaf/divider 를 절대좌표로 배치하는 기준 컨테이너 — FileExplorer.tsx 의 computeFeGeometry 참고 */
+.fe-dual-flat {
+  position: relative;
+}
+
 .fe-panel-wrap {
   flex: 1;
   display: flex;
@@ -3434,6 +3439,24 @@ body.popout-options .session-editor h3:first-child {
 .fe-panel-tab-add:hover {
   background: rgba(255,255,255,0.1);
   color: var(--win-text, #fff);
+}
+.fe-panel-split-btn, .fe-panel-close-btn {
+  width: 22px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.fe-panel-split-btn:hover, .fe-panel-close-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--win-text, #fff);
+}
+.fe-panel-close-btn:hover {
+  background: rgba(255, 80, 80, 0.25);
+  color: #ff8a8a;
 }
 .fe-panel-wrap.selected::after {
   content: '';
