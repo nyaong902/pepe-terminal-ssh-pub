@@ -5944,6 +5944,9 @@ function createStickyNoteWindow(note: StickyNote, focus: boolean) {
     },
   });
   stickyNoteWindows.set(note.id, win);
+  // frame:false 창의 드래그 영역(-webkit-app-region:drag) 우클릭 시 Windows 가 자동으로 띄우는
+  // 시스템 메뉴(이동/크기조정/최소화 등)를 막는다 — 포커스를 뺏어가 편집 중이던 내용이 끊기는 문제.
+  win.on('system-context-menu', (e) => e.preventDefault());
   win.once('ready-to-show', () => { try { win.show(); if (focus) win.focus(); } catch {} });
   const saveBoundsDebounced = () => {
     const timer = stickyNoteBoundsSaveTimers.get(note.id);

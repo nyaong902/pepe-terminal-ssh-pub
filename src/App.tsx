@@ -366,6 +366,11 @@ function App() {
   const [customWorkspaces, setCustomWorkspaces] = useState<CustomWorkspaceTemplate[]>([]);
   const customWorkspacesLoadedRef = useRef(false);
   const [customWorkspaceDialog, setCustomWorkspaceDialog] = useState<{ open: boolean; template?: CustomWorkspaceTemplate | null }>({ open: false, template: null });
+  // 커스텀 워크스페이스 생성 다이얼로그를 열기 위해 옵션 창을 "강제로" 띄운 경우(툴바 +, 커맨드 팔레트 등
+  // 옵션이 원래 닫혀있던 상태)만 취소 시 옵션도 같이 닫는다 — 옵션 안의 "+추가" 버튼(이미 옵션이 열려있던
+  // 경우)에서는 취소해도 옵션 화면이 그대로 유지되어야 한다. 이미 열려있던 경우엔 원래 보고 있던 탭으로 복원.
+  const optionsForcedOpenForCustomWorkspaceRef = useRef(false);
+  const optionsPrevTabForCustomWorkspaceRef = useRef<typeof optionsTab | null>(null);
   const [keybindingsState, setKeybindingsState] = useState<Record<string, string>>({});
   const [keybindingsDraft, setKeybindingsDraft] = useState<Record<string, string>>({});
 
@@ -2533,8 +2538,8 @@ function App() {
     setActiveTabId(id);
   }, [customWorkspaces, tabs]);
   const openCustomWorkspaceCreator = useCallback(() => {
-    setShowOptions(true);
-    setOptionsTab('workspace');
+    setShowOptions(prev => { optionsForcedOpenForCustomWorkspaceRef.current = !prev; return true; });
+    setOptionsTab(prev => { optionsPrevTabForCustomWorkspaceRef.current = prev; return 'workspace'; });
     setCustomWorkspaceDialog({ open: true, template: null });
   }, []);
   const editCustomWorkspaceTemplate = useCallback((templateId: string) => {
@@ -6393,7 +6398,16 @@ function App() {
         <CustomWorkspaceDialog
           open={customWorkspaceDialog.open}
           initialTemplate={customWorkspaceDialog.template || null}
-          onCancel={() => setCustomWorkspaceDialog({ open: false, template: null })}
+          onCancel={() => {
+            setCustomWorkspaceDialog({ open: false, template: null });
+            if (optionsForcedOpenForCustomWorkspaceRef.current) {
+              optionsForcedOpenForCustomWorkspaceRef.current = false;
+              setShowOptions(false);
+            } else if (optionsPrevTabForCustomWorkspaceRef.current) {
+              setOptionsTab(optionsPrevTabForCustomWorkspaceRef.current);
+            }
+            optionsPrevTabForCustomWorkspaceRef.current = null;
+          }}
           onSave={saveCustomWorkspaceTemplate}
         />
         </>);
