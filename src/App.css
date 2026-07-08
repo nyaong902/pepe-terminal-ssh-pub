@@ -3774,36 +3774,6 @@ body.popout-options .session-editor h3:first-child {
   color: #e74c3c;
 }
 
-.fe-transfer-btns {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  padding: 0 3px;
-  flex-shrink: 0;
-  background: var(--win-bg, #0d0f10);
-}
-
-.fe-transfer-btn {
-  background: var(--win-accent, #2b6b9b);
-  color: var(--win-text, #fff);
-  border: none;
-  border-radius: 3px;
-  padding: 4px 6px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-
-.fe-transfer-btn:hover {
-  background: var(--win-accent, #3a8bc5);
-}
-
-.fe-transfer-btn:disabled {
-  background: var(--win-border, #333);
-  color: #666;
-  cursor: default;
-}
 
 .fe-file-list.fe-drop-target {
   background: rgba(43, 107, 155, 0.1);

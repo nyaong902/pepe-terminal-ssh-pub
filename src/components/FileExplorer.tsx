@@ -7,7 +7,7 @@ import { setTermFocusBlocked } from './TerminalPanel';
 import { notifyError } from './Notify';
 import type { PanelSession } from '../utils/layoutUtils';
 import {
-  type FeTab, type FePanel, type FeLayoutNode, type FeLeafNode,
+  type FeTab, type FePanel, type FeLayoutNode,
   makeFeTab, createInitialFeLayout, splitFeNode, removeFeLeafNode, updateFeLeafPanel,
   countFeLeaves, findFirstFeLeafId, collectFeLeaves, findFeTabByTermId, mapAllFeTabs,
   setFeContainerSizes, serializeFeLayout, reviveFeLayout,
@@ -82,7 +82,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   const setLeafSelected = (leafId: string, sel: Set<string>) =>
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, selected: sel } : t) }));
 
-  const [transferring, setTransferring] = useState(false);
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // initialState 로 시작했으면(분리 창에서 복원) 자동 원격 연결 effect 비활성 — 복원 상태 우선.
@@ -206,20 +205,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       } catch {}
       setInitDone(true);
     })();
-
-    // 전송 진행률은 이제 TransferLog 컴포넌트에서 직접 처리
-    // 단, 전송 종료 시점에 버튼 disable 해제 처리만 남김
-    let unsub2: any;
-    try {
-      unsub2 = api?.onSFTPComplete?.((p: any) => {
-        try {
-          const d = JSON.parse(p.data);
-          // 루트 전송 완료시(또는 dir-done 일 때) transferring 해제
-          if (d.rel === '' || d.direction === 'dir-done') setTransferring(false);
-        } catch {}
-      });
-    } catch {}
-    return () => { try { unsub2?.(); } catch {} };
   }, [bootReady]);
 
   // 새 세션 탭을 열 대상 leaf 결정 후 추가.
@@ -555,38 +540,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       }).catch((err: any) => resolve({ success: false, error: String(err) }));
     });
 
-  // 좌우 두 leaf 사이의 → ← 버튼 전송 — 패널이 정확히 2개일 때만 의미가 있다(그 이상은 드래그앤드롭으로 전송).
-  const transferFiles = async (direction: 'left-to-right' | 'right-to-left') => {
-    const leaves = collectFeLeaves(layoutRef.current);
-    if (leaves.length !== 2) return;
-    const [a, b] = leaves;
-    const srcLeaf = direction === 'left-to-right' ? a : b;
-    const dstLeaf = direction === 'left-to-right' ? b : a;
-    const srcTab = srcLeaf.panel.tabs[srcLeaf.panel.activeIdx];
-    const dstTab = dstLeaf.panel.tabs[dstLeaf.panel.activeIdx];
-    if (!srcTab || !dstTab) return;
-    const selected = srcTab.selected;
-    const dstSep = sep(dstTab.source);
-    const srcSep = sep(srcTab.source);
-
-    if (selected.size === 0) return;
-    setTransferring(true);
-
-    for (const name of selected) {
-      const srcFull = srcTab.path.endsWith(srcSep) ? srcTab.path + name : srcTab.path + srcSep + name;
-      const dstFull = dstTab.path.endsWith(dstSep) ? dstTab.path + name : dstTab.path + dstSep + name;
-      const result = await doTransfer(
-        { mode: srcTab.source.mode, termId: srcTab.source.termId, path: srcFull },
-        { mode: dstTab.source.mode, termId: dstTab.source.termId, path: dstFull },
-        name,
-      );
-      if (!result.success) notifyError(t('transferFail', { name, err: result.error }));
-    }
-
-    setTransferring(false);
-    setRefreshKey(k => k + 1);
-  };
-
   const handleFileDrop = async (targetLeafId: string, fileNames: string[], srcMode: string, srcTermId?: string, srcPath?: string) => {
     const leaf = getLeaf(targetLeafId);
     if (!leaf) return;
@@ -595,7 +548,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const dstSep = sep(dstTab.source);
     const srcSep = srcMode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
 
-    setTransferring(true);
     for (const name of fileNames) {
       const srcFull = (srcPath || '').endsWith(srcSep) ? (srcPath || '') + name : (srcPath || '') + srcSep + name;
       const dstFull = dstTab.path.endsWith(dstSep) ? dstTab.path + name : dstTab.path + dstSep + name;
@@ -606,7 +558,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       );
       if (!result.success) notifyError(t('transferFail', { name, err: result.error }));
     }
-    setTransferring(false);
     setRefreshKey(k => k + 1);
   };
 
@@ -929,13 +880,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     );
   }
 
-  // 좌우 2패널로만 나뉜 가장 흔한 배치는 → ← 전송 버튼을 두 패널 사이(분할선 자리)에 유지(기존 UX 그대로).
-  // 그 외(3개 이상, 상하 분할 포함) 배치는 드래그앤드롭으로만 전송한다 — 어느 두 패널 사이인지 애매해지기 때문.
   const allLeaves = collectFeLeaves(layout);
-  const classicPanels = (layout.type === 'row' && layout.children.length === 2
-    && layout.children[0].type === 'leaf' && layout.children[1].type === 'leaf')
-    ? [layout.children[0] as FeLeafNode, layout.children[1] as FeLeafNode] as const
-    : null;
 
   try { return (
     <div className="fe-container">
@@ -953,34 +898,15 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             </div>
           );
         })}
-        {dividers.map(d => {
-          const isTransferDivider = !!classicPanels && d.containerId === layout.id;
-          // 전송 버튼 2개가 들어가려면 기본 8px 분할선보다 넓어야 한다 — 같은 중심축에서 좌우로 넓혀 배치.
-          const TRANSFER_W = 28;
-          const rect = isTransferDivider
-            ? { ...d.rect, left: d.rect.left + d.rect.width / 2 - TRANSFER_W / 2, width: TRANSFER_W }
-            : d.rect;
-          return (
-            <div key={d.key}
-              className={isTransferDivider ? 'fe-transfer-btns' : `layout-divider ${d.isRow ? 'row' : 'column'}`}
-              style={{ position: 'absolute', left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
-              onMouseDown={e => onDividerMouseDown(e, d)}
-            >
-              {isTransferDivider && classicPanels ? (
-                <>
-                  <button className="fe-transfer-btn" onMouseDown={e => e.stopPropagation()} onClick={() => transferFiles('left-to-right')}
-                    disabled={transferring || (classicPanels[0].panel.tabs[classicPanels[0].panel.activeIdx]?.selected.size ?? 0) === 0}
-                    title={t('transferToRight')}>→</button>
-                  <button className="fe-transfer-btn" onMouseDown={e => e.stopPropagation()} onClick={() => transferFiles('right-to-left')}
-                    disabled={transferring || (classicPanels[1].panel.tabs[classicPanels[1].panel.activeIdx]?.selected.size ?? 0) === 0}
-                    title={t('transferToLeft')}>←</button>
-                </>
-              ) : (
-                <div className="layout-divider-line" />
-              )}
-            </div>
-          );
-        })}
+        {dividers.map(d => (
+          <div key={d.key}
+            className={`layout-divider ${d.isRow ? 'row' : 'column'}`}
+            style={{ position: 'absolute', left: d.rect.left, top: d.rect.top, width: d.rect.width, height: d.rect.height }}
+            onMouseDown={e => onDividerMouseDown(e, d)}
+          >
+            <div className="layout-divider-line" />
+          </div>
+        ))}
       </div>
       <div className="fe-transfers-resize" onMouseDown={onResizeStart} />
       <div className="fe-transfers" style={{ height: transfersHeight }}>
