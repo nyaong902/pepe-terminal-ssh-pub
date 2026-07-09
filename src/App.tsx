@@ -2679,6 +2679,11 @@ function App() {
         const sessions = collectAllSessions(tab.layout);
         for (const s of sessions) if (s.termId) releaseTermResources(s.termId);
       } catch {}
+      // SIPp 워크스페이스 탭이 닫히면 돌고 있던 sipp.exe 도 같이 정리 — 탭마다
+      // 독립된 인스턴스라 안 지우면 탭을 닫아도 백그라운드에서 계속 실행된다.
+      if (tab.type === 'sipp') {
+        try { (window as any).api?.sippDispose?.({ id: tab.id }); } catch {}
+      }
     }
     setTabs(prev => { const f = prev.filter(t => t.id !== id); return f.length === 0 ? prev : f; });
     // 닫히는 탭이 우측 분할 탭 자신이면 분할도 같은 배치에서 즉시 해제.
@@ -5281,7 +5286,7 @@ function App() {
         {tabs.filter(t => t.type === 'sipp').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="SIPp">
-              <SippWorkspace />
+              <SippWorkspace instanceId={t.id} />
             </ErrorBoundary>
           </div>
         ))}

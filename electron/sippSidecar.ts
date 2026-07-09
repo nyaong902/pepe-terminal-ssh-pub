@@ -39,7 +39,8 @@ export type SippTestOptions = {
   targetPort: number;
   localIp?: string;
   localPort?: number;
-  transport?: 'udp'; // SIPp 는 tcp/tls 도 지원하나 초기 버전은 udp 만 노출
+  /** -t: 전송 방식. u1=UDP 소켓 1개(기본), un=콜마다 소켓, ui=IP당 소켓, t1/tn=TCP, l1/ln=TLS. */
+  transport?: 'u1' | 'un' | 'ui' | 't1' | 'tn' | 'l1' | 'ln';
   cps: number;       // -r  (calls per second)
   maxCalls?: number; // -m
   callDurationMs?: number; // INVITE~BYE 사이 Pause (0=즉시 종료)
@@ -49,6 +50,38 @@ export type SippTestOptions = {
   extraHeaders?: string;
   /** SDP 바디 — 비우면 SIPp 기본 PCMU SDP 사용 */
   sdpBody?: string;
+  /**
+   * -inf 로 넘길 CSV 데이터 파일 내용. 첫 줄은 SEQUENTIAL/RANDOM/USER, 이후
+   * 각 줄이 콜 1개에 대응하는 ';' 구분 값 — 시나리오에서 [field0], [field1]...
+   * 로 참조한다 (예: 발신/착신 번호 쌍을 콜마다 다르게 주입).
+   */
+  injectionCsv?: string;
+  /** -l: 최대 동시 진행 콜 수 (open call 상한). 비우면 sipp 기본값(call_duration*rate*3). */
+  maxOpenCalls?: number;
+  /** -cid_str: Call-ID 포맷 문자열. %u=콜번호, %s=IP, %p=프로세스번호, %%=% (기본 "%u-%p@%s"). */
+  callIdString?: string;
+  /** -timeout: 전역 타임아웃(초). 지나면 sipp 종료. */
+  timeoutSec?: number;
+  /** -recv_timeout: 응답 수신 타임아웃(ms). 지나면 해당 콜 타임아웃 처리. */
+  recvTimeoutMs?: number;
+  /** -send_timeout: 전송 타임아웃(ms). 혼잡 등으로 못 보내면 해당 콜 타임아웃 처리. */
+  sendTimeoutMs?: number;
+  /** -max_retrans: UDP 재전송 최대 횟수 (기본 INVITE 5회, 그 외 7회). */
+  maxRetrans?: number;
+  /** -nr: UDP 재전송 자체를 비활성화. */
+  noRetrans?: boolean;
+  /** -trace_msg: 송수신 SIP 메시지를 <시나리오>_<pid>_messages.log 에 기록. */
+  traceMsg?: boolean;
+  /** -trace_err: 예상 못한 메시지를 <시나리오>_<pid>_errors.log 에 기록. */
+  traceErr?: boolean;
+  /** -s: Request-URI 의 사용자명 부분 (기본 'service'). */
+  requestUriUser?: string;
+  /**
+   * 위 필드로 노출 안 한 나머지 sipp CLI 옵션을 그대로 추가하는 탈출구
+   * (예: "-l 100000 -timeout 30s -nr"). 공백으로 토큰을 나누되 "..."/'...' 로
+   * 묶인 구간은 하나의 토큰으로 취급한다.
+   */
+  extraArgs?: string;
 };
 
 export type SippStats = {
@@ -198,15 +231,31 @@ function extractLatestScreens(buf: string): { scenario?: string; statistics?: st
   return result;
 }
 
+// "-l 100000 -timeout 30s -nr" 같은 자유 형식 추가 CLI 옵션을 spawn() 이 요구하는
+// 인자 배열로 쪼갠다. "..."/'...' 로 묶인 구간은 공백이 있어도 한 토큰으로 취급한다.
+function tokenizeArgs(s: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    tokens.push(m[1] ?? m[2] ?? m[3]);
+  }
+  return tokens;
+}
+
 class SippSidecar extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private running = false;
   private startError: string | null = null;
   private scenarioFile: string | null = null;
   private ctrlFile: string | null = null;
+  private injectionFile: string | null = null;
   private stdoutBuf = '';
   private lastScenarioScreen = '';
   private lastStatisticsScreen = '';
+  // 여러 SIPp 워크스페이스 탭이 동시에 각자 독립된 sipp.exe 를 띄울 수 있으므로,
+  // 임시 파일명이 겹치지 않도록 인스턴스마다 고유한 접미사를 쓴다.
+  private readonly instanceTag = Math.random().toString(36).slice(2, 8);
 
   status() { return { running: this.running, binary: resolveBinary(), error: this.startError }; }
 
@@ -229,7 +278,7 @@ class SippSidecar extends EventEmitter {
     }
 
     try {
-      const tmpFile = path.join(os.tmpdir(), `pepe-sipp-scenario-${Date.now()}.xml`);
+      const tmpFile = path.join(os.tmpdir(), `pepe-sipp-scenario-${Date.now()}-${this.instanceTag}.xml`);
       fs.writeFileSync(tmpFile, scenarioXml, 'utf8');
       this.scenarioFile = tmpFile;
     } catch (e: any) {
@@ -240,7 +289,7 @@ class SippSidecar extends EventEmitter {
     // via stdin (WSAPoll can't poll non-SOCKET handles), so instead it polls
     // this file for a new CPS value — writing to it is how the GUI's CPS
     // slider takes effect on a test that's already running.
-    const ctrlFile = path.join(os.tmpdir(), `pepe-sipp-ctrl-${Date.now()}.txt`);
+    const ctrlFile = path.join(os.tmpdir(), `pepe-sipp-ctrl-${Date.now()}-${this.instanceTag}.txt`);
     try { fs.writeFileSync(ctrlFile, String(opts.cps || 1), 'utf8'); } catch {}
     this.ctrlFile = ctrlFile;
 
@@ -254,6 +303,28 @@ class SippSidecar extends EventEmitter {
     if (opts.maxCalls && opts.maxCalls > 0) args.push('-m', String(opts.maxCalls));
     if (opts.localIp) args.push('-i', opts.localIp);
     if (opts.localPort) args.push('-p', String(opts.localPort));
+    if (opts.injectionCsv && opts.injectionCsv.trim()) {
+      try {
+        const csvFile = path.join(os.tmpdir(), `pepe-sipp-inject-${Date.now()}-${this.instanceTag}.csv`);
+        fs.writeFileSync(csvFile, opts.injectionCsv, 'utf8');
+        this.injectionFile = csvFile;
+        args.push('-inf', csvFile);
+      } catch (e: any) {
+        return { ok: false, error: `데이터 파일 저장 실패: ${e?.message || e}` };
+      }
+    }
+    if (opts.maxOpenCalls && opts.maxOpenCalls > 0) args.push('-l', String(opts.maxOpenCalls));
+    if (opts.callIdString && opts.callIdString.trim()) args.push('-cid_str', opts.callIdString.trim());
+    if (opts.transport && opts.transport !== 'u1') args.push('-t', opts.transport);
+    if (opts.timeoutSec && opts.timeoutSec > 0) args.push('-timeout', String(opts.timeoutSec));
+    if (opts.recvTimeoutMs && opts.recvTimeoutMs > 0) args.push('-recv_timeout', String(opts.recvTimeoutMs));
+    if (opts.sendTimeoutMs && opts.sendTimeoutMs > 0) args.push('-send_timeout', String(opts.sendTimeoutMs));
+    if (opts.maxRetrans && opts.maxRetrans > 0) args.push('-max_retrans', String(opts.maxRetrans));
+    if (opts.noRetrans) args.push('-nr');
+    if (opts.traceMsg) args.push('-trace_msg');
+    if (opts.traceErr) args.push('-trace_err');
+    if (opts.requestUriUser && opts.requestUriUser.trim()) args.push('-s', opts.requestUriUser.trim());
+    if (opts.extraArgs && opts.extraArgs.trim()) args.push(...tokenizeArgs(opts.extraArgs.trim()));
 
     try {
       this.proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -288,6 +359,9 @@ class SippSidecar extends EventEmitter {
       const ctrlFileToClean = this.ctrlFile;
       this.ctrlFile = null;
       if (ctrlFileToClean) { try { fs.unlinkSync(ctrlFileToClean); } catch {} }
+      const injectionFileToClean = this.injectionFile;
+      this.injectionFile = null;
+      if (injectionFileToClean) { try { fs.unlinkSync(injectionFileToClean); } catch {} }
       try { this.emit('event', { ev: 'exit', code }); } catch {}
     });
 
@@ -371,8 +445,23 @@ class SippSidecar extends EventEmitter {
   }
 }
 
-let singleton: SippSidecar | null = null;
-export function getSippSidecar(): SippSidecar {
-  if (!singleton) singleton = new SippSidecar();
-  return singleton;
+// 워크스페이스 탭 하나당 완전히 독립된 SippSidecar 인스턴스(=별도 sipp.exe 프로세스,
+// 별도 상태) 를 준다 — 탭 A 를 UAC 테스트로, 탭 B 를 다른 대상 상대 UAS 테스트로 동시에
+// 돌려도 서로 간섭하지 않는다. id 는 렌더러 쪽에서 워크스페이스 탭 id 를 그대로 쓴다.
+const instances = new Map<string, SippSidecar>();
+export function getSippSidecar(id: string): SippSidecar {
+  let inst = instances.get(id);
+  if (!inst) {
+    inst = new SippSidecar();
+    instances.set(id, inst);
+  }
+  return inst;
+}
+
+/** SIPp 워크스페이스 탭이 닫힐 때 호출 — 돌고 있던 sipp.exe 를 정리하고 인스턴스를 버린다. */
+export function disposeSippSidecar(id: string) {
+  const inst = instances.get(id);
+  if (!inst) return;
+  try { inst.stop(); } catch {}
+  instances.delete(id);
 }

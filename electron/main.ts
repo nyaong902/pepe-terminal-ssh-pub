@@ -40,7 +40,8 @@ import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, get
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
-import { getSippSidecar, type SippTestOptions } from './sippSidecar';
+import { getSippSidecar, disposeSippSidecar, type SippTestOptions } from './sippSidecar';
+import { loadSippScenarios, saveSippScenario, deleteSippScenario } from './sippScenarioStore';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
@@ -6286,17 +6287,37 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
 
 // ── SIPp 워크스페이스 (네이티브 SIPp 부하 발생기) 제어 ──
 {
-  const sipp = getSippSidecar();
-  sipp.on('event', (payload: any) => {
-    for (const w of BrowserWindow.getAllWindows()) {
-      try { if (!w.isDestroyed()) w.webContents.send('sipp:event', payload); } catch {}
+  // 탭마다 독립된 sipp.exe 인스턴스 — id 는 렌더러의 워크스페이스 탭 id.
+  // 이벤트에 sippId 를 실어 보내야 렌더러가 "내 탭 것"만 골라 처리할 수 있다
+  // (브로드캐스트는 모든 창에 나가지만, sippId 로 각 SippWorkspace 컴포넌트가 필터링).
+  const sippListenerAttached = new Set<string>();
+  function sippFor(id: string) {
+    const inst = getSippSidecar(id);
+    if (!sippListenerAttached.has(id)) {
+      sippListenerAttached.add(id);
+      inst.on('event', (payload: any) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          try { if (!w.isDestroyed()) w.webContents.send('sipp:event', { ...payload, sippId: id }); } catch {}
+        }
+      });
     }
+    return inst;
+  }
+  ipcMain.handle('sipp:status', (_e, args: { id: string }) => sippFor(args?.id).status());
+  ipcMain.handle('sipp:start', (_e, args: { id: string; opts: SippTestOptions }) => sippFor(args?.id).start(args?.opts));
+  ipcMain.handle('sipp:stop', (_e, args: { id: string }) => sippFor(args?.id).stop());
+  ipcMain.handle('sipp:set-rate', (_e, args: { id: string; cps: number }) => sippFor(args?.id).setRate(Number(args?.cps)));
+  ipcMain.handle('sipp:set-paused', (_e, args: { id: string; paused: boolean }) => sippFor(args?.id).setPaused(!!args?.paused));
+  ipcMain.handle('sipp:dispose', (_e, args: { id: string }) => {
+    disposeSippSidecar(args?.id);
+    sippListenerAttached.delete(args?.id);
+    return { ok: true };
   });
-  ipcMain.handle('sipp:status', () => sipp.status());
-  ipcMain.handle('sipp:start', (_e, args: { opts: SippTestOptions }) => sipp.start(args?.opts));
-  ipcMain.handle('sipp:stop', () => sipp.stop());
-  ipcMain.handle('sipp:set-rate', (_e, args: { cps: number }) => sipp.setRate(Number(args?.cps)));
-  ipcMain.handle('sipp:set-paused', (_e, args: { paused: boolean }) => sipp.setPaused(!!args?.paused));
+
+  // 저장된 시나리오(블록 조립/고급 XML) 목록 관리
+  ipcMain.handle('sipp-scenario:list', () => loadSippScenarios());
+  ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any }) => saveSippScenario(args));
+  ipcMain.handle('sipp-scenario:delete', (_e, args: { id: string }) => { deleteSippScenario(args?.id); return { ok: true }; });
 }
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
 ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {

@@ -194,12 +194,17 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('sip:event', handler);
   },
 
-  // SIPp 워크스페이스 — 네이티브 SIPp 부하 발생기 제어
-  sippStatus: () => ipcRenderer.invoke('sipp:status'),
-  sippStart: (args: { opts: any }) => ipcRenderer.invoke('sipp:start', args),
-  sippStop: () => ipcRenderer.invoke('sipp:stop'),
-  sippSetRate: (args: { cps: number }) => ipcRenderer.invoke('sipp:set-rate', args),
-  sippSetPaused: (args: { paused: boolean }) => ipcRenderer.invoke('sipp:set-paused', args),
+  // SIPp 워크스페이스 — 네이티브 SIPp 부하 발생기 제어. id 는 탭마다 독립된 인스턴스를
+  // 구분하는 워크스페이스 탭 id (여러 SIPp 탭을 동시에 서로 다른 대상으로 돌릴 수 있음).
+  sippStatus: (args: { id: string }) => ipcRenderer.invoke('sipp:status', args),
+  sippStart: (args: { id: string; opts: any }) => ipcRenderer.invoke('sipp:start', args),
+  sippStop: (args: { id: string }) => ipcRenderer.invoke('sipp:stop', args),
+  sippSetRate: (args: { id: string; cps: number }) => ipcRenderer.invoke('sipp:set-rate', args),
+  sippSetPaused: (args: { id: string; paused: boolean }) => ipcRenderer.invoke('sipp:set-paused', args),
+  sippDispose: (args: { id: string }) => ipcRenderer.invoke('sipp:dispose', args),
+  sippScenarioList: () => ipcRenderer.invoke('sipp-scenario:list'),
+  sippScenarioSave: (args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any }) => ipcRenderer.invoke('sipp-scenario:save', args),
+  sippScenarioDelete: (args: { id: string }) => ipcRenderer.invoke('sipp-scenario:delete', args),
   onSippEvent: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('sipp:event', handler);
