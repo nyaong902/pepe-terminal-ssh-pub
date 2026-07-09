@@ -193,6 +193,18 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sip:event', handler);
     return () => ipcRenderer.removeListener('sip:event', handler);
   },
+
+  // SIPp 워크스페이스 — 네이티브 SIPp 부하 발생기 제어
+  sippStatus: () => ipcRenderer.invoke('sipp:status'),
+  sippStart: (args: { opts: any }) => ipcRenderer.invoke('sipp:start', args),
+  sippStop: () => ipcRenderer.invoke('sipp:stop'),
+  sippSetRate: (args: { cps: number }) => ipcRenderer.invoke('sipp:set-rate', args),
+  sippSetPaused: (args: { paused: boolean }) => ipcRenderer.invoke('sipp:set-paused', args),
+  onSippEvent: (cb: (p: any) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('sipp:event', handler);
+    return () => ipcRenderer.removeListener('sipp:event', handler);
+  },
   onBrowserWebviewNewWindow: (cb: (p: { guestId: number; url: string }) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('browser-webview:new-window', handler);

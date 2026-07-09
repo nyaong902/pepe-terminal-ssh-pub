@@ -173,6 +173,13 @@
           "filter": [
             "sipd.exe"
           ]
+        },
+        {
+          "from": "sipp-sidecar/bin/win-x64",
+          "to": "sipp-sidecar/win-x64",
+          "filter": [
+            "sipp.exe"
+          ]
         }
       ]
     },

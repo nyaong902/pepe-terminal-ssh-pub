@@ -40,6 +40,7 @@ import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, get
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
+import { getSippSidecar, type SippTestOptions } from './sippSidecar';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
@@ -6281,6 +6282,21 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:im', async (_e, args: { endpointId: string; target: string; text: string }) => sip.sendIm(args?.endpointId, args?.target, args?.text));
   ipcMain.handle('sip:presence', (_e, args: { endpointId: string; online: boolean }) => { sip.setPresence(args?.endpointId, !!args?.online); return { ok: true }; });
   ipcMain.handle('sip:subscribe', (_e, args: { endpointId: string; target: string; subscribe: boolean }) => { sip.subscribePresence(args?.endpointId, args?.target, !!args?.subscribe); return { ok: true }; });
+}
+
+// ── SIPp 워크스페이스 (네이티브 SIPp 부하 발생기) 제어 ──
+{
+  const sipp = getSippSidecar();
+  sipp.on('event', (payload: any) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.webContents.send('sipp:event', payload); } catch {}
+    }
+  });
+  ipcMain.handle('sipp:status', () => sipp.status());
+  ipcMain.handle('sipp:start', (_e, args: { opts: SippTestOptions }) => sipp.start(args?.opts));
+  ipcMain.handle('sipp:stop', () => sipp.stop());
+  ipcMain.handle('sipp:set-rate', (_e, args: { cps: number }) => sipp.setRate(Number(args?.cps)));
+  ipcMain.handle('sipp:set-paused', (_e, args: { paused: boolean }) => sipp.setPaused(!!args?.paused));
 }
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
 ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {

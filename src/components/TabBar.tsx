@@ -23,6 +23,7 @@ type Props = {
   onAddLogAnalyzerTab?: () => void;
   onAddVpnTab?: () => void;
   onAddMicroSipTab?: () => void;
+  onAddSippTab?: () => void;
   onAddI18nEditorTab?: () => void;
   onAddCustomWorkspace?: (templateId?: string) => void;
   customWorkspaces?: { id: string; name: string }[];
@@ -43,7 +44,7 @@ type Props = {
   availableShells?: ShellInfo[];
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddI18nEditorTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSippTab, onAddI18nEditorTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -270,6 +271,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 { label: t('logAnalyzerWorkspace'), onClick: () => onAddLogAnalyzerTab?.() },
                 { label: t('vpnWorkspace'), onClick: () => onAddVpnTab?.() },
                 { label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() },
+                { label: '📶 SIPp', onClick: () => onAddSippTab?.() },
                 { label: t('translationEditor'), onClick: () => onAddI18nEditorTab?.() },
               ],
             },
