@@ -23,6 +23,9 @@ export type CustomWorkspaceLastSession = {
   name: string;
   host?: string;
   username?: string;
+  theme?: string;
+  fontFamily?: string;
+  fontSize?: number;
 };
 
 export type CustomWorkspaceSlot = {

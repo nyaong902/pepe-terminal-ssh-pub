@@ -6,7 +6,7 @@ import { VpnWorkspace } from './VpnWorkspace';
 import { MicroSipWorkspace } from './MicroSipWorkspace';
 import { FileExplorer } from './FileExplorer';
 import { Layout } from './Layout';
-import { registerTermSession, resetTermConnectState, termStore, promptPasswordAndConnect } from './TerminalPanel';
+import { registerTermSession, resetTermConnectState, termStore, promptPasswordAndConnect, applyThemeToTerm, applyFontToTerm } from './TerminalPanel';
 import {
   CUSTOM_WORKSPACE_KIND_ORDER,
   CUSTOM_WORKSPACE_LAYOUTS,
@@ -106,8 +106,8 @@ function TerminalSlot({
   singleSessionMode?: boolean;
   // 마지막 연결 세션 — 상태가 비어 있는(새로 생성된) 슬롯일 때 초기 레이아웃에 자동 반영되어
   // TerminalPanel 의 마운트 시 자동 접속 로직(activeSession.sessionId 존재 시)을 그대로 탄다.
-  initialSession?: { id: string; sessionId: string; name: string; host?: string; username?: string };
-  onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string }) => void;
+  initialSession?: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number };
+  onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number }) => void;
 }) {
   const debugIdRef = React.useRef(`cw-term-${workspaceId}:${slotId}`);
   const emitDebugLog = (...parts: any[]) => {
@@ -124,6 +124,21 @@ function TerminalSlot({
     if (!initialSession || initial.type !== 'leaf') return initial;
     const termId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     registerTermSession(termId, initialSession.sessionId, initialSession.name, initialSession.host ?? '');
+    // TerminalPanel 이 마운트되면서 자체적으로 연결을 붙이는데, 그 시점을 여기서 알 방법이
+    // 없으므로 termStore 에 등록될 때까지 폴링한 뒤 세션의 테마/글꼴을 적용한다 —
+    // handleConnectDrop 의 connectWhenReady 와 동일한 패턴.
+    if (initialSession.theme || initialSession.fontFamily || initialSession.fontSize) {
+      const { theme, fontFamily, fontSize } = initialSession;
+      let tries = 0;
+      const applyWhenReady = () => {
+        if (!termStore.has(termId) && tries++ < 40) { setTimeout(applyWhenReady, 50); return; }
+        try {
+          if (theme) applyThemeToTerm(termId, theme);
+          if (fontFamily || fontSize) applyFontToTerm(termId, fontFamily, fontSize);
+        } catch {}
+      };
+      setTimeout(applyWhenReady, 50);
+    }
     return {
       ...initial,
       panel: {
@@ -280,13 +295,20 @@ function TerminalSlot({
     setSelectedPanelId(nodeId);
     setPickerOpen(false);
     setPickerNodeId(null);
-    try { onSessionChange?.({ id: session.id, sessionId: session.id, name: displayName, host: session.host, username: session.username }); } catch {}
+    try { onSessionChange?.({ id: session.id, sessionId: session.id, name: displayName, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize }); } catch {}
     try {
       emitDebugLog('[cw-debug][terminal-slot] connect-ssh', { termId: nextTermId, sessionId: session.id, displayName, singleSessionMode });
       const result = await (window as any).api?.connectSSH?.(nextTermId, session.id);
       if (result === 'need-password' || result === 'need-credentials') {
         promptPasswordAndConnect(nextTermId, session.id);
       }
+    } catch {}
+    // 일반 워크스페이스 탭(App.tsx)은 세션 연결 직후 항상 세션의 테마/글꼴을 적용하는데,
+    // 커스텀 워크스페이스 슬롯에서는 이 호출이 빠져 있어 세션별 테마/글꼴이 하나도
+    // 반영되지 않던 버그 — connect 직후 여기서도 동일하게 적용한다.
+    try {
+      if (session.theme) applyThemeToTerm(nextTermId, session.theme);
+      if (session.fontFamily || session.fontSize) applyFontToTerm(nextTermId, session.fontFamily, session.fontSize);
     } catch {}
   };
 
@@ -429,31 +451,24 @@ function TerminalSlot({
       }
       return walk(root);
     };
-    const connectWhenReady = (termId: string) => {
+    // 일반 워크스페이스 탭(App.tsx)은 세션 연결 직후 항상 세션의 테마/글꼴을 적용하는데,
+    // 커스텀 워크스페이스 슬롯(드래그앤드롭 연결)에서는 이 호출이 빠져 있어 세션별 테마/글꼴이
+    // 하나도 반영되지 않던 버그 — connect 직후 여기서도 동일하게 적용한다.
+    const connectWhenReady = (termId: string, sess: { theme?: string; fontFamily?: string; fontSize?: number }) => {
+      const doConnect = async () => {
+        try {
+          const result = await (window as any).api?.connectSSH?.(termId, sessionId);
+          if (result === 'need-password' || result === 'need-credentials') {
+            promptPasswordAndConnect(termId, sessionId);
+          }
+          if (sess.theme) applyThemeToTerm(termId, sess.theme);
+          if (sess.fontFamily || sess.fontSize) applyFontToTerm(termId, sess.fontFamily, sess.fontSize);
+        } catch {}
+      };
       let tries = 0;
       const tick = () => {
-        if (termStore.has(termId)) {
-          (async () => {
-            try {
-              const result = await (window as any).api?.connectSSH?.(termId, sessionId);
-              if (result === 'need-password' || result === 'need-credentials') {
-                promptPasswordAndConnect(termId, sessionId);
-              }
-            } catch {}
-          })();
-          return;
-        }
-        if (tries++ >= 40) {
-          (async () => {
-            try {
-              const result = await (window as any).api?.connectSSH?.(termId, sessionId);
-              if (result === 'need-password' || result === 'need-credentials') {
-                promptPasswordAndConnect(termId, sessionId);
-              }
-            } catch {}
-          })();
-          return;
-        }
+        if (termStore.has(termId)) { void doConnect(); return; }
+        if (tries++ >= 40) { void doConnect(); return; }
         setTimeout(tick, 50);
       };
       tick();
@@ -479,7 +494,7 @@ function TerminalSlot({
           return found;
         };
         const targetSession = findTargetSession(layout, nodeId);
-        try { onSessionChange?.({ id: sessionId, sessionId, name: displayName, host: session.host, username: session.username }); } catch {}
+        try { onSessionChange?.({ id: sessionId, sessionId, name: displayName, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize }); } catch {}
         emitDebugLog('[cw-debug][terminal-slot] connect-drop', {
           workspaceId,
           slotId,
@@ -511,7 +526,7 @@ function TerminalSlot({
           registerTermSession(termId, sessionId, displayName, session.host ?? '');
           setSelectedPanelId(nodeId);
           setActiveSlotId(slotId);
-          connectWhenReady(termId);
+          connectWhenReady(termId, session);
           return;
         }
         const newTermId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -521,7 +536,7 @@ function TerminalSlot({
         registerTermSession(newTermId, sessionId, displayName, session.host ?? '');
         setSelectedPanelId(nodeId);
         setActiveSlotId(slotId);
-        connectWhenReady(newTermId);
+        connectWhenReady(newTermId, session);
       } catch {}
     })();
   };
