@@ -1219,10 +1219,11 @@ function renderHighlightOverlay(termId: string, query: string, regex: boolean, c
   const offsetLeft = screenRect.left - containerRect.left;
   const offsetTop = screenRect.top - containerRect.top;
 
-  // 뷰포트 시작: scrollTop 기반
-  const viewport = xtermEl.querySelector('.xterm-viewport') as HTMLElement;
-  const scrollTop = viewport ? viewport.scrollTop : 0;
-  const vStart = Math.max(0, Math.round(scrollTop / cellH));
+  // 뷰포트 시작 행 — 예전엔 scrollTop(px) 을 cellH 로 나눠서 행 번호를 역산했는데, 서브픽셀
+  // 스크롤/폰트 렌더링 오차로 반올림이 살짝 어긋나면 하이라이트 박스 전체가 위아래로 한두 줄
+  // 밀려서 "엉뚱한(하지만 비슷하게 생긴) 텍스트를 찾은 것처럼 보이는" 버그가 있었다.
+  // xterm 이 이미 정확한 뷰포트 시작 행을 buffer.viewportY 로 제공하므로 그걸 그대로 쓴다.
+  const vStart = Math.max(0, buf.viewportY ?? 0);
 
   for (let row = 0; row < rows; row++) {
     const bufLine = buf.getLine(vStart + row);
@@ -1819,24 +1820,49 @@ export function highlightAllMatches(termId: string, query: string, regex: boolea
   const entry = termStore.get(termId);
   if (!entry) return;
 
-  const handler = () => renderHighlightOverlay(termId, query, regex, caseSensitive);
-
-  // 스크롤 시 갱신
+  // "새 내용이 추가되는 것"(tail -f 등)과 "화면 구조 자체가 바뀌는 것"(리사이즈로 인한
+  // rewrap)은 다르게 다뤄야 한다. 예전엔 둘 다 onRender 하나로 묶어서 "일단 숨기고 잠잠해지면
+  // 다시 그리기" 를 했는데, tail -f 처럼 onRender 가 끊임없이 발생하는 상황에서는 안정될
+  // 틈이 없어 오버레이가 계속 숨겨진 채(=깜빡이는 것처럼 보임) 있었다. 새 줄이 아래 추가되는
+  // 것만으로는 이미 보이던 매치 위치가 안 바뀌므로, 일반 onRender 는 그냥 즉시 다시 그리면
+  // 된다 — "숨겼다 보여주기" 는 실제로 좌표가 어긋날 수 있는 리사이즈에만 쓴다.
   const xtermEl = (entry.term as any).element as HTMLElement | undefined;
   const viewport = xtermEl?.querySelector('.xterm-viewport');
+  const handler = () => renderHighlightOverlay(termId, query, regex, caseSensitive);
+
   if (viewport) viewport.addEventListener('scroll', handler);
 
-  // 새 데이터 수신 시 갱신 (debounce)
+  // 리사이즈 직후엔 재줄바꿈된 버퍼에서 실제로 매치를 다시 찾아 그 위치로 스크롤한다(단순
+  // 재그리기만으로는 뷰포트가 예전 좌표 기준 어딘가에 멈춰 있어 "찾았던 줄이 최대화→복원 후
+  // 엉뚱한 곳에 있는 것처럼" 보였다). SearchAddon.findNext 는 clearSelection 전 선택 위치를
+  // 검색 시작점으로 쓰므로, 재줄바꿈 전 좌표라도 "그 근방부터 다시 찾기" 는 잘 동작한다.
+  let pendingRelocate = false;
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
   const onRenderDisp = entry.term.onRender(() => {
     if (renderTimer) clearTimeout(renderTimer);
-    renderTimer = setTimeout(handler, 100);
+    renderTimer = setTimeout(() => {
+      if (pendingRelocate) {
+        pendingRelocate = false;
+        try { entry.search.findNext(query, { regex, caseSensitive }); } catch {}
+      }
+      handler();
+    }, 100);
+  });
+
+  // 리사이즈는 컬럼 수가 바뀌면서 버퍼가 재줄바꿈(rewrap)되므로, 우리 오버레이는 즉시 지워
+  // 재줄바꿈 전 좌표로 계산된 박스가 엉뚱한 텍스트 위에 남아있지 않게 하고, 실제 재검색/재선택은
+  // 원격 재드로우가 끝나 내용이 안정된 뒤(위 debounce)에 한 번만 한다.
+  const onResizeDisp = entry.term.onResize(() => {
+    pendingRelocate = true;
+    const container = highlightOverlays.get(termId);
+    if (container) container.innerHTML = '';
   });
 
   // cleanup 함수 저장
   highlightListeners.set(termId, () => {
     if (viewport) viewport.removeEventListener('scroll', handler);
     onRenderDisp.dispose();
+    onResizeDisp.dispose();
     if (renderTimer) clearTimeout(renderTimer);
   });
 }
