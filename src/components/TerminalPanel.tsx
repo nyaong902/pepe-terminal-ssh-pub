@@ -1161,102 +1161,21 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
 }
 
 // ── 검색 헬퍼 (외부에서 사용) ──
-
-// DOM 기반 하이라이트 오버레이
-const highlightOverlays: Map<string, HTMLDivElement> = new Map();
-
-function getHighlightContainer(termId: string): HTMLDivElement | null {
-  let container = highlightOverlays.get(termId);
-  if (container && container.parentElement) return container;
-  const entry = termStore.get(termId);
-  if (!entry) return null;
-  const xtermEl = (entry.term as any).element as HTMLElement | undefined;
-  if (!xtermEl) return null;
-  // panel-terminal-area (xterm의 부모)에 오버레이 삽입
-  const termArea = xtermEl.closest('.panel-terminal-area') as HTMLElement;
-  if (!termArea) return null;
-  termArea.style.position = 'relative';
-  container = document.createElement('div');
-  container.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:100;overflow:hidden;';
-  termArea.appendChild(container);
-  highlightOverlays.set(termId, container);
-  return container;
-}
-
-function renderHighlightOverlay(termId: string, query: string, regex: boolean, caseSensitive = false) {
-  const container = getHighlightContainer(termId);
-  if (container) container.innerHTML = '';
-  if (!container || !query) return;
-
-  const entry = termStore.get(termId);
-  if (!entry) return;
-  const term = entry.term;
-  const buf = term.buffer.active;
-
-  let re: RegExp;
-  try {
-    const flags = caseSensitive ? 'g' : 'gi';
-    re = regex ? new RegExp(query, flags) : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
-  } catch { return; }
-
-  // 셀 크기 계산 — xterm 내부 _core._renderService.dimensions 에서 정확한 값 추출,
-  // 없으면 screen 크기 기반 fallback
-  const xtermEl = (term as any).element as HTMLElement | undefined;
-  if (!xtermEl) return;
-  const screen = xtermEl.querySelector('.xterm-screen') as HTMLElement;
-  if (!screen) return;
-  const rows = (term as any).rows || 24;
-  const cols = (term as any).cols || 80;
-
-  const dims = (term as any)._core?._renderService?.dimensions;
-  const cellW = dims?.css?.cell?.width || (screen.offsetWidth / cols);
-  const cellH = dims?.css?.cell?.height || (screen.offsetHeight / rows);
-  if (cellW <= 0 || cellH <= 0) return;
-
-  // xterm-screen 의 실제 좌상단 오프셋 (패딩 보정)
-  const containerRect = container.parentElement!.getBoundingClientRect();
-  const screenRect = screen.getBoundingClientRect();
-  const offsetLeft = screenRect.left - containerRect.left;
-  const offsetTop = screenRect.top - containerRect.top;
-
-  // 뷰포트 시작 행 — 예전엔 scrollTop(px) 을 cellH 로 나눠서 행 번호를 역산했는데, 서브픽셀
-  // 스크롤/폰트 렌더링 오차로 반올림이 살짝 어긋나면 하이라이트 박스 전체가 위아래로 한두 줄
-  // 밀려서 "엉뚱한(하지만 비슷하게 생긴) 텍스트를 찾은 것처럼 보이는" 버그가 있었다.
-  // xterm 이 이미 정확한 뷰포트 시작 행을 buffer.viewportY 로 제공하므로 그걸 그대로 쓴다.
-  const vStart = Math.max(0, buf.viewportY ?? 0);
-
-  for (let row = 0; row < rows; row++) {
-    const bufLine = buf.getLine(vStart + row);
-    if (!bufLine) continue;
-    const text = bufLine.translateToString();
-
-    // charIndex → cellColumn 매핑 (한글 등 wide char 보정)
-    const charToCell: number[] = [];
-    let cellCol = 0;
-    for (let ci = 0; ci < bufLine.length; ci++) {
-      const cell = bufLine.getCell(ci);
-      if (!cell) break;
-      const ch = cell.getChars();
-      if (ch === '') continue; // wide char의 두 번째 셀은 건너뜀
-      charToCell.push(cellCol);
-      const w = cell.getWidth();
-      cellCol += w || 1;
-    }
-
-    re.lastIndex = 0;
-    let match;
-    while ((match = re.exec(text)) !== null) {
-      if (match[0].length === 0) { re.lastIndex++; continue; }
-      const startCell = charToCell[match.index] ?? match.index;
-      const endCharIdx = match.index + match[0].length;
-      const endCell = endCharIdx < charToCell.length ? charToCell[endCharIdx] : (charToCell[charToCell.length - 1] ?? endCharIdx) + 1;
-      const span = document.createElement('div');
-      span.className = 'search-highlight-mark';
-      span.style.cssText = `position:absolute;top:${offsetTop + row * cellH}px;left:${offsetLeft + startCell * cellW}px;width:${(endCell - startCell) * cellW}px;height:${cellH}px;`;
-      container.appendChild(span);
-    }
-  }
-}
+//
+// 예전엔 뷰포트 픽셀 좌표를 직접 계산해 DOM <div> 오버레이를 그리는 커스텀 방식을 썼는데,
+// 리사이즈로 재줄바꿈이 일어날 때마다 좌표가 어긋나고, 스크롤/미니탭 전환 시 사라지는 등
+// 문제가 끊이지 않았다. xterm-addon-search 는 findNext/findPrevious 에 `decorations` 옵션을
+// 주기만 하면 마커(marker) 기반으로 매치를 추적하는 네이티브 하이라이트를 제공한다 — 마커는
+// 픽셀 좌표가 아니라 버퍼상의 논리적 위치를 추적하므로 재줄바꿈에도 xterm 이 알아서 갱신해준다.
+// (Eugeny/tabby 등 다른 xterm 기반 터미널 앱들도 커스텀 오버레이가 아니라 이 방식을 쓴다.)
+const SEARCH_DECORATIONS = {
+  matchBackground: '#8a6d1a',
+  matchBorder: '#c9a227',
+  matchOverviewRuler: '#c9a227',
+  activeMatchBackground: '#c9a227',
+  activeMatchBorder: '#fff3c4',
+  activeMatchColorOverviewRuler: '#ffcc33',
+};
 
 
 export function applyThemeToAll(themeName: string) {
@@ -1801,70 +1720,21 @@ export function applyThemeToTerm(termId: string, themeName: string) {
 
 export function clearHighlights(termId: string) {
   if (relayIfRemote(termId, 'clearHighlights', [])) return;
-  const container = highlightOverlays.get(termId);
-  if (container) container.innerHTML = '';
-  const cleanup = highlightListeners.get(termId);
-  if (cleanup) { cleanup(); highlightListeners.delete(termId); }
+  try { termStore.get(termId)?.search.clearDecorations(); } catch {}
 }
 
-// 활성 하이라이트 리스너 저장 (termId → cleanup 함수)
-const highlightListeners: Map<string, () => void> = new Map();
-
+// decorations 옵션을 준 findNext 는 (검색어가 바뀌었을 때) 전체 매치를 네이티브로 하이라이트도
+// 하고 다음 매치로 이동/선택도 한다 — 둘을 분리하고 싶을 때(예: 미니탭이 막 활성화됐을 뿐
+// 사용자가 방금 Enter 를 친 게 아닌 경우)는 noScroll 로 뷰포트 이동만 억제한다.
 export function highlightAllMatches(termId: string, query: string, regex: boolean, caseSensitive = false) {
-  // 기존 리스너 정리
-  const prevCleanup = highlightListeners.get(termId);
-  if (prevCleanup) prevCleanup();
-
-  renderHighlightOverlay(termId, query, regex, caseSensitive);
-
-  const entry = termStore.get(termId);
-  if (!entry) return;
-
-  // "새 내용이 추가되는 것"(tail -f 등)과 "화면 구조 자체가 바뀌는 것"(리사이즈로 인한
-  // rewrap)은 다르게 다뤄야 한다. 예전엔 둘 다 onRender 하나로 묶어서 "일단 숨기고 잠잠해지면
-  // 다시 그리기" 를 했는데, tail -f 처럼 onRender 가 끊임없이 발생하는 상황에서는 안정될
-  // 틈이 없어 오버레이가 계속 숨겨진 채(=깜빡이는 것처럼 보임) 있었다. 새 줄이 아래 추가되는
-  // 것만으로는 이미 보이던 매치 위치가 안 바뀌므로, 일반 onRender 는 그냥 즉시 다시 그리면
-  // 된다 — "숨겼다 보여주기" 는 실제로 좌표가 어긋날 수 있는 리사이즈에만 쓴다.
-  const xtermEl = (entry.term as any).element as HTMLElement | undefined;
-  const viewport = xtermEl?.querySelector('.xterm-viewport');
-  const handler = () => renderHighlightOverlay(termId, query, regex, caseSensitive);
-
-  if (viewport) viewport.addEventListener('scroll', handler);
-
-  // 리사이즈 직후엔 재줄바꿈된 버퍼에서 실제로 매치를 다시 찾아 그 위치로 스크롤한다(단순
-  // 재그리기만으로는 뷰포트가 예전 좌표 기준 어딘가에 멈춰 있어 "찾았던 줄이 최대화→복원 후
-  // 엉뚱한 곳에 있는 것처럼" 보였다). SearchAddon.findNext 는 clearSelection 전 선택 위치를
-  // 검색 시작점으로 쓰므로, 재줄바꿈 전 좌표라도 "그 근방부터 다시 찾기" 는 잘 동작한다.
-  let pendingRelocate = false;
-  let renderTimer: ReturnType<typeof setTimeout> | null = null;
-  const onRenderDisp = entry.term.onRender(() => {
-    if (renderTimer) clearTimeout(renderTimer);
-    renderTimer = setTimeout(() => {
-      if (pendingRelocate) {
-        pendingRelocate = false;
-        try { entry.search.findNext(query, { regex, caseSensitive }); } catch {}
-      }
-      handler();
-    }, 100);
-  });
-
-  // 리사이즈는 컬럼 수가 바뀌면서 버퍼가 재줄바꿈(rewrap)되므로, 우리 오버레이는 즉시 지워
-  // 재줄바꿈 전 좌표로 계산된 박스가 엉뚱한 텍스트 위에 남아있지 않게 하고, 실제 재검색/재선택은
-  // 원격 재드로우가 끝나 내용이 안정된 뒤(위 debounce)에 한 번만 한다.
-  const onResizeDisp = entry.term.onResize(() => {
-    pendingRelocate = true;
-    const container = highlightOverlays.get(termId);
-    if (container) container.innerHTML = '';
-  });
-
-  // cleanup 함수 저장
-  highlightListeners.set(termId, () => {
-    if (viewport) viewport.removeEventListener('scroll', handler);
-    onRenderDisp.dispose();
-    onResizeDisp.dispose();
-    if (renderTimer) clearTimeout(renderTimer);
-  });
+  if (relayIfRemote(termId, 'highlightAllMatches', [query, regex, caseSensitive])) return;
+  try {
+    const entry = termStore.get(termId);
+    if (!entry || !query) return;
+    // noScroll 은 실제 xterm-addon-search 런타임이 지원하지만(내부적으로 읽어서 씀)
+    // 패키지 .d.ts 타입 선언에는 누락돼 있어 as any 로 우회.
+    entry.search.findNext(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS, noScroll: true, incremental: true } as any);
+  } catch {}
 }
 
 // 검색바를 열 때 사용자가 보던 위치(viewportY) 를 termId 별로 기억해 둠.
@@ -1895,11 +1765,10 @@ export function searchFromTop(termId: string, query: string, regex = false, case
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
-    entry.search.clearDecorations();
     // 선택 해제 → findNext가 버퍼 맨 위부터 검색
     entry.term.clearSelection();
     entry.term.scrollToTop();
-    const found = entry.search.findNext(query, { regex, caseSensitive });
+    const found = entry.search.findNext(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS });
     if (!found) restoreToAnchor(termId); // 못 찾음 → 검색 시작 전 보던 위치로 복원
     return found;
   } catch { return false; }
@@ -1911,8 +1780,7 @@ export function searchInTerm(termId: string, query: string, regex = false, caseS
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
-    entry.search.clearDecorations();
-    const found = entry.search.findNext(query, { regex, caseSensitive });
+    const found = entry.search.findNext(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS });
     if (!found) restoreToAnchor(termId);
     return found;
   } catch { return false; }
@@ -1923,7 +1791,7 @@ export function searchNextInTerm(termId: string, query: string, regex = false, c
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
-    const found = entry.search.findNext(query, { regex, caseSensitive });
+    const found = entry.search.findNext(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS });
     if (!found) restoreToAnchor(termId);
     return found;
   } catch { return false; }
@@ -1934,7 +1802,7 @@ export function searchPrevInTerm(termId: string, query: string, regex = false, c
   try {
     const entry = termStore.get(termId);
     if (!entry || !query) return false;
-    const found = entry.search.findPrevious(query, { regex, caseSensitive });
+    const found = entry.search.findPrevious(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS });
     if (!found) restoreToAnchor(termId);
     return found;
   } catch { return false; }
@@ -1943,7 +1811,6 @@ export function searchPrevInTerm(termId: string, query: string, regex = false, c
 export function clearSearchInTerm(termId: string) {
   if (relayIfRemote(termId, 'clearSearchInTerm', [])) return;
   try {
-    clearHighlights(termId);
     const entry = termStore.get(termId);
     if (entry) entry.search.clearDecorations();
   } catch {}
@@ -1971,14 +1838,8 @@ export function disposeTermFully(termId: string) {
   // 2) 활성 비밀번호 프롬프트 disposable 정리
   try { activePasswordPrompt.get(termId)?.dispose(); } catch {}
   activePasswordPrompt.delete(termId);
-  // 3) 검색 하이라이트 오버레이 DOM 제거
-  try {
-    const ov = highlightOverlays.get(termId);
-    if (ov && ov.parentElement) ov.parentElement.removeChild(ov);
-  } catch {}
-  highlightOverlays.delete(termId);
-  try { highlightListeners.get(termId)?.(); } catch {}
-  highlightListeners.delete(termId);
+  // 3) 검색 하이라이트(네이티브 decorations) 정리
+  try { clearHighlights(termId); } catch {}
   // 4) reconnect timer 등 ssh/pty 보조 상태 정리
   try {
     const st = reconnectState.get(termId);
@@ -2169,6 +2030,8 @@ const termCallWhitelist: Record<string, (...args: any[]) => any> = {
   applyCursorStyleToTerm: (termId: string, style?: any, blink?: boolean) => applyCursorStyleToTerm(termId, style, blink),
   selectAllInTerm: (termId: string) => selectAllInTerm(termId),
   clearHighlights: (termId: string) => clearHighlights(termId),
+  highlightAllMatches: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
+    highlightAllMatches(termId, query, !!regex, caseSensitive),
   clearSearchInTerm: (termId: string) => clearSearchInTerm(termId),
   searchNextInTerm: (termId: string, query: string, regex?: boolean, caseSensitive?: boolean) =>
     searchNextInTerm(termId, query, regex, caseSensitive),

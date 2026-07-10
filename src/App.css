@@ -4751,16 +4751,7 @@ body.popout-options .session-editor h3:first-child {
   mix-blend-mode: normal !important;
 }
 
-/* ── xterm search highlight ── */
-.search-highlight-mark {
-  background: rgba(255, 200, 0, 0.3) !important;
-  border: 1px solid rgba(255, 200, 0, 0.8) !important;
-  border-radius: 2px !important;
-  box-sizing: border-box !important;
-  pointer-events: none !important;
-  z-index: 100 !important;
-}
-
+/* ── xterm search highlight (xterm-addon-search 네이티브 decorations) ── */
 .xterm .xterm-find-result-decoration {
   background: rgba(181, 137, 0, 0.4) !important;
   outline: 1px solid #b58900 !important;

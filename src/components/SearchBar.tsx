@@ -90,10 +90,12 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, useRegex, caseSensitive, mode]);
 
-  // 패널/미니탭 전환만 일어났을 때(query 동일): 새 타겟 터미널에 하이라이트만 다시 칠하고,
-  // 검색은 맨 위부터가 아니라 현재 위치 기준으로 한 번 시도 — 매치 없으면 anchor 로 복귀.
-  // "다른 미니탭에서 활성화 전환했더니 처음부터 찾는다" 문제 해결.
-  // activeTermId 를 dep 으로 추적 — selectedPanelId / activeTab / panel.activeIdx 변경을 모두 포착.
+  // 미니탭 전환 시 anchor(Next/Prev 실패 시 복귀 위치)만 그 미니탭의 현재 위치로 갱신한다.
+  // 하이라이트 자체는 이제 xterm-addon-search 의 네이티브 decorations(마커 기반)를 쓰므로
+  // DOM 이 어떻게 옮겨붙든(미니탭 전환으로 xterm 엘리먼트가 컨테이너를 바꿔도) 별도로 다시
+  // 칠해줄 필요가 없다 — 예전 커스텀 DOM 오버레이 시절엔 미니탭 전환마다 오버레이가 통째로
+  // 날아가서 직접 복구해야 했지만, 마커는 버퍼(Terminal 인스턴스)에 묶여 있어 DOM 과 무관하게
+  // 유지된다("다른 미니탭에서 활성화 전환했더니 처음부터 찾는다" 문제도 anchor 로 계속 해결됨).
   const activeTermId = mode === 'current' ? (() => {
     if (!selectedPanelId) return null;
     const findInLayout = (node: any): string | null => {
@@ -107,14 +109,8 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
     return findInLayout(activeTab.layout);
   })() : null;
   useEffect(() => {
-    if (!query || mode !== 'current' || !activeTermId) return;
-    // 하이라이트만 다시 칠한다 — viewport/선택 영역은 건드리지 않음.
-    // 사용자가 그 미니탭에서 보고 있던 위치를 그대로 유지. 매치 탐색은 Next/Prev 버튼으로.
-    clearHighlights(activeTermId);
-    highlightAllMatches(activeTermId, query, useRegex, caseSensitive);
-    // 새 anchor 도 이 미니탭의 현재 위치로 갱신 — 이후 Next/Prev 실패 시 여기로 복귀.
+    if (!query || !activeTermId) return;
     try { markSearchAnchor(activeTermId); } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTermId]);
 
   const getActiveTermId = (): string | null => {
