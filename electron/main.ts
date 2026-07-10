@@ -816,6 +816,14 @@ app.on('certificate-error', (event, _webContents, url, error, _certificate, call
 app.on('web-contents-created', (_e, contents) => {
   try {
     if (contents.getType() !== 'webview') return;
+    // did-stop-loading 등 네비게이션 이벤트에 대한 MaxListenersExceededWarning 이 계속 떴는데,
+    // 렌더러 쪽 addEventListener 는 idempotency guard 로 이미 1회로 확인됐고, dom-ready 시점에
+    // 렌더러→IPC 로 setMaxListeners 를 올리는 것도 시도했지만 비동기 라운드트립이라 실제 리스너가
+    // 붙는 시점(구글 홈페이지처럼 iframe 이 여러 개인 페이지는 서브프레임 attach 가 매우 빨리
+    // 연달아 일어남)보다 늦게 적용되는 레이스가 있었던 것으로 보인다. 게스트 WebContents 가
+    // 생성되는 바로 이 시점(동기, 어떤 프레임도 아직 attach 되기 전)에 즉시 한도를 올려서
+    // 그 레이스 자체를 없앤다.
+    contents.setMaxListeners(50);
     contents.setWindowOpenHandler(({ url }) => {
       // hostWebContents 가 undefined 인 케이스 대비 — 모든 BrowserWindow 에 브로드캐스트.
       // 렌더러 측이 자신의 webview guestId 와 매칭해 자신 것만 처리.
@@ -6348,6 +6356,18 @@ ipcMain.handle('browser:resize-guest', async (_e, args: { webContentsId: number;
     const width = Math.max(1, Math.floor(Number(args?.width || 0)));
     const height = Math.max(1, Math.floor(Number(args?.height || 0)));
     wc.setSize?.({ normal: { width, height } });
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+// 브라우저 워크스페이스 <webview> 게스트의 WebContents(EventEmitter) 리스너 한도를 넉넉히
+// 올린다 — dev 환경에서 Vite Fast Refresh 로 렌더러의 리스너-바인딩 effect 가 정리 없이
+// 반복 실행될 수 있어 MaxListenersExceededWarning 노이즈가 뜨는 걸 막기 위함.
+ipcMain.handle('browser:bump-max-listeners', (_e, args: { webContentsId: number }) => {
+  try {
+    const wc: any = webContents.fromId(args?.webContentsId);
+    wc?.setMaxListeners?.(50);
     return { success: true };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };

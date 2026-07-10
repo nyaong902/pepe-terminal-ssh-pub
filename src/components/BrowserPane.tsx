@@ -51,6 +51,18 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const tabsRef = useRef<BrowserTab[]>([]);
   const activeTargetPanelIdRef = useRef<string>('');
   const zoomRef = useRef<number>(1);
+  // 실제로 webview 에 적용된(setZoomFactor 를 마지막으로 호출한) 값 — 같은 값이어도 매
+  // did-navigate/dom-ready/did-stop-loading 마다 setZoomFactor 를 반복 호출하고 있었는데,
+  // Electron 의 setZoomFactor 는 호출될 때마다 게스트의 CSS vh/vw 뷰포트 재계산이 실제 픽셀
+  // 크기와 어긋나는(값이 그대로여도) 버그가 있어 이게 "구글 footer 가 하단에 안 붙는" 증상의
+  // 원인으로 의심된다. 값이 실제로 바뀔 때만 호출하도록 막는다.
+  const appliedZoomFactorRef = useRef<number>(1);
+  const applyZoomFactorIfChanged = useCallback((wv: any) => {
+    if (!wv) return;
+    const z = zoomRef.current;
+    if (appliedZoomFactorRef.current === z) return;
+    try { wv.setZoomFactor?.(z); appliedZoomFactorRef.current = z; } catch {}
+  }, []);
   const onTitleChangeRef = useRef<Props['onTitleChange']>(onTitleChange);
   const urlHistoryKey = 'pepe-browser-url-history';
   const partitionName = useMemo(
@@ -230,63 +242,67 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const shouldForceGuestResize = sizeChanged || /mount|dom-ready|did-stop-loading|active-tab-changed/.test(tag);
       if (sizeChanged) {
         lastAppliedWebviewHeightRef.current = nextHeight;
-        const nextWidth = Math.max(1, Math.floor(root.clientWidth || root.getBoundingClientRect().width || 0));
         wrap.style.flex = 'none';
         wrap.style.width = '100%';
         wrap.style.height = `${nextHeight}px`;
         wrap.style.minHeight = `${nextHeight}px`;
         wrap.style.maxHeight = `${nextHeight}px`;
         wrap.style.background = '#ffffff';
+        // autosize="on" + width/height/min/max 속성을 매번 락 걸던 예전 방식은, 커스텀
+        // 워크스페이스 쪽에서 이미 겪은 "150px 고정" 버그와 동일 계열(Chromium autosize 가
+        // 새 min/max 로 제대로 재반영을 못 하고 이전 게스트 뷰포트 크기에 눌러붙는 문제)의
+        // 원인이었다. embedded 경로처럼 autosize 를 끄고 CSS(position:absolute; inset:0;
+        // 100%)로만 게스트를 호스트 박스에 맞춘다 — wrap 이 이미 정확한 픽셀 높이로 고정돼
+        // 있으므로 webview 는 그 안을 100% 로 채우기만 하면 된다.
         wv.style.position = 'absolute';
         wv.style.inset = '0';
-        wv.style.width = `${nextWidth}px`;
-        wv.style.height = `${nextHeight}px`;
-        wv.style.minWidth = `${nextWidth}px`;
-        wv.style.minHeight = `${nextHeight}px`;
-        wv.style.maxWidth = `${nextWidth}px`;
-        wv.style.maxHeight = `${nextHeight}px`;
-        wv.style.display = 'block';
+        wv.style.width = '100%';
+        wv.style.height = '100%';
+        wv.style.minWidth = '0';
+        wv.style.minHeight = '0';
+        wv.style.maxWidth = 'none';
+        wv.style.maxHeight = 'none';
+        wv.style.display = 'flex';
         wv.style.background = '#ffffff';
       }
+      // autosize 잔여 속성 정리는 sizeChanged 여부와 무관하게 매 호출마다 보장한다 — dev HMR 등으로
+      // 이전 코드가 이미 autosize="on"/min·max 속성을 박아둔 webview 엘리먼트가 재사용되는 경우,
+      // 크기가 우연히 안 바뀌면 위 sizeChanged 블록을 안 타서 잔여 속성이 안 지워지는 문제 방지.
+      try {
+        if (wv.getAttribute?.('autosize') !== 'off') wv.setAttribute?.('autosize', 'off');
+        wv.removeAttribute?.('width');
+        wv.removeAttribute?.('height');
+        wv.removeAttribute?.('minwidth');
+        wv.removeAttribute?.('maxwidth');
+        wv.removeAttribute?.('minheight');
+        wv.removeAttribute?.('maxheight');
+      } catch {}
       if (shouldForceGuestResize) {
         try {
-          const nextWidth = Math.max(1, Math.floor(root.clientWidth || root.getBoundingClientRect().width || 0));
-          try {
-            wv.setAttribute?.('autosize', 'on');
-            wv.setAttribute?.('width', String(nextWidth));
-            wv.setAttribute?.('height', String(nextHeight));
-            wv.setAttribute?.('minwidth', String(nextWidth));
-            wv.setAttribute?.('maxwidth', String(nextWidth));
-            wv.setAttribute?.('minheight', String(nextHeight));
-            wv.setAttribute?.('maxheight', String(nextHeight));
-          } catch {}
-          // Hidden pane -> visible pane 전환 시 guest viewport 가 이전 높이에 머무는 문제가 있어
-          // 래퍼 높이를 한 번 흔들어 실제 resize 를 유도한다.
+          // webview 엘리먼트의 display 를 껐다 켜서 게스트를 강제로 재부착하는 방식은 되돌렸다 —
+          // mount 직후 ResizeObserver 가 flex 레이아웃이 안정화되는 동안 짧은 시간에 여러 번
+          // 연달아 발화할 수 있는데, 그때마다 재부착이 걸리면서 Electron 내부의 did-stop-loading
+          // 포워딩 구독이 정리 없이 누적돼 MaxListenersExceededWarning 이 뜨는 원인이었다("브라우저
+          // 워크스페이스 시작하자마자" 뜨는 것과 정확히 일치). wrap 높이 1px nudge 만 유지하고,
+          // 진짜 "게스트가 작은 크기에 눌러붙음" 케이스는 아래 onStop 의 실측 기반 자동 복구
+          // (webviewNonce 로 webview 자체를 재생성)에 맡긴다 — 이건 이미 안전하게 최대 2회로
+          // 제한돼 있다.
           wrap.style.height = `${Math.max(120, nextHeight - 1)}px`;
           window.requestAnimationFrame(() => {
             if (webviewWrapRef.current === wrap) {
               wrap.style.height = `${nextHeight}px`;
             }
           });
+          // 호스트 쪽 CSS 로 <webview> 박스 크기를 바꾸는 건 게스트 페이지 안에 실제
+          // window resize 이벤트를 발생시키지 않는다. window.innerHeight 자체는 정확히
+          // 갱신되지만(디버그 로그로 확인됨), 구글 홈페이지처럼 resize 리스너로 footer 를
+          // JS 로 한 번 계산해서 고정 배치하는 페이지는 그 계산이 다시 안 돌아 예전(마운트
+          // 시점) 위치에 눌러붙는다 — 게스트 안에 합성 resize 이벤트를 직접 쏴서 그런
+          // resize 리스너들이 재계산하도록 강제한다.
           if (webviewDomReadyRef.current) {
-            const guestKey = `${nextWidth}x${nextHeight}:${tag}`;
-            if (lastGuestResizeKeyRef.current !== guestKey) {
-              lastGuestResizeKeyRef.current = guestKey;
-              const webContentsId = typeof wv.getWebContentsId === 'function' ? wv.getWebContentsId() : null;
-              if (webContentsId) {
-                [0, 80, 220].forEach(delay => {
-                  window.setTimeout(() => {
-                    try {
-                      void (window as any).api?.resizeBrowserGuest?.({
-                        webContentsId,
-                        width: nextWidth,
-                        height: nextHeight,
-                      });
-                    } catch {}
-                  }, delay);
-                });
-              }
-            }
+            try {
+              void wv.executeJavaScript?.('window.dispatchEvent(new Event("resize"));', true).catch(() => {});
+            } catch {}
           }
         } catch {}
       }
@@ -305,6 +321,112 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   }, [emitDebugLog]);
 
   const syncWebviewHeight = embedded ? syncWebviewHeightEmbedded : syncWebviewHeightDefault;
+
+  // 실제 게스트 내부 뷰포트(window.innerHeight)를 실측해서 기대 높이의 절반도 안 되면 —
+  // "게스트가 이전(작은) 크기에 눌러붙음" 상태로 보고 webviewNonce 를 올려 webview 자체를
+  // 통째로 재생성한다(최대 2회 제한). did-stop-loading 뿐 아니라 resize/active-tab-changed 로
+  // 인한 강제 리사이즈 뒤에도 이 실측 검증을 태워서, "탭 전환/윈도우 리사이즈 후 게스트가 작게
+  // 남는" 증상을 페이지 재로딩 없이도 잡아낸다.
+  const verifyAndRecoverViewport = useCallback((tag: string) => {
+    const wv: any = webviewRef.current;
+    if (!wv || !webviewDomReadyRef.current) return;
+    try {
+      const url = String(wv.getURL?.() || '');
+      Promise.resolve(wv.executeJavaScript?.(`
+        (() => {
+          try {
+            const body = document.body;
+            const docEl = document.documentElement;
+            // id 를 추측하는 대신, 화면 하단에 고정되려는(position:fixed, bottom 값이 낮은)
+            // 모든 엘리먼트를 실제로 스캔한다 — "게스트 뷰포트가 작게 눌러붙은 버그"인지
+            // 아니면 "이 페이지가 원래 footer 를 하단 고정 안 하는 레이아웃을 타는 것"인지 구분.
+            const fixedBottomEls = [];
+            const all = document.querySelectorAll('body *');
+            for (let i = 0; i < all.length && fixedBottomEls.length < 5; i++) {
+              const elx = all[i];
+              const cs = window.getComputedStyle(elx);
+              if (cs.position === 'fixed' || cs.position === 'sticky') {
+                const r = elx.getBoundingClientRect();
+                if (r.height > 0) {
+                  fixedBottomEls.push({
+                    tag: elx.tagName,
+                    id: elx.id || null,
+                    className: typeof elx.className === 'string' ? elx.className.slice(0, 60) : null,
+                    position: cs.position,
+                    cssTop: cs.top,
+                    cssBottom: cs.bottom,
+                    rectTop: r.top,
+                    rectBottom: r.bottom,
+                    rectHeight: r.height,
+                  });
+                }
+              }
+            }
+            const footerInfo = fixedBottomEls;
+            // Chromium 게스트 리사이즈 후 100vh 단위가 실제 window.innerHeight 와 어긋나는
+            // (알려진) 버그가 있는지 직접 측정한다 — flex/grid 로 "min-height:100vh" 로 footer 를
+            // 하단에 붙이는 최신 방식의 페이지는 이게 어긋나면 정확히 이 증상(내용은 짧게, 아래
+            // 여백)이 난다.
+            let vhTestPx = 0;
+            try {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:fixed;left:-9999px;top:0;height:100vh;width:1px;pointer-events:none;';
+              document.body.appendChild(probe);
+              vhTestPx = probe.getBoundingClientRect().height;
+              document.body.removeChild(probe);
+            } catch {}
+            return {
+              vhTestPx,
+              vhMismatch: Math.abs(vhTestPx - (window.innerHeight || 0)) > 2,
+              bodyScrollHeight: body ? body.scrollHeight : 0,
+              bodyOffsetHeight: body ? body.offsetHeight : 0,
+              docScrollHeight: docEl ? docEl.scrollHeight : 0,
+              docOffsetHeight: docEl ? docEl.offsetHeight : 0,
+              htmlComputedHeight: docEl ? window.getComputedStyle(docEl).height : '',
+              bodyComputedHeight: body ? window.getComputedStyle(body).height : '',
+              innerHeight: window.innerHeight || 0,
+              innerWidth: window.innerWidth || 0,
+              devicePixelRatio: window.devicePixelRatio || 1,
+              footerInfo,
+            };
+          } catch (e) {
+            return { bodyScrollHeight: 0, bodyOffsetHeight: 0, docScrollHeight: 0, docOffsetHeight: 0, innerHeight: 0, innerWidth: 0, error: String(e) };
+          }
+        })();
+      `, true)).then((doc: any) => {
+        const innerHeight = Number(doc?.innerHeight || 0);
+        const expectedHeight = Math.max(0, lastExpectedHeightRef.current || 0);
+        const shouldRecoverViewport =
+          expectedHeight >= 240 &&
+          innerHeight > 0 &&
+          innerHeight < Math.floor(expectedHeight * 0.5) &&
+          recoveryAttemptRef.current < 2 &&
+          (Date.now() - lastRecoveryAtRef.current) > 800;
+        if (shouldRecoverViewport) {
+          recoveryAttemptRef.current += 1;
+          lastRecoveryAtRef.current = Date.now();
+          webviewDomReadyRef.current = false;
+          lastGuestResizeKeyRef.current = '';
+          lastAppliedWebviewHeightRef.current = -1;
+          window.setTimeout(() => setWebviewNonce(prev => prev + 1), 0);
+        }
+        emitDebugLog('[cw-debug][browser-viewport-verify]', {
+          tag,
+          activeTabId: activeTabIdRef.current,
+          tabsLength: tabsRef.current.length,
+          url,
+          doc,
+          expectedHeight,
+          shouldRecoverViewport,
+          recoveryAttempt: recoveryAttemptRef.current,
+        });
+      }).catch((err: any) => {
+        emitDebugLog('[cw-debug][browser-viewport-verify-error]', { tag, error: String(err?.message || err || '') });
+      });
+    } catch (err: any) {
+      emitDebugLog('[cw-debug][browser-viewport-verify-error]', { tag, error: String(err?.message || err || '') });
+    }
+  }, [emitDebugLog]);
 
   useEffect(() => {
     emitDebugLog('[cw-debug][browser-state]', {
@@ -328,6 +450,10 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         pane: { clientWidth: el.clientWidth, clientHeight: el.clientHeight, rectW: Math.round(rect.width), rectH: Math.round(rect.height) },
         webview: wrect ? { width: Math.round(wrect.width), height: Math.round(wrect.height) } : null,
       });
+      // 탭 전환/윈도우 리사이즈로 호스트 박스는 커졌는데 게스트 내부 뷰포트가 이전 크기에
+      // 눌러붙는 경우가 있어, 리사이즈 후 실측 검증도 태운다(페이지 재로딩 없이도 잡아냄).
+      // verifyAndRecoverViewport 자체가 최대 2회/800ms 쿨다운으로 제한돼 있어 자주 호출돼도 안전.
+      window.setTimeout(() => verifyAndRecoverViewport(tag), 250);
     };
     logSize('mount');
     const ro = new ResizeObserver(() => logSize('resize'));
@@ -339,7 +465,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     }
     const timer = window.setTimeout(() => logSize('delayed-200ms'), 200);
     return () => { ro.disconnect(); window.clearTimeout(timer); };
-  }, [syncWebviewHeight]);
+  }, [syncWebviewHeight, verifyAndRecoverViewport]);
 
   // 언마운트(탭 닫힘) 시 활성 프록시/전용 백그라운드 SSH 연결 정리 — 누수 방지.
   const proxyStateRef = useRef(proxyState);
@@ -652,6 +778,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
+    // did-navigate 등 리스너-바인딩 effect 와 동일한 이유의 방어적 가드 — 아래 참고.
+    if (wv.__pepeOnReadyBound) return;
     const prevOnReady = wv.__pepeOnReadyHandler;
     if (prevOnReady) {
       try { wv.removeEventListener('dom-ready', prevOnReady); } catch {}
@@ -662,13 +790,24 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const currentTargetPanelId = activeTargetPanelIdRef.current;
       if (currentTargetPanelId) void applyProxyForPanel(currentTargetPanelId);
       void forceBrowserLightTheme();
-      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
+      applyZoomFactorIfChanged(wv);
+      // dev 환경에서 Vite Fast Refresh 로 이 컴포넌트의 리스너-바인딩 effect 가 같은
+      // <webview> 에 대해 정리 없이 여러 번 재실행되는 경우가 있어(코드 수정마다 발생),
+      // 실제 리스너 개수가 진짜로 새는지와 별개로 그 과정에서 뜨는
+      // MaxListenersExceededWarning 노이즈를 없애기 위해 이 게스트 WebContents 의
+      // 한도를 넉넉히 올려둔다 — 프로덕션 빌드는 HMR 이 없어 애초에 해당 없음.
+      try {
+        const webContentsId = wv.getWebContentsId?.();
+        if (webContentsId) void (window as any).api?.bumpWebviewMaxListeners?.({ webContentsId });
+      } catch {}
       syncWebviewHeight('dom-ready');
       window.setTimeout(() => syncWebviewHeight('dom-ready-late'), 60);
     };
     wv.__pepeOnReadyHandler = onReady;
+    wv.__pepeOnReadyBound = true;
     wv.addEventListener('dom-ready', onReady);
     return () => {
+      wv.__pepeOnReadyBound = false;
       try { wv.removeEventListener('dom-ready', onReady); } catch {}
       webviewDomReadyRef.current = false;
       if (wv.__pepeOnReadyHandler === onReady) {
@@ -694,6 +833,14 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   useEffect(() => {
     const wv: any = webviewRef.current;
     if (!wv) return;
+    // 이 effect 의 의존성(emitDebugLog, syncWebviewHeight)은 항상 안정적인 참조라 마운트
+    // 시 한 번만 실행되면 충분하다. 그런데도 같은 <webview> 엘리먼트에 대해 정리 없이
+    // 반복 호출되는 경우(dev 환경의 Vite Fast Refresh 등)를 대비해, 이미 바인딩된 상태면
+    // 통째로 건너뛴다 — remove-then-readd 를 매번 반복하다 어느 한 번이라도 remove 매칭이
+    // 실패하면 리스너가 누적되는데(→ MaxListenersExceededWarning, 리사이즈 로직 중복 실행
+    // 으로 인한 뷰포트 계산 오차/작은 스크롤바 증상), 애초에 재실행 자체를 막으면 그 경로가
+    // 원천 차단된다. 진짜 새 엘리먼트(재마운트)라면 이 플래그가 없으므로 정상적으로 바인딩된다.
+    if (wv.__pepeListenersBound) return;
     const prevHandlers = wv.__pepeLifecycleHandlers;
     if (prevHandlers) {
       try { wv.removeEventListener('did-navigate', prevHandlers.onNav); } catch {}
@@ -713,76 +860,22 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         void loadBrowserCredentialsForUrl(u);
       } catch {}
       void forceBrowserLightTheme();
-      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
+      applyZoomFactorIfChanged(wv);
       try { setCanBack(wv.canGoBack()); setCanFwd(wv.canGoForward()); } catch {}
     };
-    const onStart = () => setLoading(true);
+    const onStart = () => {
+      setLoading(true);
+      // 새 네비게이션이 시작되면 Electron 이 게스트의 zoom factor 를 리셋하는 경우가 있어
+      // (기존 주석에도 명시돼 있던 이유) "이번 네비게이션에서 한 번은 실제로 재적용해야 함"
+      // 표시로 무효화한다 — dom-ready/onNav/onStop 는 같은 네비게이션 사이클 안에서 서로
+      // 중복 호출만 걸러내고, 매 네비게이션마다 최소 한 번은 확실히 재적용되게 한다.
+      appliedZoomFactorRef.current = -1;
+    };
     const onStop = () => {
       setLoading(false);
       onNav();
-      try { wv.setZoomFactor?.(zoomRef.current); } catch {}
       syncWebviewHeight('did-stop-loading');
-      try {
-        const url = String(wv.getURL?.() || '');
-        Promise.resolve(wv.executeJavaScript?.(`
-          (() => {
-            try {
-              const body = document.body;
-              const docEl = document.documentElement;
-              return {
-                bodyScrollHeight: body ? body.scrollHeight : 0,
-                bodyOffsetHeight: body ? body.offsetHeight : 0,
-                docScrollHeight: docEl ? docEl.scrollHeight : 0,
-                docOffsetHeight: docEl ? docEl.offsetHeight : 0,
-                innerHeight: window.innerHeight || 0,
-                innerWidth: window.innerWidth || 0,
-              };
-            } catch {
-              return { bodyScrollHeight: 0, bodyOffsetHeight: 0, docScrollHeight: 0, docOffsetHeight: 0, innerHeight: 0, innerWidth: 0 };
-            }
-          })();
-        `, true)).then((doc: any) => {
-          const innerHeight = Number(doc?.innerHeight || 0);
-          const expectedHeight = Math.max(0, lastExpectedHeightRef.current || 0);
-          const shouldRecoverViewport =
-            expectedHeight >= 240 &&
-            innerHeight > 0 &&
-            innerHeight < Math.floor(expectedHeight * 0.5) &&
-            recoveryAttemptRef.current < 2 &&
-            (Date.now() - lastRecoveryAtRef.current) > 800;
-          if (shouldRecoverViewport) {
-            recoveryAttemptRef.current += 1;
-            lastRecoveryAtRef.current = Date.now();
-            webviewDomReadyRef.current = false;
-            lastGuestResizeKeyRef.current = '';
-            lastAppliedWebviewHeightRef.current = -1;
-            window.setTimeout(() => setWebviewNonce(prev => prev + 1), 0);
-          }
-          emitDebugLog('[cw-debug][browser-stop-loading]', {
-            activeTabId: activeTabIdRef.current,
-            tabsLength: tabsRef.current.length,
-            url,
-            doc,
-            expectedHeight,
-            shouldRecoverViewport,
-            recoveryAttempt: recoveryAttemptRef.current,
-          });
-        }).catch((err: any) => {
-          emitDebugLog('[cw-debug][browser-stop-loading-error]', {
-            activeTabId: activeTabIdRef.current,
-            tabsLength: tabsRef.current.length,
-            url,
-            error: String(err?.message || err || ''),
-          });
-        });
-      } catch (err: any) {
-        emitDebugLog('[cw-debug][browser-stop-loading-error]', {
-          activeTabId: activeTabIdRef.current,
-          tabsLength: tabsRef.current.length,
-          url: '',
-          error: String(err?.message || err || ''),
-        });
-      }
+      verifyAndRecoverViewport('did-stop-loading');
     };
     const onTitle = (e: any) => {
       onTitleChangeRef.current?.(e.title || '');
@@ -815,6 +908,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       }
     };
     wv.__pepeLifecycleHandlers = { onNav, onStart, onStop, onTitle, onFail, onNewWindow, offBrowserNewWindow };
+    wv.__pepeListenersBound = true;
     wv.addEventListener('did-navigate', onNav);
     wv.addEventListener('did-navigate-in-page', onNav);
     wv.addEventListener('did-start-loading', onStart);
@@ -823,6 +917,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     wv.addEventListener('did-fail-load', onFail);
     wv.addEventListener('new-window', onNewWindow);
     return () => {
+      wv.__pepeListenersBound = false;
       try {
         wv.removeEventListener('did-navigate', onNav);
         wv.removeEventListener('did-navigate-in-page', onNav);
@@ -837,7 +932,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         try { delete wv.__pepeLifecycleHandlers; } catch {}
       }
     };
-  }, [emitDebugLog, syncWebviewHeight]);
+  }, [emitDebugLog, syncWebviewHeight, verifyAndRecoverViewport]);
 
   const resolveBrowserUrl = (target: string) => {
     let t = target.trim();
@@ -865,7 +960,6 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         min-height: 100vh !important;
       }
       body {
-        height: auto !important;
         -webkit-text-fill-color: initial !important;
       }
     `;
@@ -878,7 +972,6 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           try { document.documentElement.style.minHeight = '100vh'; } catch {}
           try { document.body && (document.body.style.background = '#fff'); } catch {}
           try { document.body && (document.body.style.minHeight = '100vh'); } catch {}
-          try { document.body && (document.body.style.height = 'auto'); } catch {}
         })();
       `, true);
     } catch {}
@@ -1068,7 +1161,10 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const applyZoom = (z: number) => {
     const clamped = Math.max(0.25, Math.min(5.0, +z.toFixed(2)));
     setZoom(clamped);
-    try { webviewRef.current?.setZoomFactor?.(clamped); } catch {}
+    try {
+      webviewRef.current?.setZoomFactor?.(clamped);
+      appliedZoomFactorRef.current = clamped;
+    } catch {}
   };
   const zoomIn = () => applyZoom(zoom + 0.1);
   const zoomOut = () => applyZoom(zoom - 0.1);

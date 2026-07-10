@@ -315,6 +315,7 @@ contextBridge.exposeInMainWorld('api', {
   getConnectedPanels: () => ipcRenderer.invoke('ssh:connected-panels'),
   setWebviewProxy: (args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => ipcRenderer.invoke('browser:set-proxy', args),
   resizeBrowserGuest: (args: { webContentsId: number; width: number; height: number }) => ipcRenderer.invoke('browser:resize-guest', args),
+  bumpWebviewMaxListeners: (args: { webContentsId: number }) => ipcRenderer.invoke('browser:bump-max-listeners', args),
   agentIsRunning: (args: { sessionId?: string; requestId?: string }) => ipcRenderer.invoke('agent:is-running', args),
   getCursorPoint: () => ipcRenderer.invoke('window:cursor-point'),
   getWindowBounds: () => ipcRenderer.invoke('window:get-bounds'),
