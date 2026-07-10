@@ -310,6 +310,65 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
     return next;
   });
   const updateBlock = (id: string, patch: Partial<ScenarioBlock>) => setBlocks(prev => prev.map(b => b.id === id ? ({ ...b, ...patch } as ScenarioBlock) : b));
+  // 드래그앤드롭으로 블록 순서 변경 — sourceId 블록을 targetId 블록의 자리로 옮긴다
+  // (targetId 가 있던 자리에 끼워 넣고 나머지는 밀림). 네이티브 HTML5 draggable/dataTransfer 는
+  // Chromium 이 드래그 중인 엘리먼트를 자동으로 반투명 "고스트" 이미지로 렌더링하는데 이게 CSS로
+  // 안 꺼져서(OS 레벨 드래그 렌더링), mousedown/mousemove/mouseup 으로 직접 구현해 완전히
+  // 불투명하게(테두리 강조만) 보이도록 했다.
+  const [dragBlockId, setDragBlockId] = useState<string | null>(null);
+  const [dragOverBlockId, setDragOverBlockId] = useState<string | null>(null);
+  const dragOverIdRef = useRef<string | null>(null);
+  // 드래그 중 커서를 따라다니는 불투명 미니 배지 — "지금 뭘 옮기고 있는지" 눈으로 바로 확인
+  // 가능하게. 원본 카드를 통째로 복제해 따라다니게 하면 무겁고, 네이티브 고스트 이미지를 다시
+  // 쓰면 반투명 문제가 재발하니, 종류 라벨만 담은 작은 배지를 직접 그린다.
+  const [dragPreview, setDragPreview] = useState<{ x: number; y: number; label: string; color: string } | null>(null);
+  const reorderBlocks = (sourceId: string, targetId: string) => setBlocks(prev => {
+    if (sourceId === targetId) return prev;
+    const from = prev.findIndex(b => b.id === sourceId);
+    const to = prev.findIndex(b => b.id === targetId);
+    if (from < 0 || to < 0) return prev;
+    const next = [...prev];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    return next;
+  });
+  const handleBlockMouseDown = (block: ScenarioBlock) => (e: React.MouseEvent) => {
+    if (running) return;
+    const id = block.id;
+    // 입력/버튼 등 실제 조작을 위한 요소를 누른 거면 드래그를 시작하지 않고 평소대로 동작.
+    if ((e.target as HTMLElement).closest('input, textarea, select, button')) return;
+    const label = block.kind === 'send' ? `${KIND_LABEL.send} ${block.method}`
+      : block.kind === 'recv' ? `${KIND_LABEL.recv} ${block.code}`
+      : `${KIND_LABEL.pause} ${block.ms}ms`;
+    const color = KIND_COLOR[block.kind];
+    const start = { x: e.clientX, y: e.clientY, dragging: false };
+    const onMove = (ev: MouseEvent) => {
+      if (!start.dragging) {
+        if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 4) return;
+        start.dragging = true;
+        setDragBlockId(id);
+      }
+      setDragPreview({ x: ev.clientX, y: ev.clientY, label, color });
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      const cardEl = el?.closest('[data-sipp-block-id]') as HTMLElement | null;
+      const overId = cardEl?.getAttribute('data-sipp-block-id') || null;
+      dragOverIdRef.current = overId && overId !== id ? overId : null;
+      setDragOverBlockId(dragOverIdRef.current);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (start.dragging && dragOverIdRef.current) reorderBlocks(id, dragOverIdRef.current);
+      dragOverIdRef.current = null;
+      setDragBlockId(null);
+      setDragOverBlockId(null);
+      setDragPreview(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+  // 블록을 클릭(카드 자체에 포커스)해서 선택해두면 Ctrl+↑/↓ 로도 순서를 바꿀 수 있다.
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
   // "생성된 XML 미리보기" 상호연동: 블록을 고치면 이 텍스트가 자동 갱신되고(xmlDirty
   // 가 false 일 때만), 텍스트를 직접 고치면 xmlDirty=true 로 자동 갱신을 멈춘 뒤
@@ -586,6 +645,18 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
 
   return (
     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', overflow: 'auto', padding: 12, gap: 12 }}>
+      {dragPreview && (
+        <div
+          style={{
+            position: 'fixed', left: dragPreview.x + 14, top: dragPreview.y + 14, zIndex: 10000,
+            pointerEvents: 'none', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
+            background: dragPreview.color, color: '#fff', boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ⠿ {dragPreview.label}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 14, fontWeight: 700 }}>📶 SIPp 워크스페이스</span>
         <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>네이티브 SIPp 부하 발생기 — 헤더/바디 편집, CPS(초당 콜 수) 제어</span>
@@ -892,7 +963,7 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
         {!scenarioCardCollapsed && scenarioMode === 'blocks' && (
           <div>
             <div style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', marginBottom: 8 }}>
-              메시지 전송/응답 대기/일시정지 블록을 순서대로 쌓아서 통화 흐름을 조립합니다. 위/아래 화살표로 순서를 바꿀 수 있어요.
+              메시지 전송/응답 대기/일시정지 블록을 순서대로 쌓아서 통화 흐름을 조립합니다. 위/아래 화살표로, 블록 아무 곳이나 드래그해서, 또는 블록을 클릭해 선택한 뒤 Ctrl+↑/↓ 로 순서를 바꿀 수 있어요.
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
               <div style={{ flex: 1, maxWidth: 260 }}>
@@ -925,6 +996,11 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
                     onChange={patch => updateBlock(b.id, patch)}
                     onRemove={() => removeBlock(b.id)}
                     onMove={dir => moveBlock(b.id, dir)}
+                    isSelected={selectedBlockId === b.id}
+                    onSelect={() => setSelectedBlockId(b.id)}
+                    isDragging={dragBlockId === b.id}
+                    isDragOver={dragOverBlockId === b.id && dragBlockId !== b.id}
+                    onBlockMouseDown={handleBlockMouseDown(b)}
                   />
                   {!running && (
                     <InsertGap
@@ -1108,11 +1184,48 @@ const BlockEditor: React.FC<{
   onChange: (patch: Partial<ScenarioBlock>) => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
-}> = ({ block, index, total, disabled, onChange, onRemove, onMove }) => {
+  isSelected?: boolean;
+  onSelect?: () => void;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onBlockMouseDown?: (e: React.MouseEvent) => void;
+}> = ({ block, index, total, disabled, onChange, onRemove, onMove, isSelected, onSelect, isDragging, isDragOver, onBlockMouseDown }) => {
   const send = block.kind === 'send' ? block : null;
+  const cardRef = useRef<HTMLDivElement>(null);
   return (
-    <div style={{ display: 'flex', gap: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', borderLeft: `3px solid ${KIND_COLOR[block.kind]}`, borderRadius: 6, padding: 8 }}>
+    <div
+      ref={cardRef}
+      data-sipp-block-id={block.id}
+      tabIndex={0}
+      onMouseDown={onBlockMouseDown}
+      onClick={() => onSelect?.()}
+      onFocus={() => onSelect?.()}
+      onKeyDown={e => {
+        // 텍스트 필드(입력/textarea/select) 안에서 Ctrl+↑/↓ 를 누른 거면 그쪽 자체 동작(커서
+        // 이동 등)을 건드리지 않고 그냥 통과시킨다 — 카드 자체가 포커스일 때만 순서 변경.
+        if (e.target !== e.currentTarget || disabled) return;
+        if (!(e.ctrlKey || e.metaKey)) return;
+        if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); onMove(-1); }
+        else if (e.key === 'ArrowDown' && index < total - 1) { e.preventDefault(); onMove(1); }
+      }}
+      style={{
+        display: 'flex', gap: 8, background: 'var(--win-bg, #0d1117)',
+        border: isDragOver
+          ? '1px dashed var(--win-accent, #58a6ff)'
+          : isDragging
+            ? `1px solid ${KIND_COLOR[block.kind]}`
+            : '1px solid var(--win-border, #30363d)',
+        borderLeft: `3px solid ${KIND_COLOR[block.kind]}`, borderRadius: 6, padding: 8,
+        cursor: disabled ? 'default' : 'grab',
+        outline: isSelected ? '2px solid var(--win-accent, #58a6ff)' : 'none',
+        outlineOffset: 2,
+      }}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, flex: '0 0 auto' }}>
+        <span
+          title="블록 아무 곳이나 드래그해서 순서 변경. 클릭해서 선택 후 Ctrl+↑/↓ 로도 이동 가능"
+          style={{ fontSize: 12, color: 'var(--win-text-dim, #9aa7b3)', lineHeight: 1, padding: '2px 0', userSelect: 'none' }}
+        >⠿</span>
         <button onClick={() => onMove(-1)} disabled={disabled || index === 0} style={{ ...btn(!disabled && index > 0), padding: '2px 6px', fontSize: 10 }}>▲</button>
         <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)' }}>{index + 1}</span>
         <button onClick={() => onMove(1)} disabled={disabled || index === total - 1} style={{ ...btn(!disabled && index < total - 1), padding: '2px 6px', fontSize: 10 }}>▼</button>
