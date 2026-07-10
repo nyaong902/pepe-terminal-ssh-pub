@@ -29,7 +29,7 @@ import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
 import { StatusBar } from './components/StatusBar';
 import { RemoteShareDialog } from './components/RemoteShareDialog';
-import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, searchInTerm, searchNextInTerm, searchPrevInTerm, clearSearchInTerm, highlightAllMatches, clearHighlights, searchFromTop, getAllTermIds, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle, waitForTermMount } from './components/TerminalPanel';
+import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle, waitForTermMount } from './components/TerminalPanel';
 import { marked } from 'marked';
 // @ts-ignore — vite ?raw 로 docs/MANUAL.md 를 번들 문자열로 임베드
 import manualMd from '../docs/MANUAL.md?raw';
@@ -353,6 +353,9 @@ function App() {
   }, []);
   const [wordSepValue, setWordSepValue] = useState('');
   const [termSettings, setTermSettings] = useState<TerminalSettings>(getTerminalSettings);
+  // optFontSizeDraft 와 같은 이유 — 옵션창 숫자 입력에 타이핑이 안 먹히는 문제 방지용 draft.
+  const [scrollbackDraft, setScrollbackDraft] = useState(String(termSettings.scrollback));
+  useEffect(() => { setScrollbackDraft(String(termSettings.scrollback)); }, [termSettings.scrollback]);
   const isOptionsPopout = false; // popout 비활성 — localStorage 격리로 데이터 유실 위험
   const [showOptions, setShowOptions] = useState(false);
   const [showRemoteShare, setShowRemoteShare] = useState(false);
@@ -360,6 +363,12 @@ function App() {
   const [editSessionFolders, setEditSessionFolders] = useState<any[]>([]);
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
   const [optFontSize, setOptFontSize] = useState(() => Number(localStorage.getItem('terminalFontSize')) || 14);
+  // 숫자 입력창에 타이핑한 값을 매 keystroke 마다 min/max 로 clamp 해서 실제 값(optFontSize)에
+  // 바로 반영하면, 자릿수를 채 다 입력하기도 전에("5" 입력 시 min=8 이라 바로 8로 튕김) 값이
+  // 튕겨나가 버려서 타이핑으로 입력이 안 되는 것처럼 보였다 — 화면에 보여줄 값은 이 draft 로
+  // 자유롭게 타이핑하게 두고, blur/Enter 시점에만 clamp 해서 실제 값에 반영한다.
+  const [optFontSizeDraft, setOptFontSizeDraft] = useState(String(optFontSize));
+  useEffect(() => { setOptFontSizeDraft(String(optFontSize)); }, [optFontSize]);
   const [availableFonts, setAvailableFonts] = useState<string[]>([]);
   const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'workspace' | 'mcp' | 'debug' | 'messenger' | 'keybindings'>('terminal');
   const [aiMcpAttachmentMode, setAiMcpAttachmentMode] = useState<'ssh' | 'local'>('ssh');
@@ -529,6 +538,12 @@ function App() {
         if (typeof prefs?.terminalPinned === 'boolean') {
           setTerminalPinned(prefs.terminalPinned);
           if (!prefs.terminalPinned) setTerminalVisible(false);
+        }
+        // 단어 구분 기호 — localStorage 는 sessionData 가 매 실행 분리돼 영속되지 않으므로
+        // (memory: feedback_workflow) ui-prefs(config.json) 에 저장된 값을 우선 적용한다.
+        if (typeof prefs?.wordSeparator === 'string' && prefs.wordSeparator) {
+          setWordSeparator(prefs.wordSeparator);
+          setWordSepValue(prefs.wordSeparator);
         }
         terminalPinnedLoadedRef.current = true;
         remoteTreeWidthLoadedRef.current = true;
@@ -1423,6 +1438,9 @@ function App() {
   // Claude 채팅 전용 폰트/크기 — 터미널과 독립 설정 (src/utils/claudeFont)
   const [claudeFontFamily, setClaudeFontFamilyState] = useState(() => getClaudeFontFamily());
   const [claudeFontSize, setClaudeFontSizeState] = useState(() => getClaudeFontSize());
+  // optFontSizeDraft 와 같은 이유 — 옵션창 숫자 입력에 타이핑이 안 먹히는 문제 방지용 draft.
+  const [claudeFontSizeDraft, setClaudeFontSizeDraft] = useState(String(claudeFontSize));
+  useEffect(() => { setClaudeFontSizeDraft(String(claudeFontSize)); }, [claudeFontSize]);
   useEffect(() => { applyClaudeFontVars(); }, []);
   // ClaudeChat 의 Ctrl+Wheel 이 외부에서 변경 시 옵션 창 값 동기화용
   useEffect(() => {
@@ -1602,95 +1620,12 @@ function App() {
     applySessionToTerm(s, termId);
   };
 
-  // 외부 검색 창 IPC — listener 는 한 번만 등록, 최신 tabs/activeTab 은 ref 로 참조
-  // (활성 useState/useEffect 들이 모두 선언된 후 — activeTab 은 아래에서 계산되므로 lazy init)
-  const searchStateRef = useRef<any>({ tabs: [], activeTab: null, lastQuery: '', lastCs: false, lastRe: false, lastMode: 'current' as 'current' | 'all' });
+  // 터미널 우클릭 메뉴 등에서 디스패치하는 'open-search' 커스텀 이벤트 → 인라인 검색바 열기
   useEffect(() => {
-    const api = (window as any).api;
-    if (!api) return;
-    const getActiveTermIdLocal = (): string | null => {
-      try {
-        const selInner = document.querySelector('.layout-leaf-inner.selected') as HTMLElement | null;
-        const tid = selInner?.parentElement?.getAttribute('data-active-term');
-        if (tid) return tid;
-      } catch {}
-      const ct = searchStateRef.current.activeTab;
-      if (!ct) return null;
-      return collectAllSessions(ct.layout)[0]?.termId || null;
-    };
-    const getAllVisibleTermIds = (): string[] => {
-      const ids: string[] = [];
-      for (const tab of searchStateRef.current.tabs) {
-        if (tab.type === 'fileExplorer' || tab.type === 'fileEditor') continue;
-        for (const s of collectAllSessions(tab.layout)) ids.push(s.termId);
-      }
-      return ids;
-    };
-    const st = searchStateRef.current;
-    const runSearch = async (q: string, ureg: boolean, cs: boolean, mode: 'current' | 'all') => {
-      st.lastQuery = q; st.lastCs = cs; st.lastRe = ureg; st.lastMode = mode;
-      // 모든 터미널의 기존 하이라이트 정리
-      for (const t of getAllTermIds()) { try { clearHighlights(t); } catch {} }
-      if (!q) {
-        for (const t of getAllVisibleTermIds()) { try { clearSearchInTerm(t); } catch {} }
-        api.sendSearchResult?.({ current: 0, total: 0 });
-        return;
-      }
-      if (mode === 'current') {
-        const tid = getActiveTermIdLocal();
-        if (!tid) { api.sendSearchResult?.({ current: 0, total: 0 }); return; }
-        try {
-          highlightAllMatches(tid, q, ureg, cs);
-          const found = await searchFromTop(tid, q, ureg, cs);
-          api.sendSearchResult?.({ current: found ? 1 : 0, total: found ? 1 : 0 });
-        } catch {}
-      } else {
-        let totalTerms = 0;
-        for (const tid of getAllVisibleTermIds()) {
-          try {
-            highlightAllMatches(tid, q, ureg, cs);
-            if (await searchInTerm(tid, q, ureg, cs)) totalTerms++;
-          } catch {}
-        }
-        api.sendSearchResult?.({ current: totalTerms > 0 ? 1 : 0, total: totalTerms });
-      }
-    };
-    const offQ = api.onSearchQuery?.((p: { q: string; caseSensitive: boolean; useRegex: boolean; mode?: 'current' | 'all' }) => {
-      console.log('[search-debug] query received:', p, 'activeTermId=', getActiveTermIdLocal(), 'allIds=', getAllVisibleTermIds());
-      runSearch(p.q, p.useRegex, p.caseSensitive, p.mode || 'current');
-    });
-    const offN = api.onSearchNext?.((p?: { mode?: 'current' | 'all' }) => {
-      if (!st.lastQuery) return;
-      const mode = p?.mode || st.lastMode;
-      if (mode === 'current') {
-        const tid = getActiveTermIdLocal();
-        if (tid) { try { searchNextInTerm(tid, st.lastQuery, st.lastRe, st.lastCs); } catch {} }
-      } else {
-        for (const tid of getAllVisibleTermIds()) { try { searchNextInTerm(tid, st.lastQuery, st.lastRe, st.lastCs); } catch {} }
-      }
-    });
-    const offP = api.onSearchPrev?.((p?: { mode?: 'current' | 'all' }) => {
-      if (!st.lastQuery) return;
-      const mode = p?.mode || st.lastMode;
-      if (mode === 'current') {
-        const tid = getActiveTermIdLocal();
-        if (tid) { try { searchPrevInTerm(tid, st.lastQuery, st.lastRe, st.lastCs); } catch {} }
-      } else {
-        for (const tid of getAllVisibleTermIds()) { try { searchPrevInTerm(tid, st.lastQuery, st.lastRe, st.lastCs); } catch {} }
-      }
-    });
-    const offC = api.onSearchClosed?.(() => {
-      for (const tid of getAllTermIds()) {
-        try { clearSearchInTerm(tid); clearHighlights(tid); } catch {}
-      }
-    });
-    // 외부 검색창에서 📌 클릭 → 인라인 모드로 복귀
-    const offD = api.onSearchDock?.(() => { setShowSearch(true); });
-    // 터미널 우클릭 메뉴 등에서 디스패치하는 'open-search' 커스텀 이벤트
     const onOpenSearch = () => setShowSearch(true);
     window.addEventListener('open-search', onOpenSearch);
-    return () => { offQ?.(); offN?.(); offP?.(); offC?.(); offD?.(); window.removeEventListener('open-search', onOpenSearch); };
-  }, []); // listener 한 번만 — tabs/activeTab 은 ref 로 항상 최신 참조
+    return () => window.removeEventListener('open-search', onOpenSearch);
+  }, []);
 
   // 워크스페이스 전환 시 전체화면이면 새 워크스페이스의 선택된/첫번째 연결 패널로 fs-visible 전환
   useEffect(() => {
@@ -2053,25 +1988,6 @@ function App() {
   };
 
   const activeTab = tabs.find(t => t.id === activeTabId) ?? tabs[0];
-
-  // 검색 상태 ref 동기화 — tabs/activeTab 변경 시 갱신 + 활성 터미널에서 자동 재하이라이트
-  useEffect(() => {
-    searchStateRef.current.tabs = tabs;
-    searchStateRef.current.activeTab = activeTab;
-    const st = searchStateRef.current;
-    if (!st.lastQuery) return;
-    setTimeout(() => {
-      try {
-        const selInner = document.querySelector('.layout-leaf-inner.selected') as HTMLElement | null;
-        const tid = selInner?.parentElement?.getAttribute('data-active-term');
-        const targetTid = tid || (st.activeTab ? collectAllSessions(st.activeTab.layout)[0]?.termId : null);
-        if (targetTid) {
-          highlightAllMatches(targetTid, st.lastQuery, st.lastRe, st.lastCs);
-          searchInTerm(targetTid, st.lastQuery, st.lastRe, st.lastCs);
-        }
-      } catch {}
-    }, 100);
-  }, [tabs, activeTab, selectedPanelId]);
 
   // 실제 포커스 복원 구현 — activeTab/selectedPanelId 가 선언된 후 ref 에 주입.
   // 모달 닫힌 후 브라우저가 body 로 포커스 이동시키는 케이스가 있어 여러 시점에 재시도.
@@ -3123,6 +3039,31 @@ function App() {
     findActive(targetTab.layout);
     if (alreadySame) return;
     updateLayout(targetTab.id, layout => switchPanelSession(layout, nodeId, idx));
+  };
+
+  // 검색(전체 모드) 결과 목록에서 항목을 클릭하면 그 termId 가 실제로 있는 워크스페이스 탭 +
+  // 패널 + 미니탭으로 이동시킨다 — termId 만으로는 어느 탭/패널/미니탭인지 알 수 없어서
+  // tabs 트리를 훑어 위치를 먼저 찾아야 한다.
+  const navigateToTerm = (termId: string) => {
+    for (const t of tabs) {
+      const result: { found: { nodeId: string; idx: number } | null } = { found: null };
+      const walk = (node: any): void => {
+        if (result.found) return;
+        if (node.type === 'leaf') {
+          const idx = node.panel.sessions.findIndex((s: PanelSession) => s.termId === termId);
+          if (idx !== -1) result.found = { nodeId: node.id, idx };
+          return;
+        }
+        node.children.forEach(walk);
+      };
+      walk(t.layout);
+      if (result.found) {
+        setActiveTabId(t.id);
+        setSelectedPanelForTab(t.id, result.found.nodeId);
+        handleSwitchSession(result.found.nodeId, result.found.idx, t.id);
+        return;
+      }
+    }
   };
 
   const handleReorderSession = (nodeId: string, fromIdx: number, toIdx: number, tabId?: TabId) => {
@@ -5052,6 +4993,7 @@ function App() {
             tabs={tabs}
             activeTab={activeTab}
             selectedPanelId={selectedPanelId}
+            onNavigateToTerm={navigateToTerm}
             onClose={() => setShowSearch(false)}
           />
         )}
@@ -6174,8 +6116,10 @@ function App() {
                     max={40}
                     step={1}
                     style={{ width: 100, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '8px', fontSize: 14, fontFamily: 'monospace', boxSizing: 'border-box' }}
-                    value={optFontSize}
-                    onChange={e => setOptFontSize(Math.max(8, Math.min(40, Number(e.target.value) || 14)))}
+                    value={optFontSizeDraft}
+                    onChange={e => setOptFontSizeDraft(e.target.value)}
+                    onBlur={() => setOptFontSize(Math.max(8, Math.min(40, Number.parseInt(optFontSizeDraft, 10) || 14)))}
+                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                   />
                 </div>
                 <div style={{ marginBottom: 16, borderTop: '1px solid #333', paddingTop: 12 }}>
@@ -6198,12 +6142,14 @@ function App() {
                     max={32}
                     step={1}
                     style={{ width: 100, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '8px', fontSize: 14, fontFamily: 'monospace', boxSizing: 'border-box' }}
-                    value={claudeFontSize}
-                    onChange={e => {
-                      const v = Math.max(9, Math.min(32, Number(e.target.value) || 13));
+                    value={claudeFontSizeDraft}
+                    onChange={e => setClaudeFontSizeDraft(e.target.value)}
+                    onBlur={() => {
+                      const v = Math.max(9, Math.min(32, Number.parseInt(claudeFontSizeDraft, 10) || 13));
                       setClaudeFontSize(v);
                       setClaudeFontSizeState(v);
                     }}
+                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                   />
                 </div>
                 <div style={{ marginBottom: 16 }}>
@@ -6215,11 +6161,13 @@ function App() {
                     max={1000000}
                     step={1000}
                     style={{ width: 160, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '8px', fontSize: 14, fontFamily: 'monospace', boxSizing: 'border-box' }}
-                    value={termSettings.scrollback}
-                    onChange={e => {
-                      const v = Math.max(1000, Math.min(1000000, Number(e.target.value) || 0));
+                    value={scrollbackDraft}
+                    onChange={e => setScrollbackDraft(e.target.value)}
+                    onBlur={() => {
+                      const v = Math.max(1000, Math.min(1000000, Number.parseInt(scrollbackDraft, 10) || 1000));
                       setTermSettings(s => ({ ...s, scrollback: v }));
                     }}
+                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                   />
                 </div>
                 <div style={{ marginBottom: 16 }}>
@@ -6419,6 +6367,8 @@ function App() {
               <button className="btn-save" onClick={() => {
                 saveTerminalSettings(termSettings);
                 setWordSeparator(wordSepValue);
+                // localStorage 는 sessionData 가 매 실행 분리돼 영속되지 않으므로 ui-prefs(config.json) 에도 저장.
+                (window as any).api?.setUIPrefs?.({ wordSeparator: wordSepValue });
                 applyScrollbackToAll(termSettings.scrollback);
                 applyFontToAll(optFontFamily || undefined, optFontSize);
                 // 기본 쉘 저장

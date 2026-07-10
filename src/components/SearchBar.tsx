@@ -20,23 +20,13 @@ type Props = {
   tabs: Tab[];
   activeTab: Tab;
   selectedPanelId: string | null;
+  onNavigateToTerm?: (termId: string) => void;
   onClose: () => void;
 };
 
 type MatchResult = { termId: string; sessionName: string; tabTitle: string };
 
-// 앱 실행 중 검색 이력 (최대 50개, 중복 제거, 최근 우선)
-const searchHistory: string[] = [];
-const MAX_HISTORY = 50;
-function addSearchHistory(q: string) {
-  if (!q.trim()) return;
-  const idx = searchHistory.indexOf(q);
-  if (idx !== -1) searchHistory.splice(idx, 1);
-  searchHistory.unshift(q);
-  if (searchHistory.length > MAX_HISTORY) searchHistory.pop();
-}
-
-export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, onClose }) => {
+export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, onNavigateToTerm, onClose }) => {
   const { t } = useTranslation('search');
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'current' | 'all'>('current');
@@ -46,7 +36,48 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
   const [historyIdx, setHistoryIdx] = useState(-1);
+  // 검색 이력 — 예전엔 이 컴포넌트 모듈 전역 배열에만 담아둬서 렌더러가 리로드되면(HMR·앱 재시작)
+  // 그냥 사라졌다. 이제 electron/main.ts 가 파일(<userData>/search-history.json)로 영속화한다.
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  useEffect(() => {
+    (window as any).api?.searchHistoryGet?.().then((h: string[]) => setSearchHistory(h || []));
+  }, []);
+  const addSearchHistory = (q: string) => {
+    if (!q.trim()) return;
+    try { (window as any).api?.searchHistoryAdd?.(q); } catch {}
+    setSearchHistory(prev => [q, ...prev.filter(x => x !== q)].slice(0, 50));
+  };
   const inputRef = useRef<HTMLInputElement>(null);
+  // 기본은 고정 위치 — "분리" 버튼을 눌러야만 자유롭게 드래그해서 옮길 수 있는 상태(움직이는 모드)로
+  // 전환된다. 별도 OS 창을 띄우던 예전 방식은 위치/크기가 계속 어긋나서 걷어내고, 그냥 이 인라인
+  // 검색줄 자체를 움직이게/고정으로 토글하는 걸로 단순화했다.
+  const [detached, setDetached] = useState(false);
+  // null 이면 App.css 의 기본 위치(top/right 고정)를 그대로 쓴다.
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const onGripMouseDown = (e: React.MouseEvent) => {
+    if (!detached) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const startX = e.clientX, startY = e.clientY;
+    const origX = pos?.x ?? rect.left;
+    const origY = pos?.y ?? rect.top;
+    const onMove = (ev: MouseEvent) => {
+      const maxX = window.innerWidth - (barRef.current?.offsetWidth ?? 0);
+      const maxY = window.innerHeight - (barRef.current?.offsetHeight ?? 0);
+      const nx = Math.min(Math.max(0, origX + (ev.clientX - startX)), Math.max(0, maxX));
+      const ny = Math.min(Math.max(0, origY + (ev.clientY - startY)), Math.max(0, maxY));
+      setPos({ x: nx, y: ny });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -167,6 +198,7 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
       if (matches.length === 0) return;
       const nextIdx = (activeMatchIdx + 1) % matches.length;
       setActiveMatchIdx(nextIdx);
+      onNavigateToTerm?.(matches[nextIdx].termId);
       searchNextInTerm(matches[nextIdx].termId, query, useRegex, caseSensitive);
     }
   };
@@ -179,6 +211,7 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
       if (matches.length === 0) return;
       const prevIdx = (activeMatchIdx - 1 + matches.length) % matches.length;
       setActiveMatchIdx(prevIdx);
+      onNavigateToTerm?.(matches[prevIdx].termId);
       searchPrevInTerm(matches[prevIdx].termId, query, useRegex, caseSensitive);
     }
   };
@@ -226,8 +259,19 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
   const stopProp = (e: React.SyntheticEvent) => e.stopPropagation();
 
   return (
-    <div className="search-bar" onKeyDown={stopProp} onKeyUp={stopProp} onKeyPress={stopProp} onMouseDown={stopProp} onClick={stopProp} onDoubleClick={stopProp}>
+    <div
+      ref={barRef}
+      className="search-bar"
+      style={pos ? { left: pos.x, top: pos.y, right: 'auto' } : undefined}
+      onKeyDown={stopProp} onKeyUp={stopProp} onKeyPress={stopProp} onMouseDown={stopProp} onClick={stopProp} onDoubleClick={stopProp}
+    >
       <div className="search-bar-inner">
+        <span
+          className="search-drag-grip"
+          onMouseDown={onGripMouseDown}
+          title={detached ? t('dragToMove') : t('popout')}
+          style={{ cursor: detached ? 'move' : 'default', opacity: detached ? 1 : 0.4 }}
+        >⋮⋮</span>
         <span className="search-icon">🔍</span>
         <div style={{ position: 'relative', display: 'inline-block' }}>
           <div style={{ display: 'flex' }}>
@@ -291,13 +335,17 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
           <span className="search-match-count">{activeMatchIdx + 1}/{matches.length}</span>
         )}
         <button
-          className="search-btn"
-          title={t('popout')}
+          className={`search-btn ${detached ? 'active' : ''}`}
+          title={detached ? t('dock') : t('popout')}
           onClick={() => {
-            try { (window as any).api?.searchOpenWindow?.(); } catch {}
-            onClose();
+            setDetached(prev => {
+              const next = !prev;
+              // 다시 고정으로 돌아가면 드래그했던 위치를 버리고 기본 위치로 되돌린다.
+              if (!next) setPos(null);
+              return next;
+            });
           }}
-        >🪟</button>
+        >{detached ? '📌' : '🔓'}</button>
         <button className="search-btn search-close-btn" onClick={handleClose} title={t('close')}>&times;</button>
       </div>
       {mode === 'all' && matches.length > 0 && (
@@ -306,7 +354,14 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
             <span
               key={m.termId}
               className={`search-match-item ${i === activeMatchIdx ? 'active' : ''}`}
-              onClick={() => { setActiveMatchIdx(i); searchInTerm(m.termId, query, useRegex, caseSensitive); }}
+              onClick={() => {
+                setActiveMatchIdx(i);
+                // 결과 목록의 termId 는 다른 워크스페이스 탭/패널/미니탭에 있을 수 있으므로,
+                // 실제 매치를 찾기 전에 먼저 그 화면으로 이동시켜야 한다 — 이동 없이 그냥
+                // searchInTerm 만 부르면 그 터미널이 화면에 없어서 아무 반응이 없는 것처럼 보였다.
+                onNavigateToTerm?.(m.termId);
+                searchInTerm(m.termId, query, useRegex, caseSensitive);
+              }}
             >
               {m.tabTitle} &gt; {m.sessionName}
             </span>

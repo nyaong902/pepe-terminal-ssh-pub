@@ -599,7 +599,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('paste-modal:result', handler);
     return () => ipcRenderer.removeListener('paste-modal:result', handler);
   },
-  searchOpenWindow: () => ipcRenderer.invoke('search:open-window'),
+  searchHistoryGet: (): Promise<string[]> => ipcRenderer.invoke('search:history-get'),
+  searchHistoryAdd: (q: string) => ipcRenderer.send('search:history-add', q),
   optionsOpen: () => ipcRenderer.invoke('options:open'),
   optionsClose: () => ipcRenderer.send('options:close'),
   optionsSaved: () => ipcRenderer.send('options:saved'),
@@ -614,15 +615,6 @@ contextBridge.exposeInMainWorld('api', {
     const h = (_: any, p: any) => cb(p); ipcRenderer.on('session-editor:saved', h);
     return () => ipcRenderer.removeListener('session-editor:saved', h);
   },
-  sendSearchResult: (payload: { current: number; total: number }) => ipcRenderer.send('search:result', payload),
-  onSearchQuery: (cb: (p: { q: string; caseSensitive: boolean; useRegex: boolean }) => void) => {
-    const h = (_: any, p: any) => cb(p); ipcRenderer.on('search:query', h);
-    return () => ipcRenderer.removeListener('search:query', h);
-  },
-  onSearchNext: (cb: (p?: any) => void) => { const h = (_: any, p: any) => cb(p); ipcRenderer.on('search:next', h); return () => ipcRenderer.removeListener('search:next', h); },
-  onSearchPrev: (cb: (p?: any) => void) => { const h = (_: any, p: any) => cb(p); ipcRenderer.on('search:prev', h); return () => ipcRenderer.removeListener('search:prev', h); },
-  onSearchClosed: (cb: () => void) => { const h = () => cb(); ipcRenderer.on('search:closed', h); return () => ipcRenderer.removeListener('search:closed', h); },
-  onSearchDock: (cb: () => void) => { const h = () => cb(); ipcRenderer.on('search:dock', h); return () => ipcRenderer.removeListener('search:dock', h); },
   // i18n
   i18nListLanguages: () => ipcRenderer.invoke('i18n:list-languages'),
   i18nListNamespaces: (lang: string) => ipcRenderer.invoke('i18n:list-namespaces', { lang }),

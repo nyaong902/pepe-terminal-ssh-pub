@@ -7,6 +7,8 @@
   "regex": "정규식",
   "modeCurrent": "현재탭",
   "modeAll": "전체",
-  "popout": "외부 창으로 분리 (다른 모니터로 이동 가능)",
-  "close": "닫기 (Esc)"
+  "popout": "이동 가능하게 하기 (드래그로 위치 옮기기)",
+  "close": "닫기 (Esc)",
+  "dragToMove": "드래그하여 이동",
+  "dock": "고정하기"
 }

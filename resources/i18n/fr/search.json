@@ -7,6 +7,8 @@
   "regex": "Expression régulière",
   "modeCurrent": "Onglet actuel",
   "modeAll": "Tous les onglets",
-  "popout": "Détacher dans une fenêtre externe (déplaçable vers un autre écran)",
-  "close": "Fermer (Échap)"
+  "popout": "Rendre déplaçable (glisser pour repositionner)",
+  "close": "Fermer (Échap)",
+  "dragToMove": "Glisser pour déplacer",
+  "dock": "Verrouiller en place"
 }

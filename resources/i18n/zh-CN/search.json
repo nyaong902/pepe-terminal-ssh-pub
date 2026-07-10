@@ -7,6 +7,8 @@
   "regex": "正则表达式",
   "modeCurrent": "当前标签页",
   "modeAll": "所有标签页",
-  "popout": "分离到外部窗口（可移至其他显示器）",
-  "close": "关闭 (Esc)"
+  "popout": "设为可移动（拖动以调整位置）",
+  "close": "关闭 (Esc)",
+  "dragToMove": "拖动以移动",
+  "dock": "固定位置"
 }

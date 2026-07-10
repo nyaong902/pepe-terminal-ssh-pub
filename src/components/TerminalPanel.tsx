@@ -50,7 +50,7 @@ function applyTermOpacity(termId: string, containerEl?: HTMLElement | null) {
   const anyTransparent = [...termOpacity.values()].some(v => v < 1);
   document.documentElement.classList.toggle('term-transparent-active', anyTransparent);
 }
-const DEFAULT_WORD_SEPARATORS = ' ./\\()"\'-:,.;<>~!@#$%^&*|+=[]{}`~?';
+const DEFAULT_WORD_SEPARATORS = '\\ :;~`!@#$%^&*()-=+|[]{}\'",.<>/?';
 let currentWordSeparator = localStorage.getItem('terminalWordSeparator') ?? DEFAULT_WORD_SEPARATORS;
 // termId별 폰트 크기
 const termFontSizes: Map<string, number> = new Map();
@@ -1718,23 +1718,63 @@ export function applyThemeToTerm(termId: string, themeName: string) {
   applyTermOpacity(termId, containerEl);
 }
 
+// termId 별 "새 데이터 들어올 때마다 하이라이트 다시 계산" 구독 정리 함수.
+const highlightRefreshSubs: Map<string, () => void> = new Map();
+
 export function clearHighlights(termId: string) {
   if (relayIfRemote(termId, 'clearHighlights', [])) return;
   try { termStore.get(termId)?.search.clearDecorations(); } catch {}
+  try { highlightRefreshSubs.get(termId)?.(); } catch {}
+  highlightRefreshSubs.delete(termId);
 }
 
 // decorations 옵션을 준 findNext 는 (검색어가 바뀌었을 때) 전체 매치를 네이티브로 하이라이트도
 // 하고 다음 매치로 이동/선택도 한다 — 둘을 분리하고 싶을 때(예: 미니탭이 막 활성화됐을 뿐
 // 사용자가 방금 Enter 를 친 게 아닌 경우)는 noScroll 로 뷰포트 이동만 억제한다.
-export function highlightAllMatches(termId: string, query: string, regex: boolean, caseSensitive = false) {
-  if (relayIfRemote(termId, 'highlightAllMatches', [query, regex, caseSensitive])) return;
+//
+// tail -f 처럼 계속 새 줄이 들어오는 터미널에서는, 한 번 계산해둔 매치 위치가 금방 스크롤로
+// 밀려나거나 그 buffer 줄 자체가 새 내용으로 덮어써진다. SearchAddon 이 내부적으로
+// onWriteParsed 때마다 재계산을 시도하긴 하지만 실제로는 못 따라가는 경우가 있어(예전 스크린샷에서
+// 확인 — 스크롤된 새 로그엔 하이라이트가 안 붙고 옛 위치의 "유령" 박스만 남음), 우리도 새 데이터
+// 수신마다(디바운스) 직접 다시 검색해서 확실히 갱신한다.
+function doHighlight(termId: string, query: string, regex: boolean, caseSensitive: boolean) {
+  const entry = termStore.get(termId);
+  if (!entry || !query) return;
   try {
-    const entry = termStore.get(termId);
-    if (!entry || !query) return;
+    // clearDecorations() 로 _cachedSearchTerm 을 리셋해도 여전히 "유령" 하이라이트가 남는
+    // 경우가 실측으로 확인됐다 — 스크롤백이 꽉 차서 예전에 매치했던 줄이 버퍼에서 밀려날 때,
+    // 그 줄에 연결된 marker/decoration 내부 상태(_linesCache, _highlightedLines 등)가 깔끔하게
+    // 안 지워지는 것으로 보인다. 안전하게 가려면 SearchAddon 인스턴스 자체를 새로 만들어서
+    // 내부 캐시를 통째로 버리는 게 확실하다 — 매번 새로 만들어도 매우 가벼운 객체라 문제없다.
+    entry.search.dispose();
+    const fresh = new SearchAddon();
+    entry.term.loadAddon(fresh);
+    entry.search = fresh;
     // noScroll 은 실제 xterm-addon-search 런타임이 지원하지만(내부적으로 읽어서 씀)
     // 패키지 .d.ts 타입 선언에는 누락돼 있어 as any 로 우회.
     entry.search.findNext(query, { regex, caseSensitive, decorations: SEARCH_DECORATIONS, noScroll: true, incremental: true } as any);
   } catch {}
+}
+
+export function highlightAllMatches(termId: string, query: string, regex: boolean, caseSensitive = false) {
+  if (relayIfRemote(termId, 'highlightAllMatches', [query, regex, caseSensitive])) return;
+  const entry = termStore.get(termId);
+  if (!entry || !query) return;
+
+  highlightRefreshSubs.get(termId)?.();
+  highlightRefreshSubs.delete(termId);
+
+  doHighlight(termId, query, regex, caseSensitive);
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const onData = entry.term.onWriteParsed(() => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => doHighlight(termId, query, regex, caseSensitive), 150);
+  });
+  highlightRefreshSubs.set(termId, () => {
+    onData.dispose();
+    if (timer) clearTimeout(timer);
+  });
 }
 
 // 검색바를 열 때 사용자가 보던 위치(viewportY) 를 termId 별로 기억해 둠.
