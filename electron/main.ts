@@ -6290,7 +6290,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
 
   // 저장된 시나리오(블록 조립/고급 XML) 목록 관리
   ipcMain.handle('sipp-scenario:list', () => loadSippScenarios());
-  ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any }) => saveSippScenario(args));
+  ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any; injectionCsv?: string }) => saveSippScenario(args));
   ipcMain.handle('sipp-scenario:delete', (_e, args: { id: string }) => { deleteSippScenario(args?.id); return { ok: true }; });
 }
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.

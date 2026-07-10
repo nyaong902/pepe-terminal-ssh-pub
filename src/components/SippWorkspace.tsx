@@ -27,7 +27,14 @@ type SippStats = {
 };
 
 type ScenarioMode = 'blocks' | 'xml';
-type SendMethod = 'INVITE' | 'ACK' | 'BYE' | 'CANCEL' | 'CUSTOM';
+type SendMethod = 'INVITE' | 'ACK' | 'BYE' | 'CANCEL' | 'REGISTER' | 'OPTIONS' | 'INFO' | 'REFER' | 'UPDATE' | 'PRACK' | 'SUBSCRIBE' | 'NOTIFY' | 'MESSAGE' | 'PUBLISH' | 'CUSTOM';
+// 빠른 추가 버튼/드롭다운에서 쓰는 목록 — CUSTOM 은 별도 버튼("+ 커스텀 메시지")으로 취급.
+const SEND_METHODS: Exclude<SendMethod, 'CUSTOM'>[] = ['INVITE', 'ACK', 'BYE', 'CANCEL', 'REGISTER', 'OPTIONS', 'INFO', 'REFER', 'UPDATE', 'PRACK', 'SUBSCRIBE', 'NOTIFY', 'MESSAGE', 'PUBLISH'];
+// ACK/CANCEL 은 INVITE 트랜잭션에 응답하는 요청이라 원래도 to-tag 가 필요했다 — INFO/REFER/
+// UPDATE/PRACK/NOTIFY 도 흔히 이미 성립된 다이얼로그 안에서 보내는 요청이라 마찬가지로
+// [peer_tag_param] 이 필요하다. REGISTER/OPTIONS/SUBSCRIBE(최초)/MESSAGE/PUBLISH 는 보통
+// 다이얼로그 밖에서(또는 최초 요청으로) 보내므로 제외.
+const IN_DIALOG_METHODS = new Set<SendMethod>(['ACK', 'BYE', 'CANCEL', 'INFO', 'REFER', 'UPDATE', 'PRACK', 'NOTIFY']);
 
 type SendBlock = {
   id: string;
@@ -52,8 +59,8 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 
 const DEFAULT_SDP = 'v=0\no=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]\ns=-\nc=IN IP[media_ip_type] [media_ip]\nt=0 0\nm=audio [media_port] RTP/AVP 0\na=rtpmap:0 PCMU/8000';
 
-function newSendBlock(method: SendMethod): SendBlock {
-  return { id: uid(), kind: 'send', method, fromUser: 'sipp', toUser: 'service', extraHeaders: '', includeBody: method === 'INVITE', body: '', customRaw: '' };
+function newSendBlock(method: SendMethod, fromUser = 'sipp', toUser = 'service'): SendBlock {
+  return { id: uid(), kind: 'send', method, fromUser, toUser, extraHeaders: '', includeBody: method === 'INVITE', body: '', customRaw: '' };
 }
 function newRecvBlock(code = '200'): RecvBlock {
   return { id: uid(), kind: 'recv', code, optional: false, rtd: false, crlf: false };
@@ -103,19 +110,19 @@ function buildXmlFromBlocks(blocks: ScenarioBlock[], fromDomain: string, toDomai
     let cseq: number;
     if (b.method === 'INVITE') { cseq = ++cseqCounter; lastInviteCseq = cseq; }
     else if (b.method === 'ACK' || b.method === 'CANCEL') { cseq = lastInviteCseq; }
-    else { cseq = ++cseqCounter; } // BYE
+    else { cseq = ++cseqCounter; } // BYE 및 그 외 모든 메서드는 새 CSeq
 
     const from = b.fromUser.trim() || 'sipp';
     const to = b.toUser.trim() || 'service';
     const extra = b.extraHeaders.trim() ? b.extraHeaders.trim().split('\n').map(l => l.trim()).join('\n      ') + '\n      ' : '';
-    const withBody = b.method === 'INVITE' && b.includeBody;
+    const withBody = b.includeBody;
     const body = (b.body.trim() || DEFAULT_SDP);
 
     const lines = [
       `${b.method} sip:${to}@${toHost} SIP/2.0`,
       `Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]`,
       `From: "${from}" <sip:${from}@${fromHost}>;tag=[pid]SIPpTag00[call_number]`,
-      `To: <sip:${to}@${toHost}>${b.method === 'ACK' || b.method === 'BYE' || b.method === 'CANCEL' ? '[peer_tag_param]' : ''}`,
+      `To: <sip:${to}@${toHost}>${IN_DIALOG_METHODS.has(b.method) ? '[peer_tag_param]' : ''}`,
       `Call-ID: [call_id]`,
       `CSeq: ${cseq} ${b.method}`,
       `Contact: <sip:${from}@[local_ip]:[local_port]>`,
@@ -156,7 +163,7 @@ function parseSendCdata(raw: string): { block: SendBlock; fromDomain: string; to
   const reqMatch = rawLines[i].match(/^(\S+)\s+sip:([^@\s]+)@([^\s;>]+)\s+SIP\/2\.0/i);
   if (!reqMatch) return null;
   const method = reqMatch[1].toUpperCase();
-  if (!['INVITE', 'ACK', 'BYE', 'CANCEL'].includes(method)) return null;
+  if (!SEND_METHODS.includes(method as any)) return null;
   const toUser = reqMatch[2];
   const toDomainRaw = reqMatch[3];
   i++;
@@ -184,7 +191,7 @@ function parseSendCdata(raw: string): { block: SendBlock; fromDomain: string; to
     }
   }
 
-  const includeBody = method === 'INVITE' && body.length > 0;
+  const includeBody = body.length > 0;
   return {
     block: { id: uid(), kind: 'send', method: method as SendMethod, fromUser, toUser, extraHeaders: extra.join('\n'), includeBody, body: includeBody ? body : '', customRaw: '' },
     fromDomain: normDomain(fromDomainRaw),
@@ -293,6 +300,10 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
   ]);
   const [blockXmlPreviewOpen, setBlockXmlPreviewOpen] = useState(false);
 
+  // 데이터 파일(-inf)이 설정돼 있으면 새로 추가하는 전송 블록의 From/To 기본값을
+  // sipp/service 대신 [field0]/[field1] 로 시작하게 한다 — 콜마다 다른 번호를 주입하는
+  // 게 목적인 기능인데 매번 블록 추가 후 수동으로 고쳐 써야 했다.
+  const sendDefaults = (): [string, string] => injectionCsv.trim() ? ['[field0]', '[field1]'] : ['sipp', 'service'];
   const addBlock = (b: ScenarioBlock) => setBlocks(prev => [...prev, b]);
   const insertBlockAt = (index: number, b: ScenarioBlock) => setBlocks(prev => {
     const next = [...prev];
@@ -426,6 +437,8 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
     } else {
       payload.rawXml = rawScenarioXml;
     }
+    // 데이터 파일(-inf) 내용 — 모드(블록/XML) 어느 쪽이든 공통으로 쓰이므로 최상위에 저장.
+    payload.injectionCsv = injectionCsv;
     // "대상 / 속도" 카드에 설정한 값도 같이 저장 — 불러올 때 그대로 복원된다.
     payload.targetSettings = {
       targetHost, targetPort, localIp, localPort, cps, maxCalls, callDurationMs,
@@ -451,6 +464,7 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
   };
 
   const loadScenario = (s: any) => {
+    setInjectionCsv(typeof s.injectionCsv === 'string' ? s.injectionCsv : '');
     if (s.mode === 'xml') {
       setScenarioMode('xml');
       setRawScenarioXml(s.rawXml || '');
@@ -843,6 +857,31 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
       )}
 
       <div style={card}>
+        <div
+          style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setInjectionCsvOpen(v => !v)}
+        >
+          <span style={{ fontSize: 10, transform: injectionCsvOpen ? 'none' : 'rotate(-90deg)', display: 'inline-block' }}>▼</span>
+          데이터 파일 (-inf, 콜마다 다른 번호 주입)
+          {injectionCsv.trim() && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: '#238636', color: '#fff' }}>사용 중</span>}
+        </div>
+        {injectionCsvOpen && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', marginBottom: 6 }}>
+              첫 줄은 <b>SEQUENTIAL</b>/<b>RANDOM</b>/<b>USER</b>, 이후 콜마다 한 줄씩 <code>;</code> 로 구분된 값. 아래에 값이 있으면 새로 추가하는 전송 블록의 From/To 가 자동으로 <code>[field0]</code>, <code>[field1]</code>... 을 참조하도록 채워집니다.
+            </div>
+            <textarea
+              style={{ ...inp, minHeight: 100, fontFamily: 'monospace', resize: 'vertical' }}
+              value={injectionCsv}
+              onChange={e => setInjectionCsv(e.target.value)}
+              disabled={running}
+              placeholder={'SEQUENTIAL\n03280001000;03290001000\n03280001001;03290001001\n03280001002;03290001002'}
+            />
+          </div>
+        )}
+      </div>
+
+      <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: scenarioCardCollapsed ? 0 : 12 }}>
           <div
             style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}
@@ -984,6 +1023,7 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
                   open={insertMenuAt === 0}
                   onToggle={() => setInsertMenuAt(v => v === 0 ? null : 0)}
                   onInsert={b => { insertBlockAt(0, b); setInsertMenuAt(null); }}
+                  fieldDefaults={sendDefaults()}
                 />
               )}
               {blocks.map((b, i) => (
@@ -1007,6 +1047,7 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
                       open={insertMenuAt === i + 1}
                       onToggle={() => setInsertMenuAt(v => v === i + 1 ? null : i + 1)}
                       onInsert={b2 => { insertBlockAt(i + 1, b2); setInsertMenuAt(null); }}
+                      fieldDefaults={sendDefaults()}
                     />
                   )}
                 </React.Fragment>
@@ -1018,10 +1059,9 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
 
             {!running && (
               <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                <button onClick={() => addBlock(newSendBlock('INVITE'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ INVITE</button>
-                <button onClick={() => addBlock(newSendBlock('ACK'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ ACK</button>
-                <button onClick={() => addBlock(newSendBlock('BYE'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ BYE</button>
-                <button onClick={() => addBlock(newSendBlock('CANCEL'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ CANCEL</button>
+                {SEND_METHODS.map(m => (
+                  <button key={m} onClick={() => addBlock(newSendBlock(m, ...sendDefaults()))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ {m}</button>
+                ))}
                 <button onClick={() => addBlock(newSendBlock('CUSTOM'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ 커스텀 메시지</button>
                 <button onClick={() => addBlock(newRecvBlock('200'))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ 응답 대기</button>
                 <button onClick={() => addBlock(newPauseBlock(1000))} style={{ ...btn(true), padding: '5px 10px', fontSize: 11 }}>+ 일시정지</button>
@@ -1072,31 +1112,6 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
         )}
       </div>
 
-      <div style={card}>
-        <div
-          style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}
-          onClick={() => setInjectionCsvOpen(v => !v)}
-        >
-          <span style={{ fontSize: 10, transform: injectionCsvOpen ? 'none' : 'rotate(-90deg)', display: 'inline-block' }}>▼</span>
-          데이터 파일 (-inf, 콜마다 다른 번호 주입)
-          {injectionCsv.trim() && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: '#238636', color: '#fff' }}>사용 중</span>}
-        </div>
-        {injectionCsvOpen && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', marginBottom: 6 }}>
-              첫 줄은 <b>SEQUENTIAL</b>/<b>RANDOM</b>/<b>USER</b>, 이후 콜마다 한 줄씩 <code>;</code> 로 구분된 값. 시나리오의 From/To 번호칸이나 고급 XML 에서 <code>[field0]</code>, <code>[field1]</code>... 로 참조합니다.
-            </div>
-            <textarea
-              style={{ ...inp, minHeight: 100, fontFamily: 'monospace', resize: 'vertical' }}
-              value={injectionCsv}
-              onChange={e => setInjectionCsv(e.target.value)}
-              disabled={running}
-              placeholder={'SEQUENTIAL\n03280001000;03290001000\n03280001001;03290001001\n03280001002;03290001002'}
-            />
-          </div>
-        )}
-      </div>
-
       <div style={{ ...card, flex: logCollapsed ? '0 0 auto' : 1, display: 'flex', flexDirection: 'column', minHeight: logCollapsed ? 0 : 400 }}>
         <div
           style={{ fontSize: 12, fontWeight: 700, marginBottom: logCollapsed ? 0 : 8, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}
@@ -1142,7 +1157,7 @@ const miniLabel: React.CSSProperties = { ...label, fontSize: 10, marginBottom: 2
 
 // 블록 사이 삽입 지점 — 여기를 누르면 바로 이 위치에 원하는 종류의 블록을 끼워 넣는다.
 // 기존에는 항상 맨 끝에 추가한 뒤 화살표로 하나씩 옮겨야 했던 불편함을 없애기 위함.
-const InsertGap: React.FC<{ open: boolean; onToggle: () => void; onInsert: (b: ScenarioBlock) => void }> = ({ open, onToggle, onInsert }) => (
+const InsertGap: React.FC<{ open: boolean; onToggle: () => void; onInsert: (b: ScenarioBlock) => void; fieldDefaults: [string, string] }> = ({ open, onToggle, onInsert, fieldDefaults }) => (
   <div style={{ display: 'flex', justifyContent: 'center', margin: open ? '4px 0' : '1px 0' }}>
     {!open ? (
       <div
@@ -1163,10 +1178,9 @@ const InsertGap: React.FC<{ open: boolean; onToggle: () => void; onInsert: (b: S
       </div>
     ) : (
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center', background: 'var(--win-bg, #0d1117)', border: '1px dashed var(--win-border, #30363d)', borderRadius: 6, padding: 6, width: '100%' }}>
-        <button onClick={() => onInsert(newSendBlock('INVITE'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ INVITE</button>
-        <button onClick={() => onInsert(newSendBlock('ACK'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ ACK</button>
-        <button onClick={() => onInsert(newSendBlock('BYE'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ BYE</button>
-        <button onClick={() => onInsert(newSendBlock('CANCEL'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ CANCEL</button>
+        {SEND_METHODS.map(m => (
+          <button key={m} onClick={() => onInsert(newSendBlock(m, ...fieldDefaults))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ {m}</button>
+        ))}
         <button onClick={() => onInsert(newSendBlock('CUSTOM'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ 커스텀</button>
         <button onClick={() => onInsert(newRecvBlock('200'))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ 응답 대기</button>
         <button onClick={() => onInsert(newPauseBlock(1000))} style={{ ...btn(true), padding: '3px 8px', fontSize: 10 }}>+ 일시정지</button>
@@ -1238,13 +1252,10 @@ const BlockEditor: React.FC<{
             <select
               value={send.method}
               disabled={disabled}
-              onChange={e => onChange({ method: e.target.value as SendMethod, includeBody: e.target.value === 'INVITE' ? send.includeBody : false } as Partial<SendBlock>)}
+              onChange={e => onChange({ method: e.target.value as SendMethod } as Partial<SendBlock>)}
               style={{ ...miniInp, width: 'auto', fontWeight: 700 }}
             >
-              <option value="INVITE">INVITE</option>
-              <option value="ACK">ACK</option>
-              <option value="BYE">BYE</option>
-              <option value="CANCEL">CANCEL</option>
+              {SEND_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
               <option value="CUSTOM">커스텀</option>
             </select>
           )}
@@ -1265,16 +1276,12 @@ const BlockEditor: React.FC<{
             </div>
             <label style={miniLabel}>추가 헤더 (선택, 한 줄에 하나)</label>
             <textarea style={{ ...miniInp, minHeight: 44, fontFamily: 'monospace', resize: 'vertical', marginBottom: 6 }} value={send.extraHeaders} disabled={disabled} onChange={e => onChange({ extraHeaders: e.target.value } as Partial<SendBlock>)} placeholder="X-Custom-Header: value" />
-            {send.method === 'INVITE' && (
-              <>
-                <label style={{ ...miniLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: disabled ? 'default' : 'pointer' }}>
-                  <input type="checkbox" checked={send.includeBody} disabled={disabled} onChange={e => onChange({ includeBody: e.target.checked } as Partial<SendBlock>)} />
-                  SDP 바디 포함
-                </label>
-                {send.includeBody && (
-                  <textarea style={{ ...miniInp, minHeight: 60, fontFamily: 'monospace', resize: 'vertical', marginTop: 4 }} value={send.body} disabled={disabled} onChange={e => onChange({ body: e.target.value } as Partial<SendBlock>)} placeholder={DEFAULT_SDP} />
-                )}
-              </>
+            <label style={{ ...miniLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: disabled ? 'default' : 'pointer' }}>
+              <input type="checkbox" checked={send.includeBody} disabled={disabled} onChange={e => onChange({ includeBody: e.target.checked } as Partial<SendBlock>)} />
+              바디 포함 {send.method === 'INVITE' ? '(SDP)' : ''}
+            </label>
+            {send.includeBody && (
+              <textarea style={{ ...miniInp, minHeight: 60, fontFamily: 'monospace', resize: 'vertical', marginTop: 4 }} value={send.body} disabled={disabled} onChange={e => onChange({ body: e.target.value } as Partial<SendBlock>)} placeholder={send.method === 'INVITE' ? DEFAULT_SDP : '메시지 바디 (예: MESSAGE 본문, PUBLISH 이벤트 상태 등)'} />
             )}
           </>
         )}

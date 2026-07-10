@@ -210,7 +210,7 @@ contextBridge.exposeInMainWorld('api', {
   sippSetPaused: (args: { id: string; paused: boolean }) => ipcRenderer.invoke('sipp:set-paused', args),
   sippDispose: (args: { id: string }) => ipcRenderer.invoke('sipp:dispose', args),
   sippScenarioList: () => ipcRenderer.invoke('sipp-scenario:list'),
-  sippScenarioSave: (args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any }) => ipcRenderer.invoke('sipp-scenario:save', args),
+  sippScenarioSave: (args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any; injectionCsv?: string }) => ipcRenderer.invoke('sipp-scenario:save', args),
   sippScenarioDelete: (args: { id: string }) => ipcRenderer.invoke('sipp-scenario:delete', args),
   onSippEvent: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);

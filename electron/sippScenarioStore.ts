@@ -17,6 +17,8 @@ export type SavedSippScenario = {
   rawXml?: string;
   /** "대상 / 속도" 카드에서 설정한 값들 (대상 호스트/포트, CPS, 고급 옵션 등) — 있으면 불러올 때 같이 복원 */
   targetSettings?: any;
+  /** 데이터 파일(-inf) 내용 — mode 와 무관하게 공통으로 쓰인다. */
+  injectionCsv?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -51,21 +53,21 @@ function persist(scenarios: SavedSippScenario[]) {
 
 /** id 가 있으면 덮어쓰기, 없으면 새로 만든다. 저장된(갱신된) 항목을 반환. */
 export function saveSippScenario(entry: {
-  id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any;
+  id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any; injectionCsv?: string;
 }): SavedSippScenario {
   const scenarios = loadSippScenarios();
   const now = Date.now();
   if (entry.id) {
     const idx = scenarios.findIndex(s => s.id === entry.id);
     if (idx !== -1) {
-      scenarios[idx] = { ...scenarios[idx], name: entry.name, mode: entry.mode, blocksData: entry.blocksData, rawXml: entry.rawXml, targetSettings: entry.targetSettings, updatedAt: now };
+      scenarios[idx] = { ...scenarios[idx], name: entry.name, mode: entry.mode, blocksData: entry.blocksData, rawXml: entry.rawXml, targetSettings: entry.targetSettings, injectionCsv: entry.injectionCsv, updatedAt: now };
       persist(scenarios);
       return scenarios[idx];
     }
   }
   const created: SavedSippScenario = {
     id: `sipp-scn-${now}-${Math.random().toString(36).slice(2, 8)}`,
-    name: entry.name, mode: entry.mode, blocksData: entry.blocksData, rawXml: entry.rawXml, targetSettings: entry.targetSettings,
+    name: entry.name, mode: entry.mode, blocksData: entry.blocksData, rawXml: entry.rawXml, targetSettings: entry.targetSettings, injectionCsv: entry.injectionCsv,
     createdAt: now, updatedAt: now,
   };
   scenarios.push(created);
