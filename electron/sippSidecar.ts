@@ -208,6 +208,15 @@ function parseStats(text: string): Partial<SippStats> {
   return out;
 }
 
+// SIPp(curses 기반) 화면 갱신에 섞여 오는 ANSI 이스케이프(커서 이동/화면 지우기 등)를 제거한다.
+// 이걸 안 하고 raw 텍스트를 그대로 <pre> 에 넣으면, 새 화면을 그리기 직전 "화면 지우기" 시퀀스
+// 만 도착한 찰나의 chunk 를 잡아 화면이 순간적으로 텅 빈 것처럼 깜빡이는(사용자가 "화면이
+// 왔다갔다 한다"고 표현한) 증상이 났다.
+function stripAnsi(s: string): string {
+  // CSI 시퀀스(ESC [ ... 문자) + 단순 ESC 시퀀스 모두 제거.
+  return s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\x1b[@-Z\\-_]/g, '');
+}
+
 // SIPp 는 -nostdin 상태에서도 주기적으로 화면 전체를 다시 찍는다(커브시스 화면 갱신).
 // "Scenario Screen"(진행 중 콜 흐름/스텝별 카운터)과 "Statistics Screen"(누적 통계,
 // 테스트 종료 시 함께 찍힘) 두 종류 헤더로 시작하는 블록을 통째로 뽑아 최신 것만 유지한다.
@@ -225,7 +234,7 @@ function extractLatestScreens(buf: string): { scenario?: string; statistics?: st
   for (let i = 0; i < positions.length; i++) {
     const start = positions[i].index;
     const end = i + 1 < positions.length ? positions[i + 1].index : buf.length;
-    result[positions[i].kind] = buf.slice(start, end).trimEnd();
+    result[positions[i].kind] = stripAnsi(buf.slice(start, end)).trimEnd();
   }
   if (positions.length > 0) result.lastHeaderIndex = positions[positions.length - 1].index;
   return result;
@@ -422,11 +431,19 @@ class SippSidecar extends EventEmitter {
     let lastHeaderIndex = -1;
     try {
       const screens = extractLatestScreens(this.stdoutBuf);
-      if (screens.scenario && screens.scenario !== this.lastScenarioScreen) {
+      // 아직 완성 안 된(다음 헤더가 아직 안 도착한) "최신" 블록은 매 stdout chunk 마다 계속
+      // 자라나는데, 다음 화면을 새로 그리기 직전 지우기/커서 이동 바이트만 도착한 찰나를 잡으면
+      // 직전까지 있던 내용보다 눈에 띄게 짧아진(거의 텅 빈) 스냅샷이 잡힌다 — 그걸 그대로
+      // 올리면 화면이 순간적으로 비었다가 다음 조각에서 다시 채워지는 깜빡임으로 보인다.
+      // 실제로 줄어든(테스트 종료 등) 게 아니라 "일시적으로 잘린" 것으로 보이는 경우(원래
+      // 내용의 40% 미만으로 갑자기 줄어든 경우) 는 건너뛰고 다음 chunk 에서 더 완전해진
+      // 버전을 기다린다.
+      const looksTruncated = (next: string, prev: string) => prev.length > 40 && next.trim().length < prev.length * 0.4;
+      if (screens.scenario && screens.scenario !== this.lastScenarioScreen && !looksTruncated(screens.scenario, this.lastScenarioScreen)) {
         this.lastScenarioScreen = screens.scenario;
         try { this.emit('event', { ev: 'screen', kind: 'scenario', text: screens.scenario }); } catch {}
       }
-      if (screens.statistics && screens.statistics !== this.lastStatisticsScreen) {
+      if (screens.statistics && screens.statistics !== this.lastStatisticsScreen && !looksTruncated(screens.statistics, this.lastStatisticsScreen)) {
         this.lastStatisticsScreen = screens.statistics;
         try { this.emit('event', { ev: 'screen', kind: 'statistics', text: screens.statistics }); } catch {}
       }
