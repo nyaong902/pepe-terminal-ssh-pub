@@ -83,20 +83,102 @@ input, select {
   font-family: inherit;
 }
 
+/* Windows 터미널 스타일 스크롤바 — 평소엔 얇은 반투명 막대만 보이다가, 스크롤바가 실제로
+   그려지는 좁은 픽셀 영역에 마우스가 있을 때만 화살표 버튼이 있는 두꺼운 스크롤바로 확장된다.
+   색은 현재 창 테마의 --win-* 변수를 따라가서 다크/라이트 테마 전환 시 자동으로 맞춰진다.
+   `.pepe-scrollbar-hot` 클래스는 CSS `:hover` 가 아니라 src/utils/scrollbarHover.ts 가 마우스
+   좌표를 직접 계산해 토글한다 — `*:hover`(요소 전체가 hover 대상이라 큰 패널 아무 데나
+   마우스가 있어도 확장돼버림)와 `::-webkit-scrollbar:hover`(이 Electron/Chromium 빌드에서
+   동작 안 함) 둘 다 시도했다가 실패해서 JS 로 넘어간 것. */
+/* 너비/높이는 hover 여부와 무관하게 항상 고정한다 — 예전엔 8px→16px 로 커지게 했는데,
+   그러면 그 8px 만큼 스크롤 영역이 실제로 넓어지면서 바로 옆(오른쪽) UI(사이드 아이콘 레일 등)를
+   밀고 들어가 가려버리는 문제가 있었다. 대신 같은 16px 안에서 썸의 테두리 두께만 바꿔 "평소엔
+   가늘고 hover 시엔 굵어지는" 시각 효과만 낸다 — 레이아웃은 절대 안 흔들린다. */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 16px;
+  height: 16px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #111;
+  background: transparent;
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-track {
+  background: var(--win-surface, #1a1a1a);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-corner {
+  background: var(--win-surface, #1a1a1a);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 4px;
+  background-color: var(--win-border, #3a3a3a);
+  background-clip: padding-box;
+  border: 6px solid transparent;
+  border-radius: 999px;
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-thumb {
+  border-width: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background-color: var(--win-accent, #58a6ff);
+  background-clip: padding-box;
+}
+
+/* 화살표는 SVG 를 base64 data URI 로 인코딩한 background-image 로 그린다 — mask-image 는
+   이 빌드의 native 스크롤바 버튼 pseudo-element 에 안 먹혀서 안 씀. 버튼 박스 자체(16px)는
+   항상 존재하되(레이아웃 고정), 평소엔 화살표 이미지가 없어 안 보이고 hover 시에만 그려진다. */
+::-webkit-scrollbar-button {
+  display: block;
+  background-color: var(--win-surface, #1a1a1a);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-image: none;
+}
+::-webkit-scrollbar-button:vertical:decrement,
+::-webkit-scrollbar-button:vertical:increment {
+  height: 16px;
+  background-size: 9px 6px;
+}
+::-webkit-scrollbar-button:horizontal:decrement,
+::-webkit-scrollbar-button:horizontal:increment {
+  width: 16px;
+  background-size: 6px 9px;
+}
+::-webkit-scrollbar-button {
+  background-color: transparent;
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-button {
+  background-color: var(--win-surface, #1a1a1a);
+}
+
+/* 다크 테마(기본) — 밝은 회색 화살표 */
+.pepe-scrollbar-hot::-webkit-scrollbar-button:vertical:decrement {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMCA2Jz48cGF0aCBkPSdNNSAwbDUgNkgweicgZmlsbD0nI2NjY2NjYycvPjwvc3ZnPg==");
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-button:vertical:increment {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMCA2Jz48cGF0aCBkPSdNNSA2TDAgMGgxMHonIGZpbGw9JyNjY2NjY2MnLz48L3N2Zz4=");
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-button:horizontal:decrement {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA2IDEwJz48cGF0aCBkPSdNMCA1bDYtNXYxMHonIGZpbGw9JyNjY2NjY2MnLz48L3N2Zz4=");
+}
+.pepe-scrollbar-hot::-webkit-scrollbar-button:horizontal:increment {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA2IDEwJz48cGF0aCBkPSdNNiA1TDAgMHYxMHonIGZpbGw9JyNjY2NjY2MnLz48L3N2Zz4=");
+}
+
+/* 라이트 테마 — 어두운 회색 화살표 */
+html.win-theme-light .pepe-scrollbar-hot::-webkit-scrollbar-button:vertical:decrement {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMCA2Jz48cGF0aCBkPSdNNSAwbDUgNkgweicgZmlsbD0nIzU1NTU1NScvPjwvc3ZnPg==");
+}
+html.win-theme-light .pepe-scrollbar-hot::-webkit-scrollbar-button:vertical:increment {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxMCA2Jz48cGF0aCBkPSdNNSA2TDAgMGgxMHonIGZpbGw9JyM1NTU1NTUnLz48L3N2Zz4=");
+}
+html.win-theme-light .pepe-scrollbar-hot::-webkit-scrollbar-button:horizontal:decrement {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA2IDEwJz48cGF0aCBkPSdNMCA1bDYtNXYxMHonIGZpbGw9JyM1NTU1NTUnLz48L3N2Zz4=");
+}
+html.win-theme-light .pepe-scrollbar-hot::-webkit-scrollbar-button:horizontal:increment {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA2IDEwJz48cGF0aCBkPSdNNiA1TDAgMHYxMHonIGZpbGw9JyM1NTU1NTUnLz48L3N2Zz4=");
 }
