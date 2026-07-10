@@ -86,5 +86,12 @@
   "sendReply": "إرسال",
   "replyFail": "فشل إرسال الرد",
   "triggerTextAi": "🤖 محادثة الذكاء الاصطناعي",
-  "triggerTextMessenger": "💬 المراسلة"
+  "triggerTextMessenger": "💬 المراسلة",
+  "worklogShareIncoming": "مشاركة سجل العمل",
+  "worklogShareOutgoing": "مشاركة سجل العمل المُرسلة",
+  "worklogShareAccept": "قبول",
+  "worklogShareReject": "رفض",
+  "worklogShareAccepted": "مقبول",
+  "worklogShareRejected": "مرفوض",
+  "worklogShareFail": "فشل معالجة مشاركة سجل العمل: {{error}}"
 }

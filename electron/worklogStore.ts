@@ -11,6 +11,10 @@ export type WorklogTodo = {
   memo?: string;
   createdAt: number;
   doneAt?: number;
+  sharedFromPeerId?: string;
+  sharedFromPeerName?: string;
+  sharedFromDate?: string;
+  sharedFromMessageId?: string;
 };
 
 export type WorklogDay = {

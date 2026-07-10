@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('api', {
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)
   worklogGetAll: () => ipcRenderer.invoke('worklog:get-all'),
   worklogSaveDay: (date: string, day: { todos: any[] }) => ipcRenderer.invoke('worklog:save-day', { date, day }),
+  onWorklogEvent: (cb: (p: any) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('worklog:event', handler);
+    return () => ipcRenderer.removeListener('worklog:event', handler);
+  },
   // 포스트잇 — 화면 어디든 붙일 수 있는 독립 창 (stickyNotes.json)
   stickyNoteCreate: () => ipcRenderer.invoke('sticky-note:create'),
   stickyNoteGet: (id: string) => ipcRenderer.invoke('sticky-note:get', id),
@@ -49,6 +54,8 @@ contextBridge.exposeInMainWorld('api', {
   messengerGetState: () => ipcRenderer.invoke('messenger:get-state'),
   messengerUpdatePrefs: (prefs: any) => ipcRenderer.invoke('messenger:update-prefs', prefs),
   messengerSendMessage: (peerId: string, text: string) => ipcRenderer.invoke('messenger:send-message', { peerId, text }),
+  messengerSendWorklogShare: (peerId: string, share: any) => ipcRenderer.invoke('messenger:send-worklog-share', { peerId, share }),
+  messengerRespondWorklogShare: (peerId: string, messageId: string, decision: 'accepted' | 'rejected') => ipcRenderer.invoke('messenger:respond-worklog-share', { peerId, messageId, decision }),
   messengerMarkRead: (peerId: string, messageId: string) => ipcRenderer.invoke('messenger:mark-read', { peerId, messageId }),
   messengerRecallMessage: (peerId: string, messageId: string) => ipcRenderer.invoke('messenger:recall-message', { peerId, messageId }),
   messengerSendFiles: (peerId: string) => ipcRenderer.invoke('messenger:send-files', { peerId }),
@@ -248,6 +255,8 @@ contextBridge.exposeInMainWorld('api', {
   sftpListDir: (panelId: string, remotePath: string) => ipcRenderer.invoke('sftp:list-dir', { panelId, remotePath }),
   sftpReadFile: (panelId: string, remotePath: string, encoding?: string) => ipcRenderer.invoke('sftp:read-file', { panelId, remotePath, encoding }),
   sftpWriteFile: (panelId: string, remotePath: string, content: string, encoding?: string) => ipcRenderer.invoke('sftp:write-file', { panelId, remotePath, content, encoding }),
+  gitBlameFile: (termId: string, remotePath: string) => ipcRenderer.invoke('git:blame-file', { termId, remotePath }),
+  ctagsFindDefinition: (termId: string, remotePath: string, symbol: string) => ipcRenderer.invoke('ctags:find-definition', { termId, remotePath, symbol }),
   onSFTPProgress: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('sftp:progress', handler);

@@ -15,10 +15,16 @@ type Todo = {
   memo?: string;
   createdAt: number;
   doneAt?: number;
+  sharedFromPeerId?: string;
+  sharedFromPeerName?: string;
+  sharedFromDate?: string;
+  sharedFromMessageId?: string;
 };
 
 type DayType = 'vacation' | 'trip';
 type WorklogDayRec = { todos: Todo[]; dayType?: DayType };
+type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
+type MessengerState = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: MessengerPeer[]; prefs?: { hidePresence?: boolean } };
 type WorklogDays = Record<string, WorklogDayRec>;
 type ViewMode = 'year' | 'month' | 'day';
 
@@ -137,21 +143,49 @@ export const WorkLogWorkspace: React.FC<{
   const [summaryText, setSummaryText] = useState('');
   const [summaryError, setSummaryError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [messengerSelf, setMessengerSelf] = useState<{ id: string; name: string } | null>(null);
+  const [sharePeers, setSharePeers] = useState<MessengerPeer[]>([]);
+  const [todoMenu, setTodoMenu] = useState<{ date: string; todoId: string; x: number; y: number } | null>(null);
+  const [sharePicker, setSharePicker] = useState<{ date: string; todoId: string } | null>(null);
+  const [shareBusyPeerId, setShareBusyPeerId] = useState('');
+  const [shareError, setShareError] = useState('');
   // 월별 보기에서 날짜 우클릭 시 뜨는 휴가/출장 지정 메뉴.
   const [dayMenu, setDayMenu] = useState<{ date: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
+    let disposed = false;
     (async () => {
       try {
         const data = await api().worklogGetAll?.();
         setDays(data?.days || {});
       } catch {}
+      try {
+        const messenger: MessengerState = await api().messengerGetState?.();
+        if (!disposed && messenger?.peers) {
+          setSharePeers(Array.isArray(messenger.peers) ? messenger.peers : []);
+          if (messenger.self) setMessengerSelf({ id: String(messenger.self.id || ''), name: String(messenger.self.name || '') });
+        }
+      } catch {}
       setLoaded(true);
     })();
+    const offWorklog = api().onWorklogEvent?.((p: any) => {
+      if (p?.state?.days) setDays(p.state.days || {});
+    });
+    const offMessenger = api().onMessengerEvent?.((p: any) => {
+      if (p?.state?.peers) setSharePeers(Array.isArray(p.state.peers) ? p.state.peers : []);
+      if (p?.state?.self) setMessengerSelf({ id: String(p.state.self.id || ''), name: String(p.state.self.name || '') });
+    });
+    return () => {
+      disposed = true;
+      if (offWorklog) offWorklog();
+      if (offMessenger) offMessenger();
+    };
   }, []);
 
   const todosForDate = (date: string): Todo[] => days[date]?.todos || [];
   const todos = todosForDate(selectedDate);
+  const onlinePeers = useMemo(() => sharePeers.filter(peer => peer.online), [sharePeers]);
+  const selectedShareTodo = sharePicker ? todosForDate(sharePicker.date).find(todo => todo.id === sharePicker.todoId) || null : null;
 
   // todos 를 바꿀 때도 그 날의 dayType(휴가/출장 표시)은 그대로 유지해야 한다.
   const persistDay = (date: string, nextTodos: Todo[]) => {
@@ -184,6 +218,39 @@ export const WorkLogWorkspace: React.FC<{
   };
   const updateMemo = (id: string, memo: string) => {
     persistDay(selectedDate, todos.map(t => t.id === id ? { ...t, memo } : t));
+  };
+  const openSharePicker = (date: string, todoId: string) => {
+    setTodoMenu(null);
+    setShareError('');
+    setSharePicker({ date, todoId });
+  };
+  const sendShareToPeer = async (peerId: string) => {
+    if (!sharePicker) return;
+    const todo = todosForDate(sharePicker.date).find(item => item.id === sharePicker.todoId);
+    if (!todo) {
+      setShareError(t('shareMissingTodo'));
+      return;
+    }
+    setShareBusyPeerId(peerId);
+    setShareError('');
+    try {
+      const res = await api().messengerSendWorklogShare?.(peerId, {
+        sourceDate: sharePicker.date,
+        sourceTodo: todo,
+        sourcePeerId: messengerSelf?.id,
+        sourcePeerName: messengerSelf?.name,
+        sourceMessageId: todo.sharedFromMessageId || todo.id,
+      });
+      if (!res?.success) {
+        setShareError(t('shareFail', { error: String(res?.error || 'unknown') }));
+        return;
+      }
+      setSharePicker(null);
+    } catch (err: any) {
+      setShareError(t('shareFail', { error: String(err?.message || err) }));
+    } finally {
+      setShareBusyPeerId('');
+    }
   };
 
   // 이전/다음/오늘 네비게이션 — 현재 보기 모드(년/월/일)에 따라 이동 단위가 달라진다.
@@ -367,7 +434,14 @@ export const WorkLogWorkspace: React.FC<{
         ) : todos.length === 0 ? (
           <div style={{ color: 'var(--win-text-dim, #8a93a6)', fontSize: 12, padding: 12, textAlign: 'center' }}>{t('noTodos')}</div>
         ) : todos.map(item => (
-          <div key={item.id} style={{ border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 8, background: 'var(--win-surface, #1b1e29)', padding: '8px 10px' }}>
+          <div
+            key={item.id}
+            onContextMenu={e => {
+              e.preventDefault();
+              setTodoMenu({ date: selectedDate, todoId: item.id, x: e.clientX, y: e.clientY });
+            }}
+            style={{ border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 8, background: 'var(--win-surface, #1b1e29)', padding: '8px 10px', cursor: 'context-menu' }}
+          >
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <input type="checkbox" checked={item.done} onChange={() => toggleTodo(item.id)} style={{ marginTop: 3, cursor: 'pointer' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -391,6 +465,12 @@ export const WorkLogWorkspace: React.FC<{
                     style={{ marginTop: 4, fontSize: 11, color: 'var(--win-text-dim, #8a93a6)', cursor: 'text', minHeight: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                   >
                     {item.memo?.trim() || t('memoPlaceholder')}
+                  </div>
+                )}
+                {(item.sharedFromPeerName || item.sharedFromDate) && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '3px 8px', borderRadius: 999, border: '1px solid var(--win-border, #2a2e3a)', background: 'rgba(255,255,255,0.03)', color: 'var(--win-text-dim, #8a93a6)', fontSize: 10, lineHeight: 1.2 }}>
+                    <span>🤝</span>
+                    <span>{t('sharedFrom', { name: item.sharedFromPeerName || '', date: item.sharedFromDate || '' })}</span>
                   </div>
                 )}
               </div>
@@ -442,6 +522,76 @@ export const WorkLogWorkspace: React.FC<{
           </div>
         )}
       </div>
+      {/* 작업 항목 우클릭 메뉴 — 메신저 공유 */}
+      {todoMenu && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 2000 }} onClick={() => setTodoMenu(null)} onContextMenu={e => { e.preventDefault(); setTodoMenu(null); }} />
+          <div style={{ position: 'fixed', left: todoMenu.x, top: todoMenu.y, zIndex: 2001, minWidth: 170, border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 8, background: 'var(--win-surface, #1b1e29)', boxShadow: '0 12px 28px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+            <button
+              onClick={() => openSharePicker(todoMenu.date, todoMenu.todoId)}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 0, background: 'transparent', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', fontSize: 12 }}
+            >{t('shareMenu')}</button>
+          </div>
+        </>
+      )}
+      {/* 작업일지 항목 공유 — 온라인 메신저 사용자만 선택 */}
+      {sharePicker && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(2px)' }} onClick={() => { setSharePicker(null); setShareError(''); }} />
+          <div style={{ position: 'fixed', inset: 0, zIndex: 2101, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div style={{ width: 'min(560px, 100%)', maxHeight: 'min(80vh, 760px)', display: 'flex', flexDirection: 'column', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 12, background: 'var(--win-surface, #1b1e29)', color: 'var(--win-text, #e6edf3)', boxShadow: '0 24px 72px rgba(0,0,0,0.55)', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--win-border, #2a2e3a)' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{t('shareTitle')}</div>
+                  <div style={{ marginTop: 4, color: 'var(--win-text-dim, #8a93a6)', fontSize: 12 }}>{t('shareHint')}</div>
+                </div>
+                <button className="panel-btn" onClick={() => { setSharePicker(null); setShareError(''); }} style={{ flex: '0 0 auto' }}>{t('close')}</button>
+              </div>
+              <div style={{ padding: 16, borderBottom: '1px solid var(--win-border, #2a2e3a)' }}>
+                {selectedShareTodo ? (
+                  <div style={{ border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 10, background: 'rgba(255,255,255,0.03)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ color: 'var(--win-text-dim, #8a93a6)', fontSize: 11 }}>{sharePicker.date} · {weekdayLabel(sharePicker.date)}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, wordBreak: 'break-word' }}>{selectedShareTodo.text}</div>
+                    {selectedShareTodo.memo?.trim() && <div style={{ color: 'var(--win-text-dim, #8a93a6)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{selectedShareTodo.memo}</div>}
+                  </div>
+                ) : (
+                  <div style={{ color: '#f38ba8', fontSize: 12 }}>{t('shareMissingTodo')}</div>
+                )}
+              </div>
+              <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, color: 'var(--win-text-dim, #8a93a6)' }}>{t('shareOnlineUsers')}</div>
+                  <div style={{ fontSize: 12, color: 'var(--win-text-dim, #8a93a6)' }}>{onlinePeers.length} / {sharePeers.length}</div>
+                </div>
+                {onlinePeers.length === 0 ? (
+                  <div style={{ padding: 12, border: '1px dashed var(--win-border, #2a2e3a)', borderRadius: 10, color: 'var(--win-text-dim, #8a93a6)', fontSize: 12 }}>{t('shareNoOnlineUsers')}</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {onlinePeers.map(peer => (
+                      <button
+                        key={peer.id}
+                        className="panel-btn"
+                        disabled={!!shareBusyPeerId || !selectedShareTodo}
+                        onClick={() => void sendShareToPeer(peer.id)}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, textAlign: 'left', padding: '10px 12px' }}
+                      >
+                        <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <b style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{peer.name}</b>
+                          <small style={{ color: 'var(--win-text-dim, #8a93a6)' }}>{peer.host}:{peer.port}</small>
+                        </span>
+                        <span style={{ flex: '0 0 auto', color: 'var(--win-text-dim, #8a93a6)', fontSize: 12 }}>
+                          {shareBusyPeerId === peer.id ? t('shareSending') : t('shareSend')}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {shareError && <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(255,120,120,0.28)', background: 'rgba(255,120,120,0.08)', color: '#ffb3b3', fontSize: 12, whiteSpace: 'pre-wrap' }}>{shareError}</div>}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {/* 월별 보기 날짜 우클릭 메뉴 — 휴가/출장 지정/해제 */}
       {dayMenu && (
         <>

@@ -26,5 +26,15 @@
   "summaryError": "Échec du résumé : {{error}}",
   "copy": "Copier",
   "copied": "Copié !",
-  "aiPromptInstruction": "Voici un journal de tâches quotidien. Veuillez résumer toute la période de façon concise en français — en mettant l'accent sur les principales avancées, les tâches terminées/non terminées, et les tendances ou problèmes notables."
+  "aiPromptInstruction": "Voici un journal de tâches quotidien. Veuillez résumer toute la période de façon concise en français — en mettant l'accent sur les principales avancées, les tâches terminées/non terminées, et les tendances ou problèmes notables.",
+  "shareMenu": "Partager via Messenger",
+  "shareSend": "Partager",
+  "shareTitle": "Partager une tâche",
+  "shareHint": "Seuls les utilisateurs Messenger en ligne sont affichés.",
+  "shareOnlineUsers": "Utilisateurs en ligne",
+  "shareNoOnlineUsers": "Aucun utilisateur Messenger en ligne.",
+  "shareMissingTodo": "Impossible de trouver l'élément à partager.",
+  "shareFail": "Échec du partage : {{error}}",
+  "shareSending": "Envoi...",
+  "sharedFrom": "Partagé par {{name}} · {{date}}"
 }

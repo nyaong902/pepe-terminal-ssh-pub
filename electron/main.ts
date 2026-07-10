@@ -1257,7 +1257,63 @@ ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
 // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소.
 ipcMain.handle('worklog:get-all', () => loadWorklog());
-ipcMain.handle('worklog:save-day', (_e, { date, day }: { date: string; day: WorklogDay }) => { saveWorklogDay(date, day); return true; });
+function emitWorklogState() {
+  const state = loadWorklog();
+  for (const win of BrowserWindow.getAllWindows()) {
+    try { win.webContents.send('worklog:event', { type: 'state', state }); } catch {}
+  }
+  return state;
+}
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+type WorklogSharePayload = {
+  sourceDate: string;
+  sourceTodo: {
+    id: string;
+    text: string;
+    done: boolean;
+    memo?: string;
+    createdAt: number;
+    doneAt?: number;
+  };
+  sourcePeerId?: string;
+  sourcePeerName?: string;
+  sourceMessageId?: string;
+};
+function normalizeWorklogSharePayload(raw: any): WorklogSharePayload | null {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const todoRaw = src.sourceTodo || src.todo || src.item || {};
+  const text = String(todoRaw.text || '').trim();
+  if (!text) return null;
+  const sourceDate = String(src.sourceDate || src.date || localDateStr()).slice(0, 10) || localDateStr();
+  return {
+    sourceDate,
+    sourceTodo: {
+      id: String(todoRaw.id || src.sourceTodoId || src.id || `share-${Date.now()}`),
+      text,
+      done: !!todoRaw.done,
+      memo: typeof todoRaw.memo === 'string' ? todoRaw.memo : undefined,
+      createdAt: Number(todoRaw.createdAt) || Date.now(),
+      doneAt: Number(todoRaw.doneAt) || undefined,
+    },
+    sourcePeerId: String(src.sourcePeerId || src.peerId || src.fromId || ''),
+    sourcePeerName: String(src.sourcePeerName || src.name || src.fromName || ''),
+    sourceMessageId: String(src.sourceMessageId || src.messageId || ''),
+  };
+}
+function messengerWorklogShareSummary(share: WorklogSharePayload) {
+  const parts = [share.sourceDate, share.sourceTodo.text].filter(Boolean);
+  return parts.length > 0 ? `🗓️ ${parts.join(' · ')}` : '🗓️ 작업일지 공유';
+}
+ipcMain.handle('worklog:save-day', (_e, { date, day }: { date: string; day: WorklogDay }) => {
+  saveWorklogDay(date, day);
+  emitWorklogState();
+  return true;
+});
 // 윈도우 테마 변경 — 저장 후 모든 창(메인/옵션·세션편집 팝아웃/분리된 탭)에 broadcast → 라이브 반영.
 ipcMain.handle('window-theme:set', (_e, id: string) => {
   const themeId = String(id || '');
@@ -1270,7 +1326,22 @@ ipcMain.handle('window-theme:set', (_e, id: string) => {
 
 // ── LAN Mini Messenger ─────────────────────────────────────────────
 type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
-type MessengerMessage = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number; read?: boolean; recalled?: boolean };
+type MessengerMessage = {
+  id: string;
+  peerId: string;
+  direction: 'in' | 'out';
+  kind: 'text' | 'file' | 'worklog-share';
+  text?: string;
+  fileName?: string;
+  filePath?: string;
+  size?: number;
+  ts: number;
+  read?: boolean;
+  recalled?: boolean;
+  worklogShare?: WorklogSharePayload;
+  shareStatus?: 'pending' | 'accepted' | 'rejected';
+  shareHandledAt?: number;
+};
 type MessengerPrefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center' | 'edge'; popupHoldSec?: number };
 
 const MSG_DISCOVERY_PORT = 39455;
@@ -1586,6 +1657,31 @@ async function messengerSendFileBuffer(peer: MessengerPeer, fileName: string, fi
   });
   messengerRemember(msg);
 }
+async function messengerSendWorklogShare(peer: MessengerPeer, share: WorklogSharePayload) {
+  const msg: MessengerMessage = {
+    id: `share-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    peerId: peer.id,
+    direction: 'out',
+    kind: 'worklog-share',
+    text: messengerWorklogShareSummary(share),
+    ts: Date.now(),
+    worklogShare: share,
+    shareStatus: 'pending',
+  };
+  await messengerWritePeer(peer, {
+    app: 'pepe-terminal-ssh',
+    type: 'message',
+    kind: 'worklog-share',
+    fromId: messengerId,
+    fromName: messengerPrefs.displayName || os.userInfo().username || 'PePe',
+    fromPort: messengerPort,
+    messageId: msg.id,
+    text: msg.text,
+    worklogShare: share,
+    ts: msg.ts,
+  });
+  messengerRemember(msg);
+}
 function messengerHandleIncoming(payload: any, remoteHost: string) {
   if (!payload || payload.app !== 'pepe-terminal-ssh' || payload.fromId === messengerId) return;
   if (messengerPrefs.hidePresence) return;
@@ -1600,7 +1696,21 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
   messengerSavePeers();
 
   if (payload.type === 'message') {
-    messengerRemember({ id: payload.messageId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind: 'text', text: String(payload.text || ''), ts: Number(payload.ts) || Date.now() });
+    if (payload.kind === 'worklog-share') {
+      const share = normalizeWorklogSharePayload(payload.worklogShare || payload.share || payload);
+      messengerRemember({
+        id: payload.messageId || `share-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        peerId,
+        direction: 'in',
+        kind: 'worklog-share',
+        text: String(payload.text || (share ? messengerWorklogShareSummary(share) : '') || ''),
+        ts: Number(payload.ts) || Date.now(),
+        worklogShare: share || undefined,
+        shareStatus: 'pending',
+      });
+    } else {
+      messengerRemember({ id: payload.messageId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind: 'text', text: String(payload.text || ''), ts: Number(payload.ts) || Date.now() });
+    }
   } else if (payload.type === 'file') {
     const fileName = path.basename(String(payload.fileName || 'received.bin')).replace(/[<>:"/\\|?*]/g, '_');
     const data = Buffer.from(String(payload.dataBase64 || ''), 'base64');
@@ -1722,6 +1832,54 @@ ipcMain.handle('messenger:send-message', async (_e, { peerId, text }: { peerId: 
   await messengerWritePeer(peer, { app: 'pepe-terminal-ssh', type: 'message', fromId: messengerId, fromName: messengerPrefs.displayName || os.userInfo().username || 'PePe', fromPort: messengerPort, messageId: msg.id, text, ts: msg.ts });
   messengerRemember(msg);
   return { success: true };
+});
+ipcMain.handle('messenger:send-worklog-share', async (_e, { peerId, share }: { peerId: string; share: any }) => {
+  if (messengerPrefs.hidePresence) return { success: false, error: 'presence hidden' };
+  const peer = messengerPeers.get(peerId);
+  if (!peer) return { success: false, error: 'peer not found' };
+  if (Date.now() - peer.lastSeen >= MSG_ONLINE_WINDOW_MS) return { success: false, error: 'peer is offline' };
+  const normalized = normalizeWorklogSharePayload(share);
+  if (!normalized) return { success: false, error: 'invalid share payload' };
+  await messengerSendWorklogShare(peer, normalized);
+  return { success: true, state: messengerState() };
+});
+ipcMain.handle('messenger:respond-worklog-share', (_e, { peerId, messageId, decision }: { peerId: string; messageId: string; decision: 'accepted' | 'rejected' }) => {
+  const msg = messengerMessages.find(m => m.id === messageId && m.peerId === peerId && m.direction === 'in' && m.kind === 'worklog-share');
+  if (!msg) return { success: false, error: 'message not found' };
+  if (msg.shareStatus && msg.shareStatus !== 'pending') {
+    return { success: true, state: messengerState(), worklog: loadWorklog() };
+  }
+  const now = Date.now();
+  if (decision === 'accepted') {
+    const share = msg.worklogShare;
+    if (!share?.sourceTodo?.text.trim()) return { success: false, error: 'invalid share payload' };
+    const today = localDateStr();
+    const data = loadWorklog();
+    const day = data.days[today] || { todos: [] };
+    const duplicate = day.todos.some((todo: any) => todo.sharedFromMessageId === messageId || todo.sharedFromMessageId === share.sourceMessageId);
+    if (!duplicate) {
+      const nextTodo = {
+        id: `wl-share-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        text: share.sourceTodo.text,
+        done: !!share.sourceTodo.done,
+        memo: share.sourceTodo.memo,
+        createdAt: share.sourceTodo.createdAt || now,
+        doneAt: share.sourceTodo.doneAt,
+        sharedFromPeerId: share.sourcePeerId || peerId,
+        sharedFromPeerName: share.sourcePeerName || messengerPeers.get(peerId)?.name || '',
+        sharedFromDate: share.sourceDate,
+        sharedFromMessageId: messageId,
+      } as any;
+      day.todos.push(nextTodo);
+      saveWorklogDay(today, day);
+      emitWorklogState();
+    }
+  }
+  msg.shareStatus = decision;
+  msg.shareHandledAt = now;
+  messengerSaveMessages();
+  messengerEmit({ type: 'state', state: messengerState() });
+  return { success: true, state: messengerState(), worklog: loadWorklog() };
 });
 ipcMain.handle('messenger:mark-read', async (_e, { peerId, messageId }: { peerId: string; messageId: string }) => {
   const peer = messengerPeers.get(peerId);
@@ -7569,6 +7727,158 @@ ipcMain.handle('git:status', async (_e, { mode, termId, cwd }: { mode: 'local' |
       const delMatch = stat.match(/(\d+)\s+deletion/);
       return { ok: true, branch, additions: insMatch ? parseInt(insMatch[1], 10) : 0, deletions: delMatch ? parseInt(delMatch[1], 10) : 0 };
     }
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+// 셸 안전 인용 — 작은따옴표로 감싸고 내부 작은따옴표는 '\'' 로 이스케이프
+function shQuote(s: string): string {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+// 일부 원격 환경(ClearCase VOB + HOME/빌드환경을 csh 계열 dotfile 로 설정하는 곳 등)은 로그인 셸이
+// tcsh/csh 이고, 그 환경을 쓰려면 `source ~/.cshrc.xxx` 같은 준비 명령이 exec 전에 필요함.
+// UI 설정(ui-prefs: remoteExecShell / remoteExecPreamble)으로 지정 가능 — 기본은 sh(POSIX), 준비 명령 없음.
+// posix/tcsh 문법이 서로 호환되지 않아(if/$(...)/2>&1 등) 몸통을 두 가지로 따로 받는다.
+function wrapRemoteScript(bodyPosix: string, bodyTcsh: string): string {
+  const prefs = loadUIPrefs();
+  const preamble = String(prefs.remoteExecPreamble || '').trim();
+  const shell = prefs.remoteExecShell === 'tcsh' ? 'tcsh' : 'sh';
+  if (shell === 'tcsh') {
+    const inner = (preamble ? `${preamble}\n` : '') + bodyTcsh;
+    return `tcsh -c ${shQuote(inner)}`;
+  }
+  return (preamble ? `${preamble} && ` : '') + bodyPosix;
+}
+
+// 원격 파일의 라인별 git blame 정보 (GitLens 스타일 인라인 힌트용) — 읽기 전용, 서버측 데몬 불필요
+ipcMain.handle('git:blame-file', async (_e, { termId, remotePath }: { termId: string; remotePath: string }) => {
+  try {
+    if (!termId || !remotePath) return { ok: false, error: 'invalid args' };
+    const bridge: any = getSSHBridge();
+    if (typeof bridge.execCommand !== 'function') return { ok: false, error: 'ssh exec 미지원' };
+    const idx = remotePath.lastIndexOf('/');
+    const dir = idx > 0 ? remotePath.slice(0, idx) : (idx === 0 ? '/' : '.');
+    const base = idx >= 0 ? remotePath.slice(idx + 1) : remotePath;
+    if (!base) return { ok: false, error: 'invalid path' };
+    // 각 단계 실패 사유(권한/소유권 문제로 인한 git 거부, 미추적 파일 등)를 stdout 으로 병합해
+    // 진단 가능하게 함 — execCommand 가 stderr 를 버리므로 여기서 캡처 안 하면 원인 불명의 빈 결과가 됨.
+    const scriptPosix = `cd ${shQuote(dir)} 2>&1 || exit 9
+REV=$(git rev-parse --is-inside-work-tree 2>&1)
+if [ "$REV" != "true" ]; then echo "___NOTREPO___: $REV"; exit 0; fi
+git blame --line-porcelain -- ${shQuote(base)} 2>&1`;
+    const scriptTcsh = `cd ${shQuote(dir)}
+if ( $status != 0 ) then
+  echo "___NOTREPO___: cd failed"
+  exit 0
+endif
+set REV = "\`git rev-parse --is-inside-work-tree |& cat\`"
+if ( "$REV" != "true" ) then
+  echo "___NOTREPO___: $REV"
+  exit 0
+endif
+git blame --line-porcelain -- ${shQuote(base)} |& cat`;
+    const script = wrapRemoteScript(scriptPosix, scriptTcsh);
+    const out: string = await bridge.execCommand(termId, script, 20000);
+    const trimmed = out.trim();
+    if (!trimmed) return { ok: false, notAvailable: true };
+    if (trimmed.startsWith('___NOTREPO___')) return { ok: false, notAvailable: true, error: trimmed.replace('___NOTREPO___:', '').trim() };
+    if (!/^[0-9a-f]{40}\s+\d+\s+\d+/m.test(out)) return { ok: false, notAvailable: true, error: trimmed.slice(0, 300) };
+    const lines: Record<number, { hash: string; author: string; authorTime: number; summary: string }> = {};
+    const rows = out.split('\n');
+    const commitCache: Record<string, { author?: string; authorTime?: number; summary?: string }> = {};
+    let i = 0;
+    while (i < rows.length) {
+      const m = rows[i].match(/^([0-9a-f]{40})\s+\d+\s+(\d+)(?:\s+\d+)?$/);
+      if (!m) { i++; continue; }
+      const hash = m[1];
+      const finalLine = parseInt(m[2], 10);
+      i++;
+      const meta = commitCache[hash] || {};
+      while (i < rows.length && !rows[i].startsWith('\t')) {
+        const l = rows[i];
+        if (l.startsWith('author ')) meta.author = l.slice(7);
+        else if (l.startsWith('author-time ')) meta.authorTime = parseInt(l.slice(12), 10) || 0;
+        else if (l.startsWith('summary ')) meta.summary = l.slice(8);
+        i++;
+      }
+      commitCache[hash] = meta;
+      if (i < rows.length) i++; // 탭으로 시작하는 코드 원문 라인 skip
+      lines[finalLine] = { hash: hash.slice(0, 8), author: meta.author || '', authorTime: meta.authorTime || 0, summary: meta.summary || '' };
+    }
+    return { ok: true, lines };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+// ctags 인덱스 캐시 — termId+repoRoot 별로 태그 맵 보관, 서버측 상주 프로세스(데몬) 없이
+// 필요할 때만 `ctags -R` 1회성 실행해서 결과를 메모리에 캐시 (VS Code Remote-SSH 와 달리
+// 원격에 아무것도 설치/상주시키지 않음 — ctags CLI 자체만 원격에 있으면 됨).
+type CtagsTag = { file: string; line: number; kind?: string };
+type CtagsIndexEntry = { repoRoot: string; tags: Map<string, CtagsTag[]>; builtAt: number };
+const ctagsIndexCache = new Map<string, CtagsIndexEntry>();
+const CTAGS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+ipcMain.handle('ctags:find-definition', async (_e, { termId, remotePath, symbol }: { termId: string; remotePath: string; symbol: string }) => {
+  try {
+    if (!termId || !remotePath || !symbol) return { ok: false, error: 'invalid args' };
+    const bridge: any = getSSHBridge();
+    if (typeof bridge.execCommand !== 'function') return { ok: false, error: 'ssh exec 미지원' };
+    const idx = remotePath.lastIndexOf('/');
+    const dir = idx > 0 ? remotePath.slice(0, idx) : (idx === 0 ? '/' : '.');
+
+    // 저장소 루트 탐지 — git 저장소면 최상위 디렉토리, 아니면 파일이 속한 디렉토리를 인덱스 범위로 사용
+    const rootScriptPosix = `cd ${shQuote(dir)} 2>/dev/null && (git rev-parse --show-toplevel 2>/dev/null || pwd)`;
+    const rootScriptTcsh = `(cd ${shQuote(dir)} && (git rev-parse --show-toplevel || pwd)) |& cat`;
+    const rootOut: string = await bridge.execCommand(termId, wrapRemoteScript(rootScriptPosix, rootScriptTcsh), 8000);
+    // \r 오염(원격 셸/PTY 개행 방식) 방지 — 그대로 두면 다음 cd 가 존재하지 않는 경로로 실패해 조용히 빈 출력이 됨
+    const repoRoot = rootOut.replace(/\r/g, '').trim().split('\n').pop() || dir;
+
+    const cacheKey = `${termId}::${repoRoot}`;
+    let entry = ctagsIndexCache.get(cacheKey);
+    if (!entry || Date.now() - entry.builtAt > CTAGS_CACHE_TTL_MS) {
+      // 그룹 전체에 2>&1(tcsh 는 |&) 을 걸어야 cd 실패까지도 out 에 잡혀 진단 가능 — ctags 명령에만
+      // 걸면 cd 실패는 execCommand 가 stderr 를 버리므로 완전히 빈 출력이 되어 원인 불명의 "실행 실패"만 보임.
+      const ctagsBody = `cd ${shQuote(repoRoot)} && ctags -R -f - --excmd=number --fields=+n --exclude=.git --exclude=node_modules --exclude=dist --exclude=build --exclude=.cache .`;
+      const ctagsScript = wrapRemoteScript(`(${ctagsBody}) 2>&1`, `(${ctagsBody}) |& cat`);
+      const out: string = await bridge.execCommand(termId, ctagsScript, 60000);
+      if (!out.includes('\t')) {
+        return { ok: false, error: out.trim() || `ctags 실행 실패 (repoRoot=${repoRoot})`, notInstalled: /not found|not recognized|no such file/i.test(out) };
+      }
+      const tags = new Map<string, CtagsTag[]>();
+      for (const raw of out.split('\n')) {
+        if (!raw || raw.startsWith('!')) continue;
+        const parts = raw.split('\t');
+        if (parts.length < 3) continue;
+        const name = parts[0];
+        const file = parts[1];
+        const addrMatch = parts[2].match(/^(\d+)/);
+        if (!name || !file || !addrMatch) continue;
+        const line = parseInt(addrMatch[1], 10);
+        let kind: string | undefined;
+        for (let i = 3; i < parts.length; i++) {
+          const p = parts[i].trim();
+          if (/^[a-zA-Z]$/.test(p)) { kind = p; break; }
+        }
+        const list = tags.get(name) || [];
+        list.push({ file, line, kind });
+        tags.set(name, list);
+      }
+      entry = { repoRoot, tags, builtAt: Date.now() };
+      ctagsIndexCache.set(cacheKey, entry);
+    }
+
+    const matches = entry.tags.get(symbol) || [];
+    const resolved = matches.map(m => ({
+      file: m.file.startsWith('/') ? m.file : `${entry!.repoRoot}/${m.file}`.replace(/\/\.\//g, '/'),
+      line: m.line,
+      kind: m.kind,
+    }));
+    // 현재 열려있는 파일 내 정의를 우선 후보로
+    resolved.sort((a, b) => (a.file === remotePath ? -1 : 0) - (b.file === remotePath ? -1 : 0));
+    return { ok: true, matches: resolved };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }

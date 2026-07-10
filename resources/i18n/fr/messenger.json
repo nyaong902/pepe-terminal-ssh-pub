@@ -86,5 +86,12 @@
   "sendReply": "Envoyer",
   "replyFail": "Échec de l'envoi de la réponse",
   "triggerTextAi": "🤖 Chat IA",
-  "triggerTextMessenger": "💬 Messagerie"
+  "triggerTextMessenger": "💬 Messagerie",
+  "worklogShareIncoming": "Partage du journal de travail",
+  "worklogShareOutgoing": "Partage du journal de travail envoyé",
+  "worklogShareAccept": "Accepter",
+  "worklogShareReject": "Refuser",
+  "worklogShareAccepted": "Accepté",
+  "worklogShareRejected": "Refusé",
+  "worklogShareFail": "Échec du traitement du partage du journal de travail : {{error}}"
 }

@@ -86,5 +86,12 @@
   "sendReply": "보내기",
   "replyFail": "메신저 답장 실패",
   "triggerTextAi": "🤖 AI Chat",
-  "triggerTextMessenger": "💬 메신저"
+  "triggerTextMessenger": "💬 메신저",
+  "worklogShareIncoming": "작업일지 공유",
+  "worklogShareOutgoing": "보낸 작업일지 공유",
+  "worklogShareAccept": "수락",
+  "worklogShareReject": "거절",
+  "worklogShareAccepted": "수락됨",
+  "worklogShareRejected": "거절됨",
+  "worklogShareFail": "작업일지 공유 처리 실패: {{error}}"
 }

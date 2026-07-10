@@ -86,5 +86,12 @@
   "sendReply": "Send",
   "replyFail": "Failed to send reply",
   "triggerTextAi": "🤖 AI Chat",
-  "triggerTextMessenger": "💬 Messenger"
+  "triggerTextMessenger": "💬 Messenger",
+  "worklogShareIncoming": "Work-log share",
+  "worklogShareOutgoing": "Sent work-log share",
+  "worklogShareAccept": "Accept",
+  "worklogShareReject": "Reject",
+  "worklogShareAccepted": "Accepted",
+  "worklogShareRejected": "Rejected",
+  "worklogShareFail": "Failed to process work-log share: {{error}}"
 }

@@ -26,5 +26,15 @@
   "summaryError": "요약 실패: {{error}}",
   "copy": "복사",
   "copied": "복사됨!",
-  "aiPromptInstruction": "다음은 날짜별 할 일 기록입니다. 기간 전체를 한국어로 간결하게 정리해 주세요 — 주요 진행 사항, 완료/미완료 항목, 눈에 띄는 패턴이나 이슈 위주로 요약해 주세요."
+  "aiPromptInstruction": "다음은 날짜별 할 일 기록입니다. 기간 전체를 한국어로 간결하게 정리해 주세요 — 주요 진행 사항, 완료/미완료 항목, 눈에 띄는 패턴이나 이슈 위주로 요약해 주세요.",
+  "shareMenu": "메신저로 공유",
+  "shareSend": "공유하기",
+  "shareTitle": "작업 항목 공유",
+  "shareHint": "온라인 메신저 사용자만 표시됩니다.",
+  "shareOnlineUsers": "온라인 사용자",
+  "shareNoOnlineUsers": "온라인 메신저 사용자가 없습니다.",
+  "shareMissingTodo": "공유할 항목을 찾을 수 없습니다.",
+  "shareFail": "공유 실패: {{error}}",
+  "shareSending": "전송 중...",
+  "sharedFrom": "공유받음: {{name}} · {{date}}"
 }

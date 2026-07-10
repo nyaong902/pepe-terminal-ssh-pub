@@ -5324,6 +5324,16 @@ body.popout-options .session-editor h3:first-child {
   background: rgba(224, 96, 96, 0.2);
   color: #e06060;
 }
+/* GitLens 스타일 인라인 blame 힌트 — Monaco decoration 의 injected text 라 실제 버퍼 내용이 아니며
+   선택/편집이 원천적으로 불가능함 (읽기 전용 요구사항). */
+.file-editor-blame-inline {
+  color: #6a6a8a !important;
+  font-style: italic;
+  opacity: 0.75;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre;
+}
 .file-editor-body {
   flex: 1;
   min-height: 0;
@@ -7681,6 +7691,102 @@ mark.claude-search-hit.current {
 .messenger-bubble.emoji-x2 time,
 .messenger-bubble.emoji-x3 time {
   color: var(--win-text-dim, #86a0b6);
+}
+.messenger-worklog-share-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.messenger-worklog-share-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.messenger-worklog-share-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: inherit;
+}
+.messenger-worklog-share-meta {
+  font-size: 11px;
+  color: rgba(231, 245, 255, 0.7);
+}
+.messenger-worklog-share-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.messenger-worklog-share-text {
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.messenger-worklog-share-memo {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(166, 200, 230, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(231, 245, 255, 0.74);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.messenger-worklog-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.messenger-worklog-share-accept,
+.messenger-worklog-share-reject {
+  border: 1px solid rgba(123, 158, 190, 0.28);
+  border-radius: 10px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+.messenger-worklog-share-accept {
+  background: rgba(42, 134, 74, 0.82);
+  color: #edfff1;
+}
+.messenger-worklog-share-reject {
+  background: rgba(133, 44, 44, 0.82);
+  color: #fff0f0;
+}
+.messenger-worklog-share-accept:disabled,
+.messenger-worklog-share-reject:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.messenger-worklog-share-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+.messenger-worklog-share-status.accepted {
+  background: rgba(42, 134, 74, 0.18);
+  border-color: rgba(85, 191, 134, 0.35);
+  color: #9be7b0;
+}
+.messenger-worklog-share-status.rejected {
+  background: rgba(133, 44, 44, 0.18);
+  border-color: rgba(255, 135, 135, 0.35);
+  color: #ffb5b5;
+}
+.messenger-worklog-share-error {
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 120, 120, 0.28);
+  background: rgba(255, 120, 120, 0.08);
+  color: #ffb3b3;
+  font-size: 12px;
 }
 .messenger-file-path {
   margin-top: 4px;

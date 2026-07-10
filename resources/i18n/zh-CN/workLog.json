@@ -26,5 +26,15 @@
   "summaryError": "整理失败：{{error}}",
   "copy": "复制",
   "copied": "已复制！",
-  "aiPromptInstruction": "以下是按日期记录的待办事项。请用中文简明扼要地整理整个时间段——重点说明主要进展、已完成/未完成的事项，以及值得注意的模式或问题。"
+  "aiPromptInstruction": "以下是按日期记录的待办事项。请用中文简明扼要地整理整个时间段——重点说明主要进展、已完成/未完成的事项，以及值得注意的模式或问题。",
+  "shareMenu": "通过 Messenger 分享",
+  "shareSend": "分享",
+  "shareTitle": "分享任务项",
+  "shareHint": "仅显示在线的 Messenger 用户。",
+  "shareOnlineUsers": "在线用户",
+  "shareNoOnlineUsers": "没有可用的在线 Messenger 用户。",
+  "shareMissingTodo": "找不到要分享的项目。",
+  "shareFail": "分享失败：{{error}}",
+  "shareSending": "发送中...",
+  "sharedFrom": "收到分享：{{name}} · {{date}}"
 }

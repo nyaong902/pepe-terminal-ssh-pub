@@ -86,5 +86,12 @@
   "sendReply": "发送",
   "replyFail": "回复发送失败",
   "triggerTextAi": "🤖 AI 聊天",
-  "triggerTextMessenger": "💬 即时通讯"
+  "triggerTextMessenger": "💬 即时通讯",
+  "worklogShareIncoming": "工作日志分享",
+  "worklogShareOutgoing": "已发送的工作日志分享",
+  "worklogShareAccept": "接受",
+  "worklogShareReject": "拒绝",
+  "worklogShareAccepted": "已接受",
+  "worklogShareRejected": "已拒绝",
+  "worklogShareFail": "处理工作日志分享失败：{{error}}"
 }

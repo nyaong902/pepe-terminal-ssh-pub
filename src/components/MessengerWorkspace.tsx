@@ -2,7 +2,36 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
-type Msg = { id: string; peerId: string; direction: 'in' | 'out'; kind: 'text' | 'file'; text?: string; fileName?: string; filePath?: string; size?: number; ts: number; read?: boolean; recalled?: boolean };
+type WorklogSharePayload = {
+  sourceDate: string;
+  sourceTodo: {
+    id: string;
+    text: string;
+    done: boolean;
+    memo?: string;
+    createdAt: number;
+    doneAt?: number;
+  };
+  sourcePeerId?: string;
+  sourcePeerName?: string;
+  sourceMessageId?: string;
+};
+type Msg = {
+  id: string;
+  peerId: string;
+  direction: 'in' | 'out';
+  kind: 'text' | 'file' | 'worklog-share';
+  text?: string;
+  fileName?: string;
+  filePath?: string;
+  size?: number;
+  ts: number;
+  read?: boolean;
+  recalled?: boolean;
+  worklogShare?: WorklogSharePayload;
+  shareStatus?: 'pending' | 'accepted' | 'rejected';
+  shareHandledAt?: number;
+};
 type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center'; popupHoldSec?: number };
 type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs };
 type RemoteEntry = { name: string; isDir: boolean; size?: number; mtime?: number };
@@ -161,6 +190,8 @@ export const MessengerWorkspace: React.FC<{
   const [readMarks, setReadMarks] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }
   });
+  const [shareActionBusyId, setShareActionBusyId] = useState('');
+  const [shareActionError, setShareActionError] = useState('');
   const [menu, setMenu] = useState<{ x: number; y: number; peerId: string } | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiCategory, setEmojiCategory] = useState<string>('pepe');
@@ -294,9 +325,27 @@ export const MessengerWorkspace: React.FC<{
       }
     }
   }, [selectedPeerId, state.messages]);
+  useEffect(() => {
+    setShareActionError('');
+    setShareActionBusyId('');
+  }, [selectedPeerId]);
 
   const recallMessage = async (peerId: string, messageId: string) => {
     await (window as any).api?.messengerRecallMessage?.(peerId, messageId);
+  };
+  const respondWorklogShare = async (message: Msg, decision: 'accepted' | 'rejected') => {
+    setShareActionBusyId(message.id);
+    setShareActionError('');
+    try {
+      const res = await (window as any).api?.messengerRespondWorklogShare?.(message.peerId, message.id, decision);
+      if (!res?.success) {
+        setShareActionError(t('worklogShareFail', { error: String(res?.error || 'unknown') }));
+      }
+    } catch (err: any) {
+      setShareActionError(t('worklogShareFail', { error: String(err?.message || err) }));
+    } finally {
+      setShareActionBusyId('');
+    }
   };
 
   // Seed the name input from prefs when it changes, but only if the user is not
@@ -770,6 +819,7 @@ export const MessengerWorkspace: React.FC<{
             </div>
           )}
         </header>
+        {shareActionError && <div className="messenger-worklog-share-error">{shareActionError}</div>}
 
         <section className="messenger-messages" ref={msgListRef}>
           {messages.length === 0 && <div className="messenger-empty large">{t('noMessages')}</div>}
@@ -777,10 +827,45 @@ export const MessengerWorkspace: React.FC<{
             const emojiCount = m.kind === 'text' ? emojiOnlyCount(m.text) : 0;
             const emojiSizeClass = emojiCount === 1 ? 'emoji-x1' : emojiCount === 2 ? 'emoji-x2' : emojiCount === 3 ? 'emoji-x3' : '';
             const recallable = m.direction === 'out' && !m.recalled && !m.read;
+            const shareSourceName = m.worklogShare?.sourcePeerName || (m.direction === 'out' ? state.self?.name : selectedPeer?.name) || '';
+            const shareSourceDate = m.worklogShare?.sourceDate || '';
+            const shareTodo = m.worklogShare?.sourceTodo;
+            const shareStatusLabel = m.shareStatus === 'accepted'
+              ? t('worklogShareAccepted')
+              : m.shareStatus === 'rejected'
+                ? t('worklogShareRejected')
+                : '';
             return (
             <div key={m.id} className={`messenger-bubble ${m.direction} ${emojiSizeClass}`}>
               {m.recalled ? (
                 <div className="messenger-recalled">{m.direction === 'out' ? t('messageRecalledSelf', { defaultValue: '메시지를 삭제했습니다.' }) : t('messageRecalledPeer', { defaultValue: '상대방이 메시지를 회수했습니다.' })}</div>
+              ) : m.kind === 'worklog-share' ? (
+                <div className="messenger-worklog-share-card">
+                  <div className="messenger-worklog-share-head">
+                    <div className="messenger-worklog-share-title">{m.direction === 'in' ? t('worklogShareIncoming') : t('worklogShareOutgoing')}</div>
+                    <div className="messenger-worklog-share-meta">{[shareSourceName, shareSourceDate].filter(Boolean).join(' · ')}</div>
+                  </div>
+                  <div className="messenger-worklog-share-body">
+                    <div className="messenger-worklog-share-text">{shareTodo?.text || m.text || ''}</div>
+                    {shareTodo?.memo?.trim() && <div className="messenger-worklog-share-memo">{shareTodo.memo}</div>}
+                    {m.direction === 'in' && m.shareStatus === 'pending' ? (
+                      <div className="messenger-worklog-share-actions">
+                        <button
+                          className="messenger-worklog-share-accept"
+                          disabled={shareActionBusyId === m.id}
+                          onClick={() => void respondWorklogShare(m, 'accepted')}
+                        >{t('worklogShareAccept')}</button>
+                        <button
+                          className="messenger-worklog-share-reject"
+                          disabled={shareActionBusyId === m.id}
+                          onClick={() => void respondWorklogShare(m, 'rejected')}
+                        >{t('worklogShareReject')}</button>
+                      </div>
+                    ) : shareStatusLabel ? (
+                      <div className={`messenger-worklog-share-status ${m.shareStatus}`}>{shareStatusLabel}</div>
+                    ) : null}
+                  </div>
+                </div>
               ) : m.kind === 'file' ? (
                 <div>
                   {isImageFile(m.fileName) && m.filePath ? (

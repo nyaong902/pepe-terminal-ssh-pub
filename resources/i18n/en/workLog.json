@@ -26,5 +26,15 @@
   "summaryError": "Summary failed: {{error}}",
   "copy": "Copy",
   "copied": "Copied!",
-  "aiPromptInstruction": "Below is a day-by-day to-do log. Please summarize the whole period concisely in English — focus on key progress, done/not-done items, and any notable patterns or issues."
+  "aiPromptInstruction": "Below is a day-by-day to-do log. Please summarize the whole period concisely in English — focus on key progress, done/not-done items, and any notable patterns or issues.",
+  "shareMenu": "Share in Messenger",
+  "shareSend": "Share",
+  "shareTitle": "Share work-log item",
+  "shareHint": "Only online messenger users are shown.",
+  "shareOnlineUsers": "Online users",
+  "shareNoOnlineUsers": "No online messenger users are available.",
+  "shareMissingTodo": "Could not find the item to share.",
+  "shareFail": "Share failed: {{error}}",
+  "shareSending": "Sending...",
+  "sharedFrom": "Shared from {{name}} · {{date}}"
 }
