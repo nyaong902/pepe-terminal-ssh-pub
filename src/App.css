@@ -115,11 +115,12 @@ html, body {
   z-index: 2201;
   display: flex;
   flex-direction: column;
+  /* stretch(기본값)면 이 컬럼의 자식(검색줄, 매치 목록)이 서로 폭을 맞춰 늘어난다 — 매치 목록이
+     검색줄보다 짧을 때도 검색줄 폭만큼 늘어나 보여서, 각자 자기 내용 폭만 쓰게 한다. */
+  align-items: flex-start;
   gap: 4px;
-  background: var(--win-surface, #1a1a1a);
-  border-radius: 6px;
-  padding: 6px 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  /* 배경/테두리/그림자는 자식(.search-bar-inner, .search-match-list)이 각자 갖고 있다 — 여기서
+     또 두르면 자식보다 넓은 바깥 레이어(둥근 배경)가 하나 더 겹쳐 보이는 문제가 있었다. */
 }
 
 .quick-connect-bar {
@@ -212,6 +213,15 @@ html, body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
+.search-drag-grip {
+  font-size: 11px;
+  color: var(--win-text-dim, #666);
+  cursor: move;
+  padding: 0 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .search-icon {
   font-size: 12px;
   flex-shrink: 0;
@@ -291,6 +301,12 @@ html, body {
   color: var(--win-text, #fff);
 }
 
+.search-btn.active {
+  background: var(--win-accent, #2b6b9b);
+  color: var(--win-text, #fff);
+  border-color: var(--win-accent, #2b6b9b);
+}
+
 .search-close-btn {
   font-size: 14px;
   padding: 2px 5px;
@@ -359,8 +375,13 @@ html, body {
 }
 
 .search-match-list {
+  /* flex-wrap 행 배치 + width:fit-content 조합은 크로미움에서 컨테이너 너비를 "줄바꿈 없다고
+     가정했을 때의 전체 너비"로 계산해버려, 짧은 항목도 그 너비만큼 억지로 늘어나 보이는 문제가
+     있었다. 애초에 한 줄에 하나씩만 보여주는 목록이라 줄바꿈 계산 자체가 필요 없으므로, 세로
+     방향 flex 로 바꿔 각 항목이 자기 내용 너비만큼만 차지하게 한다. */
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   background: var(--win-surface, #1a1a1a);
   border: 1px solid var(--win-border, #444);
@@ -368,6 +389,7 @@ html, body {
   padding: 4px 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
   max-width: 400px;
+  width: fit-content;
 }
 
 .search-match-item {
@@ -378,6 +400,11 @@ html, body {
   cursor: pointer;
   background: var(--win-surface, #222);
   transition: all 0.12s;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
 }
 
 .search-match-item:hover {
@@ -4751,16 +4778,7 @@ body.popout-options .session-editor h3:first-child {
   mix-blend-mode: normal !important;
 }
 
-/* ── xterm search highlight ── */
-.search-highlight-mark {
-  background: rgba(255, 200, 0, 0.3) !important;
-  border: 1px solid rgba(255, 200, 0, 0.8) !important;
-  border-radius: 2px !important;
-  box-sizing: border-box !important;
-  pointer-events: none !important;
-  z-index: 100 !important;
-}
-
+/* ── xterm search highlight (xterm-addon-search 네이티브 decorations) ── */
 .xterm .xterm-find-result-decoration {
   background: rgba(181, 137, 0, 0.4) !important;
   outline: 1px solid #b58900 !important;

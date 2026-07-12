@@ -20,23 +20,13 @@ type Props = {
   tabs: Tab[];
   activeTab: Tab;
   selectedPanelId: string | null;
+  onNavigateToTerm?: (termId: string) => void;
   onClose: () => void;
 };
 
 type MatchResult = { termId: string; sessionName: string; tabTitle: string };
 
-// 앱 실행 중 검색 이력 (최대 50개, 중복 제거, 최근 우선)
-const searchHistory: string[] = [];
-const MAX_HISTORY = 50;
-function addSearchHistory(q: string) {
-  if (!q.trim()) return;
-  const idx = searchHistory.indexOf(q);
-  if (idx !== -1) searchHistory.splice(idx, 1);
-  searchHistory.unshift(q);
-  if (searchHistory.length > MAX_HISTORY) searchHistory.pop();
-}
-
-export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, onClose }) => {
+export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, onNavigateToTerm, onClose }) => {
   const { t } = useTranslation('search');
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'current' | 'all'>('current');
@@ -46,7 +36,48 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
   const [historyIdx, setHistoryIdx] = useState(-1);
+  // 검색 이력 — 예전엔 이 컴포넌트 모듈 전역 배열에만 담아둬서 렌더러가 리로드되면(HMR·앱 재시작)
+  // 그냥 사라졌다. 이제 electron/main.ts 가 파일(<userData>/search-history.json)로 영속화한다.
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  useEffect(() => {
+    (window as any).api?.searchHistoryGet?.().then((h: string[]) => setSearchHistory(h || []));
+  }, []);
+  const addSearchHistory = (q: string) => {
+    if (!q.trim()) return;
+    try { (window as any).api?.searchHistoryAdd?.(q); } catch {}
+    setSearchHistory(prev => [q, ...prev.filter(x => x !== q)].slice(0, 50));
+  };
   const inputRef = useRef<HTMLInputElement>(null);
+  // 기본은 고정 위치 — "분리" 버튼을 눌러야만 자유롭게 드래그해서 옮길 수 있는 상태(움직이는 모드)로
+  // 전환된다. 별도 OS 창을 띄우던 예전 방식은 위치/크기가 계속 어긋나서 걷어내고, 그냥 이 인라인
+  // 검색줄 자체를 움직이게/고정으로 토글하는 걸로 단순화했다.
+  const [detached, setDetached] = useState(false);
+  // null 이면 App.css 의 기본 위치(top/right 고정)를 그대로 쓴다.
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const onGripMouseDown = (e: React.MouseEvent) => {
+    if (!detached) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const startX = e.clientX, startY = e.clientY;
+    const origX = pos?.x ?? rect.left;
+    const origY = pos?.y ?? rect.top;
+    const onMove = (ev: MouseEvent) => {
+      const maxX = window.innerWidth - (barRef.current?.offsetWidth ?? 0);
+      const maxY = window.innerHeight - (barRef.current?.offsetHeight ?? 0);
+      const nx = Math.min(Math.max(0, origX + (ev.clientX - startX)), Math.max(0, maxX));
+      const ny = Math.min(Math.max(0, origY + (ev.clientY - startY)), Math.max(0, maxY));
+      setPos({ x: nx, y: ny });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -90,10 +121,12 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, useRegex, caseSensitive, mode]);
 
-  // 패널/미니탭 전환만 일어났을 때(query 동일): 새 타겟 터미널에 하이라이트만 다시 칠하고,
-  // 검색은 맨 위부터가 아니라 현재 위치 기준으로 한 번 시도 — 매치 없으면 anchor 로 복귀.
-  // "다른 미니탭에서 활성화 전환했더니 처음부터 찾는다" 문제 해결.
-  // activeTermId 를 dep 으로 추적 — selectedPanelId / activeTab / panel.activeIdx 변경을 모두 포착.
+  // 미니탭 전환 시 anchor(Next/Prev 실패 시 복귀 위치)만 그 미니탭의 현재 위치로 갱신한다.
+  // 하이라이트 자체는 이제 xterm-addon-search 의 네이티브 decorations(마커 기반)를 쓰므로
+  // DOM 이 어떻게 옮겨붙든(미니탭 전환으로 xterm 엘리먼트가 컨테이너를 바꿔도) 별도로 다시
+  // 칠해줄 필요가 없다 — 예전 커스텀 DOM 오버레이 시절엔 미니탭 전환마다 오버레이가 통째로
+  // 날아가서 직접 복구해야 했지만, 마커는 버퍼(Terminal 인스턴스)에 묶여 있어 DOM 과 무관하게
+  // 유지된다("다른 미니탭에서 활성화 전환했더니 처음부터 찾는다" 문제도 anchor 로 계속 해결됨).
   const activeTermId = mode === 'current' ? (() => {
     if (!selectedPanelId) return null;
     const findInLayout = (node: any): string | null => {
@@ -107,14 +140,8 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
     return findInLayout(activeTab.layout);
   })() : null;
   useEffect(() => {
-    if (!query || mode !== 'current' || !activeTermId) return;
-    // 하이라이트만 다시 칠한다 — viewport/선택 영역은 건드리지 않음.
-    // 사용자가 그 미니탭에서 보고 있던 위치를 그대로 유지. 매치 탐색은 Next/Prev 버튼으로.
-    clearHighlights(activeTermId);
-    highlightAllMatches(activeTermId, query, useRegex, caseSensitive);
-    // 새 anchor 도 이 미니탭의 현재 위치로 갱신 — 이후 Next/Prev 실패 시 여기로 복귀.
+    if (!query || !activeTermId) return;
     try { markSearchAnchor(activeTermId); } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTermId]);
 
   const getActiveTermId = (): string | null => {
@@ -171,6 +198,7 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
       if (matches.length === 0) return;
       const nextIdx = (activeMatchIdx + 1) % matches.length;
       setActiveMatchIdx(nextIdx);
+      onNavigateToTerm?.(matches[nextIdx].termId);
       searchNextInTerm(matches[nextIdx].termId, query, useRegex, caseSensitive);
     }
   };
@@ -183,6 +211,7 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
       if (matches.length === 0) return;
       const prevIdx = (activeMatchIdx - 1 + matches.length) % matches.length;
       setActiveMatchIdx(prevIdx);
+      onNavigateToTerm?.(matches[prevIdx].termId);
       searchPrevInTerm(matches[prevIdx].termId, query, useRegex, caseSensitive);
     }
   };
@@ -230,8 +259,19 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
   const stopProp = (e: React.SyntheticEvent) => e.stopPropagation();
 
   return (
-    <div className="search-bar" onKeyDown={stopProp} onKeyUp={stopProp} onKeyPress={stopProp} onMouseDown={stopProp} onClick={stopProp} onDoubleClick={stopProp}>
+    <div
+      ref={barRef}
+      className="search-bar"
+      style={pos ? { left: pos.x, top: pos.y, right: 'auto' } : undefined}
+      onKeyDown={stopProp} onKeyUp={stopProp} onKeyPress={stopProp} onMouseDown={stopProp} onClick={stopProp} onDoubleClick={stopProp}
+    >
       <div className="search-bar-inner">
+        <span
+          className="search-drag-grip"
+          onMouseDown={onGripMouseDown}
+          title={detached ? t('dragToMove') : t('popout')}
+          style={{ cursor: detached ? 'move' : 'default', opacity: detached ? 1 : 0.4 }}
+        >⋮⋮</span>
         <span className="search-icon">🔍</span>
         <div style={{ position: 'relative', display: 'inline-block' }}>
           <div style={{ display: 'flex' }}>
@@ -295,13 +335,17 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
           <span className="search-match-count">{activeMatchIdx + 1}/{matches.length}</span>
         )}
         <button
-          className="search-btn"
-          title={t('popout')}
+          className={`search-btn ${detached ? 'active' : ''}`}
+          title={detached ? t('dock') : t('popout')}
           onClick={() => {
-            try { (window as any).api?.searchOpenWindow?.(); } catch {}
-            onClose();
+            setDetached(prev => {
+              const next = !prev;
+              // 다시 고정으로 돌아가면 드래그했던 위치를 버리고 기본 위치로 되돌린다.
+              if (!next) setPos(null);
+              return next;
+            });
           }}
-        >🪟</button>
+        >{detached ? '📌' : '🔓'}</button>
         <button className="search-btn search-close-btn" onClick={handleClose} title={t('close')}>&times;</button>
       </div>
       {mode === 'all' && matches.length > 0 && (
@@ -310,7 +354,14 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
             <span
               key={m.termId}
               className={`search-match-item ${i === activeMatchIdx ? 'active' : ''}`}
-              onClick={() => { setActiveMatchIdx(i); searchInTerm(m.termId, query, useRegex, caseSensitive); }}
+              onClick={() => {
+                setActiveMatchIdx(i);
+                // 결과 목록의 termId 는 다른 워크스페이스 탭/패널/미니탭에 있을 수 있으므로,
+                // 실제 매치를 찾기 전에 먼저 그 화면으로 이동시켜야 한다 — 이동 없이 그냥
+                // searchInTerm 만 부르면 그 터미널이 화면에 없어서 아무 반응이 없는 것처럼 보였다.
+                onNavigateToTerm?.(m.termId);
+                searchInTerm(m.termId, query, useRegex, caseSensitive);
+              }}
             >
               {m.tabTitle} &gt; {m.sessionName}
             </span>

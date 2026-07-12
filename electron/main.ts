@@ -804,8 +804,6 @@ function createWindow() {
 // 메인 창(또는 승격된 창)이 닫힐 때 — 부수창 정리 + 살아있는 분리 창 중 하나를 새 main 으로 승격,
 // 없으면 앱 종료.
 function onMainWindowClosed() {
-  try { if (searchWindow && !searchWindow.isDestroyed()) searchWindow.close(); } catch {}
-  try { if (histDropdownWindow && !histDropdownWindow.isDestroyed()) histDropdownWindow.close(); } catch {}
   for (const [, pw] of pasteWindows) { try { if (!pw.isDestroyed()) pw.close(); } catch {} }
   const aliveDetached = Array.from(detachedWindows).filter(w => w && !w.isDestroyed());
   if (aliveDetached.length > 0) {
@@ -2629,216 +2627,26 @@ ipcMain.on('session-editor:saved', (_e, payload) => {
   if (sessionEditorWindow && !sessionEditorWindow.isDestroyed()) { try { sessionEditorWindow.close(); } catch {} }
 });
 
-// 검색 창 — 별도 BrowserWindow (다른 모니터로도 이동 가능)
-let searchWindow: BrowserWindow | null = null;
-ipcMain.handle('search:open-window', () => {
-  if (searchWindow && !searchWindow.isDestroyed()) { searchWindow.focus(); return { success: true }; }
-  const SEARCH_W = 470;
-  const SEARCH_H = 32;
-  // 처음 위치 — 메인 창의 우측 상단에 정렬
-  let posX = 100, posY = 100;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const b = mainWindow.getBounds();
-    // 메인 창 상단 가운데 부근 — 타이틀바 영역과 겹치지 않게 우측 시스템 버튼 (_□X) 좌측에 배치
-    posX = Math.max(b.x + 24, b.x + b.width - SEARCH_W - 140);
-    posY = b.y + 4;
-  }
-  const win = new BrowserWindow({
-    x: posX, y: posY,
-    width: SEARCH_W, height: SEARCH_H,
-    minWidth: SEARCH_W, minHeight: SEARCH_H, maxWidth: SEARCH_W, maxHeight: SEARCH_H,
-    frame: false, resizable: false,
-    transparent: false, hasShadow: true,
-    backgroundColor: '#1a1a1a',
-    show: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    title: t('popup.searchTitle'),
-    webPreferences: { nodeIntegration: true, contextIsolation: false, backgroundThrottling: false },
-  });
-  // 메인 창보다 위, 다른 alwaysOnTop 창보다는 아래 (UI 레벨)
-  try { win.setAlwaysOnTop(true, 'floating'); } catch {}
-  win.once('ready-to-show', () => { try { win.show(); win.focus(); } catch {} });
-  searchWindow = win;
-  win.on('closed', () => {
-    searchWindow = null;
-    closeHistDropdown();
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('search:closed');
-  });
-  win.on('move', () => closeHistDropdown());      // 검색창 이동 시 dropdown 닫기 (위치 안 맞아짐)
-  win.on('resize', () => closeHistDropdown());
-
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    html,body{margin:0;padding:0;background:#1a1a1a;color:#eee;font-family:'Segoe UI',sans-serif;height:100%;overflow:visible;-webkit-user-select:none;user-select:none;font-size:11px;}
-    .row{display:flex;align-items:center;gap:2px;padding:0 4px;height:100%;-webkit-app-region:drag;cursor:move;}
-    .grip{font-size:10px;color:#666;padding:0 1px;-webkit-app-region:drag;cursor:move;user-select:none;}
-    .input-wrap{position:relative;display:flex;-webkit-app-region:no-drag;width:180px;flex:0 0 auto;margin-right:2px;}
-    input{flex:1;min-width:0;background:#111;color:#eee;border:1px solid #333;border-radius:3px 0 0 3px;padding:2px 5px;font-size:11px;outline:none;-webkit-user-select:text;user-select:text;cursor:text;}
-    input:focus{border-color:#2b6b9b;}
-    .hist-toggle{background:#222;color:#aaa;border:1px solid #333;border-left:none;border-radius:0 3px 3px 0;padding:0 3px;cursor:pointer;font-size:9px;}
-    button{-webkit-app-region:no-drag;background:#333;color:#eee;border:1px solid #555;border-radius:3px;padding:1px 3px;cursor:pointer;font-size:11px;min-width:18px;line-height:1.3;}
-    button:hover{background:#444;}
-    button.active{background:#2b6b9b;border-color:#3a8bc8;}
-    .mode{display:flex;border:1px solid #555;border-radius:3px;overflow:hidden;-webkit-app-region:no-drag;margin-left:2px;flex-shrink:0;}
-    .mode button{border:none;border-radius:0;min-width:auto;padding:1px 6px;background:#2a2a2a;font-size:10px;white-space:nowrap;}
-    .mode button.active{background:#2b6b9b;}
-    .mode button + button{border-left:1px solid #555;}
-    .count{font-size:10px;color:#aaa;min-width:32px;text-align:center;-webkit-app-region:drag;padding:0 2px;}
-    .close{padding:1px 5px;}
-  </style></head><body>
-    <div class="row">
-      <span class="grip" title="${t('search.dragToMove')}">⋮⋮</span>
-      <div class="input-wrap">
-        <input id="q" type="text" placeholder="${t('search.placeholder')}" autofocus spellcheck="false" />
-        <button class="hist-toggle" id="hist" title="${t('search.history')}" tabindex="-1">▾</button>
-      </div>
-      <span class="count" id="cnt">0/0</span>
-      <button id="prev" title="Previous (Shift+Enter)">▲</button>
-      <button id="next" title="Next (Enter)">▼</button>
-      <button id="aa" title="${t('search.caseSensitive')}">Aa</button>
-      <button id="re" title="${t('search.regex')}">.*</button>
-      <div class="mode">
-        <button id="m-cur" class="active" title="${t('search.currentTab')}">${t('search.currentTabShort')}</button>
-        <button id="m-all" title="${t('search.allTabs')}">${t('search.allShort')}</button>
-      </div>
-      <button id="dock" title="${t('search.dockToApp')}">📌</button>
-      <button id="x" class="close" title="${t('search.closeEsc')}">✕</button>
-    </div>
-    <script>
-      const { ipcRenderer } = require('electron');
-      const q = document.getElementById('q');
-      const cnt = document.getElementById('cnt');
-      const aa = document.getElementById('aa');
-      const re = document.getElementById('re');
-      const mCur = document.getElementById('m-cur');
-      const mAll = document.getElementById('m-all');
-      const histBtn = document.getElementById('hist');
-      let cs = false, ureg = false, mode = 'current';
-      const addHist = (s) => { if (s && s.trim()) ipcRenderer.send('search:history-add', s); };
-      // 검색창에 이력 항목이 채워질 때 (native menu 에서 클릭)
-      ipcRenderer.on('search:fill', (_e, text) => { q.value = text; sendQ(); q.focus(); });
-      const sendQ = () => ipcRenderer.send('search:query', { q: q.value, caseSensitive: cs, useRegex: ureg, mode });
-      q.addEventListener('input', () => sendQ());
-      q.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          if (q.value) addHist(q.value);
-          ipcRenderer.send(e.shiftKey ? 'search:prev' : 'search:next', { mode });
-        }
-        else if (e.key === 'Escape') ipcRenderer.send('search:close');
-        else if (e.key === 'ArrowDown') { e.preventDefault(); ipcRenderer.send('search:show-history-menu'); }
-      });
-      histBtn.onclick = (e) => { e.preventDefault(); ipcRenderer.send('search:show-history-menu'); };
-      document.getElementById('prev').onclick = () => { if (q.value) addHist(q.value); ipcRenderer.send('search:prev', { mode }); };
-      document.getElementById('next').onclick = () => { if (q.value) addHist(q.value); ipcRenderer.send('search:next', { mode }); };
-      document.getElementById('x').onclick = () => ipcRenderer.send('search:close');
-      document.getElementById('dock').onclick = () => ipcRenderer.send('search:dock');
-      aa.onclick = () => { cs = !cs; aa.classList.toggle('active', cs); sendQ(); };
-      re.onclick = () => { ureg = !ureg; re.classList.toggle('active', ureg); sendQ(); };
-      mCur.onclick = () => { mode = 'current'; mCur.classList.add('active'); mAll.classList.remove('active'); sendQ(); };
-      mAll.onclick = () => { mode = 'all'; mAll.classList.add('active'); mCur.classList.remove('active'); sendQ(); };
-      ipcRenderer.on('search:result', (_e, p) => { cnt.textContent = (p.current ?? 0) + '/' + (p.total ?? 0); });
-      q.focus();
-    </script>
-  </body></html>`;
-  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  return { success: true };
-});
-
-// 검색 창 ↔ 메인 렌더러 IPC 중계
-const forwardToMain = (channel: string) => (_e: any, payload?: any) => {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
-};
-ipcMain.on('search:query', forwardToMain('search:query'));
-ipcMain.on('search:next', forwardToMain('search:next'));
-ipcMain.on('search:prev', forwardToMain('search:prev'));
-ipcMain.on('search:close', (_e) => {
-  if (searchWindow && !searchWindow.isDestroyed()) { try { searchWindow.close(); } catch {} }
-});
-ipcMain.on('search:dock', () => {
-  // 외부 창 닫고 메인 창에 인라인 검색바 열도록 알림
-  if (searchWindow && !searchWindow.isDestroyed()) { try { searchWindow.close(); } catch {} }
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('search:dock');
-});
-// 검색 이력 — 메모리에만 보관 (앱 종료 시 자동 소멸, 영속 저장 X)
-let searchHistory: string[] = [];
-ipcMain.handle('search:history-get', () => searchHistory);
+// 검색 이력 — 렌더러 재시작/HMR 이나 앱 재시작에도 남아있도록 파일로 영속화.
+// (이전엔 SearchBar.tsx 안 모듈 전역 배열에만 담아뒀는데, 렌더러가 리로드되면 그냥 날아갔다.)
+function searchHistoryFile(): string { return path.join(app.getPath('userData'), 'search-history.json'); }
+function loadSearchHistory(): string[] {
+  try {
+    const p = searchHistoryFile();
+    if (!fs.existsSync(p)) return [];
+    const arr = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return Array.isArray(arr) ? arr.filter((x: any) => typeof x === 'string') : [];
+  } catch { return []; }
+}
+function saveSearchHistory(list: string[]) {
+  try { fs.writeFileSync(searchHistoryFile(), JSON.stringify(list.slice(0, 50)), 'utf-8'); } catch {}
+}
+ipcMain.handle('search:history-get', () => loadSearchHistory());
 ipcMain.on('search:history-add', (_e, q: string) => {
   if (!q || !q.trim()) return;
-  searchHistory = searchHistory.filter(x => x !== q);
-  searchHistory.unshift(q);
-  if (searchHistory.length > 50) searchHistory = searchHistory.slice(0, 50);
-});
-
-// 검색 이력 dropdown — 별도 BrowserWindow (검색창 바로 아래, 스타일 커스텀)
-let histDropdownWindow: BrowserWindow | null = null;
-const closeHistDropdown = () => {
-  if (histDropdownWindow && !histDropdownWindow.isDestroyed()) {
-    try { histDropdownWindow.close(); } catch {}
-  }
-  histDropdownWindow = null;
-};
-ipcMain.on('search:show-history-menu', () => {
-  if (!searchWindow || searchWindow.isDestroyed()) return;
-  closeHistDropdown();
-  if (searchHistory.length === 0) return;
-  const sb = searchWindow.getBounds();
-  const items = searchHistory.slice(0, 30);
-  const itemH = 22;
-  const ddH = Math.min(220, items.length * itemH + 4);
-  const ddX = sb.x + 20;
-  const ddY = sb.y + sb.height + 2;
-  const ddW = Math.max(240, sb.width - 60);
-  const dd = new BrowserWindow({
-    x: ddX, y: ddY, width: ddW, height: ddH,
-    frame: false, resizable: false, movable: false,
-    transparent: false, backgroundColor: '#1a1a1a',
-    show: false, skipTaskbar: true, alwaysOnTop: true, focusable: true,
-    parent: searchWindow,
-    webPreferences: { nodeIntegration: true, contextIsolation: false },
-  });
-  histDropdownWindow = dd;
-  dd.on('closed', () => { if (histDropdownWindow === dd) histDropdownWindow = null; });
-  dd.on('blur', () => closeHistDropdown());
-  const ddHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    html,body{margin:0;padding:0;background:#1a1a1a;color:#eee;font-family:'Segoe UI',sans-serif;height:100%;overflow-y:auto;border:1px solid #333;border-radius:3px;box-sizing:border-box;-webkit-user-select:none;user-select:none;font-size:11px;}
-    body::-webkit-scrollbar{width:6px;}
-    body::-webkit-scrollbar-track{background:#1a1a1a;}
-    body::-webkit-scrollbar-thumb{background:#444;border-radius:3px;}
-    .item{padding:4px 10px;font-size:11px;cursor:pointer;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;}
-    .item:hover,.item.active{background:#2b6b9b;color:#fff;}
-  </style></head><body>
-    ${items.map((s, i) => '<div class="item" data-idx="' + i + '" title="' + s.replace(/"/g, '&quot;') + '">' + s.replace(/[<>&"]/g, c => (({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'} as Record<string,string>)[c] || c)) + '</div>').join('')}
-    <script>
-      const { ipcRenderer } = require('electron');
-      const items = ${JSON.stringify(items)};
-      let active = 0;
-      const els = document.querySelectorAll('.item');
-      const setActive = (i) => { els.forEach((el, k) => el.classList.toggle('active', k === i)); active = i; els[i]?.scrollIntoView({block:'nearest'}); };
-      setActive(0);
-      els.forEach((el, i) => {
-        el.onmouseenter = () => setActive(i);
-        el.onmousedown = (e) => { e.preventDefault(); ipcRenderer.send('search:hist-pick', items[i]); };
-      });
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); setActive(Math.min(items.length - 1, active + 1)); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }
-        else if (e.key === 'Enter') { e.preventDefault(); ipcRenderer.send('search:hist-pick', items[active]); }
-        else if (e.key === 'Escape') { ipcRenderer.send('search:hist-cancel'); }
-      });
-    </script>
-  </body></html>`;
-  dd.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(ddHtml));
-  dd.once('ready-to-show', () => { try { dd.show(); } catch {} });
-});
-ipcMain.on('search:hist-pick', (_e, text: string) => {
-  if (searchWindow && !searchWindow.isDestroyed()) searchWindow.webContents.send('search:fill', text);
-  closeHistDropdown();
-});
-ipcMain.on('search:hist-cancel', () => closeHistDropdown());
-// 메인 렌더러 → 검색 창 (결과 카운트)
-ipcMain.on('search:result', (_e, payload) => {
-  if (searchWindow && !searchWindow.isDestroyed()) searchWindow.webContents.send('search:result', payload);
+  const list = loadSearchHistory().filter(x => x !== q);
+  list.unshift(q);
+  saveSearchHistory(list);
 });
 
 // X11 서버 제어 IPC
@@ -6667,7 +6475,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
 
   // 저장된 시나리오(블록 조립/고급 XML) 목록 관리
   ipcMain.handle('sipp-scenario:list', () => loadSippScenarios());
-  ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any }) => saveSippScenario(args));
+  ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any; injectionCsv?: string }) => saveSippScenario(args));
   ipcMain.handle('sipp-scenario:delete', (_e, args: { id: string }) => { deleteSippScenario(args?.id); return { ok: true }; });
 }
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.

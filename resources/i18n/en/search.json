@@ -7,6 +7,8 @@
   "regex": "Regular expression",
   "modeCurrent": "Current tab",
   "modeAll": "All tabs",
-  "popout": "Detach to external window (movable to another monitor)",
-  "close": "Close (Esc)"
+  "popout": "Make movable (drag to reposition)",
+  "close": "Close (Esc)",
+  "dragToMove": "Drag to move",
+  "dock": "Lock in place"
 }
