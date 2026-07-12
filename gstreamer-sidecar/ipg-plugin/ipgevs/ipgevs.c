@@ -5,10 +5,10 @@
  * EVS_RX_* API (lib_dec/EvsRXlib.h). Each call to evs_dec_process()
  * feeds exactly one compact-format frame ([1-byte ToC][speech payload],
  * as produced by ipgevsparse/crypto_tool's "#!EVS_MC1.0\n" file format)
- * to EVS_RX_FeedFrame() (which wants the payload as an UNPACKED bit
- * array, one bit per byte, MSB-first - matching the reference decoder's
- * internal bit_stream representation) and immediately drains one frame
- * of PCM via EVS_RX_GetSamples().
+ * to EVS_RX_FeedFrame() (which wants the payload bytes already packed,
+ * same as the file's on-disk layout - see evs_dec_process()'s comment
+ * for why an unpacked bit array here silently corrupts the decode) and
+ * immediately drains one frame of PCM via EVS_RX_GetSamples().
  *
  * Encode path: wraps the raw init_encoder/evs_enc/indices_to_serial API
  * directly (there is no jitter-buffered TX-side helper lib), producing
@@ -120,10 +120,10 @@ EvsDecoder *evs_dec_init(EvsDecConfig *cfg, evs_error **err)
 void evs_dec_process(EvsDecoder *dec, gint16 *pcm_out, gint *out_samples,
                       const guint8 *frame_with_toc, gint frame_size, evs_error **err)
 {
-    unsigned char bit_stream[MAX_BITS_PER_FRAME];
+    unsigned char packed[MAX_BITS_PER_FRAME / 8];
     unsigned int nOutSamples = 0;
     guint8 toc;
-    gint ft, payload_size, num_bits, i, byte_idx, bit_idx;
+    gint ft, payload_size, num_bits;
     const int *map;
     const guint8 *payload;
 
@@ -155,17 +155,17 @@ void evs_dec_process(EvsDecoder *dec, gint16 *pcm_out, gint *out_samples,
         return;
     }
 
-    /* unpack payload bytes -> one bit per array element, MSB-first
-     * (matches lib_com/bitstream.c's unpack_bit(), which is what the
-     * reference decoder's internal representation and EVS_RX_FeedFrame
-     * both expect). */
-    for (i = 0; i < num_bits; i++) {
-        byte_idx = i >> 3;
-        bit_idx = 7 - (i & 7);
-        bit_stream[i] = (payload[byte_idx] >> bit_idx) & 0x01;
-    }
+    /* EVS_RX_FeedFrame's `au` param is the PACKED byte stream (it does
+     * `memcpy(dataUnit->data, au, (auSize + 7) / 8)` internally, i.e. it
+     * expects auSize in BITS but au already byte-packed) - passing an
+     * unpacked one-bit-per-byte array here (as an earlier version of this
+     * adapter did) makes it copy only the first (auSize+7)/8 *elements* of
+     * that unpacked array, truncating to garbage and producing decoded
+     * audio at roughly 1/1000th the correct amplitude instead of a clean
+     * decode failure. Just forward the payload bytes as-is. */
+    memcpy(packed, payload, (size_t)payload_size);
 
-    if (EVS_RX_FeedFrame(dec->hRx, bit_stream, (unsigned int)num_bits,
+    if (EVS_RX_FeedFrame(dec->hRx, packed, (unsigned int)num_bits,
                           (unsigned short)(dec->rtpSeq++), dec->rcvTimeMs, dec->rcvTimeMs) != EVS_RX_NO_ERROR) {
         set_err(err, "evs_dec_process: EVS_RX_FeedFrame failed");
         return;

@@ -76,7 +76,14 @@ export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ w
       return;
     }
 
-    const outPath = path.join(os.tmpdir(), `pepe-gst-dec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outPath = path.join(os.tmpdir(), `pepe-gst-dec-${runId}.wav`);
+    // 레지스트리를 고정 파일로 재사용하면, 캐시된 바이너리 레지스트리가 우리 커스텀
+    // ipgevs 플러그인(자체 컴파일, brew 패키지가 아님)을 두 번째 실행부터 잘못 역직렬화해
+    // "gst_element_register: assertion 'g_type_is_a (type, GST_TYPE_ELEMENT)' failed" 로
+    // 등록 자체가 깨지는 문제가 있었다 — 실행마다 새 레지스트리 경로를 써서 매번 플러그인을
+    // 다시 스캔하게 한다(파일 1개 디코딩용 단발 프로세스라 캐싱 이점도 없다).
+    const registryPath = path.join(os.tmpdir(), `pepe-gst-registry-${runId}.bin`);
     const args = buildDecodePipeline(kind, filePath, outPath);
 
     const proc = spawn(bin, args, {
@@ -86,7 +93,7 @@ export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ w
         ...process.env,
         GST_PLUGIN_PATH: path.join(root, 'gstreamer-1.0'),
         GST_PLUGIN_SYSTEM_PATH: '',
-        GST_REGISTRY: path.join(os.tmpdir(), 'pepe-gst-registry.bin'),
+        GST_REGISTRY: registryPath,
       },
     });
 
@@ -94,6 +101,7 @@ export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ w
     proc.stderr.on('data', (d) => { stderrBuf += d.toString('utf-8'); });
     proc.on('error', (e) => resolve({ error: `GStreamer 실행 실패: ${e?.message || e}` }));
     proc.on('exit', (code) => {
+      try { fs.unlinkSync(registryPath); } catch {}
       if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 44) {
         resolve({ wavPath: outPath });
       } else {
