@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents, protocol } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
 // dev 실행 시에만 [claude]/[codex]/[mcp-control] 등 디버그 로그 출력. console.error/warn 은 유지.
@@ -42,6 +42,10 @@ import { getSSHBridge } from './sshBridge';
 import { getSipSidecar } from './sipSidecar';
 import { getSippSidecar, disposeSippSidecar, type SippTestOptions } from './sippSidecar';
 import { loadSippScenarios, saveSippScenario, deleteSippScenario } from './sippScenarioStore';
+import { getRecents as getOfficeRecents, addRecent as addOfficeRecent, removeRecent as removeOfficeRecent } from './officeRecentsStore';
+import { getMediaRecents, addMediaRecent, removeMediaRecent, updateMediaPosition } from './mediaRecentsStore';
+import { mediaProbeFile, mediaDecryptToTemp, decodeLocalCodec, type MediaCodec } from './mediaCodec';
+import { decodeToWav } from './gstreamerSidecar';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
@@ -74,6 +78,20 @@ const __dirname = path.dirname(__filename);
 // const instanceId = `${process.pid}-${Date.now()}`;
 // const sessionDataPath = path.join(app.getPath('userData'), `session-${instanceId}`);
 // app.setPath('sessionData', sessionDataPath);
+
+// 오피스 워크스페이스(rhwp-studio iframe, public/rhwp-studio 에 자체 호스팅)가 File System
+// Access API(showOpenFilePicker 등)를 쓰려면 top frame 과 iframe 이 "동일 origin" 이어야 한다.
+// file:// 로 loadFile 하면 각 파일마다 opaque(고유) origin 이 되어 cross-origin 취급을 받으므로,
+// standard 스킴으로 등록한 커스텀 프로토콜로 앱 shell 과 rhwp-studio 를 같은 origin(scheme+host)
+// 아래에서 서빙한다 — path 만 다르면 origin 은 동일하게 취급된다.
+// (registerSchemesAsPrivileged 는 app 'ready' 이전, 모듈 로드 시점에 호출해야 한다.)
+const PEPE_PROTOCOL = 'pepeapp';
+protocol.registerSchemesAsPrivileged([
+  { scheme: PEPE_PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+]);
+function pepeAppUrl(hash?: string): string {
+  return `${PEPE_PROTOCOL}://app/index.html${hash ? '#' + hash : ''}`;
+}
 
 let mainWindow: BrowserWindow | null = null;
 const remoteShareServer = new RemoteShareServer(() => mainWindow);
@@ -221,7 +239,7 @@ ipcMain.handle('dev:toggle-poc-view', () => {
   if (!app.isPackaged && devServerUrl) {
     pocView.webContents.loadURL(devServerUrl + '#tab-poc');
   } else {
-    pocView.webContents.loadFile(path.join(__dirname, '../dist/index.html'), { hash: 'tab-poc' });
+    pocView.webContents.loadURL(pepeAppUrl('tab-poc'));
   }
   return true;
 });
@@ -239,7 +257,7 @@ function loadTabView(view: InstanceType<typeof WebContentsView>, viewId: string,
   if (!app.isPackaged && devServerUrl) {
     view.webContents.loadURL(devServerUrl + '#' + hash);
   } else {
-    view.webContents.loadFile(path.join(__dirname, '../dist/index.html'), { hash });
+    view.webContents.loadURL(pepeAppUrl(hash));
   }
 }
 
@@ -651,7 +669,7 @@ function createWindow() {
     // DevTools 자동 오픈 제거 — detach 창이 항상 300MB+ 를 추가로 잡아먹음.
     // 필요하면 Ctrl+Shift+I (또는 F12) 로 수동으로 열 수 있음.
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadURL(pepeAppUrl());
   }
 
   // transparent BrowserWindow 에서 Chromium 이 drop 이벤트를 렌더러로 전달하지 못해도
@@ -702,6 +720,24 @@ function createWindow() {
         console.log('[drag-drop] will-download intercepted →', fp);
         mainWindow?.webContents.send('chat:external-file-dropped', { path: fp });
       }
+      return;
+    }
+    // 오피스 워크스페이스(rhwp-studio / office-editor iframe) 내부 "저장" 메뉴가 blob: 다운로드로
+    // 문서를 내보낼 때 — 조용히 Downloads 폴더에 저장되는 기본 동작 대신 저장 위치를 고르는
+    // 네이티브 다이얼로그를 띄운다.
+    const fileName = item.getFilename();
+    const ext = path.extname(fileName).toLowerCase();
+    const OFFICE_SAVE_FILTERS: Record<string, { name: string; extensions: string[] }> = {
+      '.hwp': { name: 'HWP Document', extensions: ['hwp'] },
+      '.hwpx': { name: 'HWPX Document', extensions: ['hwpx'] },
+      '.docx': { name: 'Word Document', extensions: ['docx'] },
+      '.xlsx': { name: 'Excel Workbook', extensions: ['xlsx'] },
+      '.pptx': { name: 'PowerPoint Presentation', extensions: ['pptx'] },
+      '.pdf': { name: 'PDF Document', extensions: ['pdf'] },
+    };
+    const filter = OFFICE_SAVE_FILTERS[ext];
+    if (filter) {
+      item.setSaveDialogOptions({ title: '문서 저장', defaultPath: fileName, filters: [filter] });
     }
   });
   // will-frame-navigate 도 보강
@@ -1034,7 +1070,39 @@ function cleanupAiMirrorTempRoots(force = false) {
   } catch {}
 }
 
+// net.fetch(file://...) 를 그대로 리턴하면 Response.url 이 file:// 로 남아 Chromium 이 이 프레임의
+// origin 을 file:// 로 취급해버린다 (주소창엔 pepeapp://app 이 떠도 실제 origin 은 opaque file://) —
+// 그러면 iframe 이 여전히 cross-origin 취급되어 File System Access API 가 막힌다. 그래서 파일을
+// 직접 읽어 file:// URL 이 전혀 섞이지 않는 새 Response 를 만들어 돌려준다.
+const PEPE_MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm',
+  '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
+};
 app.whenReady().then(() => {
+  // pepeapp://app/... → dist/... 로 매핑 (index.html 은 물론 public/rhwp-studio 가 복사된
+  // dist/rhwp-studio/... 도 같은 origin 으로 서빙된다).
+  protocol.handle(PEPE_PROTOCOL, async (request) => {
+    const { pathname } = new URL(request.url);
+    const relPath = decodeURIComponent(pathname === '' ? '/' : pathname);
+    // Next.js 정적 export(office-editor) 는 확장자 없는 라우트를 /editor.html 로 내보낸다(디렉터리
+    // index.html 이 아니라). Caddyfile 의 try_files 규칙과 동일하게: 정확한 경로 → path.html →
+    // path/index.html 순으로 시도 — rhwp-studio(디렉터리+index.html)와 office-editor(플랫 .html) 양쪽 다 커버.
+    const candidates = relPath.endsWith('/')
+      ? [relPath + 'index.html']
+      : [relPath, `${relPath}.html`, `${relPath}/index.html`];
+    for (const candidate of candidates) {
+      const filePath = path.join(__dirname, '../dist', candidate);
+      try {
+        const data = await fs.promises.readFile(filePath);
+        const mime = PEPE_MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+        return new Response(data, { status: 200, headers: { 'content-type': mime } });
+      } catch { /* try next candidate */ }
+    }
+    return new Response('Not Found', { status: 404 });
+  });
   sessionsData = loadSessionsData();
   cleanupStaleTempFiles();
   cleanupAiMirrorTempRoots(false);
@@ -3127,6 +3195,123 @@ ipcMain.handle('dialog:save-text-file', async (_e, args: { defaultName?: string;
     return { success: true, filePath: result.filePath };
   } catch (e: any) {
     return { success: false, error: String(e?.message || e) };
+  }
+});
+
+// 오피스 워크스페이스 — 워드/엑셀/파워포인트/PDF 파일 열기 (office-editor iframe 이 same-origin
+// blob: URL 로 로드할 수 있도록 바이너리를 렌더러에 그대로 넘긴다).
+const OFFICE_OPEN_FILTERS: Record<string, { name: string; extensions: string[] }> = {
+  hwp: { name: 'HWP Document', extensions: ['hwp', 'hwpx'] },
+  docx: { name: 'Word Document', extensions: ['docx'] },
+  xlsx: { name: 'Excel Workbook', extensions: ['xlsx'] },
+  pptx: { name: 'PowerPoint Presentation', extensions: ['pptx'] },
+  pdf: { name: 'PDF Document', extensions: ['pdf'] },
+  drawio: { name: 'draw.io Diagram', extensions: ['drawio', 'xml'] },
+};
+function readOfficeFile(filePath: string) {
+  const data = fs.readFileSync(filePath);
+  return { filePath, fileName: path.basename(filePath), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+}
+ipcMain.handle('office-doc:open-file', async (_e, { kind }: { kind: 'hwp' | 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'drawio' }) => {
+  if (!mainWindow) return null;
+  const filter = OFFICE_OPEN_FILTERS[kind];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '파일 열기',
+    filters: filter ? [filter, { name: 'All Files', extensions: ['*'] }] : [{ name: 'All Files', extensions: ['*'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  try {
+    return readOfficeFile(result.filePaths[0]);
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+// 최근 문서 리스트에서 다시 열 때 — 다이얼로그 없이 저장된 경로로 바로 읽는다.
+ipcMain.handle('office-doc:read-file', async (_e, { filePath }: { filePath: string }) => {
+  try {
+    return readOfficeFile(filePath);
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+
+// 오피스 워크스페이스 — 임의 바이너리 저장 (PDF 주석 편집 등, pdf.js saveDocument() 결과 등).
+ipcMain.handle('office-doc:save-file', async (_e, args: { data: ArrayBuffer; defaultName?: string; filters?: { name: string; extensions: string[] }[] }) => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '파일 저장',
+      defaultPath: args.defaultName || 'document',
+      filters: args.filters || [{ name: 'All Files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { success: false, canceled: true };
+    fs.writeFileSync(result.filePath, Buffer.from(args.data));
+    return { success: true, filePath: result.filePath };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('office-recents:get', (_e, { kind }: { kind: string }) => getOfficeRecents(kind));
+ipcMain.handle('office-recents:add', (_e, { kind, doc }: { kind: string; doc: { filePath: string; fileName: string } }) => addOfficeRecent(kind, doc));
+ipcMain.handle('office-recents:remove', (_e, { kind, filePath }: { kind: string; filePath: string }) => removeOfficeRecent(kind, filePath));
+
+// ── 미디어 플레이어 — 파일 열기 / 최근 재생 목록 / #!ENC 복호화 ──
+const MEDIA_OPEN_FILTER = { name: 'Audio Files', extensions: ['wav', 'alaw', 'pcma', 'al', 'ulaw', 'pcmu', 'mulaw', 'ul', 'amr', 'amrnb', 'awb', 'amrwb', 'evs', 'opus', 'raw'] };
+ipcMain.handle('media:open-file', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '음원 파일 열기',
+    filters: [MEDIA_OPEN_FILTER, { name: 'All Files', extensions: ['*'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  try {
+    return mediaProbeFile(result.filePaths[0]);
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('media:probe-file', (_e, { filePath }: { filePath: string }) => {
+  try {
+    return mediaProbeFile(filePath);
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('media:decrypt', (_e, { filePath, password }: { filePath: string; password: string }) => {
+  try {
+    return mediaDecryptToTemp(filePath, password);
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('media-recents:get', () => getMediaRecents());
+ipcMain.handle('media-recents:add', (_e, { doc }: { doc: { filePath: string; fileName: string; durationSec?: number; codec?: string } }) => addMediaRecent(doc));
+ipcMain.handle('media-recents:remove', (_e, { filePath }: { filePath: string }) => removeMediaRecent(filePath));
+ipcMain.handle('media-recents:set-position', (_e, { filePath, positionSec }: { filePath: string; positionSec: number }) => updateMediaPosition(filePath, positionSec));
+// WAV/A-law/u-law/raw 는 GStreamer 없이 로컬 코드로 직접 디코딩 — 16bit PCM 을 렌더러로 넘겨 Web Audio API 로 재생.
+ipcMain.handle('media:decode-local', (_e, { filePath, codec }: { filePath: string; codec: MediaCodec }) => {
+  try {
+    const { pcm, sampleRate, channels } = decodeLocalCodec(filePath, codec);
+    return { sampleRate, channels, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) };
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+// EVS/AMR-NB/AMR-WB/OPUS 는 네이티브 GStreamer 사이드카로 WAV 로 디코딩한 뒤,
+// 그 WAV 를 media:decode-local(로컬 코드 경로)로 다시 읽어 재생 파이프라인을 통일한다.
+ipcMain.handle('media:decode-gstreamer', async (_e, { filePath, codec }: { filePath: string; codec: 'evs' | 'amrnb' | 'amrwb' | 'opus' }) => {
+  const result = await decodeToWav(filePath, codec);
+  if ('error' in result) return { error: result.error };
+  try {
+    const { pcm, sampleRate, channels } = decodeLocalCodec(result.wavPath, 'wav');
+    fs.unlink(result.wavPath, () => {});
+    return { sampleRate, channels, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) };
+  } catch (e: any) {
+    fs.unlink(result.wavPath, () => {});
+    return { error: String(e?.message || e) };
   }
 });
 
@@ -6075,7 +6260,7 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
   if (!app.isPackaged && devServerUrl) {
     win.loadURL(devServerUrl + '#detached');
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'), { hash: 'detached' });
+    win.loadURL(pepeAppUrl('detached'));
   }
   return win;
 }
@@ -6107,7 +6292,7 @@ function loadStickyNoteWindow(url: string, win: BrowserWindow) {
   if (!app.isPackaged && devServerUrl) {
     win.loadURL(devServerUrl + url);
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url.replace(/^#/, '') });
+    win.loadURL(pepeAppUrl(url.replace(/^#/, '')));
   }
 }
 

@@ -1,0 +1,4 @@
+1:"$Sreact.fragment"
+2:I[88,["/office-editor/_next/static/chunks/5d994f6253d479dc.js","/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js"],"default"]
+3:I[69879,["/office-editor/_next/static/chunks/5d994f6253d479dc.js","/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js"],"default"]
+0:{"buildId":"zpbpmmbMxLkWcQ2pijFVC","rsc":["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","template":["$","$L3",null,{}]}]]}],"loading":null,"isPartial":false}

@@ -1,0 +1,169 @@
+// src/components/OfficeWorkspace.tsx
+// 한글(HWP/HWPX) 워크스페이스 — @rhwp/editor(https://github.com/edwardkim/rhwp)를 iframe 으로
+// 임베드한다. rhwp-studio 는 public/rhwp-studio 에 자체 호스팅되어 앱과 같은 origin
+// (pepeapp://app, electron/main.ts 의 커스텀 프로토콜) 에서 서빙되므로 열기/저장은 내부 파일
+// 메뉴(showOpenFilePicker/showSaveFilePicker)로도 처리되지만, 워드/엑셀/파워포인트와 동일하게
+// 상단 "새 문서"/"열기" 버튼 + 미니탭으로 여러 문서를 동시에 열어둘 수 있게 한다.
+import { useEffect, useRef, useState } from 'react';
+import type { RhwpEditor } from '@rhwp/editor';
+import { OfficeBackBar } from './OfficeBackBar';
+import { OfficeEmptyState } from './OfficeEmptyState';
+import { getRecents, addRecent, removeRecent, type RecentDoc } from '../utils/officeRecents';
+
+const api = () => (window as any).api || {};
+
+const toolbarBtn: React.CSSProperties = {
+  padding: '4px 12px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)',
+  background: 'var(--win-surface, #161b22)', color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer',
+};
+
+type FileData = { data: ArrayBuffer; fileName: string };
+type OpenHwp = { id: string; title: string; fileData?: FileData };
+
+let nextHwpId = 0;
+
+export function OfficeWorkspace({ instanceId: _instanceId }: { instanceId: string }) {
+  const [docs, setDocs] = useState<OpenHwp[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [statusById, setStatusById] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+  const [recents, setRecents] = useState<RecentDoc[]>([]);
+  useEffect(() => { getRecents('hwp').then(setRecents); }, []);
+  const docsRef = useRef<OpenHwp[]>(docs);
+  docsRef.current = docs;
+  const editorsRef = useRef<Map<string, RhwpEditor>>(new Map());
+  const mountedRef = useRef<Set<string>>(new Set());
+
+  const setStatus = (id: string, s: string) => setStatusById(prev => ({ ...prev, [id]: s }));
+
+  const mountEditor = (id: string, container: HTMLDivElement, fileData?: FileData) => {
+    if (mountedRef.current.has(id)) return;
+    mountedRef.current.add(id);
+    setStatus(id, '에디터 로딩 중...');
+    (async () => {
+      const { createEditor } = await import('@rhwp/editor');
+      const editor = await createEditor(container, { studioUrl: `${window.location.origin}/rhwp-studio/index.html` });
+      editorsRef.current.set(id, editor);
+      if (fileData) {
+        const result = await editor.loadFile(fileData.data, fileData.fileName);
+        setStatus(id, `${fileData.fileName} — ${result?.pageCount ?? '?'}페이지 로드 완료`);
+      } else {
+        // createEditor() 직후를 그냥 "빈 문서"라고 가정하면 환경에 따라 캔버스가 비어 보이는
+        // 문제가 있었다 — "파일 > 새로 만들기" 메뉴 항목은 이 시점에 DOM 상 disabled 상태라
+        // 클릭해도 무시된다. 대신 실제 단축키(Alt+N)를 그대로 시뮬레이션해서 메뉴의 disabled
+        // 여부와 무관하게 내부 커맨드 디스패처(file:new-doc)를 직접 트리거한다.
+        try {
+          const doc = (editor.element as HTMLIFrameElement).contentDocument;
+          if (doc) {
+            const ev = new KeyboardEvent('keydown', { key: 'n', code: 'KeyN', altKey: true, bubbles: true, cancelable: true });
+            doc.dispatchEvent(ev);
+            doc.body?.dispatchEvent(ev);
+          }
+        } catch { /* 실패해도 기존 빈 상태 그대로 둔다 */ }
+        setStatus(id, '새 문서');
+      }
+    })().catch((e) => setStatus(id, `초기화 실패: ${e?.message || e}`));
+  };
+
+  const addDoc = (title: string, fileData?: FileData) => {
+    const id = `hwp-${++nextHwpId}`;
+    setDocs(prev => [...prev, { id, title, fileData }]);
+    setActiveId(id);
+  };
+
+  const closeDoc = (id: string) => {
+    editorsRef.current.get(id)?.destroy();
+    editorsRef.current.delete(id);
+    mountedRef.current.delete(id);
+    setDocs(prev => prev.filter(d => d.id !== id));
+    setActiveId(prev => {
+      if (prev !== id) return prev;
+      const remaining = docsRef.current.filter(d => d.id !== id);
+      return remaining.length ? remaining[remaining.length - 1].id : null;
+    });
+  };
+
+  const handleNew = () => {
+    setError('');
+    const count = docsRef.current.filter(d => d.title.startsWith('새 문서')).length + 1;
+    addDoc(`새 문서 ${count}`);
+  };
+
+  const handleOpen = async () => {
+    const result = await api().officeDocOpenFile?.('hwp');
+    if (!result || result.error) {
+      if (result?.error) setError(`열기 실패: ${result.error}`);
+      return;
+    }
+    setError('');
+    addDoc(result.fileName, { data: result.data, fileName: result.fileName });
+    addRecent('hwp', { filePath: result.filePath, fileName: result.fileName }).then(setRecents);
+  };
+
+  const handleOpenRecent = async (doc: RecentDoc) => {
+    const result = await api().officeDocReadFile?.(doc.filePath);
+    if (!result || result.error) {
+      setError(`열기 실패: ${result?.error || '파일을 찾을 수 없습니다'}`);
+      removeRecent('hwp', doc.filePath).then(setRecents);
+      return;
+    }
+    setError('');
+    addDoc(result.fileName, { data: result.data, fileName: result.fileName });
+    addRecent('hwp', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: 'var(--win-bg, #0d1117)' }}>
+      <OfficeBackBar
+        label="한글 (HWP/HWPX)"
+        right={(
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button style={toolbarBtn} onClick={handleNew}>📄 새 문서</button>
+            <button style={toolbarBtn} onClick={handleOpen}>📂 열기</button>
+            {error && <span style={{ fontSize: 11, color: '#e5534b' }}>{error}</span>}
+          </div>
+        )}
+      />
+      {docs.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 8px 0', borderBottom: '1px solid var(--win-border, #30363d)', overflowX: 'auto', flex: '0 0 auto' }}>
+          {docs.map(d => (
+            <div
+              key={d.id}
+              onClick={() => setActiveId(d.id)}
+              title={d.title}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: '6px 6px 0 0',
+                background: d.id === activeId ? 'var(--win-surface, #161b22)' : 'transparent',
+                border: '1px solid var(--win-border, #30363d)',
+                color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer', maxWidth: 180, whiteSpace: 'nowrap',
+              }}
+            >
+              <span>📄</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</span>
+              <span
+                onClick={(e) => { e.stopPropagation(); closeDoc(d.id); }}
+                style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}
+              >×</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, position: 'relative' }}>
+        {docs.length === 0 && (
+          <OfficeEmptyState
+            recents={recents}
+            onOpenRecent={handleOpenRecent}
+            onRemoveRecent={(fp) => removeRecent('hwp', fp).then(setRecents)}
+            message='"새 문서" 또는 "열기"를 눌러 한글 문서를 시작하세요.'
+          />
+        )}
+        {docs.map(d => (
+          <div key={d.id} style={{ position: 'absolute', inset: 0, display: d.id === activeId ? 'flex' : 'none', flexDirection: 'column' }}>
+            <div ref={(el) => { if (el) mountEditor(d.id, el, d.fileData); }} style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, position: 'relative' }} />
+            <div style={{ position: 'absolute', bottom: 6, right: 10, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)', pointerEvents: 'none' }}>{statusById[d.id]}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

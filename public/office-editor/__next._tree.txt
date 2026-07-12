@@ -1,0 +1,2 @@
+:HL["/office-editor/_next/static/chunks/0e543c94dee5c48c.css","style"]
+0:{"buildId":"zpbpmmbMxLkWcQ2pijFVC","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"(main)","paramType":null,"paramKey":"(main)","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}

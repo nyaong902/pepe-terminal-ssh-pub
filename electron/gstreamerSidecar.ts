@@ -1,0 +1,104 @@
+// electron/gstreamerSidecar.ts
+// 미디어 플레이어 — EVS/AMR-NB/AMR-WB/OPUS 재생을 위한 네이티브 GStreamer 사이드카.
+//
+// SIPp 사이드카와 달리 상시 상주 프로세스가 아니라 "파일 1개 디코딩 1회 실행" 모델이다:
+// gst-launch-1.0.exe 를 짧은 파이프라인(파일 읽기 → 해당 코덱 디코더 → WAV 인코딩 →
+// 임시 파일 저장)으로 spawn 하고, 종료를 기다렸다가 결과 WAV 경로를 반환한다.
+// 렌더러는 이후 이 WAV 파일을 mediaDecodeLocal(로컬 코드 경로)로 읽어 Web Audio API 로
+// 재생한다 — GStreamer 사이드카는 "디코딩"만 담당하고 실제 재생 파이프라인은 통일한다.
+//
+// 바이너리/플러그인 경로:
+//   env PEPE_GST 우선 → 패키지: <resources>/gstreamer-sidecar/<plat>/gst-launch-1.0.exe
+//                     → dev:    <repo>/gstreamer-sidecar/bin/<plat>/gst-launch-1.0.exe
+import { app } from 'electron';
+import { spawn } from 'child_process';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+
+function platDir(): string {
+  if (process.platform === 'win32') return 'win-x64';
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
+  return 'linux-x64';
+}
+
+function sidecarRoot(): string | null {
+  const candidates: string[] = [];
+  if (process.env.PEPE_GST_ROOT) candidates.push(process.env.PEPE_GST_ROOT);
+  try {
+    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'gstreamer-sidecar', platDir()));
+    else candidates.push(path.join(process.cwd(), 'gstreamer-sidecar', 'bin', platDir()));
+  } catch { /* app not ready 등 — 다음 후보로 */ }
+  for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }
+  return null;
+}
+
+function resolveBinary(): string | null {
+  const root = sidecarRoot();
+  if (!root) return null;
+  const bin = path.join(root, process.platform === 'win32' ? 'gst-launch-1.0.exe' : 'gst-launch-1.0');
+  return fs.existsSync(bin) ? bin : null;
+}
+
+export type MediaCodecKind = 'evs' | 'amrnb' | 'amrwb' | 'opus';
+
+// gst-launch 는 property 문자열 값 안의 '\' 를 이스케이프 문자로 해석해 그대로 제거해버린다
+// (Windows 경로 "C:\Users\..." 를 "C:Users..." 로 깨뜨림) — 슬래시로 바꿔서 넘겨야 한다.
+// Windows 는 forward-slash 경로도 그대로 지원하므로 안전하다.
+function toGstPath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+// 3GPP EVS 컴팩트 저장 포맷(#!EVS_MC1.0\n[TOC][SPEECH]...)을 읽는 ipgevsparse+ipgevsdec,
+// 3GPP TS26.201 표준 AMR/AMR-WB 저장 포맷(#!AMR\n / #!AMR-WB\n)을 읽는 amrparse+amrnbdec/amrwbdec,
+// Ogg-Opus 컨테이너를 읽는 oggdemux+opusdec — 모두 표준 헤더 감지 기반이라 별도 옵션 불필요.
+function buildDecodePipeline(kind: MediaCodecKind, inPath: string, outPath: string): string[] {
+  const src = ['filesrc', `location=${toGstPath(inPath)}`];
+  const sink = ['wavenc', '!', 'filesink', `location=${toGstPath(outPath)}`];
+  switch (kind) {
+    case 'evs':
+      return [...src, '!', 'ipgevsparse', '!', 'ipgevsdec', '!', 'audioconvert', '!', ...sink];
+    case 'amrnb':
+      return [...src, '!', 'amrparse', '!', 'amrnbdec', '!', 'audioconvert', '!', ...sink];
+    case 'amrwb':
+      return [...src, '!', 'amrparse', '!', 'amrwbdec', '!', 'audioconvert', '!', ...sink];
+    case 'opus':
+      return [...src, '!', 'oggdemux', '!', 'opusdec', '!', 'audioconvert', '!', ...sink];
+  }
+}
+
+export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ wavPath: string } | { error: string }> {
+  return new Promise((resolve) => {
+    const bin = resolveBinary();
+    const root = sidecarRoot();
+    if (!bin || !root) {
+      resolve({ error: 'GStreamer 사이드카 바이너리를 찾을 수 없습니다. gstreamer-sidecar/bin/<plat>/ 에 배치하거나 PEPE_GST_ROOT 환경변수로 경로를 지정하세요.' });
+      return;
+    }
+
+    const outPath = path.join(os.tmpdir(), `pepe-gst-dec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
+    const args = buildDecodePipeline(kind, filePath, outPath);
+
+    const proc = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GST_PLUGIN_PATH: path.join(root, 'gstreamer-1.0'),
+        GST_PLUGIN_SYSTEM_PATH: '',
+        GST_REGISTRY: path.join(os.tmpdir(), 'pepe-gst-registry.bin'),
+      },
+    });
+
+    let stderrBuf = '';
+    proc.stderr.on('data', (d) => { stderrBuf += d.toString('utf-8'); });
+    proc.on('error', (e) => resolve({ error: `GStreamer 실행 실패: ${e?.message || e}` }));
+    proc.on('exit', (code) => {
+      if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 44) {
+        resolve({ wavPath: outPath });
+      } else {
+        resolve({ error: `디코딩 실패 (exit ${code}): ${stderrBuf.slice(-500) || '알 수 없는 오류'}` });
+      }
+    });
+  });
+}

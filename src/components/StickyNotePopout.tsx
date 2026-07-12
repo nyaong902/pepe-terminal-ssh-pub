@@ -140,7 +140,7 @@ const StickyNotePopout: React.FC<{ noteId: string }> = ({ noteId }) => {
             cursor: 'pointer', fontSize: 12, fontWeight: 700,
           } as React.CSSProperties}
         >
-          ✕
+          🗑️
         </button>
       </div>
       <div

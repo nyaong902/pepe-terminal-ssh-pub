@@ -66,3 +66,6 @@ sip-sidecar/bin/*
 !sip-sidecar/bin/win-x64
 sip-sidecar/bin/win-x64/*
 !sip-sidecar/bin/win-x64/sipd.exe
+
+# electron-builder 로컬 빌드 캐시 (수 GB, 재생성 가능 — 커밋 대상 아님)
+.cache/

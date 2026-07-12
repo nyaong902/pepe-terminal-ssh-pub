@@ -1,0 +1,122 @@
+<!DOCTYPE html><!--zpbpmmbMxLkWcQ2pijFVC--><html><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="stylesheet" href="/office-editor/_next/static/chunks/0e543c94dee5c48c.css" data-precedence="next"/><link rel="preload" as="script" fetchPriority="low" href="/office-editor/_next/static/chunks/5cf8bc313b42452d.js"/><script src="/office-editor/_next/static/chunks/6a760078a131d0ca.js" async=""></script><script src="/office-editor/_next/static/chunks/3a94cf22836738c1.js" async=""></script><script src="/office-editor/_next/static/chunks/e426a62af4392ae0.js" async=""></script><script src="/office-editor/_next/static/chunks/d99e5a749530d860.js" async=""></script><script src="/office-editor/_next/static/chunks/turbopack-8e8044e6457c9e08.js" async=""></script><script src="/office-editor/_next/static/chunks/5d994f6253d479dc.js" async=""></script><script src="/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js" async=""></script><script src="/office-editor/_next/static/chunks/74bd5d39e5671b68.js" async=""></script><script src="/office-editor/_next/static/chunks/d409aa61efc28fad.js" async=""></script><script src="/office-editor/_next/static/chunks/db570818f0d9802f.js" async=""></script><script src="/office-editor/_next/static/chunks/d53828b24e48e7b5.js" async=""></script><link rel="preload" href="https://www.googletagmanager.com/gtag/js?id=G-EFLBPT6TS8" as="script"/><title>Document Editor — ZIZIYI Office</title><meta name="description" content="Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private."/><meta name="keywords" content="web office,online office suite,Word online,Excel online,PowerPoint online,DOCX viewer,DOCX editor,XLSX editor,PPTX editor,open docx online,edit excel online,serverless office,privacy first,ZIZIYI"/><meta name="robots" content="noindex, nofollow"/><meta name="mobile-web-app-capable" content="yes"/><meta name="apple-mobile-web-app-capable" content="yes"/><meta name="apple-mobile-web-app-title" content="ZIZIYI Office"/><meta property="og:title" content="Document Editor — ZIZIYI Office"/><meta property="og:description" content="Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private."/><meta property="og:site_name" content="ZIZIYI Office"/><meta property="og:locale" content="en_US"/><meta property="og:type" content="website"/><meta name="twitter:card" content="summary_large_image"/><meta name="twitter:creator" content="@nicezizi"/><meta name="twitter:title" content="Document Editor — ZIZIYI Office"/><meta name="twitter:description" content="Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private."/><link rel="icon" href="/favicon.ico" sizes="any"/><link rel="icon" href="/logo.svg" type="image/svg+xml"/><link rel="apple-touch-icon" href="/logo.png"/><script>(()=>{let a=document.cookie.match(/theme=([^;]+)/)?.[1]||"",b=window.matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.classList.toggle("dark","dark"==a||b&&"light"!=a)})()</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"ZIZIYI Office","url":"https://office.ziziyi.com","description":"Open, view, and edit Word, Excel, and PowerPoint documents directly in your browser. No upload, no server — your files stay private.","applicationCategory":"BusinessApplication","operatingSystem":"Any","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"featureList":["Edit DOCX, XLSX, PPTX files","No file upload required","Privacy-first — files stay local","Free templates","Browser extension for drag & drop"]}</script><script src="/office-editor/_next/static/chunks/a6dad97d9634a72d.js" noModule=""></script></head><body><div hidden=""><!--$--><!--/$--></div><style>
+:root {
+  --bprogress-color: #FF5900;
+  --bprogress-height: 4px;
+  --bprogress-spinner-size: 18px;
+  --bprogress-spinner-animation-duration: 400ms;
+  --bprogress-spinner-border-size: 2px;
+  --bprogress-box-shadow: 0 0 10px #FF5900, 0 0 5px #FF5900;
+  --bprogress-z-index: 99999;
+  --bprogress-spinner-top: 15px;
+  --bprogress-spinner-bottom: auto;
+  --bprogress-spinner-right: 15px;
+  --bprogress-spinner-left: auto;
+}
+
+.bprogress {
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: var(--bprogress-z-index);
+}
+
+.bprogress .bar {
+  background: var(--bprogress-color);
+  position: fixed;
+  z-index: var(--bprogress-z-index);
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--bprogress-height);
+}
+
+/* Fancy blur effect */
+.bprogress .peg {
+  display: block;
+  position: absolute;
+  right: 0;
+  width: 100px;
+  height: 100%;
+  box-shadow: var(--bprogress-box-shadow);
+  opacity: 1.0;
+  transform: rotate(3deg) translate(0px, -4px);
+}
+
+/* Remove these to get rid of the spinner */
+.bprogress .spinner {
+  display: block;
+  position: fixed;
+  z-index: var(--bprogress-z-index);
+  top: var(--bprogress-spinner-top);
+  bottom: var(--bprogress-spinner-bottom);
+  right: var(--bprogress-spinner-right);
+  left: var(--bprogress-spinner-left);
+}
+
+.bprogress .spinner-icon {
+  width: var(--bprogress-spinner-size);
+  height: var(--bprogress-spinner-size);
+  box-sizing: border-box;
+  border: solid var(--bprogress-spinner-border-size) transparent;
+  border-top-color: var(--bprogress-color);
+  border-left-color: var(--bprogress-color);
+  border-radius: 50%;
+  -webkit-animation: bprogress-spinner var(--bprogress-spinner-animation-duration) linear infinite;
+  animation: bprogress-spinner var(--bprogress-spinner-animation-duration) linear infinite;
+}
+
+.bprogress-custom-parent {
+  overflow: hidden;
+  position: relative;
+}
+
+.bprogress-custom-parent .bprogress .spinner,
+.bprogress-custom-parent .bprogress .bar {
+  position: absolute;
+}
+
+.bprogress .indeterminate {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--bprogress-height);
+  overflow: hidden;
+}
+
+.bprogress .indeterminate .inc,
+.bprogress .indeterminate .dec {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background-color: var(--bprogress-color);
+}
+
+.bprogress .indeterminate .inc {
+  animation: bprogress-indeterminate-increase 2s infinite;
+}
+
+.bprogress .indeterminate .dec {
+  animation: bprogress-indeterminate-decrease 2s 0.5s infinite;
+}
+
+@-webkit-keyframes bprogress-spinner {
+  0%   { -webkit-transform: rotate(0deg); transform: rotate(0deg); }
+  100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
+}
+
+@keyframes bprogress-spinner {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes bprogress-indeterminate-increase {
+  from { left: -5%; width: 5%; }
+  to { left: 130%; width: 100%; }
+}
+
+@keyframes bprogress-indeterminate-decrease {
+  from { left: -80%; width: 80%; }
+  to { left: 110%; width: 10%; }
+}
+</style><!--$!--><template data-dgst="BAILOUT_TO_CLIENT_SIDE_RENDERING"></template><!--/$--><div><div class="w-screen h-screen"><div id="placeholder"><iframe class="w-0 h-0 hidden" src="/office-editor/v9.3.0.24-1/web-apps/apps/api/documents/preload.html"></iframe></div></div></div><!--$--><!--/$--><script src="/office-editor/_next/static/chunks/5cf8bc313b42452d.js" id="_R_" async=""></script><script>(self.__next_f=self.__next_f||[]).push([0])</script><script>self.__next_f.push([1,"1:\"$Sreact.fragment\"\n3:I[88,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"default\"]\n4:I[69879,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"default\"]\n5:I[58274,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"ClientPageRoot\"]\n6:I[40104,[\"/office-editor/_next/static/chunks/74bd5d39e5671b68.js\",\"/office-editor/_next/static/chunks/d409aa61efc28fad.js\",\"/office-editor/_next/static/chunks/db570818f0d9802f.js\",\"/office-editor/_next/static/chunks/d53828b24e48e7b5.js\"],\"default\"]\n9:I[68633,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"OutletBoundary\"]\na:\"$Sreact.suspense\"\nc:I[68633,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"ViewportBoundary\"]\ne:I[68633,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"MetadataBoundary\"]\n10:I[4773,[],\"default\"]\n:HL[\"/office-editor/_next/static/chunks/0e543c94dee5c48c.css\",\"style\"]\n"])</script><script>self.__next_f.push([1,"0:{\"P\":null,\"b\":\"zpbpmmbMxLkWcQ2pijFVC\",\"c\":[\"\",\"editor\"],\"q\":\"\",\"i\":false,\"f\":[[[\"\",{\"children\":[\"editor\",{\"children\":[\"__PAGE__\",{}]}]},\"$undefined\",\"$undefined\",true],[[\"$\",\"$1\",\"c\",{\"children\":[[[\"$\",\"link\",\"0\",{\"rel\":\"stylesheet\",\"href\":\"/office-editor/_next/static/chunks/0e543c94dee5c48c.css\",\"precedence\":\"next\",\"crossOrigin\":\"$undefined\",\"nonce\":\"$undefined\"}],[\"$\",\"script\",\"script-0\",{\"src\":\"/office-editor/_next/static/chunks/74bd5d39e5671b68.js\",\"async\":true,\"nonce\":\"$undefined\"}],[\"$\",\"script\",\"script-1\",{\"src\":\"/office-editor/_next/static/chunks/d409aa61efc28fad.js\",\"async\":true,\"nonce\":\"$undefined\"}],[\"$\",\"script\",\"script-2\",{\"src\":\"/office-editor/_next/static/chunks/db570818f0d9802f.js\",\"async\":true,\"nonce\":\"$undefined\"}]],\"$L2\"]}],{\"children\":[[\"$\",\"$1\",\"c\",{\"children\":[null,[\"$\",\"$L3\",null,{\"parallelRouterKey\":\"children\",\"error\":\"$undefined\",\"errorStyles\":\"$undefined\",\"errorScripts\":\"$undefined\",\"template\":[\"$\",\"$L4\",null,{}],\"templateStyles\":\"$undefined\",\"templateScripts\":\"$undefined\",\"notFound\":\"$undefined\",\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}]]}],{\"children\":[[\"$\",\"$1\",\"c\",{\"children\":[[\"$\",\"$L5\",null,{\"Component\":\"$6\",\"serverProvidedParams\":{\"searchParams\":{},\"params\":{},\"promises\":[\"$@7\",\"$@8\"]}}],[[\"$\",\"script\",\"script-0\",{\"src\":\"/office-editor/_next/static/chunks/d53828b24e48e7b5.js\",\"async\":true,\"nonce\":\"$undefined\"}]],[\"$\",\"$L9\",null,{\"children\":[\"$\",\"$a\",null,{\"name\":\"Next.MetadataOutlet\",\"children\":\"$@b\"}]}]]}],{},null,false,false]},null,false,false]},null,false,false],[\"$\",\"$1\",\"h\",{\"children\":[null,[\"$\",\"$Lc\",null,{\"children\":\"$Ld\"}],[\"$\",\"div\",null,{\"hidden\":true,\"children\":[\"$\",\"$Le\",null,{\"children\":[\"$\",\"$a\",null,{\"name\":\"Next.Metadata\",\"children\":\"$Lf\"}]}]}],null]}],false]],\"m\":\"$undefined\",\"G\":[\"$10\",[]],\"S\":true}\n"])</script><script>self.__next_f.push([1,"7:{}\n8:\"$0:f:0:1:1:children:1:children:0:props:children:0:props:serverProvidedParams:params\"\n"])</script><script>self.__next_f.push([1,"11:I[33492,[\"/office-editor/_next/static/chunks/74bd5d39e5671b68.js\",\"/office-editor/_next/static/chunks/d409aa61efc28fad.js\",\"/office-editor/_next/static/chunks/db570818f0d9802f.js\"],\"ProgressProvider\"]\n12:I[73955,[\"/office-editor/_next/static/chunks/74bd5d39e5671b68.js\",\"/office-editor/_next/static/chunks/d409aa61efc28fad.js\",\"/office-editor/_next/static/chunks/db570818f0d9802f.js\"],\"I18nProvider\"]\n"])</script><script>self.__next_f.push([1,"2:[\"$\",\"html\",null,{\"suppressHydrationWarning\":true,\"children\":[[\"$\",\"head\",null,{\"children\":[[\"$\",\"script\",null,{\"children\":\"(()=\u003e{let a=document.cookie.match(/theme=([^;]+)/)?.[1]||\\\"\\\",b=window.matchMedia(\\\"(prefers-color-scheme: dark)\\\").matches;document.documentElement.classList.toggle(\\\"dark\\\",\\\"dark\\\"==a||b\u0026\u0026\\\"light\\\"!=a)})()\"}],[\"$\",\"script\",null,{\"type\":\"application/ld+json\",\"dangerouslySetInnerHTML\":{\"__html\":\"{\\\"@context\\\":\\\"https://schema.org\\\",\\\"@type\\\":\\\"WebApplication\\\",\\\"name\\\":\\\"ZIZIYI Office\\\",\\\"url\\\":\\\"https://office.ziziyi.com\\\",\\\"description\\\":\\\"Open, view, and edit Word, Excel, and PowerPoint documents directly in your browser. No upload, no server — your files stay private.\\\",\\\"applicationCategory\\\":\\\"BusinessApplication\\\",\\\"operatingSystem\\\":\\\"Any\\\",\\\"offers\\\":{\\\"@type\\\":\\\"Offer\\\",\\\"price\\\":\\\"0\\\",\\\"priceCurrency\\\":\\\"USD\\\"},\\\"featureList\\\":[\\\"Edit DOCX, XLSX, PPTX files\\\",\\\"No file upload required\\\",\\\"Privacy-first — files stay local\\\",\\\"Free templates\\\",\\\"Browser extension for drag \u0026 drop\\\"]}\"}}]]}],[\"$\",\"body\",null,{\"children\":[\"$\",\"$L11\",null,{\"children\":[\"$\",\"$L12\",null,{\"initialMessages\":{\"ysS5xi\":\"Drop to Open\",\"4UBbxg\":\"Word, Excel, PowerPoint \u0026 more\",\"1zZ5Ve\":\"Make your browser an Office app\",\"D8d2oG\":\"Documents you download or drag in will open for editing automatically — no extra steps.\",\"7mKmJ6\":\"Get the Extension\",\"uQDRsY\":\"Later\",\"rWGXO2\":\"Drop your file here\",\"h/ftND\":\"Choose a file\",\"Ouci9t\":\"Drag and drop your Office document here, or click to browse from your computer\",\"LSeDhV\":\"Supports: DOCX, DOC, XLSX, XLS, PPTX, PPT, PDF\",\"/6/sPX\":\"Docs\",\"tHSb8p\":\"Desktop\",\"OnbqrE\":\"Downloads\",\"TjDikE\":\"Extension Required\",\"Vemf4M\":\"The browser extension is required to open this file. It enables local file access and cross-origin fetching.\",\"VA1uir\":\"Install Extension\",\"kfoc7z\":\"Back to Home\",\"gjBiyj\":\"Loading...\",\"Ant+DU\":\"Try opening without extension\",\"rfMyMs\":\"About — ZIZIYI Office\",\"rMPZlP\":\"A modern, high-performance web-based office suite designed for the future of productivity.\",\"Xd0J7Y\":\"Open Source\",\"E13dvA\":\"We believe in the power of community. The source code for this project is available on GitHub for everyone to view, contribute, and improve.\",\"80g19N\":\"View on GitHub\",\"UV6Ps3\":\"Powered by OnlyOffice\",\"y2xRtY\":\"This project is built upon the robust foundation of OnlyOffice open-source code. We strictly adhere to and support OnlyOffice's open-source license, ensuring a sustainable ecosystem for document processing.\",\"PC7jTa\":\"Our Commitment\",\"QfGqDe\":\"Our goal is to provide a seamless, local-first office experience while maintaining the highest standards of compatibility and open-source compliance.\",\"Nej9RW\":\"New {type}\",\"JfG49w\":\"Open\",\"3JxaKs\":\"Template\",\"D3idYv\":\"Settings\",\"g5pX+a\":\"About\",\"Lrib/G\":\"Free Online Office Editor — Word, Excel, PowerPoint | ZIZIYI\",\"Document\":\"Document\",\"Spreadsheet\":\"Spreadsheet\",\"Presentation\":\"Presentation\",\"PDF\":\"PDF\",\"bW7B87\":\"New\",\"VKfWR3\":\"Recommended\",\"f39KOE\":\"More templates\",\"iXpep1\":\"Recent\",\"YJc0Wb\":\"Loading recent files...\",\"WUGpoH\":\"No recent files\",\"IbM/m2\":\"Files you open will appear here for quick access\",\"U/6uYa\":\"Click to reopen this file\",\"6PcFGr\":\"Remove from recent\",\"Y+UeeE\":\"Settings — ZIZIYI Office\",\"FI/NWR\":\"Modern Light\",\"3cc4Ct\":\"Light\",\"dwMR5h\":\"Classic Light\",\"sD9QpP\":\"Modern Dark\",\"tOdNiY\":\"Dark\",\"Wd4ooZ\":\"High Contrast\",\"xmKp7U\":\"Configure your preferred language and editor theme.\",\"y1Z3or\":\"Language\",\"eVlu1R\":\"Select language\",\"gEcvtY\":\"Editor Theme\",\"QJAllU\":\"Plugins\",\"rET/Cl\":\"Load Featured Plugins\",\"mfU/qe\":\"Load All Plugins\",\"6PEpzR\":\"Disable Plugins\",\"lgDYNz\":\"Changing these settings will affect the OnlyOffice editor interface. Some changes may require reloading the editor to take full effect.\",\"ZBIkEw\":\"Get Extension\",\"E3qn6j\":\"Free Office Templates — Word, Excel \u0026 PowerPoint | ZIZIYI Office\",\"zQvVDJ\":\"All\",\"TGazyx\":\"Word\",\"vwxVnf\":\"Excel\",\"OqRO5N\":\"PowerPoint\",\"pRYiat\":\"Template Library\",\"rMX+aM\":\"Professional designs tailored for your productivity needs.\",\"W2sXxa\":\"Search for templates (e.g. 'Resume', 'Report', 'Pitch')...\",\"sc2DN9\":\"Use Template\",\"F03jGl\":\"No templates found matching your criteria.\",\"jKKg2o\":\"Clear all filters\"},\"children\":\"$L13\"}]}]}],\"$L14\"]}]\n"])</script><script>self.__next_f.push([1,"15:I[50116,[\"/office-editor/_next/static/chunks/74bd5d39e5671b68.js\",\"/office-editor/_next/static/chunks/d409aa61efc28fad.js\",\"/office-editor/_next/static/chunks/db570818f0d9802f.js\"],\"GoogleAnalytics\"]\n"])</script><script>self.__next_f.push([1,"13:[\"$\",\"$L3\",null,{\"parallelRouterKey\":\"children\",\"error\":\"$undefined\",\"errorStyles\":\"$undefined\",\"errorScripts\":\"$undefined\",\"template\":[\"$\",\"$L4\",null,{}],\"templateStyles\":\"$undefined\",\"templateScripts\":\"$undefined\",\"notFound\":[[[\"$\",\"title\",null,{\"children\":\"404: This page could not be found.\"}],[\"$\",\"div\",null,{\"style\":{\"fontFamily\":\"system-ui,\\\"Segoe UI\\\",Roboto,Helvetica,Arial,sans-serif,\\\"Apple Color Emoji\\\",\\\"Segoe UI Emoji\\\"\",\"height\":\"100vh\",\"textAlign\":\"center\",\"display\":\"flex\",\"flexDirection\":\"column\",\"alignItems\":\"center\",\"justifyContent\":\"center\"},\"children\":[\"$\",\"div\",null,{\"children\":[[\"$\",\"style\",null,{\"dangerouslySetInnerHTML\":{\"__html\":\"body{color:#000;background:#fff;margin:0}.next-error-h1{border-right:1px solid rgba(0,0,0,.3)}@media (prefers-color-scheme:dark){body{color:#fff;background:#000}.next-error-h1{border-right:1px solid rgba(255,255,255,.3)}}\"}}],[\"$\",\"h1\",null,{\"className\":\"next-error-h1\",\"style\":{\"display\":\"inline-block\",\"margin\":\"0 20px 0 0\",\"padding\":\"0 23px 0 0\",\"fontSize\":24,\"fontWeight\":500,\"verticalAlign\":\"top\",\"lineHeight\":\"49px\"},\"children\":404}],[\"$\",\"div\",null,{\"style\":{\"display\":\"inline-block\"},\"children\":[\"$\",\"h2\",null,{\"style\":{\"fontSize\":14,\"fontWeight\":400,\"lineHeight\":\"49px\",\"margin\":0},\"children\":\"This page could not be found.\"}]}]]}]}]],[]],\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}]\n"])</script><script>self.__next_f.push([1,"14:[\"$\",\"$L15\",null,{\"gaId\":\"G-EFLBPT6TS8\"}]\n"])</script><script>self.__next_f.push([1,"d:[[\"$\",\"meta\",\"0\",{\"charSet\":\"utf-8\"}],[\"$\",\"meta\",\"1\",{\"name\":\"viewport\",\"content\":\"width=device-width, initial-scale=1\"}]]\n"])</script><script>self.__next_f.push([1,"16:I[8751,[\"/office-editor/_next/static/chunks/5d994f6253d479dc.js\",\"/office-editor/_next/static/chunks/1c3fdd12a9e3bbd0.js\"],\"IconMark\"]\nb:null\n"])</script><script>self.__next_f.push([1,"f:[[\"$\",\"title\",\"0\",{\"children\":\"Document Editor — ZIZIYI Office\"}],[\"$\",\"meta\",\"1\",{\"name\":\"description\",\"content\":\"Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private.\"}],[\"$\",\"meta\",\"2\",{\"name\":\"keywords\",\"content\":\"web office,online office suite,Word online,Excel online,PowerPoint online,DOCX viewer,DOCX editor,XLSX editor,PPTX editor,open docx online,edit excel online,serverless office,privacy first,ZIZIYI\"}],[\"$\",\"meta\",\"3\",{\"name\":\"robots\",\"content\":\"noindex, nofollow\"}],[\"$\",\"meta\",\"4\",{\"name\":\"mobile-web-app-capable\",\"content\":\"yes\"}],[\"$\",\"meta\",\"5\",{\"name\":\"apple-mobile-web-app-capable\",\"content\":\"yes\"}],[\"$\",\"meta\",\"6\",{\"name\":\"apple-mobile-web-app-title\",\"content\":\"ZIZIYI Office\"}],[\"$\",\"meta\",\"7\",{\"property\":\"og:title\",\"content\":\"Document Editor — ZIZIYI Office\"}],[\"$\",\"meta\",\"8\",{\"property\":\"og:description\",\"content\":\"Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private.\"}],[\"$\",\"meta\",\"9\",{\"property\":\"og:site_name\",\"content\":\"ZIZIYI Office\"}],[\"$\",\"meta\",\"10\",{\"property\":\"og:locale\",\"content\":\"en_US\"}],[\"$\",\"meta\",\"11\",{\"property\":\"og:type\",\"content\":\"website\"}],[\"$\",\"meta\",\"12\",{\"name\":\"twitter:card\",\"content\":\"summary_large_image\"}],[\"$\",\"meta\",\"13\",{\"name\":\"twitter:creator\",\"content\":\"@nicezizi\"}],[\"$\",\"meta\",\"14\",{\"name\":\"twitter:title\",\"content\":\"Document Editor — ZIZIYI Office\"}],[\"$\",\"meta\",\"15\",{\"name\":\"twitter:description\",\"content\":\"Edit Word, Excel, and PowerPoint files directly in your browser. No upload, no server — fully private.\"}],[\"$\",\"link\",\"16\",{\"rel\":\"icon\",\"href\":\"/favicon.ico\",\"sizes\":\"any\"}],[\"$\",\"link\",\"17\",{\"rel\":\"icon\",\"href\":\"/logo.svg\",\"type\":\"image/svg+xml\"}],[\"$\",\"link\",\"18\",{\"rel\":\"apple-touch-icon\",\"href\":\"/logo.png\"}],[\"$\",\"$L16\",\"19\",{}]]\n"])</script></body></html>

@@ -217,6 +217,26 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sipp:event', handler);
     return () => ipcRenderer.removeListener('sipp:event', handler);
   },
+  // 오피스 워크스페이스 — 워드/엑셀/파워포인트/PDF 파일 열기 (office-editor iframe 용).
+  officeDocOpenFile: (kind: 'hwp' | 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'drawio') => ipcRenderer.invoke('office-doc:open-file', { kind }),
+  officeDocReadFile: (filePath: string) => ipcRenderer.invoke('office-doc:read-file', { filePath }),
+  officeDocSaveFile: (args: { data: ArrayBuffer; defaultName?: string; filters?: { name: string; extensions: string[] }[] }) =>
+    ipcRenderer.invoke('office-doc:save-file', args),
+  officeRecentsGet: (kind: string) => ipcRenderer.invoke('office-recents:get', { kind }),
+  officeRecentsAdd: (kind: string, doc: { filePath: string; fileName: string }) => ipcRenderer.invoke('office-recents:add', { kind, doc }),
+  officeRecentsRemove: (kind: string, filePath: string) => ipcRenderer.invoke('office-recents:remove', { kind, filePath }),
+
+  // 미디어 플레이어 — 파일 열기/판별, #!ENC 복호화, 로컬 코덱(wav/alaw/ulaw/raw) 디코딩, 최근 재생 목록.
+  mediaOpenFile: () => ipcRenderer.invoke('media:open-file'),
+  mediaProbeFile: (filePath: string) => ipcRenderer.invoke('media:probe-file', { filePath }),
+  mediaDecrypt: (filePath: string, password: string) => ipcRenderer.invoke('media:decrypt', { filePath, password }),
+  mediaDecodeLocal: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-local', { filePath, codec }),
+  mediaDecodeGstreamer: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-gstreamer', { filePath, codec }),
+  mediaRecentsGet: () => ipcRenderer.invoke('media-recents:get'),
+  mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
+  mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),
+  mediaRecentsSetPosition: (filePath: string, positionSec: number) => ipcRenderer.invoke('media-recents:set-position', { filePath, positionSec }),
+
   onBrowserWebviewNewWindow: (cb: (p: { guestId: number; url: string }) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('browser-webview:new-window', handler);

@@ -8,9 +8,12 @@ import path from 'path';
 import { app } from 'electron';
 
 function bundledDir(): string {
+  // app.getAppPath() 는 package.json 이 있는 프로젝트 루트를 반환 — process.cwd() 와 달리
+  // npm run dev 를 어느 디렉터리에서 실행했든(다른 터미널 탭, IDE 실행 버튼 등) 항상 안정적이다.
+  // (process.cwd() 를 쓰면 실행 위치에 따라 resources/i18n 을 못 찾아 번역이 전부 빈 값으로 깨짐)
   return app.isPackaged
     ? path.join(process.resourcesPath, 'i18n')
-    : path.join(process.cwd(), 'resources', 'i18n');
+    : path.join(app.getAppPath(), 'resources', 'i18n');
 }
 function overrideDir(): string {
   return path.join(app.getPath('userData'), 'i18n');
