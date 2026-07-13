@@ -98,8 +98,10 @@ FunctionEnd
 !endif
 
 !macro customInit
-  ; 모든 사용자 / 전용 모두 Program Files에 설치
-  StrCpy $INSTDIR "$PROGRAMFILES\PePe Terminal(SSH)"
+  ; 모든 사용자 / 전용 모두 Program Files에 설치. $PROGRAMFILES 는 64비트 Windows에서도
+  ; 32비트용 "Program Files (x86)" 로 풀리는 변수라 — 이 앱은 64비트 빌드이므로 반드시
+  ; $PROGRAMFILES64 를 써야 정상적인 "Program Files" 아래로 설치된다.
+  StrCpy $INSTDIR "$PROGRAMFILES64\PePe Terminal(SSH)"
   ; 설치 시 파일 복사 단계도 detail 패널에 출력되도록 — 기본 SetDetailsPrint=lastused → both
   SetDetailsPrint both
   !ifndef BUILD_UNINSTALLER
