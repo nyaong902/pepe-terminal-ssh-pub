@@ -33,7 +33,7 @@ function sidecarRoot(): string | null {
   return null;
 }
 
-function resolveBinary(): string | null {
+export function resolveBinary(): string | null {
   const root = sidecarRoot();
   if (!root) return null;
   const bin = path.join(root, process.platform === 'win32' ? 'gst-launch-1.0.exe' : 'gst-launch-1.0');

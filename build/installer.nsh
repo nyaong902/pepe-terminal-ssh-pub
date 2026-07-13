@@ -6,18 +6,16 @@
 !ifndef BUILD_UNINSTALLER
 Var DeleteDataCheckbox
 Var DeleteDataChecked  ; 0 = 유지(기본), 1 = 삭제
+Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (customInit 에서 판별)
 
 Function nsShowDeleteDataPage
-  ; 자동 업데이트(electron-updater 의 quitAndInstall)로 실행된 경우엔 이 exe 에
-  ; "--updated" 인자가 붙어서 실행된다. 사용자 상호작용 없이 조용히 진행되는 상황이라,
-  ; 여기서 체크박스 응답을 기다리며 멈추면 "작업관리자엔 떠 있는데 창은 안 보이는"
-  ; 것처럼 보인다 — 업데이트 실행일 땐 이 페이지 자체를 건너뛴다.
-  ${GetParameters} $R0
-  ${GetOptions} $R0 "--updated" $R1
-  ${IfNot} ${Errors}
+  ; 자동 업데이트(electron-updater 의 quitAndInstall)로 실행된 경우엔 사용자 상호작용 없이
+  ; 조용히 진행돼야 하는 상황이라, 여기서 체크박스 응답을 기다리며 멈추면 "작업관리자엔 떠
+  ; 있는데 창은 안 보이는" 것처럼 보인다 — 업데이트 실행일 땐 이 페이지 자체를 건너뛴다.
+  ; (customInit 에서 미리 판별해둔 $IsUpdateRun 재사용)
+  ${If} $IsUpdateRun == "1"
     Abort
   ${EndIf}
-  ClearErrors
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
   ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
   SetShellVarContext current
@@ -42,6 +40,59 @@ FunctionEnd
 Function nsLeaveDeleteDataPage
   ${NSD_GetState} $DeleteDataCheckbox $DeleteDataChecked
 FunctionEnd
+
+; 선택 설치(용량 큰 기능만) — VPN/MicroSIP/SIPp/미디어 재생/오피스는 각각 전용 번들
+; 바이너리·정적 파일을 쓰고 서로 공유하지 않아서 필요 없으면 통째로 뺄 수 있다(브라우저/파일
+; 비교/로그 분석은 별도 번들이 없는 순수 JS 기능이라 선택 설치 대상이 아님 — 항상 설치됨).
+Var VpnCheckbox
+Var VpnChecked
+Var MicroSipCheckbox
+Var MicroSipChecked
+Var SippCheckbox
+Var SippChecked
+Var MediaCheckbox
+Var MediaChecked
+Var OfficeCheckbox
+Var OfficeChecked
+
+Function nsShowFeaturesPage
+  ; 자동 업데이트 실행일 땐(위 nsShowDeleteDataPage 와 같은 이유) 이 페이지도 건너뛴다 —
+  ; customInit 에서 레지스트리에 저장해둔 이전 선택값을 이미 읽어와 놨으므로 그걸 그대로 쓴다.
+  ${If} $IsUpdateRun == "1"
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateLabel} 0 0 100% 20u "설치할 기능을 선택하세요 (기본: 전체 설치). 용량이 큰 기능만 선택 해제할 수 있습니다."
+  ${NSD_CreateCheckBox} 0 26u 100% 12u "VPN (OpenVPN, 약 9MB)"
+  Pop $VpnCheckbox
+  ${NSD_SetState} $VpnCheckbox $VpnChecked
+  ${NSD_CreateCheckBox} 0 40u 100% 12u "MicroSIP (SIP 소프트폰, 약 104MB)"
+  Pop $MicroSipCheckbox
+  ${NSD_SetState} $MicroSipCheckbox $MicroSipChecked
+  ${NSD_CreateCheckBox} 0 54u 100% 12u "SIPp (SIP 부하테스트, 약 15MB)"
+  Pop $SippCheckbox
+  ${NSD_SetState} $SippCheckbox $SippChecked
+  ${NSD_CreateCheckBox} 0 68u 100% 12u "미디어 재생 — EVS/AMR/OPUS 코덱 (약 49MB)"
+  Pop $MediaCheckbox
+  ${NSD_SetState} $MediaCheckbox $MediaChecked
+  ${NSD_CreateCheckBox} 0 82u 100% 12u "오피스 — 한글/워드/엑셀/파워포인트/FlowChart 편집기 (약 220MB)"
+  Pop $OfficeCheckbox
+  ${NSD_SetState} $OfficeCheckbox $OfficeChecked
+  ${NSD_CreateLabel} 0 100u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
+  nsDialogs::Show
+FunctionEnd
+
+Function nsLeaveFeaturesPage
+  ${NSD_GetState} $VpnCheckbox $VpnChecked
+  ${NSD_GetState} $MicroSipCheckbox $MicroSipChecked
+  ${NSD_GetState} $SippCheckbox $SippChecked
+  ${NSD_GetState} $MediaCheckbox $MediaChecked
+  ${NSD_GetState} $OfficeCheckbox $OfficeChecked
+FunctionEnd
 !endif
 
 !macro customInit
@@ -51,6 +102,48 @@ FunctionEnd
   SetDetailsPrint both
   !ifndef BUILD_UNINSTALLER
     StrCpy $DeleteDataChecked "0"
+
+    ; 자동 업데이트(electron-updater 의 quitAndInstall)로 실행됐는지 여기서 한 번만 판별해
+    ; 이후 여러 페이지의 PRE 훅에서 재사용한다 — --updated 인자가 붙어 있으면 업데이트.
+    ${GetParameters} $R0
+    ${GetOptions} $R0 "--updated" $R1
+    ${IfNot} ${Errors}
+      StrCpy $IsUpdateRun "1"
+    ${Else}
+      StrCpy $IsUpdateRun "0"
+    ${EndIf}
+    ClearErrors
+
+    ; 선택 설치 기본값 = 전체 설치. 업데이트 실행이면 페이지를 안 띄우는 대신, 지난 설치 때
+    ; 레지스트리에 저장해둔 선택을 그대로 읽어와 customInstall 에서 재적용한다(값이 없으면,
+    ; 즉 이 기능이 생기기 전에 설치된 경우, 안전하게 "전체 설치" 로 취급해 아무것도 안 지운다).
+    StrCpy $VpnChecked "1"
+    StrCpy $MicroSipChecked "1"
+    StrCpy $SippChecked "1"
+    StrCpy $MediaChecked "1"
+    StrCpy $OfficeChecked "1"
+    ${If} $IsUpdateRun == "1"
+      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Vpn"
+      ${IfNot} $R2 == ""
+        StrCpy $VpnChecked $R2
+      ${EndIf}
+      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "MicroSip"
+      ${IfNot} $R2 == ""
+        StrCpy $MicroSipChecked $R2
+      ${EndIf}
+      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Sipp"
+      ${IfNot} $R2 == ""
+        StrCpy $SippChecked $R2
+      ${EndIf}
+      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Media"
+      ${IfNot} $R2 == ""
+        StrCpy $MediaChecked $R2
+      ${EndIf}
+      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Office"
+      ${IfNot} $R2 == ""
+        StrCpy $OfficeChecked $R2
+      ${EndIf}
+    ${EndIf}
   !endif
 !macroend
 
@@ -64,6 +157,7 @@ FunctionEnd
 ; MUI_PAGE_INSTFILES 이전에 customPageAfterChangeDir 훅을 삽입한다.
 !macro customPageAfterChangeDir
   Page custom nsShowDeleteDataPage nsLeaveDeleteDataPage
+  Page custom nsShowFeaturesPage nsLeaveFeaturesPage
 !macroend
 
 ; 부드러운 진행 바 — 퍼센티지 갱신 부드럽게
@@ -85,6 +179,48 @@ FunctionEnd
     SetShellVarContext all
     RMDir /r "$APPDATA\PePe Terminal(SSH)"
     DetailPrint "  ✓ 기존 사용자 데이터 삭제 완료"
+  ${EndIf}
+
+  ; 다음 업데이트 때(페이지 없이 조용히 진행) 같은 선택을 다시 적용할 수 있도록 저장.
+  WriteRegStr HKLM "Software\PePeTerminal\Features" "Vpn" "$VpnChecked"
+  WriteRegStr HKLM "Software\PePeTerminal\Features" "MicroSip" "$MicroSipChecked"
+  WriteRegStr HKLM "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
+  WriteRegStr HKLM "Software\PePeTerminal\Features" "Media" "$MediaChecked"
+  WriteRegStr HKLM "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
+
+  ; 선택 해제한 기능의 전용 번들 폴더 삭제 — electron-builder 가 resources 전체를 이미
+  ; 통째로 복사해둔 뒤라, 여기서 안 쓸 폴더만 걷어낸다(각 기능 전용, 다른 기능과 안 겹침).
+  ; NSIS 내장 RMDir /r 은 SetDetailsPrint both 상태에서 파일 하나마다 로그 줄을 찍어(특히
+  ; flowchart-editor/mxgraph 처럼 작은 파일 수천 개짜리 트리에서) 체감상 매우 느려진다 —
+  ; customUnInit 의 X11 폴더 삭제와 동일하게 cmd rmdir 한 방으로 통째로 지운다(로그 1줄, 훨씬 빠름).
+  ${If} $VpnChecked == 0
+    DetailPrint "▶ 선택 해제: VPN — 번들 삭제 중..."
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\openvpn"'
+    Pop $0
+  ${EndIf}
+  ${If} $MicroSipChecked == 0
+    DetailPrint "▶ 선택 해제: MicroSIP — 번들 삭제 중..."
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\sip-sidecar"'
+    Pop $0
+  ${EndIf}
+  ${If} $SippChecked == 0
+    DetailPrint "▶ 선택 해제: SIPp — 번들 삭제 중..."
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\sipp-sidecar"'
+    Pop $0
+  ${EndIf}
+  ${If} $MediaChecked == 0
+    DetailPrint "▶ 선택 해제: 미디어 재생(GStreamer) — 번들 삭제 중..."
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\gstreamer-sidecar"'
+    Pop $0
+  ${EndIf}
+  ${If} $OfficeChecked == 0
+    DetailPrint "▶ 선택 해제: 오피스(한글/워드/엑셀/파워포인트/FlowChart) — 번들 삭제 중..."
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\office-editor"'
+    Pop $0
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\rhwp-studio"'
+    Pop $0
+    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\flowchart-editor"'
+    Pop $0
   ${EndIf}
 
   DetailPrint "─────────────────────────────────────────"
@@ -185,6 +321,9 @@ FunctionEnd
   DeleteRegKey HKCU "Software\Classes\Directory\shell\PepeTerminal"
   DeleteRegKey HKLM "Software\Classes\Directory\Background\shell\PepeTerminal"
   DeleteRegKey HKLM "Software\Classes\Directory\shell\PepeTerminal"
+
+  ; 선택 설치 기능 플래그(설정값, 사용자 데이터 아님) 삭제
+  DeleteRegKey HKLM "Software\PePeTerminal\Features"
 
   ; 사용자 데이터(세션·설정) 는 자동 삭제하지 않음 — 재설치/업그레이드 시 세션 유지 보장.
   ; 완전 삭제가 필요하면 사용자가 %APPDATA%\PePe Terminal(SSH) 폴더를 수동 삭제.

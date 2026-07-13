@@ -2,7 +2,7 @@
   "name": "pepe-terminal-ssh",
   "productName": "PePe Terminal(SSH)",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "SSH Terminal Client",
   "author": "Claude (feat. ghjeong[prompt])",
   "type": "commonjs",
@@ -186,6 +186,27 @@
         {
           "from": "gstreamer-sidecar/bin/win-x64",
           "to": "gstreamer-sidecar/win-x64",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "resources/office-editor",
+          "to": "office-editor",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "resources/rhwp-studio",
+          "to": "rhwp-studio",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "resources/flowchart-editor",
+          "to": "flowchart-editor",
           "filter": [
             "**/*"
           ]

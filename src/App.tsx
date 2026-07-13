@@ -649,6 +649,13 @@ function App() {
   const [showManual, setShowManual] = useState(false);
   // 도움말/정보 등 단순 텍스트 모달 (alert 대체 — 스크롤 가능 + 닫을 때 터미널 포커스 복원)
   const [infoModal, setInfoModal] = useState<{ title: string; text: string } | null>(null);
+  // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
+  // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
+  // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sipp: true, office: true, media: true });
+  useEffect(() => {
+    (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
+  }, []);
   // X 서버 시작/중지/상태 버튼 3개가 도구모음 자리를 너무 차지해서 드롭다운 하나로 합침.
   const [xServerMenuPos, setXServerMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [sessionWipeDialog, setSessionWipeDialog] = useState(false);
@@ -2541,11 +2548,11 @@ function App() {
     { id: 'cmd-bcastXfer', label: '일괄전송', icon: '📤', keywords: ['broadcast', 'bulk transfer', '일괄 전송', '파일'], run: () => { setBcastXferFiles([]); setBcastXferPath(''); setBcastXferLog([]); setShowBcastFileXfer(true); } },
     { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
-    { id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() },
-    { id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() },
-    { id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() },
-    { id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() },
-    { id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() },
+    ...(availableFeatures.vpn ? [{ id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() }] : []),
+    ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
+    ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
+    ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
+    ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
     { id: 'cmd-customWorkspaceAdd', label: '커스텀 워크스페이스 추가', icon: '➕', keywords: ['custom workspace', '커스텀'], run: () => openCustomWorkspaceCreator() },
     ...customWorkspaces.map((ws, i) => ({
@@ -4017,9 +4024,9 @@ function App() {
         { label: tMenu('tools.browserWs'), action: addBrowserTab },
         { label: tMenu('tools.compareWs'), action: addCompareTab },
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
-        { label: tMenu('tools.vpnWs'), action: addVpnTab },
-        { label: '📞 MicroSIP', action: addMicroSipTab },
-        { label: '📶 SIPp', action: addSippTab },
+        ...(availableFeatures.vpn ? [{ label: tMenu('tools.vpnWs'), action: addVpnTab }] : []),
+        ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
+        ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
@@ -4726,6 +4733,7 @@ function App() {
           canSplitType={(type: any) => SPLITTABLE_TYPES.includes(type)}
           hasSession={tabs.reduce((acc, t) => { acc[t.id] = collectAllSessions(t.layout).length > 0; return acc; }, {} as Record<string, boolean>)}
           availableShells={availableShells}
+          availableFeatures={availableFeatures}
         />
           <div className="titlebar-drag-area"
             onDoubleClick={() => {
