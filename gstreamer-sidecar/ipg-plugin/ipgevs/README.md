@@ -180,6 +180,31 @@ ETSI-internal assertion crash deep in the DSP code
   a "the codec is broken" symptom; generate fresh test files via
   `gst-launch`'s own encoder instead, like the round-trip above.
 
+## Placeholder DLL committed at `gstreamer-sidecar/bin/win-x64/gstreamer-1.0/libgstipgevs.dll`
+
+The file actually tracked in this git repo at that path is **not** a real
+plugin binary — it's a small text stub starting with the marker
+`#!PEPE_EVS_PLACEHOLDER`. A real, working `libgstipgevs.dll` requires
+linking the company's proprietary plugin source (see above), which must
+never be committed to this public repo, even in compiled form.
+
+`electron/gstreamerSidecar.ts`'s `isEvsPluginAvailable()` reads the first
+bytes of whatever DLL is found at that path and checks for this marker.
+If the marker is present (i.e. anyone who just `git clone`d this repo and
+built it), EVS decode requests fail immediately with a clear Korean error
+(`EVS_UNAVAILABLE_MSG`) instead of GStreamer failing to load the plugin
+with a cryptic error, or — worse — silently "succeeding" with corrupted
+near-silent audio the way the pre-`168d5e0` buggy real DLL used to.
+
+To get real EVS support for local development/personal builds: build a
+real `libgstipgevs.dll`/`.dylib` per the steps above, put the whole
+sidecar directory tree (a copy of `gstreamer-sidecar/bin/<plat>/`, with
+only `gstreamer-1.0/libgstipgevs.dll` swapped for the real one) somewhere
+**outside this repo**, and point `PEPE_GST_ROOT` at that directory. Never
+overwrite the copy inside the repo's working tree — `sidecarRoot()`
+checks `PEPE_GST_ROOT` first specifically so the real DLL never needs to
+touch a tracked path.
+
 ## Windows-specific gotcha that does NOT apply on Mac
 
 `gst-launch-1.0` on Windows silently strips backslashes out of
