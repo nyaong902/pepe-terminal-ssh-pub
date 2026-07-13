@@ -69,3 +69,8 @@ sip-sidecar/bin/win-x64/*
 
 # electron-builder 로컬 빌드 캐시 (수 GB, 재생성 가능 — 커밋 대상 아님)
 .cache/
+
+# EVS GStreamer 플러그인 DLL: git에는 더미(placeholder)만 커밋되어 있음.
+# 실제 동작하는 DLL은 회사 소스로 로컬 빌드해야 하며 절대 커밋하지 않는다.
+# (아래 skip-worktree 플래그로 로컬 교체본이 git status에 안 잡히도록 처리)
+
