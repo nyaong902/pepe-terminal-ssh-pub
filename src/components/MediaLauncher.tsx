@@ -3,6 +3,10 @@
 // 바로 MediaWorkspace 로 위임한다. instanceId 만 전달해 탭별 상태를 분리.
 import { MediaWorkspace } from './MediaWorkspace';
 
-export function MediaLauncher({ instanceId }: { instanceId: string }) {
-  return <MediaWorkspace instanceId={instanceId} />;
+export function MediaLauncher({ instanceId, initialState, onStateChange }: {
+  instanceId: string;
+  initialState?: any;
+  onStateChange?: (state: any) => void;
+}) {
+  return <MediaWorkspace instanceId={instanceId} initialState={initialState} onStateChange={onStateChange} />;
 }

@@ -336,7 +336,7 @@ contextBridge.exposeInMainWorld('api', {
   windowToggleDevTools: () => ipcRenderer.invoke('window:toggle-devtools'),
   // 탭 분리(멀티 윈도우)
   detachTab: (payload: any, bounds?: any) => ipcRenderer.invoke('window:detach-tab', { payload, bounds }),
-  dropTab: (payload: any, point?: any) => ipcRenderer.invoke('window:drop-tab', { payload, point }),
+  dropTab: (payload: any, point?: any, opts?: { sourceTabCount?: number }) => ipcRenderer.invoke('window:drop-tab', { payload, point, sourceTabCount: opts?.sourceTabCount }),
   onAdoptTab: (cb: (payload: any) => void) => {
     const listener = (_e: any, payload: any) => cb(payload);
     ipcRenderer.on('window:adopt-tab', listener);

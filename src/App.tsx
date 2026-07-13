@@ -2884,19 +2884,29 @@ function App() {
     if (tab.type === 'sqlTool' && tab.sqlTool?.sessionId) {
       liveWsState = serializeSqlSession(tab.sqlTool.sessionId);
     }
-    return {
+    // ipcRenderer.invoke 는 structured clone 을 쓰기 때문에, buffers/styles/siblingSessions 안에
+    // (예: quickSession 등 어디선가 섞여 들어온) 함수·클래스 인스턴스 등 클론 불가능한 값이 하나만
+    // 있어도 "An object could not be cloned" 로 전체 IPC 호출이 그냥 죽는다(에러 하나 안 뜨고
+    // 조용히 실패 — "눌러도 반응 없음"의 실제 원인). tab 필드만 JSON 왕복하던 걸 payload 전체로
+    // 넓혀서, 클론 불가능한 값은 JSON.stringify 단계에서 미리 걸러지거나(함수/undefined 는 조용히
+    // 사라짐) throw 하면 호출부에서 잡아 로그를 남기게 한다.
+    return JSON.parse(JSON.stringify({
       kind: 'workspace' as const,
       buffers: collectTabBuffers(tab),
       styles: collectTabStyles(tab),
       siblingSessions: collectSiblingSessions(tab),
-      tab: JSON.parse(JSON.stringify({
+      tab: {
         id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
         sqlTool: tab.sqlTool, editor: tab.editor,
         initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
         fileExplorerState: liveFeState || tab.fileExplorerState,
         workspaceState: liveWsState || tab.workspaceState,
-      })),
-    };
+        // 커스텀 워크스페이스 렌더링은 이 둘로 템플릿(그리드 레이아웃 정의)을 찾는다
+        // (App.tsx 의 customWorkspace 렌더 블록, `t.customWorkspaceTemplate || customWorkspaces.find(...)`).
+        // 빠져있으면 분리된 창에서 템플릿을 못 찾아 tpl==null 로 아예 렌더링이 안 된다.
+        customWorkspaceId: tab.customWorkspaceId, customWorkspaceTemplate: tab.customWorkspaceTemplate,
+      },
+    }));
   };
 
   // 원본 창에서 분리된/이동한 탭 제거 — 백엔드 세션은 살리고 xterm 만 dispose.
@@ -2920,17 +2930,31 @@ function App() {
   const detachTabToNewWindow = useCallback(async (tabId: TabId, screenX?: number, screenY?: number) => {
     const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
-    // 워크스페이스가 하나뿐이면 분리 금지 — 분리하면 이 창에 탭이 하나도 안 남게 됨.
-    if (tabsRef.current.length <= 1) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
     // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
     (window as any).__preserveFileExplorerConns = true;
     (window as any).__preserveSqlConns = true;
     try {
-      const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
-      if (res === undefined) return; // IPC 실패
+      // 워크스페이스가 하나뿐이어도 무조건 막으면 안 된다 — 드롭 지점이 다른 앱 창 위라서
+      // 재도킹되는 경우엔 이 창에 탭이 없어져도 문제가 안 된다(재도킹이지 분리가 아니므로).
+      // "진짜 새 창"으로 갈 때만 막아야 하는데 그건 main 프로세스만 알 수 있으므로(다른 창들과의
+      // 히트테스트), 현재 탭 개수를 같이 넘겨 main 쪽에서 target 없을 때만 판단하게 한다.
+      let payload: ReturnType<typeof serializeTab>;
+      try {
+        payload = serializeTab(tab);
+      } catch (err) {
+        // serializeTab 이 던지면(예: 상태에 JSON 으로 못 바꾸는 값이 섞여 있는 경우)
+        // 여기서 못 잡으면 예외가 그대로 새어나가 호출부(드래그/컨텍스트메뉴 핸들러)에서
+        // unhandled rejection 이 되어 "눌러도 아무 반응 없음" 처럼 보인다.
+        console.error('[detachTabToNewWindow] serializeTab 실패 — 탭 type:', tab.type, err);
+        return;
+      }
+      const res = await (window as any).api?.dropTab?.(payload, point, { sourceTabCount: tabsRef.current.length });
+      if (res === undefined || res?.blocked) return; // IPC 실패 또는 (새 창인데 탭이 하나뿐이라) 거부됨
       removeTabAfterMove(tabId, tab.layout);
+    } catch (err) {
+      console.error('[detachTabToNewWindow] 실패 — 탭 type:', tab.type, err);
     } finally {
       // unmount cleanup 이 다 끝난 다음 플래그 해제 (마이크로태스크 두 번)
       setTimeout(() => {
@@ -3464,13 +3488,15 @@ function App() {
       } catch {}
     }
     console.log('[duplicate] originalCwd =', originalCwd, 'sourceTermId =', termId);
-    const payload: any = {
+    // JSON 왕복 — ipcRenderer.invoke 의 structured clone 이 못 처리하는 값(quickSession 등에
+    // 섞여 들어올 수 있는 클론 불가능한 값)이 있어도 IPC 호출 자체가 조용히 죽지 않게 한다.
+    const payload: any = JSON.parse(JSON.stringify({
       kind: 'session' as const,
       buffers: {},
       styles: st ? { [newTermId]: st } : {},
-      tab: JSON.parse(JSON.stringify({ id: tabId, title: info.sessionName || 'Session', layout })),
+      tab: { id: tabId, title: info.sessionName || 'Session', layout },
       connectAfterAdopt: [{ termId: newTermId, sessionId: info.sessionId || '', quickSession: info.quickSession || null, cdAfterConnect: originalCwd }],
-    };
+    }));
     await (window as any).api?.dropTab?.(payload, undefined);
   }, []);
 
@@ -3490,7 +3516,7 @@ function App() {
     };
     const buf = serializeTermBuffer(termId);
     const st = getTermStyle(termId);
-    const payload = { kind: 'session' as const, buffers: buf ? { [termId]: buf } : {}, styles: st ? { [termId]: st } : {}, tab: JSON.parse(JSON.stringify({ id: tabId, title: sess.sessionName || 'Session', layout })) };
+    const payload = JSON.parse(JSON.stringify({ kind: 'session' as const, buffers: buf ? { [termId]: buf } : {}, styles: st ? { [termId]: st } : {}, tab: { id: tabId, title: sess.sessionName || 'Session', layout } }));
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     const res = await (window as any).api?.dropTab?.(payload, point);
     if (res === undefined) return;
@@ -5304,21 +5330,33 @@ function App() {
         {tabs.filter(t => t.type === 'sipp').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="SIPp">
-              <SippWorkspace instanceId={t.id} />
+              <SippWorkspace
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'office').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="Office">
-              <OfficeLauncher instanceId={t.id} />
+              <OfficeLauncher
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'media').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="Media">
-              <MediaLauncher instanceId={t.id} />
+              <MediaLauncher
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}

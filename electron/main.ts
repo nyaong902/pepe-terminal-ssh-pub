@@ -6260,7 +6260,7 @@ ipcMain.handle('sticky-note:get-list', () => {
   return notes.map(n => ({ id: n.id, html: n.html, updatedAt: n.updatedAt, minimized: minimizedStickyNoteIds.has(n.id) }));
 });
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
-ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {
+ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
   try {
     const sourceWin = winOf(e);
     // 최소화/숨김 창은 화면에 안 보여도 getBounds() 가 restored 좌표를 돌려주므로
@@ -6282,6 +6282,12 @@ ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?
       target.webContents.send('window:adopt-tab', { ...payload, point });
       try { target.show(); target.focus(); } catch {}
       return { docked: true };
+    }
+    // 다른 앱 창으로 재도킹되는 게 아니라 진짜 새 창을 만드는 경우에만, 원본 창에 탭이
+    // 하나(sourceTabCount<=1)뿐이면 거부한다 — 그러면 원본 창에 탭이 하나도 안 남게 됨.
+    // (재도킹 드래그도 같은 함수를 타므로, 여기서 target 유무로 분기해야 재도킹이 막히지 않는다.)
+    if (sourceTabCount != null && sourceTabCount <= 1) {
+      return { docked: false, blocked: true };
     }
     // 멀티모니터 환경에서 음수 좌표(주모니터 왼쪽/위쪽 모니터)도 그대로 보존해야
     // 사용자가 드롭한 모니터에 정확히 분리 창이 생성됨. Math.max(0, ...) 클램프는 금지.

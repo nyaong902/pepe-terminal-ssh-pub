@@ -51,7 +51,16 @@ function fmtTime(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function MediaWorkspace(_props: { instanceId: string }) {
+type MediaWorkspaceState = { files: { filePath: string; fileName: string }[]; activeFilePath: string | null };
+
+export function MediaWorkspace(props: {
+  instanceId: string;
+  // 다른 창으로 분리될 때 "어떤 파일들이 열려 있었는지"만 보존해서 다시 열어준다 — 디코딩된
+  // 오디오 버퍼/재생 위치/편집 선택 구간은 데이터가 크고 창 경계를 못 넘어가 다시 초기화된다.
+  initialState?: MediaWorkspaceState;
+  onStateChange?: (state: MediaWorkspaceState) => void;
+}) {
+  const { initialState, onStateChange } = props;
   const [docs, setDocs] = useState<OpenMedia[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recents, setRecents] = useState<MediaRecentDoc[]>([]);
@@ -167,6 +176,34 @@ export function MediaWorkspace(_props: { instanceId: string }) {
     addMediaRecent({ filePath, fileName, codec: probe.codec }).then(setRecents);
     await loadByCodec(id, filePath, probe.codec, fileName);
   };
+
+  // 창 분리 등으로 initialState 가 넘어오면 열려 있던 파일들을 다시 연다(재디코딩 — 원래 재생
+  // 위치/편집 상태는 못 살림). 마운트 시 1회만.
+  useEffect(() => {
+    if (!initialState?.files?.length) return;
+    (async () => {
+      for (const f of initialState.files) {
+        await openPath(f.filePath, f.fileName);
+      }
+      if (initialState.activeFilePath) {
+        setDocs(prev => {
+          const match = prev.find(d => d.filePath === initialState.activeFilePath);
+          if (match) setActiveId(match.id);
+          return prev;
+        });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!onStateChange) return;
+    const active = docs.find(d => d.id === activeId);
+    onStateChange({
+      files: docs.map(d => ({ filePath: d.filePath, fileName: d.fileName })),
+      activeFilePath: active?.filePath || null,
+    });
+  }, [docs, activeId]);
 
   const handleOpenFile = async () => {
     const result = await api().mediaOpenFile?.();

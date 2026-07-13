@@ -2,7 +2,7 @@
 // 오피스 워크스페이스 진입점 — 상단 탭 바에는 이미 형식이 정해진 탭(한글/워드/엑셀/파워포인트/PDF)만
 // 나타난다. "+" 를 누르면 형식 선택 화면이 그 자리에 잠깐 나타날 뿐 탭으로 남지 않고, 형식을
 // 고르는 즉시 그 이름의 탭이 새로 생긴다. 각 형식 에디터 내부에는 문서 단위 미니탭이 별도로 있다.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { OfficeWorkspace } from './OfficeWorkspace';
 import { ZiziyiOfficeWorkspace } from './ZiziyiOfficeWorkspace';
 import { PdfWorkspace } from './PdfWorkspace';
@@ -53,10 +53,22 @@ const slotTabStyle = (active: boolean): React.CSSProperties => ({
   color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer', maxWidth: 160, whiteSpace: 'nowrap',
 });
 
-export function OfficeLauncher({ instanceId }: { instanceId: string }) {
-  const [slots, setSlots] = useState<Slot[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(true);
+type OfficeLauncherState = { slots: Slot[]; activeId: string | null; pickerOpen: boolean };
+
+export function OfficeLauncher({ instanceId, initialState, onStateChange }: {
+  instanceId: string;
+  // 다른 창으로 분리될 때 "어떤 형식 탭이 열려 있었는지"만 가볍게 보존한다 — 편집기(iframe)
+  // 내부의 실제 문서 편집 내용까지는 살릴 수 없다(그 안은 각 에디터 프로세스 고유 상태).
+  initialState?: OfficeLauncherState;
+  onStateChange?: (state: OfficeLauncherState) => void;
+}) {
+  const [slots, setSlots] = useState<Slot[]>(initialState?.slots || []);
+  const [activeId, setActiveId] = useState<string | null>(initialState?.activeId ?? null);
+  const [pickerOpen, setPickerOpen] = useState(initialState ? initialState.pickerOpen : true);
+
+  useEffect(() => {
+    onStateChange?.({ slots, activeId, pickerOpen });
+  }, [slots, activeId, pickerOpen]);
 
   const selectFormat = (format: OfficeFormat) => {
     const id = `slot-${++nextSlotId}`;
