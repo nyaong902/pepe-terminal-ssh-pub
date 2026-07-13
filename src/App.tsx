@@ -9,6 +9,7 @@ import { Layout } from './components/Layout';
 import IsolatedTabSlot from './components/IsolatedTabSlot';
 import { SearchBar } from './components/SearchBar';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
+import { ContextMenu } from './components/ContextMenu';
 import { FileExplorer } from './components/FileExplorer';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
@@ -648,6 +649,8 @@ function App() {
   const [showManual, setShowManual] = useState(false);
   // 도움말/정보 등 단순 텍스트 모달 (alert 대체 — 스크롤 가능 + 닫을 때 터미널 포커스 복원)
   const [infoModal, setInfoModal] = useState<{ title: string; text: string } | null>(null);
+  // X 서버 시작/중지/상태 버튼 3개가 도구모음 자리를 너무 차지해서 드롭다운 하나로 합침.
+  const [xServerMenuPos, setXServerMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [sessionWipeDialog, setSessionWipeDialog] = useState(false);
   const [sessionOrganizeBusy, setSessionOrganizeBusy] = useState(false);
   // 자동 업데이트 상태 모달 (electron-updater)
@@ -4026,39 +4029,58 @@ function App() {
         { label: showClaudeChat ? tMenu('tools.claudeHide') : tMenu('tools.claudeShow'), action: () => setShowClaudeChat(v => !v) },
         { label: showBroadcast ? tMenu('tools.broadcastHide') : tMenu('tools.broadcastShow'), action: () => { setShowBroadcast(v => !v); } },
         { separator: true, label: '' },
-        { label: tMenu('tools.xStart'), action: async () => {
-          try {
-            const r = await (window as any).api?.x11Start?.(0);
-            if (r?.usedBundled) {
-              setInfoModal({ title: tMenu('tools.xStartTitle'), text: tMenu('tools.xStartOk', { pid: r.pid }) });
-              setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
-            } else {
-              setInfoModal({ title: tMenu('tools.xStartTitle'), text: `${tMenu('tools.xStartNoBundle')}\n\n${(r?.logs || []).slice(-5).join('\n')}` });
-            }
-          } catch (e: any) {
-            setInfoModal({ title: tMenu('tools.xStartFail'), text: String(e?.message || e) });
-          }
-        }},
-        { label: tMenu('tools.xStop'), action: async () => {
-          try {
-            await (window as any).api?.x11Stop?.(0);
-            setInfoModal({ title: tMenu('tools.xStopTitle'), text: tMenu('tools.xStopOk') });
-            setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
-          } catch (e: any) {
-            setInfoModal({ title: tMenu('tools.xStopFail'), text: String(e?.message || e) });
-          }
-        }},
-        { label: tMenu('tools.xStatus'), action: async () => {
-          try {
-            const r = await (window as any).api?.x11Status?.();
-            const text = r?.anyRunning
-              ? `${tMenu('tools.xStatusRunning')}\n\n` + r.running.map((x: any) => `  • DISPLAY=:${x.displayNum}  PID=${x.pid}`).join('\n')
-              : tMenu('tools.xStatusNone');
-            setInfoModal({ title: tMenu('tools.xStatusTitle'), text });
-          } catch (e: any) {
-            setInfoModal({ title: tMenu('tools.xStatusFail'), text: String(e?.message || e) });
-          }
-        }},
+        {
+          label: (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <defs>
+                  <linearGradient id="xServerRingMenu" x1="1" y1="3" x2="15" y2="13" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stopColor="#f97316"/>
+                    <stop offset="100%" stopColor="#fbbf24"/>
+                  </linearGradient>
+                </defs>
+                <ellipse cx="8" cy="8" rx="6.8" ry="4.3" stroke="url(#xServerRingMenu)" strokeWidth="1.7"/>
+                <path d="M3.6 3.2 L12.4 12.8 M12.4 3.2 L3.6 12.8" stroke="#111" strokeWidth="2.4" strokeLinecap="round"/>
+              </svg>
+              {tMenu('tools.xServer')}
+            </span>
+          ),
+          submenu: [
+            { label: tMenu('tools.xStart'), action: async () => {
+              try {
+                const r = await (window as any).api?.x11Start?.(0);
+                if (r?.usedBundled) {
+                  setInfoModal({ title: tMenu('tools.xStartTitle'), text: tMenu('tools.xStartOk', { pid: r.pid }) });
+                  setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
+                } else {
+                  setInfoModal({ title: tMenu('tools.xStartTitle'), text: `${tMenu('tools.xStartNoBundle')}\n\n${(r?.logs || []).slice(-5).join('\n')}` });
+                }
+              } catch (e: any) {
+                setInfoModal({ title: tMenu('tools.xStartFail'), text: String(e?.message || e) });
+              }
+            }},
+            { label: tMenu('tools.xStop'), action: async () => {
+              try {
+                await (window as any).api?.x11Stop?.(0);
+                setInfoModal({ title: tMenu('tools.xStopTitle'), text: tMenu('tools.xStopOk') });
+                setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
+              } catch (e: any) {
+                setInfoModal({ title: tMenu('tools.xStopFail'), text: String(e?.message || e) });
+              }
+            }},
+            { label: tMenu('tools.xStatus'), action: async () => {
+              try {
+                const r = await (window as any).api?.x11Status?.();
+                const text = r?.anyRunning
+                  ? `${tMenu('tools.xStatusRunning')}\n\n` + r.running.map((x: any) => `  • DISPLAY=:${x.displayNum}  PID=${x.pid}`).join('\n')
+                  : tMenu('tools.xStatusNone');
+                setInfoModal({ title: tMenu('tools.xStatusTitle'), text });
+              } catch (e: any) {
+                setInfoModal({ title: tMenu('tools.xStatusFail'), text: String(e?.message || e) });
+              }
+            }},
+          ],
+        },
         { separator: true, label: '' },
         { label: tMenu('tools.options'), action: async () => {
           setWordSepValue(getWordSeparator());
@@ -4863,33 +4885,71 @@ function App() {
             )}
           </button>
           <span className="tool-sep" />
-          <button className="tool-btn" title={tApp('toolbar.xStart')} onClick={async () => {
-            try {
-              const r = await (window as any).api?.x11Start?.(0);
-              if (r?.usedBundled) {
-                setInfoModal({ title: tApp('xServer.startTitle'), text: tApp('xServer.startOk', { pid: r.pid }) });
-                setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
-              } else {
-                setInfoModal({ title: tApp('xServer.startTitle'), text: tApp('xServer.startNoBundle', { logs: (r?.logs || []).slice(-5).join('\n') }) });
-              }
-            } catch (e: any) { setInfoModal({ title: tApp('xServer.startFail'), text: String(e?.message || e) }); }
-          }}>🖥️</button>
-          <button className="tool-btn" title={tApp('toolbar.xStop')} onClick={async () => {
-            try {
-              await (window as any).api?.x11Stop?.(0);
-              setInfoModal({ title: tApp('xServer.stopTitle'), text: tApp('xServer.stopOk') });
-              setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
-            } catch (e: any) { setInfoModal({ title: tApp('xServer.stopFail'), text: String(e?.message || e) }); }
-          }}>🛑</button>
-          <button className="tool-btn" title={tApp('toolbar.xStatus')} onClick={async () => {
-            try {
-              const r = await (window as any).api?.x11Status?.();
-              const text = r?.anyRunning
-                ? tApp('xServer.statusRunning') + '\n\n' + r.running.map((x: any) => `  • DISPLAY=:${x.displayNum}  PID=${x.pid}`).join('\n')
-                : tApp('xServer.statusNone');
-              setInfoModal({ title: tApp('xServer.statusTitle'), text });
-            } catch (e: any) { setInfoModal({ title: tApp('xServer.statusFail'), text: String(e?.message || e) }); }
-          }}>ℹ️</button>
+          <button
+            className="tool-btn"
+            title={tApp('toolbar.xServer')}
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setXServerMenuPos(prev => prev ? null : { x: r.left, y: r.bottom + 4 });
+            }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              {/* X.Org 로고 느낌 — 주황~노랑 그라디언트 링 + 굵은 검정 X */}
+              <defs>
+                <linearGradient id="xServerRing" x1="1" y1="3" x2="15" y2="13" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#f97316"/>
+                  <stop offset="100%" stopColor="#fbbf24"/>
+                </linearGradient>
+              </defs>
+              <ellipse cx="8" cy="8" rx="6.8" ry="4.3" stroke="url(#xServerRing)" strokeWidth="1.7"/>
+              <path d="M3.6 3.2 L12.4 12.8 M12.4 3.2 L3.6 12.8" stroke="#111" strokeWidth="2.4" strokeLinecap="round"/>
+            </svg>
+            <span className="x-server-btn-divider" />
+            <span style={{ fontSize: 9, opacity: 0.8 }}>▾</span>
+          </button>
+          {xServerMenuPos && (
+            <ContextMenu
+              x={xServerMenuPos.x}
+              y={xServerMenuPos.y}
+              onClose={() => setXServerMenuPos(null)}
+              items={[
+                {
+                  icon: '🖥️', label: tApp('toolbar.xStart'), onClick: async () => {
+                    try {
+                      const r = await (window as any).api?.x11Start?.(0);
+                      if (r?.usedBundled) {
+                        setInfoModal({ title: tApp('xServer.startTitle'), text: tApp('xServer.startOk', { pid: r.pid }) });
+                        setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
+                      } else {
+                        setInfoModal({ title: tApp('xServer.startTitle'), text: tApp('xServer.startNoBundle', { logs: (r?.logs || []).slice(-5).join('\n') }) });
+                      }
+                    } catch (e: any) { setInfoModal({ title: tApp('xServer.startFail'), text: String(e?.message || e) }); }
+                  },
+                },
+                {
+                  icon: '🛑', label: tApp('toolbar.xStop'), onClick: async () => {
+                    try {
+                      await (window as any).api?.x11Stop?.(0);
+                      setInfoModal({ title: tApp('xServer.stopTitle'), text: tApp('xServer.stopOk') });
+                      setTimeout(() => { setInfoModal(null); restoreTerminalFocus(); }, 1200);
+                    } catch (e: any) { setInfoModal({ title: tApp('xServer.stopFail'), text: String(e?.message || e) }); }
+                  },
+                },
+                {
+                  icon: 'ℹ️', label: tApp('toolbar.xStatus'), onClick: async () => {
+                    try {
+                      const r = await (window as any).api?.x11Status?.();
+                      const text = r?.anyRunning
+                        ? tApp('xServer.statusRunning') + '\n\n' + r.running.map((x: any) => `  • DISPLAY=:${x.displayNum}  PID=${x.pid}`).join('\n')
+                        : tApp('xServer.statusNone');
+                      setInfoModal({ title: tApp('xServer.statusTitle'), text });
+                    } catch (e: any) { setInfoModal({ title: tApp('xServer.statusFail'), text: String(e?.message || e) }); }
+                  },
+                },
+              ]}
+            />
+          )}
           <span className="tool-sep" />
           <button className="tool-btn" title={tApp('toolbar.options')} onClick={async () => {
             setWordSepValue(getWordSeparator());

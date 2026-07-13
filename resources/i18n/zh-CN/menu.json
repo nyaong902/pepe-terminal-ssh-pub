@@ -46,6 +46,7 @@
     "claudeHide": "🤖 隐藏 Claude 聊天",
     "broadcastShow": "📢 显示广播栏",
     "broadcastHide": "📢 隐藏广播栏",
+    "xServer": "X 服务器",
     "xStart": "🖥️ 启动 X 服务器 (DISPLAY=:0)",
     "xStop": "🛑 停止 X 服务器",
     "xStatus": "ℹ️ X 服务器状态",

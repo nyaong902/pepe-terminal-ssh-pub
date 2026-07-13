@@ -232,6 +232,7 @@ contextBridge.exposeInMainWorld('api', {
   mediaDecrypt: (filePath: string, password: string) => ipcRenderer.invoke('media:decrypt', { filePath, password }),
   mediaDecodeLocal: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-local', { filePath, codec }),
   mediaDecodeGstreamer: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-gstreamer', { filePath, codec }),
+  mediaReadVideo: (filePath: string) => ipcRenderer.invoke('media:read-video', { filePath }),
   mediaRecentsGet: () => ipcRenderer.invoke('media-recents:get'),
   mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
   mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),

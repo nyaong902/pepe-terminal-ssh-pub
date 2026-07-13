@@ -2736,16 +2736,29 @@ ipcMain.handle('sessions:list', () => sessionsData);
 
 ipcMain.handle('sessions:save', (_e, s: Session) => {
   const idx = sessionsData.sessions.findIndex(x => x.id === s.id);
-  if (idx >= 0) sessionsData.sessions[idx] = s;
-  else sessionsData.sessions.push(s);
+  const saved: Session = { ...s, name: uniqueSessionName(s.name, s.id) };
+  if (idx >= 0) sessionsData.sessions[idx] = saved;
+  else sessionsData.sessions.push(saved);
   saveSessionsData(sessionsData);
   return sessionsData;
 });
 
+// 세션을 복사/복제하거나("New Session" 기본값 그대로 저장하는 등) 그냥 새로 추가할 때도 매번
+// 똑같은 이름이 생성돼서 목록에 구분 안 되는 동명 세션이 여러 개 쌓였다 — 자기 자신(id 로 구분,
+// 이름 안 바꾸고 그냥 다시 저장하는 경우) 을 제외한 다른 세션과 이름이 겹치면 " 2", " 3"... 을
+// 붙여서 유일한 이름이 나올 때까지 늘린다.
+function uniqueSessionName(baseName: string, excludeId?: string): string {
+  const existingNames = new Set(sessionsData.sessions.filter(s => s.id !== excludeId).map(s => s.name));
+  if (!existingNames.has(baseName)) return baseName;
+  let i = 2;
+  while (existingNames.has(`${baseName} ${i}`)) i++;
+  return `${baseName} ${i}`;
+}
+
 function cloneSessionForDuplicate(source: Session, newId: string, nameSuffix: string): Session {
   const cloned: Session = JSON.parse(JSON.stringify(source));
   cloned.id = newId;
-  cloned.name = `${source.name} (${nameSuffix || 'Copy'})`;
+  cloned.name = uniqueSessionName(`${source.name} (${nameSuffix || 'Copy'})`);
   return cloned;
 }
 
@@ -3067,11 +3080,14 @@ ipcMain.handle('office-recents:remove', (_e, { kind, filePath }: { kind: string;
 
 // ── 미디어 플레이어 — 파일 열기 / 최근 재생 목록 / #!ENC 복호화 ──
 const MEDIA_OPEN_FILTER = { name: 'Audio Files', extensions: ['wav', 'alaw', 'pcma', 'al', 'ulaw', 'pcmu', 'mulaw', 'ul', 'amr', 'amrnb', 'awb', 'amrwb', 'evs', 'opus', 'raw'] };
+// mp4/m4v/mov/webm/ogv 는 GStreamer 사이드카나 로컬 디코딩 없이 Chromium 내장 디코더로 그대로
+// 재생한다(electron/mediaCodec.ts 의 VIDEO_EXTENSIONS 와 동일 목록).
+const MEDIA_OPEN_VIDEO_FILTER = { name: 'Video Files', extensions: ['mp4', 'm4v', 'mov', 'webm', 'ogv'] };
 ipcMain.handle('media:open-file', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '음원 파일 열기',
-    filters: [MEDIA_OPEN_FILTER, { name: 'All Files', extensions: ['*'] }],
+    title: '미디어 파일 열기',
+    filters: [MEDIA_OPEN_FILTER, MEDIA_OPEN_VIDEO_FILTER, { name: 'All Files', extensions: ['*'] }],
     properties: ['openFile'],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -3119,6 +3135,18 @@ ipcMain.handle('media:decode-gstreamer', async (_e, { filePath, codec }: { fileP
     return { sampleRate, channels, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) };
   } catch (e: any) {
     fs.unlink(result.wavPath, () => {});
+    return { error: String(e?.message || e) };
+  }
+});
+// 영상 파일 — PCM 디코딩은 안 하지만, file:// URL 을 <video src> 에 직접 넣는 방식은 이 앱에서
+// 렌더러가 항상 로드하지 못했다(검은 화면, 재생 버튼 자체가 안 뜸 — webSecurity 로 인해 렌더러
+// origin 에서 임의 file:// 리소스를 못 읽는 것으로 보임). PDF/오피스 파일들과 동일하게, 파일을
+// 통째로 읽어 ArrayBuffer 로 넘기고 렌더러에서 Blob URL 로 바꿔 재생한다 — 이미 검증된 경로.
+ipcMain.handle('media:read-video', (_e, { filePath }: { filePath: string }) => {
+  try {
+    const data = fs.readFileSync(filePath);
+    return { data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  } catch (e: any) {
     return { error: String(e?.message || e) };
   }
 });

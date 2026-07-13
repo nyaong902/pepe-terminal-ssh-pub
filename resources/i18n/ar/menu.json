@@ -46,6 +46,7 @@
     "claudeHide": "🤖 إخفاء محادثة Claude",
     "broadcastShow": "📢 إظهار شريط البث",
     "broadcastHide": "📢 إخفاء شريط البث",
+    "xServer": "خادم X",
     "xStart": "🖥️ تشغيل خادم X (DISPLAY=:0)",
     "xStop": "🛑 إيقاف خادم X",
     "xStatus": "ℹ️ حالة خادم X",

@@ -19,7 +19,12 @@ const UENC_KEY_LEN = 32;
 const UENC_IV_LEN = 16;
 const UENC_PBKDF2_ITER = 10000;
 
-export type MediaCodec = 'wav' | 'alaw' | 'ulaw' | 'amrnb' | 'amrwb' | 'evs' | 'opus' | 'raw' | 'unknown';
+export type MediaCodec = 'wav' | 'alaw' | 'ulaw' | 'amrnb' | 'amrwb' | 'evs' | 'opus' | 'raw' | 'video' | 'unknown';
+
+// 영상 컨테이너 — Chromium 내장 디코더(Electron 에 이미 포함된 ffmpeg)가 그대로 재생하므로
+// GStreamer 사이드카나 로컬 PCM 디코딩 없이, 렌더러의 <video> 엘리먼트에 file:// 로 바로 넘긴다.
+// mkv/avi 는 Chromium 이 컨테이너 자체를 지원하지 않아 제외했다.
+const VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mov', '.webm', '.ogv'];
 
 export type MediaProbeResult = {
   filePath: string;
@@ -40,6 +45,7 @@ function detectCodec(headerBuf: Buffer, filePath: string): MediaCodec {
   if (headerBuf.length >= 12 && headerBuf.subarray(0, 12).toString('latin1') === '#!EVS_MC1.0\n') return 'evs';
   if (headerBuf.length >= 4 && headerBuf.subarray(0, 4).toString('latin1') === 'OggS') return 'opus';
   if (headerBuf.length >= 4 && headerBuf.subarray(0, 4).toString('latin1') === 'RIFF') return 'wav';
+  if (VIDEO_EXTENSIONS.some(ext => hasExtCi(filePath, ext))) return 'video';
   if (hasExtCi(filePath, '.pcma') || hasExtCi(filePath, '.alaw') || hasExtCi(filePath, '.al')) return 'alaw';
   if (hasExtCi(filePath, '.pcmu') || hasExtCi(filePath, '.ulaw') || hasExtCi(filePath, '.mulaw') || hasExtCi(filePath, '.ul')) return 'ulaw';
   if (hasExtCi(filePath, '.amr') || hasExtCi(filePath, '.amrnb')) return 'amrnb';

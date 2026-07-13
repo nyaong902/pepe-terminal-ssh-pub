@@ -1,5 +1,6 @@
 ﻿!include "nsDialogs.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 
 ; nsDialogs 사용자 데이터 삭제 옵션 페이지 관련 변수/함수 — 설치용에만 필요.
 !ifndef BUILD_UNINSTALLER
@@ -7,6 +8,16 @@ Var DeleteDataCheckbox
 Var DeleteDataChecked  ; 0 = 유지(기본), 1 = 삭제
 
 Function nsShowDeleteDataPage
+  ; 자동 업데이트(electron-updater 의 quitAndInstall)로 실행된 경우엔 이 exe 에
+  ; "--updated" 인자가 붙어서 실행된다. 사용자 상호작용 없이 조용히 진행되는 상황이라,
+  ; 여기서 체크박스 응답을 기다리며 멈추면 "작업관리자엔 떠 있는데 창은 안 보이는"
+  ; 것처럼 보인다 — 업데이트 실행일 땐 이 페이지 자체를 건너뛴다.
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "--updated" $R1
+  ${IfNot} ${Errors}
+    Abort
+  ${EndIf}
+  ClearErrors
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
   ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
   SetShellVarContext current
