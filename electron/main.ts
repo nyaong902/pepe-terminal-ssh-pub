@@ -2736,16 +2736,29 @@ ipcMain.handle('sessions:list', () => sessionsData);
 
 ipcMain.handle('sessions:save', (_e, s: Session) => {
   const idx = sessionsData.sessions.findIndex(x => x.id === s.id);
-  if (idx >= 0) sessionsData.sessions[idx] = s;
-  else sessionsData.sessions.push(s);
+  const saved: Session = { ...s, name: uniqueSessionName(s.name, s.id) };
+  if (idx >= 0) sessionsData.sessions[idx] = saved;
+  else sessionsData.sessions.push(saved);
   saveSessionsData(sessionsData);
   return sessionsData;
 });
 
+// 세션을 복사/복제하거나("New Session" 기본값 그대로 저장하는 등) 그냥 새로 추가할 때도 매번
+// 똑같은 이름이 생성돼서 목록에 구분 안 되는 동명 세션이 여러 개 쌓였다 — 자기 자신(id 로 구분,
+// 이름 안 바꾸고 그냥 다시 저장하는 경우) 을 제외한 다른 세션과 이름이 겹치면 " 2", " 3"... 을
+// 붙여서 유일한 이름이 나올 때까지 늘린다.
+function uniqueSessionName(baseName: string, excludeId?: string): string {
+  const existingNames = new Set(sessionsData.sessions.filter(s => s.id !== excludeId).map(s => s.name));
+  if (!existingNames.has(baseName)) return baseName;
+  let i = 2;
+  while (existingNames.has(`${baseName} ${i}`)) i++;
+  return `${baseName} ${i}`;
+}
+
 function cloneSessionForDuplicate(source: Session, newId: string, nameSuffix: string): Session {
   const cloned: Session = JSON.parse(JSON.stringify(source));
   cloned.id = newId;
-  cloned.name = `${source.name} (${nameSuffix || 'Copy'})`;
+  cloned.name = uniqueSessionName(`${source.name} (${nameSuffix || 'Copy'})`);
   return cloned;
 }
 
