@@ -2725,6 +2725,17 @@ body.popout-options .session-editor h3:first-child {
   background: #2b4a6b;
   border-color: #3a6b9c;
 }
+/* X 서버 버튼의 아이콘/화살표 구분선 — 평소엔 안 보이다가 버튼에 마우스 올렸을 때만 살짝 표시 */
+.x-server-btn-divider {
+  width: 1px;
+  align-self: stretch;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tool-toolbar .tool-btn:hover .x-server-btn-divider {
+  opacity: 0.25;
+}
 .tool-toolbar .tool-btn.messenger-alert {
   border-color: rgba(90, 190, 255, 0.5);
   box-shadow: 0 0 0 1px rgba(90, 190, 255, 0.14), 0 0 12px rgba(90, 190, 255, 0.28);

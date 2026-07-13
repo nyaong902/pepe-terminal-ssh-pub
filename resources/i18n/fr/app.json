@@ -116,6 +116,7 @@
     "broadcastHide": "Masquer la barre de diffusion",
     "terminalPin": "Épingler le panneau du terminal",
     "terminalUnpin": "Désépingler le panneau du terminal (réduire en onglet vertical)",
+    "xServer": "Serveur X",
     "xStart": "Démarrer le serveur X (DISPLAY=:0)",
     "xStop": "Arrêter le serveur X",
     "xStatus": "État du serveur X",

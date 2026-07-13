@@ -46,6 +46,7 @@
     "claudeHide": "🤖 Masquer le chat Claude",
     "broadcastShow": "📢 Afficher la barre de diffusion",
     "broadcastHide": "📢 Masquer la barre de diffusion",
+    "xServer": "Serveur X",
     "xStart": "🖥️ Démarrer le serveur X (DISPLAY=:0)",
     "xStop": "🛑 Arrêter le serveur X",
     "xStatus": "ℹ️ État du serveur X",

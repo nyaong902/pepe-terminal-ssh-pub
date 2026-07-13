@@ -116,6 +116,7 @@
     "broadcastHide": "إخفاء شريط البث",
     "terminalPin": "تثبيت لوحة الطرفية",
     "terminalUnpin": "إلغاء تثبيت لوحة الطرفية (تصغير إلى تبويب عمودي)",
+    "xServer": "خادم X",
     "xStart": "بدء خادم X (DISPLAY=:0)",
     "xStop": "إيقاف خادم X",
     "xStatus": "حالة خادم X",

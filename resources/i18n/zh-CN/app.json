@@ -116,6 +116,7 @@
     "broadcastHide": "隐藏广播栏",
     "terminalPin": "固定终端面板",
     "terminalUnpin": "取消固定终端面板（最小化为竖向标签页）",
+    "xServer": "X 服务器",
     "xStart": "启动 X 服务器（DISPLAY=:0）",
     "xStop": "停止 X 服务器",
     "xStatus": "X 服务器状态",

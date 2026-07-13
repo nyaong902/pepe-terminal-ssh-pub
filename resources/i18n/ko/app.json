@@ -118,6 +118,7 @@
     "stickyNote": "스티커 메모",
     "terminalPin": "터미널 패널 고정",
     "terminalUnpin": "터미널 패널 고정 해제 (세로 탭으로 최소화)",
+    "xServer": "X 서버",
     "xStart": "X 서버 시작 (DISPLAY=:0)",
     "xStop": "X 서버 중지",
     "xStatus": "X 서버 상태",

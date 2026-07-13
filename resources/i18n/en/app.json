@@ -118,6 +118,7 @@
     "stickyNote": "Add sticky note",
     "terminalPin": "Pin terminal panel",
     "terminalUnpin": "Unpin terminal panel (minimize to vertical tab)",
+    "xServer": "X server",
     "xStart": "Start X server (DISPLAY=:0)",
     "xStop": "Stop X server",
     "xStatus": "X server status",

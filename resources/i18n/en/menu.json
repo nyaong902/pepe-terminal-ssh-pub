@@ -46,6 +46,7 @@
     "claudeHide": "🤖 Hide Claude chat",
     "broadcastShow": "📢 Show broadcast bar",
     "broadcastHide": "📢 Hide broadcast bar",
+    "xServer": "X server",
     "xStart": "🖥️ Start X server (DISPLAY=:0)",
     "xStop": "🛑 Stop X server",
     "xStatus": "ℹ️ X server status",
