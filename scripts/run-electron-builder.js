@@ -41,6 +41,22 @@ if ((result.status ?? 1) === 0) {
     console.error(err);
     process.exit(1);
   }
+
+  // release/ 로 복사 완료했으니 .cache 밑 타임스탬프 산출물 폴더(이번 것 + 이전 실행에서
+  // 파일 잠금 등으로 못 지우고 남은 것들)를 모두 정리 — 빌드마다 수백MB~수GB씩 계속 쌓이는 것 방지.
+  // 실패해도(다른 프로세스가 파일을 잠그고 있는 경우 등) 빌드 자체는 성공으로 취급한다.
+  try {
+    for (const name of fs.readdirSync(path.join(projectRoot, '.cache'))) {
+      if (!name.startsWith('electron-builder-output-')) continue;
+      try {
+        fs.rmSync(path.join(projectRoot, '.cache', name), { recursive: true, force: true });
+      } catch (err) {
+        console.warn('[run-electron-builder] .cache 산출물 정리 실패(무시):', name, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[run-electron-builder] .cache 정리 중 오류(무시):', err.message);
+  }
 }
 
 process.exit(result.status ?? 1);

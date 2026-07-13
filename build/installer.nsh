@@ -18,6 +18,9 @@ Function nsShowDeleteDataPage
   ${If} ${Silent}
     Abort
   ${EndIf}
+  ; customInit 의 BringToFront 만으로 부족할 때를 대비한 2차 안전장치 — 첫 커스텀 페이지가
+  ; 뜨는 시점에 한 번 더 앞으로 가져온다.
+  BringToFront
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
   ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
   SetShellVarContext current
@@ -98,10 +101,17 @@ FunctionEnd
 !endif
 
 !macro customInit
-  ; 모든 사용자 / 전용 모두 Program Files에 설치. $PROGRAMFILES 는 64비트 Windows에서도
-  ; 32비트용 "Program Files (x86)" 로 풀리는 변수라 — 이 앱은 64비트 빌드이므로 반드시
-  ; $PROGRAMFILES64 를 써야 정상적인 "Program Files" 아래로 설치된다.
-  StrCpy $INSTDIR "$PROGRAMFILES64\PePe Terminal(SSH)"
+  ; electron-builder 의 PAGE_INSTALL_MODE 는 "전체 사용자" 설치를 고르면(기본값) 관리자 권한이
+  ; 없는 바깥 프로세스 창을 ShowWindow ... SW_HIDE 로 숨기고 UAC_RunElevated 로 권한 상승된
+  ; 내부(inner) 인스턴스를 새로 띄운 뒤 Quit 한다 — 이 내부 인스턴스가 .onInit 을 다시 타면서
+  ; customInit(여기)도 다시 실행된다. Windows 가 백그라운드/업데이터에서 간접 실행 → UAC 승인
+  ; 흐름으로 새로 뜬 창에는 포커스를 안 줄 때가 있어(알려진 OS 동작), 승인 후에도 창이 다른
+  ; 창 뒤에 숨어 "설치 화면이 안 보인다"는 증상으로 나타난다. NSIS 공식 문서가 정확히 이 상황
+  ; (다른 프로그램 실행 등으로 포그라운드를 뺏긴 경우) 을 위해 제공하는 BringToFront 로 강제로
+  ; 앞으로 가져온다.
+  BringToFront
+  ; 모든 사용자 / 전용 모두 Program Files(x86 경로)에 설치.
+  StrCpy $INSTDIR "$PROGRAMFILES\PePe Terminal(SSH)"
   ; 설치 시 파일 복사 단계도 detail 패널에 출력되도록 — 기본 SetDetailsPrint=lastused → both
   SetDetailsPrint both
   !ifndef BUILD_UNINSTALLER
