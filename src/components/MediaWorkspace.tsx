@@ -13,12 +13,12 @@ import { getMediaRecents, addMediaRecent, removeMediaRecent, setMediaPosition, t
 
 const api = () => (window as any).api || {};
 
-type MediaCodec = 'wav' | 'alaw' | 'ulaw' | 'amrnb' | 'amrwb' | 'evs' | 'opus' | 'raw' | 'unknown';
+type MediaCodec = 'wav' | 'alaw' | 'ulaw' | 'amrnb' | 'amrwb' | 'evs' | 'opus' | 'raw' | 'video' | 'unknown';
 const LOCAL_CODECS: MediaCodec[] = ['wav', 'alaw', 'ulaw', 'raw'];
 const GSTREAMER_CODECS: MediaCodec[] = ['evs', 'amrnb', 'amrwb', 'opus'];
 const CODEC_LABEL: Record<MediaCodec, string> = {
   wav: 'WAV', alaw: 'A-law', ulaw: 'u-law', raw: 'RAW PCM',
-  amrnb: 'AMR-NB', amrwb: 'AMR-WB', evs: 'EVS', opus: 'OPUS', unknown: '알 수 없음',
+  amrnb: 'AMR-NB', amrwb: 'AMR-WB', evs: 'EVS', opus: 'OPUS', video: '영상', unknown: '알 수 없음',
 };
 
 type PlayState = 'idle' | 'loading' | 'need-password' | 'ready' | 'playing' | 'paused' | 'error';
@@ -32,6 +32,7 @@ type OpenMedia = {
   error?: string;
   duration: number;
   position: number;
+  videoUrl?: string;
 };
 
 let nextTabId = 0;
@@ -63,6 +64,7 @@ export function MediaWorkspace(_props: { instanceId: string }) {
   const bufferRef = useRef<Map<string, AudioBuffer>>(new Map());
   const startedAtRef = useRef<Map<string, { ctxTime: number; offset: number }>>(new Map());
   const rafRef = useRef<number | null>(null);
+  const videoUrlRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     getMediaRecents().then(setRecents);
@@ -112,6 +114,40 @@ export function MediaWorkspace(_props: { instanceId: string }) {
     applyDecodedPcm(id, pcm, sampleRate, channels);
   };
 
+  // mp4/webm/mov 등 — PCM 디코딩은 안 하지만, file:// URL 을 <video src> 에 바로 넣는 방식은
+  // 이 앱 렌더러에서 로드가 안 됐다(검은 화면, 재생 자체가 안 됨 — webSecurity 때문으로 보임).
+  // PDF/오피스 파일들과 같은 방식으로 파일을 통째로 읽어와 Blob URL 로 바꿔서 재생한다.
+  const videoMime = (fileName: string): string => {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (ext === 'webm') return 'video/webm';
+    if (ext === 'ogv') return 'video/ogg';
+    if (ext === 'mov') return 'video/quicktime';
+    return 'video/mp4'; // mp4, m4v
+  };
+  const loadVideo = async (id: string, filePath: string, fileName: string) => {
+    const result = await api().mediaReadVideo?.(filePath);
+    if (!result || result.error) {
+      patchDoc(id, { state: 'error', error: result?.error || '영상 파일을 열 수 없습니다.' });
+      return;
+    }
+    const blob = new Blob([result.data as ArrayBuffer], { type: videoMime(fileName) });
+    const url = URL.createObjectURL(blob);
+    videoUrlRef.current.set(id, url);
+    patchDoc(id, { state: 'ready', videoUrl: url });
+  };
+
+  const loadByCodec = async (id: string, filePath: string, codec: MediaCodec, fileName: string) => {
+    if (codec === 'video') {
+      await loadVideo(id, filePath, fileName);
+    } else if (LOCAL_CODECS.includes(codec)) {
+      await loadLocalCodec(id, filePath, codec);
+    } else if (GSTREAMER_CODECS.includes(codec)) {
+      await loadGstreamerCodec(id, filePath, codec);
+    } else {
+      patchDoc(id, { state: 'error', error: `지원하지 않는 코덱입니다: ${codec}` });
+    }
+  };
+
   const openPath = async (filePath: string, fileName: string) => {
     const id = `media-${++nextTabId}`;
     setDocs(prev => [...prev, { id, filePath, fileName, codec: 'unknown', state: 'loading', duration: 0, position: 0 }]);
@@ -129,13 +165,7 @@ export function MediaWorkspace(_props: { instanceId: string }) {
     }
     patchDoc(id, { codec: probe.codec });
     addMediaRecent({ filePath, fileName, codec: probe.codec }).then(setRecents);
-    if (LOCAL_CODECS.includes(probe.codec)) {
-      await loadLocalCodec(id, filePath, probe.codec);
-    } else if (GSTREAMER_CODECS.includes(probe.codec)) {
-      await loadGstreamerCodec(id, filePath, probe.codec);
-    } else {
-      patchDoc(id, { state: 'error', error: `지원하지 않는 코덱입니다: ${probe.codec}` });
-    }
+    await loadByCodec(id, filePath, probe.codec, fileName);
   };
 
   const handleOpenFile = async () => {
@@ -165,13 +195,7 @@ export function MediaWorkspace(_props: { instanceId: string }) {
     setPendingPassword(null);
     patchDoc(id, { codec });
     addMediaRecent({ filePath, fileName, codec }).then(setRecents);
-    if (LOCAL_CODECS.includes(codec)) {
-      await loadLocalCodec(id, tempPath, codec);
-    } else if (GSTREAMER_CODECS.includes(codec)) {
-      await loadGstreamerCodec(id, tempPath, codec);
-    } else {
-      patchDoc(id, { state: 'error', error: `지원하지 않는 코덱입니다: ${codec}` });
-    }
+    await loadByCodec(id, tempPath, codec, fileName);
   };
 
   const stopPlayback = (id: string) => {
@@ -243,6 +267,8 @@ export function MediaWorkspace(_props: { instanceId: string }) {
     stopPlayback(id);
     bufferRef.current.delete(id);
     startedAtRef.current.delete(id);
+    const videoUrl = videoUrlRef.current.get(id);
+    if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrlRef.current.delete(id); }
     const doc = docs.find(d => d.id === id);
     if (doc && doc.position > 0) setMediaPosition(doc.filePath, doc.position);
     const idx = docs.findIndex(d => d.id === id);
@@ -257,14 +283,14 @@ export function MediaWorkspace(_props: { instanceId: string }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 8px', borderBottom: '1px solid var(--win-border, #30363d)', overflowX: 'auto', flex: '0 0 auto' }}>
           {docs.map(d => (
             <div key={d.id} onClick={() => setActiveId(d.id)} style={tabStyle(d.id === activeId)}>
-              <span>🎵</span>
+              <span>{d.codec === 'video' ? '🎬' : '🎵'}</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.fileName}</span>
               <span onClick={(e) => { e.stopPropagation(); closeDoc(d.id); }} style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}>×</span>
             </div>
           ))}
           <button
             onClick={handleOpenFile}
-            title="음원 파일 열기"
+            title="미디어 파일 열기"
             style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text, #e6edf3)', fontSize: 13, cursor: 'pointer' }}
           >＋</button>
         </div>
@@ -276,7 +302,7 @@ export function MediaWorkspace(_props: { instanceId: string }) {
               recents={recents}
               onOpenRecent={handleOpenRecent}
               onRemoveRecent={handleRemoveRecent}
-              message="🎵 미디어 플레이어 — 왼쪽에서 최근 재생 항목을 선택하거나 아래 버튼으로 파일을 여세요."
+              message="🎵🎬 미디어 플레이어 — 음원/영상 파일을 재생합니다. 왼쪽에서 최근 재생 항목을 선택하거나 아래 버튼으로 파일을 여세요."
             />
             <button
               onClick={handleOpenFile}
@@ -291,7 +317,7 @@ export function MediaWorkspace(_props: { instanceId: string }) {
           <div key={d.id} style={{ position: 'absolute', inset: 0, display: d.id === activeId ? 'flex' : 'none', flexDirection: 'column' }}>
             <OfficeBackBar
               label={`${d.fileName} — ${CODEC_LABEL[d.codec]}`}
-              right={isPlayable ? (
+              right={isPlayable && d.codec !== 'video' ? (
                 <button
                   onClick={() => { setEditMode(v => !v); setSelection(null); }}
                   style={{ ...playBtnStyle, padding: '4px 10px', fontSize: 12 }}
@@ -321,7 +347,15 @@ export function MediaWorkspace(_props: { instanceId: string }) {
                   }}
                 />
               )}
-              {isPlayable && !editMode && (
+              {isPlayable && d.codec === 'video' && (
+                <video
+                  src={d.videoUrl}
+                  controls
+                  autoPlay={false}
+                  style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', background: '#000', borderRadius: 6 }}
+                />
+              )}
+              {isPlayable && d.codec !== 'video' && !editMode && (
                 <>
                   <div style={{ fontSize: 48 }}>🎵</div>
                   <div style={{ fontWeight: 600, color: 'var(--win-text, #e6edf3)', maxWidth: 420, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.fileName}</div>

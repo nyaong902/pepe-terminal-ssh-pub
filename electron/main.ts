@@ -3067,11 +3067,14 @@ ipcMain.handle('office-recents:remove', (_e, { kind, filePath }: { kind: string;
 
 // ── 미디어 플레이어 — 파일 열기 / 최근 재생 목록 / #!ENC 복호화 ──
 const MEDIA_OPEN_FILTER = { name: 'Audio Files', extensions: ['wav', 'alaw', 'pcma', 'al', 'ulaw', 'pcmu', 'mulaw', 'ul', 'amr', 'amrnb', 'awb', 'amrwb', 'evs', 'opus', 'raw'] };
+// mp4/m4v/mov/webm/ogv 는 GStreamer 사이드카나 로컬 디코딩 없이 Chromium 내장 디코더로 그대로
+// 재생한다(electron/mediaCodec.ts 의 VIDEO_EXTENSIONS 와 동일 목록).
+const MEDIA_OPEN_VIDEO_FILTER = { name: 'Video Files', extensions: ['mp4', 'm4v', 'mov', 'webm', 'ogv'] };
 ipcMain.handle('media:open-file', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '음원 파일 열기',
-    filters: [MEDIA_OPEN_FILTER, { name: 'All Files', extensions: ['*'] }],
+    title: '미디어 파일 열기',
+    filters: [MEDIA_OPEN_FILTER, MEDIA_OPEN_VIDEO_FILTER, { name: 'All Files', extensions: ['*'] }],
     properties: ['openFile'],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -3119,6 +3122,18 @@ ipcMain.handle('media:decode-gstreamer', async (_e, { filePath, codec }: { fileP
     return { sampleRate, channels, pcm: pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) };
   } catch (e: any) {
     fs.unlink(result.wavPath, () => {});
+    return { error: String(e?.message || e) };
+  }
+});
+// 영상 파일 — PCM 디코딩은 안 하지만, file:// URL 을 <video src> 에 직접 넣는 방식은 이 앱에서
+// 렌더러가 항상 로드하지 못했다(검은 화면, 재생 버튼 자체가 안 뜸 — webSecurity 로 인해 렌더러
+// origin 에서 임의 file:// 리소스를 못 읽는 것으로 보임). PDF/오피스 파일들과 동일하게, 파일을
+// 통째로 읽어 ArrayBuffer 로 넘기고 렌더러에서 Blob URL 로 바꿔 재생한다 — 이미 검증된 경로.
+ipcMain.handle('media:read-video', (_e, { filePath }: { filePath: string }) => {
+  try {
+    const data = fs.readFileSync(filePath);
+    return { data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  } catch (e: any) {
     return { error: String(e?.message || e) };
   }
 });
