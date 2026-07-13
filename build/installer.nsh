@@ -6,14 +6,16 @@
 !ifndef BUILD_UNINSTALLER
 Var DeleteDataCheckbox
 Var DeleteDataChecked  ; 0 = 유지(기본), 1 = 삭제
-Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (customInit 에서 판별)
+Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (customInit 에서 판별) — 레지스트리
+                        ; 이전 선택값을 기본 체크 상태로 미리 채우는 용도로만 쓴다(아래 참고).
 
 Function nsShowDeleteDataPage
-  ; 자동 업데이트(electron-updater 의 quitAndInstall)로 실행된 경우엔 사용자 상호작용 없이
-  ; 조용히 진행돼야 하는 상황이라, 여기서 체크박스 응답을 기다리며 멈추면 "작업관리자엔 떠
-  ; 있는데 창은 안 보이는" 것처럼 보인다 — 업데이트 실행일 땐 이 페이지 자체를 건너뛴다.
-  ; (customInit 에서 미리 판별해둔 $IsUpdateRun 재사용)
-  ${If} $IsUpdateRun == "1"
+  ; 진짜 무음 설치(/S — 예: electron-updater 가 quitAndInstall(true, ...) 로 부르거나, 관리자가
+  ; 사일런트 배포를 직접 실행하는 경우)에서만 페이지를 건너뛴다. 이 앱은 quitAndInstall(false, true)
+  ; 로 불러 /S 를 안 붙이므로(자동 업데이트여도 설치 창이 실제로 보임) --updated 유무만으로
+  ; 판단하면 안 된다 — --updated 는 "자동 업데이트로 실행됨" 표시일 뿐 "화면이 없음"의 의미가
+  ; 아니다. 진짜 무음 여부는 NSIS 가 자체 관리하는 ${Silent}(=/S 로 실행됐는지) 로만 정확히 판별된다.
+  ${If} ${Silent}
     Abort
   ${EndIf}
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
@@ -56,9 +58,9 @@ Var OfficeCheckbox
 Var OfficeChecked
 
 Function nsShowFeaturesPage
-  ; 자동 업데이트 실행일 땐(위 nsShowDeleteDataPage 와 같은 이유) 이 페이지도 건너뛴다 —
-  ; customInit 에서 레지스트리에 저장해둔 이전 선택값을 이미 읽어와 놨으므로 그걸 그대로 쓴다.
-  ${If} $IsUpdateRun == "1"
+  ; 위 nsShowDeleteDataPage 와 동일한 이유로, 진짜 무음 설치(/S)일 때만 건너뛴다 —
+  ; 그 경우엔 customInit 에서 레지스트리에 저장해둔 이전 선택값을 그대로 쓴다.
+  ${If} ${Silent}
     Abort
   ${EndIf}
   nsDialogs::Create 1018
