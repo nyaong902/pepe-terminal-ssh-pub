@@ -199,7 +199,15 @@ function PdfEditorPaneBound({ id: _id, data, mode, onDocReady }: { id: string; d
       const viewer = new PDFViewer({ container, eventBus, linkService, annotationEditorMode: pdfjsLib.AnnotationEditorType.NONE });
       linkService.setViewer(viewer);
       viewerRef.current = viewer;
-      const loadingTask = pdfjsLib.getDocument({ data: data.slice(0) });
+      // cMap/표준폰트 데이터 없이는, 시스템 폰트를 CID(Adobe-Korea1 등) 로 참조하는 비임베드
+      // 한글 폰트를 못 풀어서 페이지 배경/표/테두리는 멀쩡히 그려지는데 글자만 전부 안 보이는
+      // 증상이 생긴다(HWP/한글 변환 PDF 에서 흔함) — public/ 에 복사해둔 pdfjs-dist 리소스를 가리킨다.
+      const loadingTask = pdfjsLib.getDocument({
+        data: data.slice(0),
+        cMapUrl: `${import.meta.env.BASE_URL}pdfjs-cmaps/`,
+        cMapPacked: true,
+        standardFontDataUrl: `${import.meta.env.BASE_URL}pdfjs-standard-fonts/`,
+      });
       const pdfDocument = await loadingTask.promise;
       if (disposed) return;
       onDocReady(pdfDocument);
