@@ -1,6 +1,7 @@
 ﻿!include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "Sections.nsh"
 
 ; 진단용 파일 로그 — 자동 업데이트 중 설치 창이 안 뜨는 문제의 실제 발생 지점을 확인하기 위함.
 ; 앱 쪽 update-debug.log 는 앱이 이미 종료된 뒤(설치 프로그램 실행 중)엔 아무것도 못 남기므로,
@@ -80,60 +81,39 @@ FunctionEnd
 ; 선택 설치(용량 큰 기능만) — VPN/MicroSIP/SIPp/미디어 재생/오피스는 각각 전용 번들
 ; 바이너리·정적 파일을 쓰고 서로 공유하지 않아서 필요 없으면 통째로 뺄 수 있다(브라우저/파일
 ; 비교/로그 분석은 별도 번들이 없는 순수 JS 기능이라 선택 설치 대상이 아님 — 항상 설치됨).
-Var VpnCheckbox
+; nsDialogs 커스텀 페이지 대신 NSIS 내장 컴포넌트 선택 페이지(MUI_PAGE_COMPONENTS)를 쓴다 —
+; 표준 페이지 타입이라 커스텀 nsDialogs 페이지보다 안정적일 것으로 기대. 아래 5개 Section 은
+; 파일을 직접 설치하지 않는 빈 섹션이다(electron-builder 의 메인 섹션이 전체를 이미 복사해두고,
+; customInstall 에서 체크 해제된 것만 걷어내는 기존 방식 그대로 유지) — 체크 상태만 사용.
 Var VpnChecked
-Var MicroSipCheckbox
 Var MicroSipChecked
-Var SippCheckbox
 Var SippChecked
-Var MediaCheckbox
 Var MediaChecked
-Var OfficeCheckbox
 Var OfficeChecked
 
-Function nsShowFeaturesPage
-  ; 자동 업데이트에서도 컴포넌트 선택 페이지는 보여준다.
-  !insertmacro DbgLog "nsShowFeaturesPage: enter IsUpdateRun=$IsUpdateRun HWNDPARENT=$HWNDPARENT"
-  !insertmacro ForceShowInstallerWindow
-  !insertmacro DbgLog "nsShowFeaturesPage: ForceShowInstallerWindow SetForegroundWindow result=$0"
-  nsDialogs::Create 1018
-  Pop $0
-  !insertmacro DbgLog "nsShowFeaturesPage: nsDialogs::Create result=$0"
-  ${If} $0 == error
-    !insertmacro DbgLog "nsShowFeaturesPage: Create failed, aborting page"
-    Abort
-  ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 20u "설치할 기능을 선택하세요 (기본: 전체 설치). 용량이 큰 기능만 선택 해제할 수 있습니다."
-  ${NSD_CreateCheckBox} 0 26u 100% 12u "VPN (OpenVPN, 약 9MB)"
-  Pop $VpnCheckbox
-  ${NSD_SetState} $VpnCheckbox $VpnChecked
-  ${NSD_CreateCheckBox} 0 40u 100% 12u "MicroSIP (SIP 소프트폰, 약 104MB)"
-  Pop $MicroSipCheckbox
-  ${NSD_SetState} $MicroSipCheckbox $MicroSipChecked
-  ${NSD_CreateCheckBox} 0 54u 100% 12u "SIPp (SIP 부하테스트, 약 15MB)"
-  Pop $SippCheckbox
-  ${NSD_SetState} $SippCheckbox $SippChecked
-  ${NSD_CreateCheckBox} 0 68u 100% 12u "미디어 재생 — EVS/AMR/OPUS 코덱 (약 49MB)"
-  Pop $MediaCheckbox
-  ${NSD_SetState} $MediaCheckbox $MediaChecked
-  ${NSD_CreateCheckBox} 0 82u 100% 12u "오피스 — 한글/워드/엑셀/파워포인트/FlowChart 편집기 (약 220MB)"
-  Pop $OfficeCheckbox
-  ${NSD_SetState} $OfficeCheckbox $OfficeChecked
-  ${NSD_CreateLabel} 0 100u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
-  !insertmacro DbgLog "nsShowFeaturesPage: calling nsDialogs::Show"
-  nsDialogs::Show
-  !insertmacro DbgLog "nsShowFeaturesPage: nsDialogs::Show returned (page left)"
-FunctionEnd
+Section "VPN (OpenVPN, 약 9MB)" SEC_VPN
+  AddSize 9000
+SectionEnd
+Section "MicroSIP (SIP 소프트폰, 약 104MB)" SEC_MICROSIP
+  AddSize 104000
+SectionEnd
+Section "SIPp (SIP 부하테스트, 약 15MB)" SEC_SIPP
+  AddSize 15000
+SectionEnd
+Section "미디어 재생 - EVS/AMR/OPUS 코덱 (약 49MB)" SEC_MEDIA
+  AddSize 49000
+SectionEnd
+Section "오피스 - 한글/워드/엑셀/파워포인트/FlowChart (약 220MB)" SEC_OFFICE
+  AddSize 220000
+SectionEnd
 
-Function nsLeaveFeaturesPage
-  !insertmacro DbgLog "nsLeaveFeaturesPage: enter"
-  ${NSD_GetState} $VpnCheckbox $VpnChecked
-  ${NSD_GetState} $MicroSipCheckbox $MicroSipChecked
-  ${NSD_GetState} $SippCheckbox $SippChecked
-  ${NSD_GetState} $MediaCheckbox $MediaChecked
-  ${NSD_GetState} $OfficeCheckbox $OfficeChecked
-  !insertmacro DbgLog "nsLeaveFeaturesPage: Vpn=$VpnChecked MicroSip=$MicroSipChecked Sipp=$SippChecked Media=$MediaChecked Office=$OfficeChecked"
-FunctionEnd
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_VPN} "OpenVPN 클라이언트 — 회사망 VPN 접속이 필요 없으면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MICROSIP} "SIP 소프트폰 — MicroSIP 워크스페이스를 안 쓰면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SIPP} "SIP 부하테스트 도구 — SIPp 워크스페이스를 안 쓰면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MEDIA} "EVS/AMR/OPUS 코덱 재생 — 미디어 워크스페이스의 일반 영상/WAV 재생은 이 옵션과 무관하게 계속 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_OFFICE} "한글/워드/엑셀/파워포인트/FlowChart 편집기 — 오피스 워크스페이스를 안 쓰면 해제해도 됩니다."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 !endif
 
 ; preInit — electron-builder .onInit 의 가장 첫 훅. 외부(비승격)·내부(승격) 인스턴스 모두 여기부터 실행된다.
@@ -198,6 +178,24 @@ FunctionEnd
     ${IfNot} $R2 == ""
       StrCpy $OfficeChecked $R2
     ${EndIf}
+
+    ; 컴포넌트 선택 페이지의 초기 체크 상태에 반영 — Section 은 기본 전체 선택이므로, 이전에
+    ; 꺼뒀던 것만 명시적으로 해제한다.
+    ${If} $VpnChecked == 0
+      !insertmacro UnselectSection ${SEC_VPN}
+    ${EndIf}
+    ${If} $MicroSipChecked == 0
+      !insertmacro UnselectSection ${SEC_MICROSIP}
+    ${EndIf}
+    ${If} $SippChecked == 0
+      !insertmacro UnselectSection ${SEC_SIPP}
+    ${EndIf}
+    ${If} $MediaChecked == 0
+      !insertmacro UnselectSection ${SEC_MEDIA}
+    ${EndIf}
+    ${If} $OfficeChecked == 0
+      !insertmacro UnselectSection ${SEC_OFFICE}
+    ${EndIf}
   !endif
 !macroend
 
@@ -211,7 +209,7 @@ FunctionEnd
 ; MUI_PAGE_INSTFILES 이전에 customPageAfterChangeDir 훅을 삽입한다.
 !macro customPageAfterChangeDir
   Page custom nsShowDeleteDataPage nsLeaveDeleteDataPage
-  Page custom nsShowFeaturesPage nsLeaveFeaturesPage
+  !insertmacro MUI_PAGE_COMPONENTS
 !macroend
 
 ; 부드러운 진행 바 — 퍼센티지 갱신 부드럽게
@@ -221,6 +219,33 @@ FunctionEnd
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 !macro customInstall
+  ; 컴포넌트 선택 페이지에서 사용자가 실제로 고른 최종 체크 상태를 Section 플래그에서 읽어온다
+  ; (customInit 에서 넣어둔 값은 페이지 띄우기 전 "기본값"일 뿐, 사용자가 바꿨을 수 있다).
+  SectionGetFlags ${SEC_VPN} $R3
+  IntOp $VpnChecked $R3 & ${SF_SELECTED}
+  ${If} $VpnChecked <> 0
+    StrCpy $VpnChecked 1
+  ${EndIf}
+  SectionGetFlags ${SEC_MICROSIP} $R3
+  IntOp $MicroSipChecked $R3 & ${SF_SELECTED}
+  ${If} $MicroSipChecked <> 0
+    StrCpy $MicroSipChecked 1
+  ${EndIf}
+  SectionGetFlags ${SEC_SIPP} $R3
+  IntOp $SippChecked $R3 & ${SF_SELECTED}
+  ${If} $SippChecked <> 0
+    StrCpy $SippChecked 1
+  ${EndIf}
+  SectionGetFlags ${SEC_MEDIA} $R3
+  IntOp $MediaChecked $R3 & ${SF_SELECTED}
+  ${If} $MediaChecked <> 0
+    StrCpy $MediaChecked 1
+  ${EndIf}
+  SectionGetFlags ${SEC_OFFICE} $R3
+  IntOp $OfficeChecked $R3 & ${SF_SELECTED}
+  ${If} $OfficeChecked <> 0
+    StrCpy $OfficeChecked 1
+  ${EndIf}
   !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
