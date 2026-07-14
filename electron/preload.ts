@@ -234,11 +234,6 @@ contextBridge.exposeInMainWorld('api', {
   mediaDecodeGstreamer: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-gstreamer', { filePath, codec }),
   mediaReadVideo: (filePath: string) => ipcRenderer.invoke('media:read-video', { filePath }),
   getAvailableFeatures: (): Promise<{ vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean }> => ipcRenderer.invoke('features:get-available'),
-  // "다음 업데이트에 설치할 번들" 선택 — 자동 업데이트 중엔 설치 프로그램이 인터랙티브 페이지를
-  // 못 띄우니(설치 창이 안 뜨는 문제로 확인됨), "재시작하여 설치" 클릭 시점에 앱 자체 모달로
-  // 미리 물어보고 여기 기록해둔다.
-  getFeatureSelection: (): Promise<{ vpn: boolean; microsip: boolean; sipp: boolean; media: boolean; office: boolean } | null> => ipcRenderer.invoke('features:get-selection'),
-  setFeatureSelection: (sel: { vpn: boolean; microsip: boolean; sipp: boolean; media: boolean; office: boolean }) => ipcRenderer.invoke('features:set-selection', sel),
   mediaRecentsGet: () => ipcRenderer.invoke('media-recents:get'),
   mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
   mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),
