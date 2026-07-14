@@ -10,17 +10,15 @@ Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (cust
                         ; 이전 선택값을 기본 체크 상태로 미리 채우는 용도로만 쓴다(아래 참고).
 
 Function nsShowDeleteDataPage
-  ; 진짜 무음 설치(/S — 예: electron-updater 가 quitAndInstall(true, ...) 로 부르거나, 관리자가
-  ; 사일런트 배포를 직접 실행하는 경우)에서만 페이지를 건너뛴다. 이 앱은 quitAndInstall(false, true)
-  ; 로 불러 /S 를 안 붙이므로(자동 업데이트여도 설치 창이 실제로 보임) --updated 유무만으로
-  ; 판단하면 안 된다 — --updated 는 "자동 업데이트로 실행됨" 표시일 뿐 "화면이 없음"의 의미가
-  ; 아니다. 진짜 무음 여부는 NSIS 가 자체 관리하는 ${Silent}(=/S 로 실행됐는지) 로만 정확히 판별된다.
-  ${If} ${Silent}
+  ; --updated(자동 업데이트) 로 실행된 경우엔 이 페이지 자체를 건너뛴다. isSilent=false 라
+  ; ${Silent} 로는 "진짜 화면이 없는지"를 정확히 구분할 수 있을 줄 알았지만, 실제로는 PC마다
+  ; (관리자 권한/그룹정책 등 환경 차이로) 이 인터랙티브 nsDialogs 페이지 자체가 자동 업데이트
+  ; 흐름에서 안정적으로 안 뜨는 경우가 있어(v2.2.1 에서 이 페이지들이 생기기 전인 v2.2.0 까지는
+  ; 커스텀 페이지가 없어 문제가 없었음) --updated 여부만으로 다시 건너뛴다. 자동 업데이트 중엔
+  ; customInit 에서 레지스트리에 저장해둔 이전 선택값을 그대로 쓴다.
+  ${If} $IsUpdateRun == "1"
     Abort
   ${EndIf}
-  ; customInit 의 BringToFront 만으로 부족할 때를 대비한 2차 안전장치 — 첫 커스텀 페이지가
-  ; 뜨는 시점에 한 번 더 앞으로 가져온다.
-  BringToFront
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
   ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
   SetShellVarContext current
@@ -61,9 +59,8 @@ Var OfficeCheckbox
 Var OfficeChecked
 
 Function nsShowFeaturesPage
-  ; 위 nsShowDeleteDataPage 와 동일한 이유로, 진짜 무음 설치(/S)일 때만 건너뛴다 —
-  ; 그 경우엔 customInit 에서 레지스트리에 저장해둔 이전 선택값을 그대로 쓴다.
-  ${If} ${Silent}
+  ; 위 nsShowDeleteDataPage 와 동일한 이유로 --updated 실행일 땐 건너뛴다.
+  ${If} $IsUpdateRun == "1"
     Abort
   ${EndIf}
   nsDialogs::Create 1018
