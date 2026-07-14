@@ -2,6 +2,10 @@
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !include "Sections.nsh"
+; 우리 파일이 electron-builder 자체 스크립트보다 먼저 include 돼서, MUI_PAGE_COMPONENTS/
+; MUI_FUNCTION_DESCRIPTION_* 등 MUI2.nsh 매크로가 이 시점엔 아직 정의 안 돼 있다("macro named
+; ... not found" 컴파일 에러) — 직접 include 한다(MUI2.nsh 는 중복 include 가드가 있어 안전).
+!include "MUI2.nsh"
 
 ; 진단용 파일 로그 — 자동 업데이트 중 설치 창이 안 뜨는 문제의 실제 발생 지점을 확인하기 위함.
 ; 앱 쪽 update-debug.log 는 앱이 이미 종료된 뒤(설치 프로그램 실행 중)엔 아무것도 못 남기므로,
