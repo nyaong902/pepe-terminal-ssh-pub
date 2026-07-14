@@ -19,6 +19,8 @@ export type RtpStreamInfo = {
   codec: RtpPayloadCodec;
   packetCount: number;
   durationSec: number;
+  suggestedEvsFormat: EvsRtpFormat;
+  suggestedCodec: RtpPayloadCodec;
 };
 
 const CODEC_OPTIONS: { value: RtpPayloadCodec; label: string }[] = [
@@ -47,7 +49,7 @@ export function MediaPcapStreamPicker({ fileName, streams, error, onSelect, onCa
   // 스트림별 사용자가 고른 코덱/EVS 형식 — 정적 PT 는 감지값을 기본 선택으로 미리 채운다.
   const [choice, setChoice] = useState<Record<string, { codec: RtpPayloadCodec; evsFormat: EvsRtpFormat }>>({});
 
-  const choiceFor = (s: RtpStreamInfo) => choice[s.id] ?? { codec: s.codec === 'unsupported' ? 'alaw' : s.codec, evsFormat: 'header-full' as EvsRtpFormat };
+  const choiceFor = (s: RtpStreamInfo) => choice[s.id] ?? { codec: s.suggestedCodec, evsFormat: s.suggestedEvsFormat };
   const setChoiceFor = (id: string, patch: Partial<{ codec: RtpPayloadCodec; evsFormat: EvsRtpFormat }>) => {
     setChoice((prev) => ({ ...prev, [id]: { ...choiceFor(streams.find((s) => s.id === id)!), ...prev[id], ...patch } }));
   };
@@ -93,18 +95,23 @@ export function MediaPcapStreamPicker({ fileName, streams, error, onSelect, onCa
                           value={cur.codec}
                           onChange={(e) => setChoiceFor(s.id, { codec: e.target.value as RtpPayloadCodec })}
                           style={selStyle}
+                          title={isStatic ? undefined : `페이로드 패턴으로 자동 추정: ${CODEC_OPTIONS.find(o => o.value === s.suggestedCodec)?.label ?? s.suggestedCodec}. SDP 없이는 확정할 수 없으니 재생이 이상하면 다른 코덱으로 바꿔보세요.`}
                         >
-                          {CODEC_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          {CODEC_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}{!isStatic && s.suggestedCodec === o.value ? ' (추정)' : ''}
+                            </option>
+                          ))}
                         </select>
                         {cur.codec === 'evs' && (
                           <select
                             value={cur.evsFormat}
                             onChange={(e) => setChoiceFor(s.id, { evsFormat: e.target.value as EvsRtpFormat })}
                             style={selStyle}
-                            title="EVS RTP 페이로드 형식 — 게이트웨이/장비 대부분은 header-full 을 사용합니다."
+                            title={`EVS RTP 페이로드 형식 — 페이로드 길이로 자동 추정: ${s.suggestedEvsFormat}. 재생이 안 되면 반대 형식으로 바꿔보세요.`}
                           >
-                            <option value="header-full">header-full</option>
-                            <option value="compact">compact</option>
+                            <option value="header-full">header-full{s.suggestedEvsFormat === 'header-full' ? ' (추정)' : ''}</option>
+                            <option value="compact">compact{s.suggestedEvsFormat === 'compact' ? ' (추정)' : ''}</option>
                           </select>
                         )}
                       </div>
