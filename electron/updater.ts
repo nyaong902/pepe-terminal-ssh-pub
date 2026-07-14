@@ -14,15 +14,24 @@ import { spawn } from 'child_process';
 // 최신 Node 에선 이미 제거돼 호출 즉시 TypeError 로 죽는다(현장 로그로 확인). 그 패키지를
 // 거치지 않고, sudo-prompt 가 Windows 에서 내부적으로 하는 것과 동일한 방식
 // (PowerShell Start-Process -Verb RunAs) 를 직접 호출한다.
-function elevatedRunWindows(filePath: string, args: string[]): void {
+function elevatedRunWindows(filePath: string, args: string[], log: (msg: string) => void, done: () => void): void {
   const escSingle = (s: string) => s.replace(/'/g, "''");
   const argList = args.map(a => `'${escSingle(a)}'`).join(',');
-  const psScript = `Start-Process -FilePath '${escSingle(filePath)}' -ArgumentList ${argList} -Verb RunAs`;
+  // Start-Process 자체가 UAC 를 띄우고 즉시 반환한다(대상 프로세스 종료를 기다리지 않음) —
+  // $err 로 Start-Process 호출 자체(경로 문제, UAC 취소 등)의 실패만 STDOUT 에 남겨 로그로 확인.
+  const psScript = `try { Start-Process -FilePath '${escSingle(filePath)}' -ArgumentList ${argList} -Verb RunAs -ErrorAction Stop; Write-Output 'ELEVATE_OK' } catch { Write-Output ('ELEVATE_FAIL: ' + $_.Exception.Message) }`;
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psScript], {
     windowsHide: true,
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let out = '';
+  let finished = false;
+  const finish = () => { if (finished) return; finished = true; done(); };
+  child.stdout?.on('data', (d) => { out += d.toString(); });
+  child.stderr?.on('data', (d) => { out += d.toString(); });
+  child.on('error', (e) => { log(`elevatedRunWindows: powershell.exe spawn 자체 실패: ${String(e?.message || e)}`); finish(); });
+  child.on('exit', (code) => { log(`elevatedRunWindows: powershell 종료(code=${code}) 출력: ${out.trim() || '(없음)'}`); finish(); });
   child.unref();
 }
 
@@ -121,10 +130,13 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
         }
         unblockFile(installerPath);
         logUpdate(`PowerShell Start-Process 로 설치 프로그램 승격 실행: "${installerPath}" --updated --force-run`);
-        elevatedRunWindows(installerPath, ['--updated', '--force-run']);
         // Start-Process -Verb RunAs 로 승격된 프로세스는 Windows AppInfo 서비스가 별도로 띄우므로
-        // 우리 앱 프로세스가 먼저 종료돼도 살아남는다. UAC/설치 창이 뜰 시간만 잠깐 준 뒤 종료.
-        setTimeout(() => { app.quit(); }, 1500);
+        // 우리 앱 프로세스가 먼저 종료돼도 살아남는다. powershell 래퍼가 ELEVATE_OK/FAIL 을 로그로
+        // 남길 때까지(또는 최대 4초) 기다렸다가 종료 — 그래야 실패 원인이 로그에 남는다.
+        let quit = false;
+        const doQuit = () => { if (quit) return; quit = true; app.quit(); };
+        elevatedRunWindows(installerPath, ['--updated', '--force-run'], logUpdate, doQuit);
+        setTimeout(doQuit, 4000);
       } catch (e: any) {
         logUpdate(`승격 실행 예외: ${String(e?.stack || e)}`);
       }
