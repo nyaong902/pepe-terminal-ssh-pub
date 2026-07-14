@@ -6,7 +6,6 @@
 // - 다운로드 완료 후 사용자가 "재시작하여 설치" 누르면 quitAndInstall
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -84,49 +83,21 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
     if (!supported()) return { ok: false, reason: 'unsupported' };
     logUpdate(`quit-and-install 호출됨 — version=${app.getVersion()} platform=${process.platform} arch=${process.arch}`);
 
-    const fallbackToBuiltin = (reason: string) => {
-      logUpdate(`${reason} — electron-updater 기본 quitAndInstall 로 폴백`);
-      setImmediate(() => {
-        try { autoUpdater.quitAndInstall(false, true); }
-        catch (e: any) { logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`); }
-      });
-    };
-
-    const installerPath = (() => { try { return (autoUpdater as any).installerPath as string | null; } catch { return null; } })();
-    if (!installerPath || process.platform !== 'win32') {
-      fallbackToBuiltin('installerPath 없음 또는 win32 아님');
-      return { ok: true };
-    }
-    unblockFile(installerPath);
-
-    // v2.2.11 에서 autoInstallOnAppQuit 중복 실행은 없앴지만(로그로 확인됨), 여전히 일부 PC 에서
-    // UAC 승인 이후 설치 창이 안 뜬다 — 남은 용의자는 Windows Job Object 다. Electron 은 자식
-    // 프로세스를 Job Object 로 묶어 관리하는데, 앱이 종료(app.quit())될 때 그 Job 에 딸린
-    // 프로세스는 Node 의 detached:true 로 spawn 했어도 함께 강제 종료될 수 있다 — elevate.exe 가
-    // UAC 승인까지 마치고 설치 프로그램을 막 띄우려는 순간 우리 프로세스가 사라지며 그 트리 전체가
-    // 같이 죽는 것이라면, 5초 지연을 아무리 늘려도 소용이 없다(실제로 v2.2.9~v2.2.11 에서 안
-    // 고쳐짐). cmd.exe /c start 로 한 번 더 감싸서 새 콘솔/프로세스 트리로 완전히 분리시킨다 —
-    // Electron 앱에서 이 Job Object 문제를 피하는 통상적인 방법.
-    const elevatePath = path.join(process.resourcesPath, 'elevate.exe');
+    // v2.2.9~v2.2.13 에서 elevate.exe 를 직접 spawn + 지연 종료 + cmd/c start 로 감싸는 등
+    // 자체 재구현을 시도했지만 현장에서 계속 재현됐다. Tabby(Eugeny/tabby, 검증된 대형 Electron
+    // 터미널 앱) 의 실제 구현을 확인해보니 별다른 우회 없이 표준 quitAndInstall() 하나만 호출한다
+    // — 자체 재구현이 문제를 더 꼬이게 만들었을 가능성이 있어 표준 방식으로 되돌린다.
     try {
-      const startCmd = `start "" "${elevatePath}" "${installerPath}" --updated --force-run`;
-      const child = spawn('cmd.exe', ['/c', startCmd], {
-        stdio: 'ignore',
-        detached: true,
-        windowsHide: true,
-      });
-      child.unref();
-      logUpdate(`elevate.exe 를 cmd /c start 로 spawn — pid=${child.pid}`);
-      child.on('error', (e: any) => logUpdate(`spawn 에러: ${String(e?.stack || e)}`));
-    } catch (e: any) {
-      fallbackToBuiltin(`spawn 예외: ${String(e?.stack || e)}`);
-      return { ok: true };
-    }
-    logUpdate('5초 대기 후 앱 종료 (elevate.exe 가 UAC 승인/설치 프로그램 실행을 마칠 시간 확보)');
-    setTimeout(() => {
-      logUpdate('앱 종료(quit)');
-      app.quit();
-    }, 5000);
+      const installerPath = (autoUpdater as any).installerPath;
+      if (installerPath) unblockFile(installerPath);
+    } catch (e: any) { logUpdate(`installerPath 조회 실패: ${String(e?.message || e)}`); }
+    setImmediate(() => {
+      try {
+        autoUpdater.quitAndInstall(false, true);
+      } catch (e: any) {
+        logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`);
+      }
+    });
     return { ok: true };
   });
   ipcMain.handle('updater:state', () => ({
