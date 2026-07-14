@@ -1418,25 +1418,33 @@ function App() {
       detail: { sessions: added },
     }));
   }, [tabs, connectedTick]);
-  // 세션 설정 변경 (X11 forwarding 등) 이벤트 — 활성 연결을 즉시 재접속해서 새 설정 반영
+  // 세션 설정 변경 이벤트 — 글꼴/테마/스크롤백/커서 등은 재접속 없이 열려 있는 터미널에 바로
+  // 반영하고, X11 forwarding 등 재접속이 꼭 필요한 항목은 안내 토스트만 띄운다.
+  // (사이드바 세션 편집(SessionList.tsx onSaveSession)은 App.tsx 의 open-session-editor 팝업
+  //  경로와 달리 termId 를 모르므로, applySessionToTerm 을 직접 못 부르고 이 이벤트로 위임한다.)
   useEffect(() => {
     const onSettingChanged = (e: any) => {
       const d = e?.detail || {};
-      if (!d.sessionId || !d.requiresReconnect) return;
+      if (!d.sessionId) return;
       const sessionId: string = d.sessionId;
-      // 현재 모든 탭에서 이 sessionId 로 연결된 termId 수집 (안내용)
-      let affectedCount = 0;
+      // 현재 모든 탭에서 이 sessionId 로 연결된 termId 수집
+      const affectedTermIds: string[] = [];
       for (const t of tabsRef.current) {
         if (t.type === 'fileExplorer' || t.type === 'fileEditor') continue;
         for (const s of collectAllSessions(t.layout)) {
           if (s.sessionId === sessionId && (isTermConnected(s.termId) || isTermConnecting(s.termId))) {
-            affectedCount += 1;
+            affectedTermIds.push(s.termId);
           }
         }
       }
-      if (affectedCount === 0) return;
-      // 자동 재접속 안 함 — 안내만 (SSH X11 은 shell 채널 생성 시점에 설정되므로 재접속 필요)
-      showToast(tApp('x11.settingChanged', { count: affectedCount }), 6000);
+      if (affectedTermIds.length === 0) return;
+      if (d.session) {
+        for (const termId of affectedTermIds) applySessionToTerm(d.session, termId);
+      }
+      if (d.requiresReconnect) {
+        // 자동 재접속 안 함 — 안내만 (SSH X11 은 shell 채널 생성 시점에 설정되므로 재접속 필요)
+        showToast(tApp('x11.settingChanged', { count: affectedTermIds.length }), 6000);
+      }
     };
     window.addEventListener('session-setting-changed', onSettingChanged as any);
     return () => window.removeEventListener('session-setting-changed', onSettingChanged as any);
