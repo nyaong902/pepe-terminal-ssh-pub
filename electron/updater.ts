@@ -131,6 +131,10 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
   if (!supported()) return;
 
   autoUpdater.autoDownload = false;
+  // 문제의 PC에서 "0-temp-..." 차등 다운로드 임시 파일에 EBUSY(resource busy or locked)가
+  // 발생해 다운로드 자체가 실패/파일 소실되는 현상이 확인됨 — 블록 단위 조립 과정을 아예
+  // 없애고 매번 전체 파일을 새로 받도록 강제한다(용량은 늘지만 훨씬 안정적).
+  autoUpdater.disableDifferentialDownload = true;
   // v2.2.9 진단 로그로 확정된 근본 원인: 이 값이 true 면, 우리가 'updater:quit-and-install' 에서
   // elevate.exe 를 직접 spawn 한 뒤 app.quit() 을 호출하는 바로 그 순간, electron-updater 가
   // 자체 등록해둔 "종료 시 자동 설치" 퀸 핸들러가 또 한 번 install() 을 트리거해 elevate.exe 를
