@@ -111,6 +111,14 @@ Section "오피스 - 한글/워드/엑셀/파워포인트/FlowChart (약 220MB)"
   AddSize 220000
 SectionEnd
 
+; MUI_FUNCTION_DESCRIPTION_BEGIN/TEXT 는 $mui.ComponentsPage.DescriptionText 변수를 참조하는데,
+; 이 변수는 원래 MUI_PAGE_COMPONENTS 매크로가 삽입될 때(customPageAfterChangeDir, 더 뒤에서 실행)
+; 선언된다. 우리 파일은 그보다 먼저 top-level 로 include 돼서 참조 시점에 변수가 없어
+; "unknown variable" 경고(=치명적 에러)가 났다 — MUI_COMPONENTSPAGE_INTERFACE 를 여기서 먼저
+; 호출해 변수만 미리 선언해둔다(내부적으로 !ifndef 가드가 있어 나중에 MUI_PAGE_COMPONENTS 가
+; 다시 호출해도 중복 선언 에러는 나지 않는다).
+!insertmacro MUI_COMPONENTSPAGE_INTERFACE
+
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_VPN} "OpenVPN 클라이언트 — 회사망 VPN 접속이 필요 없으면 해제해도 됩니다."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MICROSIP} "SIP 소프트폰 — MicroSIP 워크스페이스를 안 쓰면 해제해도 됩니다."
