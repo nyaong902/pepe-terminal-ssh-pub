@@ -23,6 +23,26 @@ function logUpdate(msg: string) {
   try { fs.appendFileSync(UPDATE_LOG_PATH, `[${new Date().toISOString()}] ${msg}\n`); } catch {}
 }
 
+// GitHub 에서 받은 exe 는 NTFS Zone.Identifier(ADS)로 "인터넷에서 받음" 표시가 붙는데, 이게
+// Windows SmartScreen 평판 검사를 유발한다. 우리 인증서가 신뢰된 CA 가 아닌 자체 서명이라
+// (아래 verifyUpdateCodeSignature 우회 참고) 이 검사가 PC마다(그 머신이 이 발행자를 처음
+// 보는지 등) 다르게 동작할 수 있고, elevate.exe 로 UAC 승인까지 받고도 설치 창이 아예 안
+// 뜨는(우회 대화상자도 없이 조용히 막히는) 현상과 정확히 들어맞는다. 설치 직전에 이 표시를
+// 미리 제거해 SmartScreen 검사 자체를 건너뛰게 한다.
+function unblockFile(filePath: string) {
+  const adsPath = `${filePath}:Zone.Identifier`;
+  try {
+    fs.unlinkSync(adsPath);
+    logUpdate(`Zone.Identifier 제거됨: ${filePath}`);
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') {
+      logUpdate(`Zone.Identifier 없음(이미 unblocked): ${filePath}`);
+    } else {
+      logUpdate(`Zone.Identifier 제거 실패: ${String(e?.message || e)}`);
+    }
+  }
+}
+
 type UpdaterState =
   | 'idle'
   | 'unsupported'   // dev / portable — 자동 업데이트 미지원
@@ -65,6 +85,10 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
   ipcMain.handle('updater:quit-and-install', () => {
     if (!supported()) return { ok: false, reason: 'unsupported' };
     logUpdate(`quit-and-install 호출됨 — version=${app.getVersion()} platform=${process.platform} arch=${process.arch}`);
+    try {
+      const installerPath = (autoUpdater as any).installerPath;
+      if (installerPath) unblockFile(installerPath);
+    } catch (e: any) { logUpdate(`installerPath 조회 실패: ${String(e?.message || e)}`); }
     // isSilent=false, isForceRunAfter=true — 설치 후 자동 재실행
     setImmediate(() => {
       try {
