@@ -2,7 +2,7 @@
   "name": "pepe-terminal-ssh",
   "productName": "PePe Terminal(SSH)",
   "private": true,
-  "version": "2.2.18",
+  "version": "2.2.19",
   "description": "PePe Terminal(SSH)",
   "author": "Claude (feat. ghjeong[prompt])",
   "type": "commonjs",
@@ -215,13 +215,12 @@
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": true,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "unicode": true,
       "include": "build/installer.nsh",
       "shortcutName": "PePe Terminal(SSH)",
-      "artifactName": "PePe-Terminal-SSH-Setup-${version}.${ext}",
-      "packElevateHelper": true
+      "artifactName": "PePe-Terminal-SSH-Setup-${version}.${ext}"
     },
     "portable": {
       "artifactName": "PePe-Terminal-SSH-${version}-portable.${ext}"

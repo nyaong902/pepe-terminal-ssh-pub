@@ -28,11 +28,9 @@ Function nsShowDeleteDataPage
     Abort
   ${EndIf}
   !insertmacro ForceShowInstallerWindow
-  ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
-  ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
+  ; 사용자별 설치라 SetShellVarContext 는 항상 current 하나뿐 — 별도 전환 불필요.
   SetShellVarContext current
   StrCpy $0 "$APPDATA\PePe Terminal(SSH)"
-  SetShellVarContext all
   IfFileExists "$0\*.*" +2 0
     Abort
   nsDialogs::Create 1018
@@ -107,18 +105,22 @@ Function nsLeaveFeaturesPage
 FunctionEnd
 !endif
 
+; perMachine=false(사용자별 설치) 로 바꾸면서 이 훅이 필요해졌다 — oneClick=false + perMachine=false
+; 조합은 기본적으로 "전체 사용자용/나만" 을 고르는 인터랙티브 페이지를 보여주는데, "전체 사용자용"을
+; 고르면 결국 관리자 권한 상승(UAC)이 다시 필요해진다. 이 앱은 관리자 권한이 전혀 필요 없게 만드는
+; 게 목적이므로(자동 업데이트 시 UAC 승인 이후 설치 창이 조용히 안 뜨는 문제를 겪어봄 — PC마다
+; 보안 정책이 달라 elevate.exe 직접 실행/지연 종료/Job Object 분리 등 여러 시도로도 못 고친 PC가
+; 있었음), 이 페이지 자체를 안 보여주고 항상 "나만 설치"로 강제한다.
+!macro customInstallMode
+  StrCpy $isForceCurrentInstall "1"
+!macroend
+
 !macro customInit
-  ; electron-builder 의 PAGE_INSTALL_MODE 는 "전체 사용자" 설치를 고르면(기본값) 관리자 권한이
-  ; 없는 바깥 프로세스 창을 ShowWindow ... SW_HIDE 로 숨기고 UAC_RunElevated 로 권한 상승된
-  ; 내부(inner) 인스턴스를 새로 띄운 뒤 Quit 한다 — 이 내부 인스턴스가 .onInit 을 다시 타면서
-  ; customInit(여기)도 다시 실행된다. Windows 가 백그라운드/업데이터에서 간접 실행 → UAC 승인
-  ; 흐름으로 새로 뜬 창에는 포커스를 안 줄 때가 있어(알려진 OS 동작), 승인 후에도 창이 다른
-  ; 창 뒤에 숨어 "설치 화면이 안 보인다"는 증상으로 나타난다. NSIS 공식 문서가 정확히 이 상황
-  ; (다른 프로그램 실행 등으로 포그라운드를 뺏긴 경우) 을 위해 제공하는 BringToFront 로 강제로
-  ; 앞으로 가져온다.
+  ; 설치 화면이 뒤에 숨는 경우를 대비한 안전장치 (관리자 권한 상승이 없어진 지금은 필요 없을
+  ; 가능성이 높지만 무해하므로 유지).
   BringToFront
-  ; 모든 사용자 / 전용 모두 Program Files(x86 경로)에 설치.
-  StrCpy $INSTDIR "$PROGRAMFILES\PePe Terminal(SSH)"
+  ; $INSTDIR 를 직접 지정하지 않는다 — customInstallMode 로 항상 사용자별 설치이므로 electron-builder
+  ; 자체 로직(multiUser.nsh)이 표준 경로(%LocalAppData%\Programs\PePe Terminal(SSH)) 로 잡아준다.
   ; 설치 시 파일 복사 단계도 detail 패널에 출력되도록 — 기본 SetDetailsPrint=lastused → both
   SetDetailsPrint both
   !ifndef BUILD_UNINSTALLER
@@ -144,23 +146,23 @@ FunctionEnd
     StrCpy $MediaChecked "1"
     StrCpy $OfficeChecked "1"
     ${If} $IsUpdateRun == "1"
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Vpn"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
       ${IfNot} $R2 == ""
         StrCpy $VpnChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "MicroSip"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "MicroSip"
       ${IfNot} $R2 == ""
         StrCpy $MicroSipChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Sipp"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Sipp"
       ${IfNot} $R2 == ""
         StrCpy $SippChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Media"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Media"
       ${IfNot} $R2 == ""
         StrCpy $MediaChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Office"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
       ${IfNot} $R2 == ""
         StrCpy $OfficeChecked $R2
       ${EndIf}
@@ -197,17 +199,15 @@ FunctionEnd
     DetailPrint "▶ 사용자 요청: 기존 사용자 데이터 삭제 중..."
     SetShellVarContext current
     RMDir /r "$APPDATA\PePe Terminal(SSH)"
-    SetShellVarContext all
-    RMDir /r "$APPDATA\PePe Terminal(SSH)"
     DetailPrint "  ✓ 기존 사용자 데이터 삭제 완료"
   ${EndIf}
 
   ; 다음 업데이트 때(페이지 없이 조용히 진행) 같은 선택을 다시 적용할 수 있도록 저장.
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Vpn" "$VpnChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "MicroSip" "$MicroSipChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Media" "$MediaChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Vpn" "$VpnChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "MicroSip" "$MicroSipChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Media" "$MediaChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
 
   ; 선택 해제한 기능의 전용 번들 폴더 삭제 — electron-builder 가 resources 전체를 이미
   ; 통째로 복사해둔 뒤라, 여기서 안 쓸 폴더만 걷어낸다(각 기능 전용, 다른 기능과 안 겹침).
@@ -344,7 +344,7 @@ FunctionEnd
   DeleteRegKey HKLM "Software\Classes\Directory\shell\PepeTerminal"
 
   ; 선택 설치 기능 플래그(설정값, 사용자 데이터 아님) 삭제
-  DeleteRegKey HKLM "Software\PePeTerminal\Features"
+  DeleteRegKey HKCU "Software\PePeTerminal\Features"
 
   ; 사용자 데이터(세션·설정) 는 자동 삭제하지 않음 — 재설치/업그레이드 시 세션 유지 보장.
   ; 완전 삭제가 필요하면 사용자가 %APPDATA%\PePe Terminal(SSH) 폴더를 수동 삭제.
