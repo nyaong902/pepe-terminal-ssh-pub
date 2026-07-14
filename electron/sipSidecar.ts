@@ -23,7 +23,7 @@ function platDir(): string {
 }
 function binName(): string { return process.platform === 'win32' ? 'sipd.exe' : 'sipd'; }
 
-function resolveBinary(): string | null {
+export function resolveBinary(): string | null {
   const candidates: string[] = [];
   if (process.env.PEPE_SIPD) candidates.push(process.env.PEPE_SIPD);
   try {

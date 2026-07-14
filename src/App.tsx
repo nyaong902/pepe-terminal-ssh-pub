@@ -649,6 +649,13 @@ function App() {
   const [showManual, setShowManual] = useState(false);
   // 도움말/정보 등 단순 텍스트 모달 (alert 대체 — 스크롤 가능 + 닫을 때 터미널 포커스 복원)
   const [infoModal, setInfoModal] = useState<{ title: string; text: string } | null>(null);
+  // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
+  // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
+  // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sipp: true, office: true, media: true });
+  useEffect(() => {
+    (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
+  }, []);
   // X 서버 시작/중지/상태 버튼 3개가 도구모음 자리를 너무 차지해서 드롭다운 하나로 합침.
   const [xServerMenuPos, setXServerMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [sessionWipeDialog, setSessionWipeDialog] = useState(false);
@@ -1411,25 +1418,33 @@ function App() {
       detail: { sessions: added },
     }));
   }, [tabs, connectedTick]);
-  // 세션 설정 변경 (X11 forwarding 등) 이벤트 — 활성 연결을 즉시 재접속해서 새 설정 반영
+  // 세션 설정 변경 이벤트 — 글꼴/테마/스크롤백/커서 등은 재접속 없이 열려 있는 터미널에 바로
+  // 반영하고, X11 forwarding 등 재접속이 꼭 필요한 항목은 안내 토스트만 띄운다.
+  // (사이드바 세션 편집(SessionList.tsx onSaveSession)은 App.tsx 의 open-session-editor 팝업
+  //  경로와 달리 termId 를 모르므로, applySessionToTerm 을 직접 못 부르고 이 이벤트로 위임한다.)
   useEffect(() => {
     const onSettingChanged = (e: any) => {
       const d = e?.detail || {};
-      if (!d.sessionId || !d.requiresReconnect) return;
+      if (!d.sessionId) return;
       const sessionId: string = d.sessionId;
-      // 현재 모든 탭에서 이 sessionId 로 연결된 termId 수집 (안내용)
-      let affectedCount = 0;
+      // 현재 모든 탭에서 이 sessionId 로 연결된 termId 수집
+      const affectedTermIds: string[] = [];
       for (const t of tabsRef.current) {
         if (t.type === 'fileExplorer' || t.type === 'fileEditor') continue;
         for (const s of collectAllSessions(t.layout)) {
           if (s.sessionId === sessionId && (isTermConnected(s.termId) || isTermConnecting(s.termId))) {
-            affectedCount += 1;
+            affectedTermIds.push(s.termId);
           }
         }
       }
-      if (affectedCount === 0) return;
-      // 자동 재접속 안 함 — 안내만 (SSH X11 은 shell 채널 생성 시점에 설정되므로 재접속 필요)
-      showToast(tApp('x11.settingChanged', { count: affectedCount }), 6000);
+      if (affectedTermIds.length === 0) return;
+      if (d.session) {
+        for (const termId of affectedTermIds) applySessionToTerm(d.session, termId);
+      }
+      if (d.requiresReconnect) {
+        // 자동 재접속 안 함 — 안내만 (SSH X11 은 shell 채널 생성 시점에 설정되므로 재접속 필요)
+        showToast(tApp('x11.settingChanged', { count: affectedTermIds.length }), 6000);
+      }
     };
     window.addEventListener('session-setting-changed', onSettingChanged as any);
     return () => window.removeEventListener('session-setting-changed', onSettingChanged as any);
@@ -2541,11 +2556,11 @@ function App() {
     { id: 'cmd-bcastXfer', label: '일괄전송', icon: '📤', keywords: ['broadcast', 'bulk transfer', '일괄 전송', '파일'], run: () => { setBcastXferFiles([]); setBcastXferPath(''); setBcastXferLog([]); setShowBcastFileXfer(true); } },
     { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
-    { id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() },
-    { id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() },
-    { id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() },
-    { id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() },
-    { id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() },
+    ...(availableFeatures.vpn ? [{ id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() }] : []),
+    ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
+    ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
+    ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
+    ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
     { id: 'cmd-customWorkspaceAdd', label: '커스텀 워크스페이스 추가', icon: '➕', keywords: ['custom workspace', '커스텀'], run: () => openCustomWorkspaceCreator() },
     ...customWorkspaces.map((ws, i) => ({
@@ -2877,19 +2892,29 @@ function App() {
     if (tab.type === 'sqlTool' && tab.sqlTool?.sessionId) {
       liveWsState = serializeSqlSession(tab.sqlTool.sessionId);
     }
-    return {
+    // ipcRenderer.invoke 는 structured clone 을 쓰기 때문에, buffers/styles/siblingSessions 안에
+    // (예: quickSession 등 어디선가 섞여 들어온) 함수·클래스 인스턴스 등 클론 불가능한 값이 하나만
+    // 있어도 "An object could not be cloned" 로 전체 IPC 호출이 그냥 죽는다(에러 하나 안 뜨고
+    // 조용히 실패 — "눌러도 반응 없음"의 실제 원인). tab 필드만 JSON 왕복하던 걸 payload 전체로
+    // 넓혀서, 클론 불가능한 값은 JSON.stringify 단계에서 미리 걸러지거나(함수/undefined 는 조용히
+    // 사라짐) throw 하면 호출부에서 잡아 로그를 남기게 한다.
+    return JSON.parse(JSON.stringify({
       kind: 'workspace' as const,
       buffers: collectTabBuffers(tab),
       styles: collectTabStyles(tab),
       siblingSessions: collectSiblingSessions(tab),
-      tab: JSON.parse(JSON.stringify({
+      tab: {
         id: tab.id, title: tab.title, type: tab.type, layout: tab.layout,
         sqlTool: tab.sqlTool, editor: tab.editor,
         initialTermId: tab.initialTermId, initialRemotePath: tab.initialRemotePath,
         fileExplorerState: liveFeState || tab.fileExplorerState,
         workspaceState: liveWsState || tab.workspaceState,
-      })),
-    };
+        // 커스텀 워크스페이스 렌더링은 이 둘로 템플릿(그리드 레이아웃 정의)을 찾는다
+        // (App.tsx 의 customWorkspace 렌더 블록, `t.customWorkspaceTemplate || customWorkspaces.find(...)`).
+        // 빠져있으면 분리된 창에서 템플릿을 못 찾아 tpl==null 로 아예 렌더링이 안 된다.
+        customWorkspaceId: tab.customWorkspaceId, customWorkspaceTemplate: tab.customWorkspaceTemplate,
+      },
+    }));
   };
 
   // 원본 창에서 분리된/이동한 탭 제거 — 백엔드 세션은 살리고 xterm 만 dispose.
@@ -2913,17 +2938,31 @@ function App() {
   const detachTabToNewWindow = useCallback(async (tabId: TabId, screenX?: number, screenY?: number) => {
     const tab = tabsRef.current.find(t => t.id === tabId);
     if (!tab) return;
-    // 워크스페이스가 하나뿐이면 분리 금지 — 분리하면 이 창에 탭이 하나도 안 남게 됨.
-    if (tabsRef.current.length <= 1) return;
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     // FileExplorer 가 unmount 될 때 lazy SFTP connId 를 끊지 않게 한다 — 새 창에서 그대로 이어쓰기 위해.
     // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
     (window as any).__preserveFileExplorerConns = true;
     (window as any).__preserveSqlConns = true;
     try {
-      const res = await (window as any).api?.dropTab?.(serializeTab(tab), point);
-      if (res === undefined) return; // IPC 실패
+      // 워크스페이스가 하나뿐이어도 무조건 막으면 안 된다 — 드롭 지점이 다른 앱 창 위라서
+      // 재도킹되는 경우엔 이 창에 탭이 없어져도 문제가 안 된다(재도킹이지 분리가 아니므로).
+      // "진짜 새 창"으로 갈 때만 막아야 하는데 그건 main 프로세스만 알 수 있으므로(다른 창들과의
+      // 히트테스트), 현재 탭 개수를 같이 넘겨 main 쪽에서 target 없을 때만 판단하게 한다.
+      let payload: ReturnType<typeof serializeTab>;
+      try {
+        payload = serializeTab(tab);
+      } catch (err) {
+        // serializeTab 이 던지면(예: 상태에 JSON 으로 못 바꾸는 값이 섞여 있는 경우)
+        // 여기서 못 잡으면 예외가 그대로 새어나가 호출부(드래그/컨텍스트메뉴 핸들러)에서
+        // unhandled rejection 이 되어 "눌러도 아무 반응 없음" 처럼 보인다.
+        console.error('[detachTabToNewWindow] serializeTab 실패 — 탭 type:', tab.type, err);
+        return;
+      }
+      const res = await (window as any).api?.dropTab?.(payload, point, { sourceTabCount: tabsRef.current.length });
+      if (res === undefined || res?.blocked) return; // IPC 실패 또는 (새 창인데 탭이 하나뿐이라) 거부됨
       removeTabAfterMove(tabId, tab.layout);
+    } catch (err) {
+      console.error('[detachTabToNewWindow] 실패 — 탭 type:', tab.type, err);
     } finally {
       // unmount cleanup 이 다 끝난 다음 플래그 해제 (마이크로태스크 두 번)
       setTimeout(() => {
@@ -3457,13 +3496,15 @@ function App() {
       } catch {}
     }
     console.log('[duplicate] originalCwd =', originalCwd, 'sourceTermId =', termId);
-    const payload: any = {
+    // JSON 왕복 — ipcRenderer.invoke 의 structured clone 이 못 처리하는 값(quickSession 등에
+    // 섞여 들어올 수 있는 클론 불가능한 값)이 있어도 IPC 호출 자체가 조용히 죽지 않게 한다.
+    const payload: any = JSON.parse(JSON.stringify({
       kind: 'session' as const,
       buffers: {},
       styles: st ? { [newTermId]: st } : {},
-      tab: JSON.parse(JSON.stringify({ id: tabId, title: info.sessionName || 'Session', layout })),
+      tab: { id: tabId, title: info.sessionName || 'Session', layout },
       connectAfterAdopt: [{ termId: newTermId, sessionId: info.sessionId || '', quickSession: info.quickSession || null, cdAfterConnect: originalCwd }],
-    };
+    }));
     await (window as any).api?.dropTab?.(payload, undefined);
   }, []);
 
@@ -3483,7 +3524,7 @@ function App() {
     };
     const buf = serializeTermBuffer(termId);
     const st = getTermStyle(termId);
-    const payload = { kind: 'session' as const, buffers: buf ? { [termId]: buf } : {}, styles: st ? { [termId]: st } : {}, tab: JSON.parse(JSON.stringify({ id: tabId, title: sess.sessionName || 'Session', layout })) };
+    const payload = JSON.parse(JSON.stringify({ kind: 'session' as const, buffers: buf ? { [termId]: buf } : {}, styles: st ? { [termId]: st } : {}, tab: { id: tabId, title: sess.sessionName || 'Session', layout } }));
     const point = (screenX != null && screenY != null) ? { x: screenX, y: screenY } : undefined;
     const res = await (window as any).api?.dropTab?.(payload, point);
     if (res === undefined) return;
@@ -4017,9 +4058,9 @@ function App() {
         { label: tMenu('tools.browserWs'), action: addBrowserTab },
         { label: tMenu('tools.compareWs'), action: addCompareTab },
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
-        { label: tMenu('tools.vpnWs'), action: addVpnTab },
-        { label: '📞 MicroSIP', action: addMicroSipTab },
-        { label: '📶 SIPp', action: addSippTab },
+        ...(availableFeatures.vpn ? [{ label: tMenu('tools.vpnWs'), action: addVpnTab }] : []),
+        ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
+        ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
@@ -4726,6 +4767,7 @@ function App() {
           canSplitType={(type: any) => SPLITTABLE_TYPES.includes(type)}
           hasSession={tabs.reduce((acc, t) => { acc[t.id] = collectAllSessions(t.layout).length > 0; return acc; }, {} as Record<string, boolean>)}
           availableShells={availableShells}
+          availableFeatures={availableFeatures}
         />
           <div className="titlebar-drag-area"
             onDoubleClick={() => {
@@ -5296,21 +5338,33 @@ function App() {
         {tabs.filter(t => t.type === 'sipp').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="SIPp">
-              <SippWorkspace instanceId={t.id} />
+              <SippWorkspace
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'office').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="Office">
-              <OfficeLauncher instanceId={t.id} />
+              <OfficeLauncher
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}
         {tabs.filter(t => t.type === 'media').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="Media">
-              <MediaLauncher instanceId={t.id} />
+              <MediaLauncher
+                instanceId={t.id}
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+              />
             </ErrorBoundary>
           </div>
         ))}

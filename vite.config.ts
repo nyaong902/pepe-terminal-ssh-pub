@@ -1,12 +1,51 @@
 import { defineConfig } from 'vite'
 import path from 'node:path'
+import fs from 'node:fs'
 import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
+import type { Plugin } from 'vite'
+
+// office-editor/rhwp-studio/flowchart-editor 는 설치 시 선택 해제될 수 있는 대용량 번들이라
+// public/ 에서 resources/ 로 옮기고(electron-builder extraResources 로만 패키징됨), 패키지된
+// 앱에서는 electron/main.ts 의 pepeapp:// 핸들러가 resourcesPath 에서 직접 서빙한다. 개발 서버에서는
+// public/ 밖이라 자동 서빙되지 않으므로, 같은 URL 프리픽스로 정적 파일을 서빙하는 미들웨어가 필요하다
+// (같은 origin 이어야 iframe 내부의 File System Access API 등이 cross-origin 취급받지 않는다).
+const EXTERNAL_STATIC_DIRS = ['office-editor', 'rhwp-studio', 'flowchart-editor'];
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm',
+  '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+};
+function serveExternalStaticDirs(): Plugin {
+  return {
+    name: 'serve-external-static-dirs',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = (req.url || '').split('?')[0];
+        const top = url.split('/').filter(Boolean)[0];
+        if (!top || !EXTERNAL_STATIC_DIRS.includes(top)) return next();
+        const rel = url.slice(1 + top.length) || '/';
+        const candidates = rel.endsWith('/') ? [rel + 'index.html'] : [rel, `${rel}.html`, `${rel}/index.html`];
+        for (const candidate of candidates) {
+          const filePath = path.join(__dirname, 'resources', top, candidate);
+          if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+            res.setHeader('content-type', MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+            fs.createReadStream(filePath).pipe(res);
+            return;
+          }
+        }
+        next();
+      });
+    },
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    serveExternalStaticDirs(),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.

@@ -252,44 +252,56 @@ function parseXmlToBlocks(xml: string): {
   return { blocks, fromDomain, toDomain, responseTimeRepartition, callLengthRepartition };
 }
 
-export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) => {
-  const [targetHost, setTargetHost] = useState('127.0.0.1');
-  const [targetPort, setTargetPort] = useState(5060);
-  const [localIp, setLocalIp] = useState('');
-  const [localPort, setLocalPort] = useState<string>('');
-  const [cps, setCps] = useState(5);
-  const [maxCalls, setMaxCalls] = useState<string>('100');
-  const [callDurationMs, setCallDurationMs] = useState(0);
+// 창 분리 시 보존하는 "설정/시나리오 작업 내용" — 실행 중 통계·로그·진행상태는 살아있는
+// sipp 프로세스에 묶여 있어 새 창으로 못 옮기므로 제외한다(입력해둔 옵션과 블록 구성만 보존).
+export type SippWorkspaceState = {
+  targetHost: string; targetPort: number; localIp: string; localPort: string; cps: number;
+  maxCalls: string; callDurationMs: number; maxOpenCalls: string; callIdString: string;
+  transport: 'u1' | 'un' | 'ui' | 't1' | 'tn' | 'l1' | 'ln'; timeoutSec: string; recvTimeoutMs: string;
+  sendTimeoutMs: string; maxRetrans: string; noRetrans: boolean; traceMsg: boolean; traceErr: boolean;
+  requestUriUser: string; extraArgs: string; advOptsOpen: boolean; injectionCsv: string; injectionCsvOpen: boolean;
+  scenarioMode: ScenarioMode; rawScenarioXml: string; fromDomain: string; toDomain: string;
+  responseTimeRepartition: string; callLengthRepartition: string; blocks: ScenarioBlock[];
+};
+
+export const SippWorkspace: React.FC<{ instanceId: string; initialState?: SippWorkspaceState; onStateChange?: (state: SippWorkspaceState) => void }> = ({ instanceId, initialState, onStateChange }) => {
+  const [targetHost, setTargetHost] = useState(initialState?.targetHost ?? '127.0.0.1');
+  const [targetPort, setTargetPort] = useState(initialState?.targetPort ?? 5060);
+  const [localIp, setLocalIp] = useState(initialState?.localIp ?? '');
+  const [localPort, setLocalPort] = useState<string>(initialState?.localPort ?? '');
+  const [cps, setCps] = useState(initialState?.cps ?? 5);
+  const [maxCalls, setMaxCalls] = useState<string>(initialState?.maxCalls ?? '100');
+  const [callDurationMs, setCallDurationMs] = useState(initialState?.callDurationMs ?? 0);
   // Linux 에서 흔히 쓰는 sipp CLI 옵션들 — 옵션마다 이름표 붙여서 "고급 옵션" 접이식에 노출
-  const [maxOpenCalls, setMaxOpenCalls] = useState('');
-  const [callIdString, setCallIdString] = useState('');
-  const [transport, setTransport] = useState<'u1' | 'un' | 'ui' | 't1' | 'tn' | 'l1' | 'ln'>('u1');
-  const [timeoutSec, setTimeoutSec] = useState('');
-  const [recvTimeoutMs, setRecvTimeoutMs] = useState('');
-  const [sendTimeoutMs, setSendTimeoutMs] = useState('');
-  const [maxRetrans, setMaxRetrans] = useState('');
-  const [noRetrans, setNoRetrans] = useState(false);
-  const [traceMsg, setTraceMsg] = useState(false);
-  const [traceErr, setTraceErr] = useState(false);
-  const [requestUriUser, setRequestUriUser] = useState('');
-  const [extraArgs, setExtraArgs] = useState('');
-  const [advOptsOpen, setAdvOptsOpen] = useState(false);
+  const [maxOpenCalls, setMaxOpenCalls] = useState(initialState?.maxOpenCalls ?? '');
+  const [callIdString, setCallIdString] = useState(initialState?.callIdString ?? '');
+  const [transport, setTransport] = useState<'u1' | 'un' | 'ui' | 't1' | 'tn' | 'l1' | 'ln'>(initialState?.transport ?? 'u1');
+  const [timeoutSec, setTimeoutSec] = useState(initialState?.timeoutSec ?? '');
+  const [recvTimeoutMs, setRecvTimeoutMs] = useState(initialState?.recvTimeoutMs ?? '');
+  const [sendTimeoutMs, setSendTimeoutMs] = useState(initialState?.sendTimeoutMs ?? '');
+  const [maxRetrans, setMaxRetrans] = useState(initialState?.maxRetrans ?? '');
+  const [noRetrans, setNoRetrans] = useState(initialState?.noRetrans ?? false);
+  const [traceMsg, setTraceMsg] = useState(initialState?.traceMsg ?? false);
+  const [traceErr, setTraceErr] = useState(initialState?.traceErr ?? false);
+  const [requestUriUser, setRequestUriUser] = useState(initialState?.requestUriUser ?? '');
+  const [extraArgs, setExtraArgs] = useState(initialState?.extraArgs ?? '');
+  const [advOptsOpen, setAdvOptsOpen] = useState(initialState?.advOptsOpen ?? false);
   // -inf 로 넘길 CSV 데이터 파일 — 첫 줄 SEQUENTIAL/RANDOM/USER, 이후 콜마다
   // ';' 구분 값 한 줄. 시나리오(블록의 From/To 또는 고급 XML)에서 [field0],
   // [field1]... 로 참조한다. 예: 발신/착신 번호 쌍을 콜마다 다르게 주입.
-  const [injectionCsv, setInjectionCsv] = useState('');
-  const [injectionCsvOpen, setInjectionCsvOpen] = useState(false);
-  const [scenarioMode, setScenarioMode] = useState<ScenarioMode>('blocks');
-  const [rawScenarioXml, setRawScenarioXml] = useState('');
+  const [injectionCsv, setInjectionCsv] = useState(initialState?.injectionCsv ?? '');
+  const [injectionCsvOpen, setInjectionCsvOpen] = useState(initialState?.injectionCsvOpen ?? false);
+  const [scenarioMode, setScenarioMode] = useState<ScenarioMode>(initialState?.scenarioMode ?? 'blocks');
+  const [rawScenarioXml, setRawScenarioXml] = useState(initialState?.rawScenarioXml ?? '');
   // 블록 조립 모드 전용: SIP 계층 도메인. 통신사망처럼 발신자/수신자가 서로 다른
   // 도메인에 등록돼 있을 수 있어 From/To 를 따로 지정한다 — 비우면 각각
   // [remote_ip]:[remote_port] (대상 호스트/포트 필드 값)를 그대로 쓴다.
-  const [fromDomain, setFromDomain] = useState('');
-  const [toDomain, setToDomain] = useState('');
+  const [fromDomain, setFromDomain] = useState(initialState?.fromDomain ?? '');
+  const [toDomain, setToDomain] = useState(initialState?.toDomain ?? '');
   // 통계 화면(6/7번 화면)의 구간 경계 — 비워도 되지만 비우면 sipp 기본 구간을 씀.
-  const [responseTimeRepartition, setResponseTimeRepartition] = useState('10, 20, 30, 40, 50, 100, 150, 200');
-  const [callLengthRepartition, setCallLengthRepartition] = useState('10, 50, 100, 500, 1000, 5000, 10000');
-  const [blocks, setBlocks] = useState<ScenarioBlock[]>(() => [
+  const [responseTimeRepartition, setResponseTimeRepartition] = useState(initialState?.responseTimeRepartition ?? '10, 20, 30, 40, 50, 100, 150, 200');
+  const [callLengthRepartition, setCallLengthRepartition] = useState(initialState?.callLengthRepartition ?? '10, 50, 100, 500, 1000, 5000, 10000');
+  const [blocks, setBlocks] = useState<ScenarioBlock[]>(initialState?.blocks ?? (() => [
     newSendBlock('INVITE'),
     { ...newRecvBlock('180'), optional: true },
     { ...newRecvBlock('200'), rtd: true },
@@ -297,8 +309,23 @@ export const SippWorkspace: React.FC<{ instanceId: string }> = ({ instanceId }) 
     newPauseBlock(2000),
     newSendBlock('BYE'),
     { ...newRecvBlock('200'), crlf: true },
-  ]);
+  ])());
   const [blockXmlPreviewOpen, setBlockXmlPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    if (!onStateChange) return;
+    onStateChange({
+      targetHost, targetPort, localIp, localPort, cps, maxCalls, callDurationMs, maxOpenCalls, callIdString,
+      transport, timeoutSec, recvTimeoutMs, sendTimeoutMs, maxRetrans, noRetrans, traceMsg, traceErr,
+      requestUriUser, extraArgs, advOptsOpen, injectionCsv, injectionCsvOpen, scenarioMode, rawScenarioXml,
+      fromDomain, toDomain, responseTimeRepartition, callLengthRepartition, blocks,
+    });
+  }, [
+    targetHost, targetPort, localIp, localPort, cps, maxCalls, callDurationMs, maxOpenCalls, callIdString,
+    transport, timeoutSec, recvTimeoutMs, sendTimeoutMs, maxRetrans, noRetrans, traceMsg, traceErr,
+    requestUriUser, extraArgs, advOptsOpen, injectionCsv, injectionCsvOpen, scenarioMode, rawScenarioXml,
+    fromDomain, toDomain, responseTimeRepartition, callLengthRepartition, blocks,
+  ]);
 
   // 데이터 파일(-inf)이 설정돼 있으면 새로 추가하는 전송 블록의 From/To 기본값을
   // sipp/service 대신 [field0]/[field1] 로 시작하게 한다 — 콜마다 다른 번호를 주입하는

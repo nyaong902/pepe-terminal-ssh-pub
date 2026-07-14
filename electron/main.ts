@@ -39,13 +39,13 @@ import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
-import { getSipSidecar } from './sipSidecar';
-import { getSippSidecar, disposeSippSidecar, type SippTestOptions } from './sippSidecar';
+import { getSipSidecar, resolveBinary as resolveSipdBinary } from './sipSidecar';
+import { getSippSidecar, disposeSippSidecar, resolveBinary as resolveSippBinary, type SippTestOptions } from './sippSidecar';
 import { loadSippScenarios, saveSippScenario, deleteSippScenario } from './sippScenarioStore';
 import { getRecents as getOfficeRecents, addRecent as addOfficeRecent, removeRecent as removeOfficeRecent } from './officeRecentsStore';
 import { getMediaRecents, addMediaRecent, removeMediaRecent, updateMediaPosition } from './mediaRecentsStore';
 import { mediaProbeFile, mediaDecryptToTemp, decodeLocalCodec, type MediaCodec } from './mediaCodec';
-import { decodeToWav } from './gstreamerSidecar';
+import { decodeToWav, resolveBinary as resolveGstreamerBinary } from './gstreamerSidecar';
 import { probePcapFile, extractRtpStreamToTemp } from './pcapParser';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
@@ -1081,11 +1081,20 @@ const PEPE_MIME_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
 app.whenReady().then(() => {
-  // pepeapp://app/... → dist/... 로 매핑 (index.html 은 물론 public/rhwp-studio 가 복사된
-  // dist/rhwp-studio/... 도 같은 origin 으로 서빙된다).
+  // pepeapp://app/... → dist/... 로 매핑. office-editor/rhwp-studio/flowchart-editor 는 설치 시
+  // 선택 해제될 수 있는 대용량 번들(build/installer.nsh 참고)이라 dist(app.asar) 밖의
+  // resources/<name>(패키지) 또는 repo resources/<name>(dev) 에서 별도로 서빙한다 — asar 안에 있으면
+  // 설치 후 부분 삭제가 불가능하기 때문.
+  const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor']);
   protocol.handle(PEPE_PROTOCOL, async (request) => {
     const { pathname } = new URL(request.url);
     const relPath = decodeURIComponent(pathname === '' ? '/' : pathname);
+    const topSeg = relPath.split('/').filter(Boolean)[0];
+    const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
+    const baseDir = isExternal
+      ? (app.isPackaged ? path.join(process.resourcesPath, topSeg) : path.join(process.cwd(), 'resources', topSeg))
+      : path.join(__dirname, '../dist');
+    const stripPrefix = isExternal ? '/' + topSeg : '';
     // Next.js 정적 export(office-editor) 는 확장자 없는 라우트를 /editor.html 로 내보낸다(디렉터리
     // index.html 이 아니라). Caddyfile 의 try_files 규칙과 동일하게: 정확한 경로 → path.html →
     // path/index.html 순으로 시도 — rhwp-studio(디렉터리+index.html)와 office-editor(플랫 .html) 양쪽 다 커버.
@@ -1093,7 +1102,8 @@ app.whenReady().then(() => {
       ? [relPath + 'index.html']
       : [relPath, `${relPath}.html`, `${relPath}/index.html`];
     for (const candidate of candidates) {
-      const filePath = path.join(__dirname, '../dist', candidate);
+      const rel = stripPrefix && candidate.startsWith(stripPrefix) ? (candidate.slice(stripPrefix.length) || '/') : candidate;
+      const filePath = path.join(baseDir, rel);
       try {
         const data = await fs.promises.readFile(filePath);
         const mime = PEPE_MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
@@ -6279,7 +6289,7 @@ ipcMain.handle('sticky-note:get-list', () => {
   return notes.map(n => ({ id: n.id, html: n.html, updatedAt: n.updatedAt, minimized: minimizedStickyNoteIds.has(n.id) }));
 });
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
-ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?: { x: number; y: number } }) => {
+ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
   try {
     const sourceWin = winOf(e);
     // 최소화/숨김 창은 화면에 안 보여도 getBounds() 가 restored 좌표를 돌려주므로
@@ -6301,6 +6311,12 @@ ipcMain.handle('window:drop-tab', (e, { payload, point }: { payload: any; point?
       target.webContents.send('window:adopt-tab', { ...payload, point });
       try { target.show(); target.focus(); } catch {}
       return { docked: true };
+    }
+    // 다른 앱 창으로 재도킹되는 게 아니라 진짜 새 창을 만드는 경우에만, 원본 창에 탭이
+    // 하나(sourceTabCount<=1)뿐이면 거부한다 — 그러면 원본 창에 탭이 하나도 안 남게 됨.
+    // (재도킹 드래그도 같은 함수를 타므로, 여기서 target 유무로 분기해야 재도킹이 막히지 않는다.)
+    if (sourceTabCount != null && sourceTabCount <= 1) {
+      return { docked: false, blocked: true };
     }
     // 멀티모니터 환경에서 음수 좌표(주모니터 왼쪽/위쪽 모니터)도 그대로 보존해야
     // 사용자가 드롭한 모니터에 정확히 분리 창이 생성됨. Math.max(0, ...) 클램프는 금지.
@@ -7059,6 +7075,28 @@ ${JSON.stringify(items, null, 2)}`;
     return { ok: false, error: String(err?.message || err) };
   }
 });
+
+// office-editor/rhwp-studio/flowchart-editor 는 오피스 워크스페이스가 함께 쓰는 3개 대용량
+// 정적 번들(pepeapp:// 핸들러가 resourcesPath 에서 직접 서빙 — electron/main.ts 상단 참고).
+// 셋 다 설치 시 "오피스" 체크박스 하나로 같이 설치/삭제되므로 대표로 office-editor 만 확인한다.
+function officeBundleAvailable(): boolean {
+  try {
+    const base = app.isPackaged ? path.join(process.resourcesPath, 'office-editor') : path.join(process.cwd(), 'resources', 'office-editor');
+    return fs.existsSync(path.join(base, 'editor.html'));
+  } catch { return false; }
+}
+
+// 설치 시 선택 해제한 기능(build/installer.nsh 참고 — 각 사이드카/번들 폴더가 통째로 빠질 수
+// 있다)의 메뉴 항목을 렌더러에서 숨기기 위한 가용성 체크. 파일 존재 여부만 실시간으로 보고,
+// 설치 시점 값을 어딘가 저장해두지 않는다 — 나중에 사용자가 폴더를 수동으로 넣거나 빼도 항상
+// 실제 상태와 일치한다.
+ipcMain.handle('features:get-available', () => ({
+  vpn: !!getVpnService().binaryPath(),
+  microsip: !!resolveSipdBinary(),
+  sipp: !!resolveSippBinary(),
+  office: officeBundleAvailable(),
+  media: !!resolveGstreamerBinary(),
+}));
 
 // ── OpenVPN ──
 const vpn = getVpnService();
