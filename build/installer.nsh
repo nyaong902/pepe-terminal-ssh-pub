@@ -18,13 +18,24 @@ Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (cust
   System::Call 'user32::SetForegroundWindow(i $HWNDPARENT) i .r0'
 !macroend
 
+; 진단용 파일 로그 — 자동 업데이트 중 설치 창이 안 뜨는 문제의 실제 발생 지점을 확인하기 위함.
+; 앱 쪽 update-debug.log 는 앱이 이미 종료된 뒤(설치 프로그램 실행 중)엔 아무것도 못 남기므로,
+; 설치 프로그램 자신이 %TEMP%\pepe-install-debug.log 에 직접 기록한다(권한/승격 여부 무관).
+!macro DbgLog msg
+  FileOpen $9 "$TEMP\pepe-install-debug.log" a
+  FileWrite $9 "${msg}$\r$\n"
+  FileClose $9
+!macroend
+
 Function nsShowDeleteDataPage
   ; v2.2.14/v2.2.15 에서 "자동 업데이트 시 이 페이지를 무조건 건너뛴다"가 그 문제의 PC에서
   ; 확실히 검증됐었다(설치 창 정상). v2.2.16/v2.2.18 에서 페이지를 다시 보여주도록 바꿨다가
   ; 두 번 다 재현됐고, v2.2.19 에서 perMachine:false(관리자 권한 자체를 없앰) 로 바꾸면서
   ; 실수로 이 페이지 표시 여부는 되돌리지 않고 남겨뒀다 — 관리자 권한 문제와 이 페이지 문제는
   ; 서로 별개의 원인이었다. 확실히 검증된 상태로 되돌린다: --updated 실행이면 무조건 건너뛴다.
+  !insertmacro DbgLog "nsShowDeleteDataPage: enter IsUpdateRun=$IsUpdateRun"
   ${If} $IsUpdateRun == "1"
+    !insertmacro DbgLog "nsShowDeleteDataPage: skip (IsUpdateRun=1)"
     Abort
   ${EndIf}
   !insertmacro ForceShowInstallerWindow
@@ -68,14 +79,15 @@ Var OfficeCheckbox
 Var OfficeChecked
 
 Function nsShowFeaturesPage
-  ; 위 nsShowDeleteDataPage 와 동일한 이유로 --updated 실행일 땐 건너뛴다.
-  ${If} $IsUpdateRun == "1"
-    Abort
-  ${EndIf}
+  ; 자동 업데이트에서도 컴포넌트 선택 페이지는 보여준다.
+  !insertmacro DbgLog "nsShowFeaturesPage: enter IsUpdateRun=$IsUpdateRun HWNDPARENT=$HWNDPARENT"
   !insertmacro ForceShowInstallerWindow
+  !insertmacro DbgLog "nsShowFeaturesPage: ForceShowInstallerWindow SetForegroundWindow result=$0"
   nsDialogs::Create 1018
   Pop $0
+  !insertmacro DbgLog "nsShowFeaturesPage: nsDialogs::Create result=$0"
   ${If} $0 == error
+    !insertmacro DbgLog "nsShowFeaturesPage: Create failed, aborting page"
     Abort
   ${EndIf}
   ${NSD_CreateLabel} 0 0 100% 20u "설치할 기능을 선택하세요 (기본: 전체 설치). 용량이 큰 기능만 선택 해제할 수 있습니다."
@@ -95,19 +107,24 @@ Function nsShowFeaturesPage
   Pop $OfficeCheckbox
   ${NSD_SetState} $OfficeCheckbox $OfficeChecked
   ${NSD_CreateLabel} 0 100u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
+  !insertmacro DbgLog "nsShowFeaturesPage: calling nsDialogs::Show"
   nsDialogs::Show
+  !insertmacro DbgLog "nsShowFeaturesPage: nsDialogs::Show returned (page left)"
 FunctionEnd
 
 Function nsLeaveFeaturesPage
+  !insertmacro DbgLog "nsLeaveFeaturesPage: enter"
   ${NSD_GetState} $VpnCheckbox $VpnChecked
   ${NSD_GetState} $MicroSipCheckbox $MicroSipChecked
   ${NSD_GetState} $SippCheckbox $SippChecked
   ${NSD_GetState} $MediaCheckbox $MediaChecked
   ${NSD_GetState} $OfficeCheckbox $OfficeChecked
+  !insertmacro DbgLog "nsLeaveFeaturesPage: Vpn=$VpnChecked MicroSip=$MicroSipChecked Sipp=$SippChecked Media=$MediaChecked Office=$OfficeChecked"
 FunctionEnd
 !endif
 
 !macro customInit
+  !insertmacro DbgLog "customInit: ENTRY (installer process started, v${VERSION})"
   ; 설치 화면이 뒤에 숨는 경우를 대비한 안전장치.
   BringToFront
   ; 모든 사용자 / 전용 모두 Program Files에 설치.
@@ -127,36 +144,34 @@ FunctionEnd
       StrCpy $IsUpdateRun "0"
     ${EndIf}
     ClearErrors
+    !insertmacro DbgLog "customInit: IsUpdateRun=$IsUpdateRun params=$R0"
 
-    ; 선택 설치 기본값 = 전체 설치. 업데이트 실행이면 페이지를 안 띄우는 대신, 지난 설치 때
-    ; 레지스트리에 저장해둔 선택을 그대로 읽어와 customInstall 에서 재적용한다(값이 없으면,
-    ; 즉 이 기능이 생기기 전에 설치된 경우, 안전하게 "전체 설치" 로 취급해 아무것도 안 지운다).
+    ; 선택 설치 기본값 = 전체 설치. 앱 또는 이전 설치가 저장한 선택값이 있으면,
+    ; 일반 설치와 자동 업데이트 모두 컴포넌트 선택 페이지의 기본 체크 상태로 반영한다.
     StrCpy $VpnChecked "1"
     StrCpy $MicroSipChecked "1"
     StrCpy $SippChecked "1"
     StrCpy $MediaChecked "1"
     StrCpy $OfficeChecked "1"
-    ${If} $IsUpdateRun == "1"
-      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
-      ${IfNot} $R2 == ""
-        StrCpy $VpnChecked $R2
-      ${EndIf}
-      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "MicroSip"
-      ${IfNot} $R2 == ""
-        StrCpy $MicroSipChecked $R2
-      ${EndIf}
-      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Sipp"
-      ${IfNot} $R2 == ""
-        StrCpy $SippChecked $R2
-      ${EndIf}
-      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Media"
-      ${IfNot} $R2 == ""
-        StrCpy $MediaChecked $R2
-      ${EndIf}
-      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
-      ${IfNot} $R2 == ""
-        StrCpy $OfficeChecked $R2
-      ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
+    ${IfNot} $R2 == ""
+      StrCpy $VpnChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "MicroSip"
+    ${IfNot} $R2 == ""
+      StrCpy $MicroSipChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Sipp"
+    ${IfNot} $R2 == ""
+      StrCpy $SippChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Media"
+    ${IfNot} $R2 == ""
+      StrCpy $MediaChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
+    ${IfNot} $R2 == ""
+      StrCpy $OfficeChecked $R2
     ${EndIf}
   !endif
 !macroend
@@ -181,6 +196,7 @@ FunctionEnd
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 !macro customInstall
+  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
   SetAutoClose false
@@ -311,6 +327,7 @@ FunctionEnd
   DetailPrint "─────────────────────────────────────────"
   DetailPrint "✓ 모든 설치 완료. PePe Terminal(SSH) v${VERSION}"
   DetailPrint "─────────────────────────────────────────"
+  !insertmacro DbgLog "customInstall: complete"
 !macroend
 
 ; customUnInit: 제거 시작 시점 — electron-builder 의 자동 파일 삭제 (수천 개 파일 하나씩 출력) 이전에 실행
