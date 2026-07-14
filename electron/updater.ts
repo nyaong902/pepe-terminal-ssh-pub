@@ -8,6 +8,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as fs from 'fs';
 import * as path from 'path';
+const sudo = require('sudo-prompt');
 
 // 패키지 빌드에선 main.ts 가 console.log 를 무력화해서(6번째 줄), electron-updater 의 진단 로그가
 // 지금까지 어디에도 안 남고 있었다 — 다른 PC 에서 "재시작 설치" 버튼을 눌러도 설치 창이 안 뜨는
@@ -84,20 +85,41 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
     logUpdate(`quit-and-install 호출됨 — version=${app.getVersion()} platform=${process.platform} arch=${process.arch}`);
 
     // v2.2.9~v2.2.13 에서 elevate.exe 를 직접 spawn + 지연 종료 + cmd/c start 로 감싸는 등
-    // 자체 재구현을 시도했지만 현장에서 계속 재현됐다. Tabby(Eugeny/tabby, 검증된 대형 Electron
-    // 터미널 앱) 의 실제 구현을 확인해보니 별다른 우회 없이 표준 quitAndInstall() 하나만 호출한다
-    // — 자체 재구현이 문제를 더 꼬이게 만들었을 가능성이 있어 표준 방식으로 되돌린다.
-    try {
-      const installerPath = (autoUpdater as any).installerPath;
-      if (installerPath) unblockFile(installerPath);
-    } catch (e: any) { logUpdate(`installerPath 조회 실패: ${String(e?.message || e)}`); }
-    setImmediate(() => {
+    // 자체 재구현을 시도했지만 현장에서 계속 재현됐고, 표준 quitAndInstall() 로 되돌려도(Tabby
+    // 방식) 여전히 재현됐다. 현장 로그로 확인한 결과: autoInstallOnAppQuit 중복 무음 설치
+    // 경쟁은 이미 해결됐는데도(로그에 "Install on explicit quitAndInstall" 한 번만 찍힘) UAC
+    // 승인 뒤 아무 창도 안 뜨고, 정작 같은 설치 파일을 수동 더블클릭하면 완전히 정상 동작한다.
+    // 즉 파일도, 우리 트리거 로직도 문제가 아니라 electron-updater 가 내장한 elevate.exe 가 그
+    // 경로("...\pepe terminal(ssh)-updater\pending\...", 공백+괄호 포함)를 실행하는 단계
+    // 자체에서 조용히 실패하는 것으로 보인다. VPN 연결(vpnService.ts)에서 이미 같은 PC 부류에서
+    // 안정적으로 쓰고 있는 sudo-prompt 로 직접 승격 실행해 elevate.exe 를 완전히 우회한다.
+    (async () => {
       try {
-        autoUpdater.quitAndInstall(false, true);
+        const installerPath: string | undefined = (autoUpdater as any).installerPath;
+        if (!installerPath) {
+          logUpdate('installerPath 없음 — sudo-prompt 실행 불가, quitAndInstall 로 폴백');
+          setImmediate(() => { try { autoUpdater.quitAndInstall(false, true); } catch (e: any) { logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`); } });
+          return;
+        }
+        unblockFile(installerPath);
+        const quote = (s: string) => `"${s}"`;
+        const cmd = `${quote(installerPath)} --updated --force-run`;
+        logUpdate(`sudo-prompt 로 설치 프로그램 승격 실행: ${cmd}`);
+        sudo.exec(cmd, { name: 'PePe Terminal SSH' }, (err: any, stdout: any, stderr: any) => {
+          const out = (stdout?.toString?.() || '') + (stderr?.toString?.() || '');
+          if (out) logUpdate('sudo-prompt 설치 프로그램 종료 출력: ' + out.trim());
+          if (err) logUpdate(`sudo-prompt 설치 프로그램 실행 오류: ${String(err?.message || err)}`);
+          else logUpdate('sudo-prompt 설치 프로그램 정상 종료(사용자가 설치 마법사를 완료함)');
+        });
+        // sudo-prompt 는 승격된 프로세스가 끝날 때까지 콜백을 기다리므로(설치 마법사 완료 시점),
+        // 여기서 콜백을 기다리지 않고 UAC/설치 창이 뜰 시간만 잠깐 준 뒤 앱을 종료한다 — UAC 로
+        // 승격된 프로세스는 Windows AppInfo 서비스가 별도로 띄우므로 우리 앱 프로세스가 먼저
+        // 종료돼도 살아남는다(일반 자식 프로세스와 달리 Job Object 에 묶이지 않음).
+        setTimeout(() => { app.quit(); }, 1500);
       } catch (e: any) {
-        logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`);
+        logUpdate(`sudo-prompt 승격 실행 예외: ${String(e?.stack || e)}`);
       }
-    });
+    })();
     return { ok: true };
   });
   ipcMain.handle('updater:state', () => ({
