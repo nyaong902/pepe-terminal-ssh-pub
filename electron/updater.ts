@@ -6,6 +6,7 @@
 // - 다운로드 완료 후 사용자가 "재시작하여 설치" 누르면 quitAndInstall
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -23,12 +24,9 @@ function logUpdate(msg: string) {
   try { fs.appendFileSync(UPDATE_LOG_PATH, `[${new Date().toISOString()}] ${msg}\n`); } catch {}
 }
 
-// GitHub 에서 받은 exe 는 NTFS Zone.Identifier(ADS)로 "인터넷에서 받음" 표시가 붙는데, 이게
-// Windows SmartScreen 평판 검사를 유발한다. 우리 인증서가 신뢰된 CA 가 아닌 자체 서명이라
-// (아래 verifyUpdateCodeSignature 우회 참고) 이 검사가 PC마다(그 머신이 이 발행자를 처음
-// 보는지 등) 다르게 동작할 수 있고, elevate.exe 로 UAC 승인까지 받고도 설치 창이 아예 안
-// 뜨는(우회 대화상자도 없이 조용히 막히는) 현상과 정확히 들어맞는다. 설치 직전에 이 표시를
-// 미리 제거해 SmartScreen 검사 자체를 건너뛰게 한다.
+// (v2.2.7 에서 추가 — 실제로는 원인이 아닌 것으로 확인됨: 현장 로그에서 Zone.Identifier 가
+// 애초에 없었는데도 문제가 재현됐다. SmartScreen 표시 자체는 원인이 아니지만, 무해하므로
+// 그대로 둔다.)
 function unblockFile(filePath: string) {
   const adsPath = `${filePath}:Zone.Identifier`;
   try {
@@ -85,18 +83,48 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
   ipcMain.handle('updater:quit-and-install', () => {
     if (!supported()) return { ok: false, reason: 'unsupported' };
     logUpdate(`quit-and-install 호출됨 — version=${app.getVersion()} platform=${process.platform} arch=${process.arch}`);
+
+    const fallbackToBuiltin = (reason: string) => {
+      logUpdate(`${reason} — electron-updater 기본 quitAndInstall 로 폴백`);
+      setImmediate(() => {
+        try { autoUpdater.quitAndInstall(false, true); }
+        catch (e: any) { logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`); }
+      });
+    };
+
+    const installerPath = (() => { try { return (autoUpdater as any).installerPath as string | null; } catch { return null; } })();
+    if (!installerPath || process.platform !== 'win32') {
+      fallbackToBuiltin('installerPath 없음 또는 win32 아님');
+      return { ok: true };
+    }
+    unblockFile(installerPath);
+
+    // electron-updater 의 quitAndInstall 은 elevate.exe(관리자 권한 상승 도우미) 를 spawn 하자마자
+    // (한 틱 뒤) 곧바로 app.quit() 을 호출한다. 커맨드 프롬프트로 똑같은 명령을 직접 실행하면
+    // (부모 cmd.exe 가 계속 살아있음) 항상 잘 되는데, 앱이 트리거하면 일부 PC 에서 UAC 승인까지는
+    // 뜨고 그 이후 설치 창이 조용히 안 뜨는 문제가 재현됐다 — elevate.exe 의 UAC(runas) 상승
+    // 요청이 채 끝나기도 전에 우리 프로세스가 사라지면서 꼬이는 것으로 추정된다(v2.2.1 ${Silent}
+    // 페이지 변경, v2.2.3 packElevateHelper, v2.2.7 Zone.Identifier 제거 모두 시도했지만 현장에서
+    // 재현 — 남은 것은 이 타이밍 문제). elevate.exe 를 직접 spawn 하고 app.quit() 을 몇 초
+    // 늦춰서, elevate.exe 가 UAC 승인과 설치 프로그램 실행을 확실히 마칠 시간을 준다.
+    const elevatePath = path.join(process.resourcesPath, 'elevate.exe');
     try {
-      const installerPath = (autoUpdater as any).installerPath;
-      if (installerPath) unblockFile(installerPath);
-    } catch (e: any) { logUpdate(`installerPath 조회 실패: ${String(e?.message || e)}`); }
-    // isSilent=false, isForceRunAfter=true — 설치 후 자동 재실행
-    setImmediate(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true);
-      } catch (e: any) {
-        logUpdate(`quitAndInstall 예외: ${String(e?.stack || e)}`);
-      }
-    });
+      const child = spawn(elevatePath, [installerPath, '--updated', '--force-run'], {
+        stdio: 'ignore',
+        detached: true,
+      });
+      child.unref();
+      logUpdate(`elevate.exe 직접 spawn — pid=${child.pid}`);
+      child.on('error', (e: any) => logUpdate(`elevate.exe spawn 에러: ${String(e?.stack || e)}`));
+    } catch (e: any) {
+      fallbackToBuiltin(`elevate.exe spawn 예외: ${String(e?.stack || e)}`);
+      return { ok: true };
+    }
+    logUpdate('5초 대기 후 앱 종료 (elevate.exe 가 UAC 승인/설치 프로그램 실행을 마칠 시간 확보)');
+    setTimeout(() => {
+      logUpdate('앱 종료(quit)');
+      app.quit();
+    }, 5000);
     return { ok: true };
   });
   ipcMain.handle('updater:state', () => ({
