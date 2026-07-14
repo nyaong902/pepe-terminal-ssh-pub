@@ -10,13 +10,12 @@ Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (cust
                         ; 이전 선택값을 기본 체크 상태로 미리 채우는 용도로만 쓴다(아래 참고).
 
 Function nsShowDeleteDataPage
-  ; --updated(자동 업데이트) 로 실행된 경우엔 이 페이지 자체를 건너뛴다. isSilent=false 라
-  ; ${Silent} 로는 "진짜 화면이 없는지"를 정확히 구분할 수 있을 줄 알았지만, 실제로는 PC마다
-  ; (관리자 권한/그룹정책 등 환경 차이로) 이 인터랙티브 nsDialogs 페이지 자체가 자동 업데이트
-  ; 흐름에서 안정적으로 안 뜨는 경우가 있어(v2.2.1 에서 이 페이지들이 생기기 전인 v2.2.0 까지는
-  ; 커스텀 페이지가 없어 문제가 없었음) --updated 여부만으로 다시 건너뛴다. 자동 업데이트 중엔
-  ; customInit 에서 레지스트리에 저장해둔 이전 선택값을 그대로 쓴다.
-  ${If} $IsUpdateRun == "1"
+  ; "설치 창 자체가 안 뜬다"는 문제의 실제 원인은 이 페이지가 아니라 autoInstallOnAppQuit 중복
+  ; 실행이었다(electron/updater.ts 참고, v2.2.11 에서 확정). 그 전까지는 이 인터랙티브 페이지가
+  ; 원인일 것으로 추정해 --updated(자동 업데이트) 실행이면 무조건 건너뛰게 했었는데, 이제 진짜
+  ; 원인이 고쳐졌으니 다시 보여줘도 된다 — 진짜 무음 설치(/S, 예: 관리자의 사일런트 배포)일 때만
+  ; 건너뛴다.
+  ${If} ${Silent}
     Abort
   ${EndIf}
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
@@ -59,8 +58,8 @@ Var OfficeCheckbox
 Var OfficeChecked
 
 Function nsShowFeaturesPage
-  ; 위 nsShowDeleteDataPage 와 동일한 이유로 --updated 실행일 땐 건너뛴다.
-  ${If} $IsUpdateRun == "1"
+  ; 위 nsShowDeleteDataPage 와 동일한 이유로, 진짜 무음 설치(/S)일 때만 건너뛴다.
+  ${If} ${Silent}
     Abort
   ${EndIf}
   nsDialogs::Create 1018
