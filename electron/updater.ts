@@ -99,25 +99,27 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
     }
     unblockFile(installerPath);
 
-    // electron-updater 의 quitAndInstall 은 elevate.exe(관리자 권한 상승 도우미) 를 spawn 하자마자
-    // (한 틱 뒤) 곧바로 app.quit() 을 호출한다. 커맨드 프롬프트로 똑같은 명령을 직접 실행하면
-    // (부모 cmd.exe 가 계속 살아있음) 항상 잘 되는데, 앱이 트리거하면 일부 PC 에서 UAC 승인까지는
-    // 뜨고 그 이후 설치 창이 조용히 안 뜨는 문제가 재현됐다 — elevate.exe 의 UAC(runas) 상승
-    // 요청이 채 끝나기도 전에 우리 프로세스가 사라지면서 꼬이는 것으로 추정된다(v2.2.1 ${Silent}
-    // 페이지 변경, v2.2.3 packElevateHelper, v2.2.7 Zone.Identifier 제거 모두 시도했지만 현장에서
-    // 재현 — 남은 것은 이 타이밍 문제). elevate.exe 를 직접 spawn 하고 app.quit() 을 몇 초
-    // 늦춰서, elevate.exe 가 UAC 승인과 설치 프로그램 실행을 확실히 마칠 시간을 준다.
+    // v2.2.11 에서 autoInstallOnAppQuit 중복 실행은 없앴지만(로그로 확인됨), 여전히 일부 PC 에서
+    // UAC 승인 이후 설치 창이 안 뜬다 — 남은 용의자는 Windows Job Object 다. Electron 은 자식
+    // 프로세스를 Job Object 로 묶어 관리하는데, 앱이 종료(app.quit())될 때 그 Job 에 딸린
+    // 프로세스는 Node 의 detached:true 로 spawn 했어도 함께 강제 종료될 수 있다 — elevate.exe 가
+    // UAC 승인까지 마치고 설치 프로그램을 막 띄우려는 순간 우리 프로세스가 사라지며 그 트리 전체가
+    // 같이 죽는 것이라면, 5초 지연을 아무리 늘려도 소용이 없다(실제로 v2.2.9~v2.2.11 에서 안
+    // 고쳐짐). cmd.exe /c start 로 한 번 더 감싸서 새 콘솔/프로세스 트리로 완전히 분리시킨다 —
+    // Electron 앱에서 이 Job Object 문제를 피하는 통상적인 방법.
     const elevatePath = path.join(process.resourcesPath, 'elevate.exe');
     try {
-      const child = spawn(elevatePath, [installerPath, '--updated', '--force-run'], {
+      const startCmd = `start "" "${elevatePath}" "${installerPath}" --updated --force-run`;
+      const child = spawn('cmd.exe', ['/c', startCmd], {
         stdio: 'ignore',
         detached: true,
+        windowsHide: true,
       });
       child.unref();
-      logUpdate(`elevate.exe 직접 spawn — pid=${child.pid}`);
-      child.on('error', (e: any) => logUpdate(`elevate.exe spawn 에러: ${String(e?.stack || e)}`));
+      logUpdate(`elevate.exe 를 cmd /c start 로 spawn — pid=${child.pid}`);
+      child.on('error', (e: any) => logUpdate(`spawn 에러: ${String(e?.stack || e)}`));
     } catch (e: any) {
-      fallbackToBuiltin(`elevate.exe spawn 예외: ${String(e?.stack || e)}`);
+      fallbackToBuiltin(`spawn 예외: ${String(e?.stack || e)}`);
       return { ok: true };
     }
     logUpdate('5초 대기 후 앱 종료 (elevate.exe 가 UAC 승인/설치 프로그램 실행을 마칠 시간 확보)');
