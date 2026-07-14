@@ -9,15 +9,25 @@ Var DeleteDataChecked  ; 0 = 유지(기본), 1 = 삭제
 Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (customInit 에서 판별) — 레지스트리
                         ; 이전 선택값을 기본 체크 상태로 미리 채우는 용도로만 쓴다(아래 참고).
 
+; SW_SHOWNORMAL(1) + SetForegroundWindow — BringToFront 는 "이미 보이는 창을 앞으로" 가져올 뿐이라,
+; 자동 업데이트 흐름에서 이 페이지가 설치 프로그램이 처음 화면에 뭔가를 보여주는 순간이면(그
+; 전 페이지들은 다 건너뛰므로) 부족할 수 있다 — 창을 명시적으로 SW_SHOWNORMAL 로 띄우고
+; SetForegroundWindow 로 강제 포그라운드까지 시도한다.
+!macro ForceShowInstallerWindow
+  System::Call 'user32::ShowWindow(i $HWNDPARENT, i 1)'
+  System::Call 'user32::SetForegroundWindow(i $HWNDPARENT) i .r0'
+!macroend
+
 Function nsShowDeleteDataPage
   ; v2.2.16 에서 "autoInstallOnAppQuit 중복 실행이 진짜 원인이었으니 이제 자동 업데이트 중에도
   ; 이 페이지를 보여줘도 된다"고 되돌렸었는데, 실제로 테스트해보니(항상 정상이던 PC에서도) 설치
-  ; 창이 다시 안 뜨는 게 재현됐다 — 즉 이 인터랙티브 페이지 자체도 여전히 자동 업데이트 흐름에서
-  ; 문제를 일으킨다는 뜻이다. v2.2.4~v2.2.15 의, 확실히 검증된 동작(--updated 면 무조건 건너뛰기)
-  ; 으로 다시 되돌린다.
-  ${If} $IsUpdateRun == "1"
+  ; 창이 다시 안 뜨는 게 재현됐다. v2.2.18 에서는 페이지를 다시 보여주되, ForceShowInstallerWindow
+  ; 로 창을 명시적으로 띄우고 포그라운드로 끌어오는 걸 추가로 시도한다 — 그래도 안 되면 v2.2.17
+  ; 의 "자동 업데이트 시 건너뛰기"로 다시 돌아갈 예정.
+  ${If} ${Silent}
     Abort
   ${EndIf}
+  !insertmacro ForceShowInstallerWindow
   ; 사용자 데이터는 현재 사용자의 Roaming(AppData) 에 있음. perMachine 모드에선
   ; SetShellVarContext=all 이라 $APPDATA 가 ProgramData 로 잡히니, current 로 잠깐 전환.
   SetShellVarContext current
@@ -58,10 +68,11 @@ Var OfficeCheckbox
 Var OfficeChecked
 
 Function nsShowFeaturesPage
-  ; 위 nsShowDeleteDataPage 와 동일한 이유로 --updated 실행일 땐 건너뛴다.
-  ${If} $IsUpdateRun == "1"
+  ; 위 nsShowDeleteDataPage 와 동일한 이유로, 진짜 무음 설치(/S)일 때만 건너뛴다.
+  ${If} ${Silent}
     Abort
   ${EndIf}
+  !insertmacro ForceShowInstallerWindow
   nsDialogs::Create 1018
   Pop $0
   ${If} $0 == error
