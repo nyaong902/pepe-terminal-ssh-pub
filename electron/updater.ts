@@ -136,7 +136,15 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
   if (!supported()) return;
 
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // v2.2.9 진단 로그로 확정된 근본 원인: 이 값이 true 면, 우리가 'updater:quit-and-install' 에서
+  // elevate.exe 를 직접 spawn 한 뒤 app.quit() 을 호출하는 바로 그 순간, electron-updater 가
+  // 자체 등록해둔 "종료 시 자동 설치" 퀸 핸들러가 또 한 번 install() 을 트리거해 elevate.exe 를
+  // *두 번째로* 실행한다 — 이번엔 isSilent:true, /S(완전 무음) 로. 같은 설치 파일의 두 인스턴스가
+  // 거의 동시에 뜨고, NSIS 의 "동시 실행 하나만 허용" 규칙 때문에 둘 중 하나만 살아남는데
+  // 하필 무음 인스턴스가 이겨서 화면 없이 조용히 설치되는 것으로 보인다(우리가 의도한, 화면
+  // 있는 인스턴스가 밀려남) — "UAC 승인까지는 뜨는데 설치 창이 안 보인다"는 증상과 정확히
+  // 일치한다. 설치 트리거를 이미 우리가 직접 제어하므로, 이 자동 핸들러는 끈다.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowDowngrade = false;
   // 진단 로그 — 패키지 빌드에서도 남도록 파일에 기록 (위 logUpdate 참고)
   try { (autoUpdater as any).logger = { info: logUpdate, warn: logUpdate, error: logUpdate, debug: () => {} }; } catch {}
