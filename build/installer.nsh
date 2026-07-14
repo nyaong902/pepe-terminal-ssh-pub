@@ -137,23 +137,23 @@ FunctionEnd
     StrCpy $MediaChecked "1"
     StrCpy $OfficeChecked "1"
     ${If} $IsUpdateRun == "1"
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Vpn"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
       ${IfNot} $R2 == ""
         StrCpy $VpnChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "MicroSip"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "MicroSip"
       ${IfNot} $R2 == ""
         StrCpy $MicroSipChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Sipp"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Sipp"
       ${IfNot} $R2 == ""
         StrCpy $SippChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Media"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Media"
       ${IfNot} $R2 == ""
         StrCpy $MediaChecked $R2
       ${EndIf}
-      ReadRegStr $R2 HKLM "Software\PePeTerminal\Features" "Office"
+      ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
       ${IfNot} $R2 == ""
         StrCpy $OfficeChecked $R2
       ${EndIf}
@@ -196,11 +196,11 @@ FunctionEnd
   ${EndIf}
 
   ; 다음 업데이트 때(페이지 없이 조용히 진행) 같은 선택을 다시 적용할 수 있도록 저장.
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Vpn" "$VpnChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "MicroSip" "$MicroSipChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Media" "$MediaChecked"
-  WriteRegStr HKLM "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Vpn" "$VpnChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "MicroSip" "$MicroSipChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Media" "$MediaChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
 
   ; 선택 해제한 기능의 전용 번들 폴더 삭제 — electron-builder 가 resources 전체를 이미
   ; 통째로 복사해둔 뒤라, 여기서 안 쓸 폴더만 걷어낸다(각 기능 전용, 다른 기능과 안 겹침).
@@ -337,7 +337,7 @@ FunctionEnd
   DeleteRegKey HKLM "Software\Classes\Directory\shell\PepeTerminal"
 
   ; 선택 설치 기능 플래그(설정값, 사용자 데이터 아님) 삭제
-  DeleteRegKey HKLM "Software\PePeTerminal\Features"
+  DeleteRegKey HKCU "Software\PePeTerminal\Features"
 
   ; 사용자 데이터(세션·설정) 는 자동 삭제하지 않음 — 재설치/업그레이드 시 세션 유지 보장.
   ; 완전 삭제가 필요하면 사용자가 %APPDATA%\PePe Terminal(SSH) 폴더를 수동 삭제.

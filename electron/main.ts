@@ -31,7 +31,7 @@ app.commandLine.appendSwitch('disable-http-cache');
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
@@ -7097,6 +7097,47 @@ ipcMain.handle('features:get-available', () => ({
   office: officeBundleAvailable(),
   media: !!resolveGstreamerBinary(),
 }));
+
+// "다음 업데이트에 어떤 번들을 설치할지" 사용자 선택 저장/조회 — build/installer.nsh 가 자동
+// 업데이트 시 읽어가는 바로 그 레지스트리 값(HKCU\Software\PePeTerminal\Features)이다.
+// 자동 업데이트 중엔 인터랙티브 설치 페이지를 못 띄우므로(일부 PC에서 설치 창이 안 뜨는 문제로
+// 확인됨 — v2.2.1~v2.2.20 참고), 대신 "재시작하여 설치" 버튼을 누르는 시점에 앱 자체 모달로
+// 미리 물어보고 여기에 기록해둔다. 설치 프로그램은 항상 정상적으로 뜨는 렌더러(우리 React UI)
+// 쪽에서 물어보고, 실제 설치 창은 얌전히 그 값을 읽어서 적용만 하게 하는 것.
+function readRegFeature(name: string): boolean {
+  try {
+    const out = execFileSync('reg', ['query', 'HKCU\\Software\\PePeTerminal\\Features', '/v', name], { encoding: 'utf8', windowsHide: true });
+    const m = out.match(/REG_SZ\s+(\S+)/);
+    if (!m) return true;
+    return m[1] !== '0';
+  } catch {
+    return true; // 값 없음(첫 설치 등) — installer.nsh 기본값 규칙과 동일하게 "전체 설치" 로 취급
+  }
+}
+function writeRegFeature(name: string, checked: boolean): void {
+  try {
+    execFileSync('reg', ['add', 'HKCU\\Software\\PePeTerminal\\Features', '/v', name, '/t', 'REG_SZ', '/d', checked ? '1' : '0', '/f'], { windowsHide: true });
+  } catch (e) { console.error('[features] 레지스트리 쓰기 실패:', name, e); }
+}
+ipcMain.handle('features:get-selection', () => {
+  if (process.platform !== 'win32') return null;
+  return {
+    vpn: readRegFeature('Vpn'),
+    microsip: readRegFeature('MicroSip'),
+    sipp: readRegFeature('Sipp'),
+    media: readRegFeature('Media'),
+    office: readRegFeature('Office'),
+  };
+});
+ipcMain.handle('features:set-selection', (_e, sel: { vpn: boolean; microsip: boolean; sipp: boolean; media: boolean; office: boolean }) => {
+  if (process.platform !== 'win32') return { ok: false };
+  writeRegFeature('Vpn', !!sel?.vpn);
+  writeRegFeature('MicroSip', !!sel?.microsip);
+  writeRegFeature('Sipp', !!sel?.sipp);
+  writeRegFeature('Media', !!sel?.media);
+  writeRegFeature('Office', !!sel?.office);
+  return { ok: true };
+});
 
 // ── OpenVPN ──
 const vpn = getVpnService();

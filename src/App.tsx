@@ -662,6 +662,11 @@ function App() {
   const [sessionOrganizeBusy, setSessionOrganizeBusy] = useState(false);
   // 자동 업데이트 상태 모달 (electron-updater)
   const [updateStatus, setUpdateStatus] = useState<any | null>(null);
+  // "재시작하여 설치" 클릭 시 뜨는 번들 선택 모달 — 자동 업데이트 중엔 설치 프로그램 자체의
+  // 인터랙티브 페이지를 못 띄우니(일부 PC에서 설치 창이 안 뜨는 문제로 확인됨), 항상 정상적으로
+  // 뜨는 이 앱 화면에서 미리 물어보고 레지스트리에 기록해두면 설치 프로그램은 그 값을 읽어서
+  // 조용히 적용만 한다.
+  const [featureSelectModal, setFeatureSelectModal] = useState<{ vpn: boolean; microsip: boolean; sipp: boolean; media: boolean; office: boolean } | null>(null);
   // 활성 터미널로 포커스 복원 (모달 닫기 / 빠른연결 닫기 / 외부 영역 클릭 후 등)
   // activeTab/selectedPanelId 는 ref 로 읽음 (선언 순서 의존 회피)
   const restoreTermFocusRef = useRef<() => void>(() => {});
@@ -7078,7 +7083,9 @@ function App() {
                   <>
                     <button onClick={close}>{tApp('update.later')}</button>
                     <button style={{ background: '#2a6', color: '#fff' }} onClick={async () => {
-                      try { await (window as any).api?.updaterQuitAndInstall?.(); } catch {}
+                      let sel: any = null;
+                      try { sel = await (window as any).api?.getFeatureSelection?.(); } catch {}
+                      setFeatureSelectModal(sel || { vpn: true, microsip: true, sipp: true, media: true, office: true });
                     }}>{tApp('update.restartNow')}</button>
                   </>
                 )}
@@ -7090,6 +7097,48 @@ function App() {
           </div>
         );
       })()}
+
+      {featureSelectModal && (
+        <div className="session-editor-backdrop" onClick={() => setFeatureSelectModal(null)}>
+          <div className="session-editor" onClick={e => e.stopPropagation()}
+            style={{ minWidth: 380, maxWidth: 520, display: 'flex', flexDirection: 'column' }}
+            tabIndex={-1}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 4px 8px', borderBottom: '1px solid #333' }}>
+              <h3 style={{ margin: 0 }}>설치할 기능 선택</h3>
+              <button onClick={() => setFeatureSelectModal(null)} title="닫기">✕</button>
+            </div>
+            <div style={{ padding: '14px 16px', color: '#ddd', fontSize: 13, lineHeight: 1.6 }}>
+              <div style={{ marginBottom: 10, color: '#aaa' }}>용량이 큰 기능만 선택 해제할 수 있습니다. 나머지는 항상 설치됩니다.</div>
+              {([
+                ['vpn', 'VPN (OpenVPN, 약 9MB)'],
+                ['microsip', 'MicroSIP (SIP 소프트폰, 약 104MB)'],
+                ['sipp', 'SIPp (SIP 부하테스트, 약 15MB)'],
+                ['media', '미디어 재생 — EVS/AMR/OPUS 코덱 (약 49MB)'],
+                ['office', '오피스 — 한글/워드/엑셀/파워포인트/FlowChart 편집기 (약 220MB)'],
+              ] as const).map(([key, label]) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!(featureSelectModal as any)[key]}
+                    onChange={e => setFeatureSelectModal(prev => prev ? { ...prev, [key]: e.target.checked } : prev)}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '8px 12px', borderTop: '1px solid #333' }}>
+              <button onClick={() => setFeatureSelectModal(null)}>취소</button>
+              <button style={{ background: '#2a6', color: '#fff' }} onClick={async () => {
+                const sel = featureSelectModal;
+                setFeatureSelectModal(null);
+                try { await (window as any).api?.setFeatureSelection?.(sel); } catch {}
+                try { await (window as any).api?.updaterQuitAndInstall?.(); } catch {}
+              }}>설치 후 재시작</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {sessionWipeDialog && (
         <div
