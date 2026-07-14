@@ -3,14 +3,21 @@
 // 그리고 로컬 코드로 재생 가능한 WAV/A-law/u-law 디코딩을 담당한다.
 //
 // #!ENC 파일 포맷 (사내 UEnc.c: aes256_enc_file_core_direct / aes256_dec_file_core_direct 와 동일):
-//   "#!ENC" + 2자리 버전(hex) + "\n"   (7바이트 헤더)
-//   "Salted__"                         (8바이트 고정 문자열)
-//   salt                                (8바이트, 파일마다 랜덤)
-//   AES-256-CBC 암호문                  (키/IV = PBKDF2-HMAC-SHA256(password, salt, 10000회, 48바이트))
+//   "#!ENC" + 2자리 버전(10진수) + "\n"   (7바이트 헤더)
+//   "Salted__"                            (8바이트 고정 문자열)
+//   salt                                   (8바이트, 파일마다 랜덤)
+//   AES-256-CBC 암호문                     (키/IV = PBKDF2-HMAC-SHA256(password+시스템키, salt, 10000회, 48바이트))
+//
+// [HDSEO 260714 방식] UEnc.c 의 uenc_derive_file_key_iv_from_password_ex() 와 동일하게, KDF 입력은
+// 평문 비밀번호 뒤에 시스템키(cryptoNative.ts, get_uenc_system_key() 와 동일)를 이어붙인 문자열이다
+// — crypto_tool.exe(사내 배치 암복호화 도구)와 파일 포맷 완전 호환을 위함. 시스템키가 코드에
+// 하드코딩되면 안 되므로, 실제 값은 별도 배포되는 네이티브 애드온(crypto-local-package)에서만
+// 얻을 수 있다 — 그 패키지가 설치되어 있지 않으면 암복호화 자체가 전부 실패한다(의도된 동작).
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { isCryptoNativeAvailable, getSystemKey } from './cryptoNative';
 
 export const UENC_MAGIC = '#!ENC';
 const UENC_SALTED_STR = 'Salted__';
@@ -66,7 +73,7 @@ export function mediaProbeFile(filePath: string): MediaProbeResult {
     const header = headerBuf.subarray(0, n);
     if (n >= 7 && header.subarray(0, 5).toString('latin1') === UENC_MAGIC) {
       const versionStr = header.subarray(5, 7).toString('latin1');
-      const version = parseInt(versionStr, 16);
+      const version = parseInt(versionStr, 10);
       if (!Number.isNaN(version)) {
         return { filePath, fileName: path.basename(filePath), isEncrypted: true, encVersion: version, codec: 'unknown' };
       }
@@ -77,16 +84,30 @@ export function mediaProbeFile(filePath: string): MediaProbeResult {
   }
 }
 
-function deriveKeyIvSalted(password: string, salt: Buffer): { key: Buffer; iv: Buffer } {
-  const buffer = crypto.pbkdf2Sync(password, salt, UENC_PBKDF2_ITER, UENC_KEY_LEN + UENC_IV_LEN, 'sha256');
+function deriveKeyIvSalted(kdfInput: string, salt: Buffer): { key: Buffer; iv: Buffer } {
+  const buffer = crypto.pbkdf2Sync(kdfInput, salt, UENC_PBKDF2_ITER, UENC_KEY_LEN + UENC_IV_LEN, 'sha256');
   return { key: buffer.subarray(0, UENC_KEY_LEN), iv: buffer.subarray(UENC_KEY_LEN, UENC_KEY_LEN + UENC_IV_LEN) };
+}
+
+function tryDecipher(ciphertext: Buffer, key: Buffer, iv: Buffer): Buffer | null {
+  try {
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch {
+    return null;
+  }
 }
 
 /**
  * #!ENC 파일을 평문 비밀번호로 복호화해 임시 파일로 풀어낸다 (aes256_dec_file_core_direct 와 동일 포맷).
+ * KDF 입력은 "비밀번호+시스템키" 조합(crypto_tool.exe 신규 포맷)을 우선 시도하고, 실패하면
+ * "비밀번호만"(UEnc.c 의 legacyKdf 경로 — 마이그레이션 이전에 만들어진 기존 파일 호환)으로 재시도한다.
  * 실패 시(버전/Salted__ 매직 불일치, 비밀번호 오류로 인한 padding 오류 등) throw.
  */
 export function mediaDecryptToTemp(filePath: string, password: string): { tempPath: string; codec: MediaCodec } {
+  if (!isCryptoNativeAvailable()) {
+    throw new Error('암호화 기능을 사용할 수 없습니다 (crypto-local-package 미설치). install-crypto-local.bat 을 실행한 뒤 앱을 재시작하세요.');
+  }
   const input = fs.readFileSync(filePath);
   if (input.length < 7 || input.subarray(0, 5).toString('latin1') !== UENC_MAGIC) {
     throw new Error('#!ENC 헤더가 없는 파일입니다.');
@@ -98,18 +119,20 @@ export function mediaDecryptToTemp(filePath: string, password: string): { tempPa
   const saltedMagic = input.subarray(headerEnd, headerEnd + UENC_SALTED_STR.length).toString('latin1');
   if (saltedMagic !== UENC_SALTED_STR) throw new Error('Salted__ 마커를 찾을 수 없습니다.');
   const saltStart = headerEnd + UENC_SALTED_STR.length;
-  const salt = input.subarray(saltStart, saltStart + UENC_SALT_LEN);
+  const salt = Buffer.from(input.subarray(saltStart, saltStart + UENC_SALT_LEN));
   if (salt.length !== UENC_SALT_LEN) throw new Error('salt 길이가 올바르지 않습니다.');
 
   const cipherStart = saltStart + UENC_SALT_LEN;
   const ciphertext = input.subarray(cipherStart);
 
-  const { key, iv } = deriveKeyIvSalted(password, Buffer.from(salt));
-  let plaintext: Buffer;
-  try {
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  } catch {
+  const systemKey = getSystemKey();
+  const combined = deriveKeyIvSalted(password + systemKey, salt);
+  let plaintext = tryDecipher(ciphertext, combined.key, combined.iv);
+  if (!plaintext) {
+    const legacy = deriveKeyIvSalted(password, salt);
+    plaintext = tryDecipher(ciphertext, legacy.key, legacy.iv);
+  }
+  if (!plaintext) {
     throw new Error('비밀번호가 올바르지 않거나 파일이 손상되었습니다.');
   }
 
@@ -120,6 +143,30 @@ export function mediaDecryptToTemp(filePath: string, password: string): { tempPa
   const tempPath = path.join(tempDir, path.basename(filePath) || 'decrypted.bin');
   fs.writeFileSync(tempPath, plaintext);
   return { tempPath, codec: probe };
+}
+
+/**
+ * 평문 데이터를 #!ENC 포맷으로 암호화해 지정 경로에 저장한다 (aes256_enc_file_core_direct 와
+ * 동일 포맷 — mediaDecryptToTemp 의 정확한 역연산). 매 호출마다 새 랜덤 salt 를 사용한다.
+ * KDF 입력은 항상 "비밀번호+시스템키" 조합(crypto_tool.exe 신규 포맷) — UEnc.c 의
+ * aes256_enc_file_with_deploy_key 와 동일하게, 새로 암호화하는 파일은 legacy KDF 를 쓰지 않는다.
+ */
+export function mediaEncryptToFile(plaintext: Buffer, password: string, outPath: string, version = 1): void {
+  if (!Number.isInteger(version) || version < 1 || version > 99) {
+    throw new Error('#!ENC 버전은 01~99 사이의 정수여야 합니다.');
+  }
+  if (!isCryptoNativeAvailable()) {
+    throw new Error('암호화 기능을 사용할 수 없습니다 (crypto-local-package 미설치). install-crypto-local.bat 을 실행한 뒤 앱을 재시작하세요.');
+  }
+  const systemKey = getSystemKey();
+  const salt = crypto.randomBytes(UENC_SALT_LEN);
+  const { key, iv } = deriveKeyIvSalted(password + systemKey, salt);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const versionStr = String(version).padStart(2, '0');
+  const header = Buffer.from(`${UENC_MAGIC}${versionStr}\n`, 'latin1');
+  const saltedMarker = Buffer.from(UENC_SALTED_STR, 'latin1');
+  fs.writeFileSync(outPath, Buffer.concat([header, saltedMarker, salt, ciphertext]));
 }
 
 // ── WAV 파싱 (표준 RIFF/WAVE, fmt 청크 실제 값 기반 — 하드코딩 오프셋 사용 안 함) ──
@@ -199,6 +246,86 @@ export function decodeUlaw(input: Buffer): Int16Array {
   const out = new Int16Array(input.length);
   for (let i = 0; i < input.length; i++) out[i] = ULAW_TABLE[input[i]];
   return out;
+}
+
+// ── G.711 A-law / u-law 인코드 ──
+// A-law: 위 buildAlawTable() 디코드 테이블 256개 값 전체를 뒤집어(값→코드) 가장 가까운 코드를
+// 이진 탐색으로 찾는다. 비트 시프트로 직접 인코딩하는 공식은 디코드 테이블의 도메인(exponent/
+// mantissa 스케일)과 정확히 일치해야 하는데 어긋나기 쉬워 왕복 오차가 커질 위험이 있다 —
+// 코드가 256개뿐이므로 역테이블 탐색이 항상 정확하고(디코드 테이블과 100% 정합) 더 간단하다.
+function buildAlawEncodeTable(): { sortedVals: Int32Array; sortedCodes: Uint8Array } {
+  const entries = Array.from({ length: 256 }, (_, code) => ({ code, val: ALAW_TABLE[code] }));
+  entries.sort((a, b) => a.val - b.val);
+  return {
+    sortedVals: Int32Array.from(entries.map((e) => e.val)),
+    sortedCodes: Uint8Array.from(entries.map((e) => e.code)),
+  };
+}
+
+const ALAW_ENCODE = buildAlawEncodeTable();
+
+function linearToAlawViaTable(sample: number): number {
+  // sortedVals 에서 sample 이상인 첫 값의 인덱스를 찾아, 그 값과 바로 앞 값 중 더 가까운 쪽 채택.
+  const { sortedVals, sortedCodes } = ALAW_ENCODE;
+  let lo = 0, hi = sortedVals.length - 1;
+  if (sample <= sortedVals[0]) return sortedCodes[0];
+  if (sample >= sortedVals[hi]) return sortedCodes[hi];
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedVals[mid] < sample) lo = mid + 1; else hi = mid;
+  }
+  const afterIdx = lo;
+  const beforeIdx = lo - 1;
+  const distAfter = Math.abs(sortedVals[afterIdx] - sample);
+  const distBefore = Math.abs(sortedVals[beforeIdx] - sample);
+  return distAfter <= distBefore ? sortedCodes[afterIdx] : sortedCodes[beforeIdx];
+}
+
+function linearToUlaw(sample: number): number {
+  const BIAS = 0x84;
+  const CLIP = 32635;
+  let sign = (sample >> 8) & 0x80;
+  if (sign !== 0) sample = -sample;
+  if (sample > CLIP) sample = CLIP;
+  sample += BIAS;
+  let exponent = 7;
+  for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; mask >>= 1) exponent--;
+  const mantissa = (sample >> (exponent + 3)) & 0x0f;
+  const ulaw = sign | (exponent << 4) | mantissa;
+  return (~ulaw) & 0xff;
+}
+
+export function encodeAlaw(pcm: Int16Array): Buffer {
+  const out = Buffer.alloc(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = linearToAlawViaTable(pcm[i]);
+  return out;
+}
+
+export function encodeUlaw(pcm: Int16Array): Buffer {
+  const out = Buffer.alloc(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = linearToUlaw(pcm[i]);
+  return out;
+}
+
+/** 16bit PCM 샘플을 표준 RIFF/WAVE 파일 바이트로 감싼다 (저장/코덱 인코딩 파이프라인 입력용). */
+export function buildWavFile(pcm: Int16Array, sampleRate: number, channels: number): Buffer {
+  const dataSize = pcm.length * 2;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'latin1');
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8, 'latin1');
+  header.write('fmt ', 12, 'latin1');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * channels * 2, 28);
+  header.writeUInt16LE(channels * 2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'latin1');
+  header.writeUInt32LE(dataSize, 40);
+  const dataBuf = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  return Buffer.concat([header, dataBuf]);
 }
 
 /** WAV/A-law/u-law/headerless-raw-PCM 을 16bit PCM 샘플로 변환 (렌더러에서 Web Audio API 로 재생). */

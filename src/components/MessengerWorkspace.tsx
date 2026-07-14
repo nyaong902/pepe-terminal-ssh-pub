@@ -20,7 +20,7 @@ type Msg = {
   id: string;
   peerId: string;
   direction: 'in' | 'out';
-  kind: 'text' | 'file' | 'worklog-share';
+  kind: 'text' | 'file' | 'sticker' | 'worklog-share';
   text?: string;
   fileName?: string;
   filePath?: string;
@@ -32,8 +32,10 @@ type Msg = {
   shareStatus?: 'pending' | 'accepted' | 'rejected';
   shareHandledAt?: number;
 };
+type EmoticonAsset = { name: string; path: string; size: number; updatedAt: number; ext: string };
+type EmoticonPack = { id: string; name: string; rootDir: string; cover: EmoticonAsset; items: EmoticonAsset[] };
 type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center'; popupHoldSec?: number };
-type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs };
+type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs; emoticonPacks?: EmoticonPack[] };
 type RemoteEntry = { name: string; isDir: boolean; size?: number; mtime?: number };
 type ConnectedSession = { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number };
 type PendingAttachment = { name: string; path: string; size: number; mime: string; previewUrl?: string };
@@ -87,8 +89,8 @@ function isImageFile(name?: string) {
 }
 function fileUrl(p?: string) {
   if (!p) return '';
-  const norm = p.replace(/\\/g, '/');
-  return 'file:///' + (norm.startsWith('/') ? norm.slice(1) : norm);
+  // Electron renderer 에서 file:// 로컬 이미지가 종종 깨져서, 앱 전용 프로토콜로 읽는다.
+  return `pepeapp://app/__local-file?path=${encodeURIComponent(p)}`;
 }
 
 // 메시지가 이모티콘만으로 구성됐으면 개수를 반환(0이면 일반 텍스트) — 카톡/디스코드처럼
@@ -195,6 +197,8 @@ export const MessengerWorkspace: React.FC<{
   const [menu, setMenu] = useState<{ x: number; y: number; peerId: string } | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiCategory, setEmojiCategory] = useState<string>('pepe');
+  const [selectedEmoticonPackId, setSelectedEmoticonPackId] = useState('');
+  const [emoticonReloading, setEmoticonReloading] = useState(false);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('messenger:recentEmojis') || '[]') || []; } catch { return []; }
   });
@@ -365,6 +369,19 @@ export const MessengerWorkspace: React.FC<{
   const popupHoldSec = Number.isFinite(Number(state.prefs.popupHoldSec)) ? Math.max(0, Number(state.prefs.popupHoldSec)) : 5;
   const selectedOnline = !!selectedPeer?.online;
   const canSend = !!selectedPeerId && selectedOnline && !hidePresence;
+  const emoticonPacks = state.emoticonPacks || [];
+  const selectedEmoticonPack = emoticonPacks.find(p => p.id === selectedEmoticonPackId) || emoticonPacks[0] || null;
+  const hasEmoticonPacks = emoticonPacks.length > 0;
+
+  useEffect(() => {
+    if (!hasEmoticonPacks) {
+      if (selectedEmoticonPackId) setSelectedEmoticonPackId('');
+      return;
+    }
+    if (!selectedEmoticonPackId || !emoticonPacks.some(p => p.id === selectedEmoticonPackId)) {
+      setSelectedEmoticonPackId(emoticonPacks[0]?.id || '');
+    }
+  }, [hasEmoticonPacks, emoticonPacks, selectedEmoticonPackId, emojiCategory]);
 
   const updatePrefs = async (patch: Prefs) => {
     setSaving(true);
@@ -391,6 +408,27 @@ export const MessengerWorkspace: React.FC<{
     if (body) {
       const res = await (window as any).api?.messengerSendMessage?.(selectedPeerId, body);
       if (!res?.success) setText(body);
+    }
+  };
+  const sendSticker = async (filePath: string) => {
+    if (!canSend || !filePath) return;
+    setEmojiOpen(false);
+    try {
+      await (window as any).api?.messengerSendStickerPaths?.(selectedPeerId, [filePath]);
+    } catch {}
+  };
+
+  const refreshEmoticonPacks = async () => {
+    if (emoticonReloading) return;
+    setEmoticonReloading(true);
+    try {
+      const res = await (window as any).api?.messengerGetState?.().catch(() => null);
+      if (res) {
+        setState(res);
+        setSelectedPeerId((cur) => (cur && Array.isArray(res.peers) && res.peers.some((p: Peer) => p.id === cur)) ? cur : (res.peers?.[0]?.id || ''));
+      }
+    } finally {
+      setEmoticonReloading(false);
     }
   };
 
@@ -866,23 +904,27 @@ export const MessengerWorkspace: React.FC<{
                     ) : null}
                   </div>
                 </div>
-              ) : m.kind === 'file' ? (
-                <div>
+              ) : m.kind === 'file' || m.kind === 'sticker' ? (
+                <div className={`messenger-file-card ${m.kind === 'sticker' ? 'sticker' : ''}`}>
                   {isImageFile(m.fileName) && m.filePath ? (
                     <img
-                      className="messenger-image-preview"
+                      className={m.kind === 'sticker' ? 'messenger-sticker-preview' : 'messenger-image-preview'}
                       src={fileUrl(m.filePath)}
                       alt={m.fileName}
                       onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}
                     />
                   ) : null}
-                  <div>
-                    <b>{t('fileLabel')}</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
-                  </div>
-                  {m.filePath && (
+                  {m.kind === 'file' && (
                     <>
-                      <div className="messenger-file-path">{m.filePath}</div>
-                      {canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('revealFile')}</button>}
+                      <div>
+                        <b>{t('fileLabel')}</b> {m.fileName} <small>{m.size ? `${(m.size / 1024).toFixed(1)}KB` : ''}</small>
+                      </div>
+                      {m.filePath && (
+                        <>
+                          <div className="messenger-file-path">{m.filePath}</div>
+                          {canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('revealFile')}</button>}
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -965,6 +1007,8 @@ export const MessengerWorkspace: React.FC<{
                 const activeCat = emojiCategory === 'recent'
                   ? { key: 'recent', icon: '🕒', label: '최근', emojis: recentEmojis }
                   : EMOJI_CATEGORIES.find(c => c.key === emojiCategory) || EMOJI_CATEGORIES[0];
+                const isPackMode = emojiCategory === 'packs';
+                const popupWidth = emojiPopupPos?.width || 300;
                 return (
                   <div
                     className="messenger-emoji-popup"
@@ -985,19 +1029,82 @@ export const MessengerWorkspace: React.FC<{
                           onClick={() => setEmojiCategory(c.key)}
                         >{c.icon}</button>
                       ))}
+                      <button
+                        className={`messenger-emoji-tab ${isPackMode ? 'active' : ''}`}
+                        title="설치형 GIF"
+                        onClick={() => {
+                          setEmojiCategory('packs');
+                          void refreshEmoticonPacks();
+                        }}
+                      >🎞️</button>
                     </div>
-                    <div
-                      className="messenger-emoji-grid"
-                      style={{ gridTemplateColumns: `repeat(${Math.max(4, Math.floor((emojiPopupPos?.width || 300) / 34))}, minmax(0, 1fr))` }}
-                    >
-                      {activeCat.emojis.length === 0 ? (
-                        <div className="messenger-emoji-empty">아직 사용한 이모티콘이 없습니다.</div>
-                      ) : (
-                        activeCat.emojis.map((em, i) => (
-                          <button key={`${em}-${i}`} className="messenger-emoji-item" onClick={() => insertEmoji(em)}>{em}</button>
-                        ))
-                      )}
-                    </div>
+                    {isPackMode ? (
+                      <>
+                        <div className="messenger-emoticon-pack-bar">
+                          <div className="messenger-emoticon-pack-strip">
+                            {emoticonPacks.map(pack => (
+                              <button
+                                key={pack.id}
+                                className={`messenger-emoticon-pack-card ${selectedEmoticonPack?.id === pack.id ? 'active' : ''}`}
+                                onClick={() => setSelectedEmoticonPackId(pack.id)}
+                                title={pack.name}
+                              >
+                                <img className="messenger-emoticon-pack-cover" src={fileUrl(pack.cover.path)} alt={pack.name} />
+                                <span className="messenger-emoticon-pack-name">{pack.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            className="messenger-emoticon-refresh-btn"
+                            onClick={() => void refreshEmoticonPacks()}
+                            title="이모티콘 목록 새로고침"
+                            disabled={emoticonReloading}
+                          >{emoticonReloading ? '새로고침 중' : '새로고침'}</button>
+                        </div>
+                        {selectedEmoticonPack ? (
+                          <>
+                            <div className="messenger-emoticon-pack-heading">
+                              <span>{selectedEmoticonPack.name}</span>
+                              <small>총 {selectedEmoticonPack.items.length + 1}개</small>
+                            </div>
+                            <div
+                              className="messenger-emoji-grid messenger-emoticon-items-grid"
+                              style={{ gridTemplateColumns: `repeat(${Math.max(3, Math.floor(popupWidth / 68))}, minmax(0, 1fr))` }}
+                            >
+                              {selectedEmoticonPack.items.length === 0 ? (
+                                <div className="messenger-emoji-empty">이 팩에는 대표이미지 외의 아이콘이 없습니다.</div>
+                              ) : (
+                                selectedEmoticonPack.items.map((item, i) => (
+                                  <button
+                                    key={`${selectedEmoticonPack.id}-${item.name}-${i}`}
+                                    className="messenger-emoji-item messenger-emoticon-item"
+                                    onClick={() => void sendSticker(item.path)}
+                                    title={item.name}
+                                  >
+                                    <img src={fileUrl(item.path)} alt={item.name} />
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="messenger-emoji-empty">설치된 GIF 팩이 없습니다. 새로고침해서 다시 읽어보세요.</div>
+                        )}
+                      </>
+                    ) : (
+                      <div
+                        className="messenger-emoji-grid"
+                        style={{ gridTemplateColumns: `repeat(${Math.max(4, Math.floor(popupWidth / 34))}, minmax(0, 1fr))` }}
+                      >
+                        {activeCat.emojis.length === 0 ? (
+                          <div className="messenger-emoji-empty">아직 사용한 이모티콘이 없습니다.</div>
+                        ) : (
+                          activeCat.emojis.map((em, i) => (
+                            <button key={`${em}-${i}`} className="messenger-emoji-item" onClick={() => insertEmoji(em)}>{em}</button>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })()}

@@ -54,7 +54,7 @@ export type SipEndpoint = {
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
 type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; mwi?: boolean; error?: string };
+type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string };
 
 type MacroStep =
   | { type: 'key'; key: string }
@@ -94,7 +94,7 @@ type CallHistEntry = {
 
 export type MicroSipView = 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log';
 
-const MAX_ENDPOINTS = 10;
+const MAX_ENDPOINTS = 100;
 const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 
 // DTMF 톤 주파수 — RFC 4733 / ITU-T Q.23 표준
@@ -203,6 +203,10 @@ export const MicroSipWorkspace: React.FC<{
   const [conversations, setConversations] = useState<Conversations>({});
   const [presence, setPresence] = useState<PresenceMap>({});
   const [ringEnabled, setRingEnabled] = useState(true);
+  // 단말별 패킷 캡처(dumpcap.exe) — 로컬 패키지(capture-local-package) 설치 시에만 사용 가능.
+  const [captureAvailable, setCaptureAvailable] = useState(false);
+  const [captureInterfaces, setCaptureInterfaces] = useState<{ id: string; name: string }[]>([]);
+  const [captureIface, setCaptureIface] = useState('');
   const loadedRef = useRef(false);
   const ringCtxRef = useRef<AudioContext | null>(null);
   const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -273,6 +277,18 @@ export const MicroSipWorkspace: React.FC<{
     enumerate();
     navigator.mediaDevices?.addEventListener?.('devicechange', enumerate);
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', enumerate);
+  }, []);
+
+  // ── 패킷 캡처(dumpcap) 가용 여부 + 인터페이스 목록 ──
+  useEffect(() => {
+    (async () => {
+      const available = await api().captureAvailable?.().catch(() => false);
+      setCaptureAvailable(!!available);
+      if (available) {
+        const r = await api().captureListInterfaces?.().catch(() => null);
+        if (r?.ok) setCaptureInterfaces(r.interfaces || []);
+      }
+    })();
   }, []);
 
   // ── SIP 엔진(사이드카) 상태 + 이벤트 구독 ──
@@ -582,6 +598,25 @@ export const MicroSipWorkspace: React.FC<{
   const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
   const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
   const toggleRecord = async (id: string) => { await api().sipRecord?.({ endpointId: id, on: !rt(id).recording }).catch(() => {}); };
+
+  // ── 단말별 패킷 캡처 토글(dumpcap.exe) ──
+  const toggleCapture = async (id: string) => {
+    if (!captureAvailable) { pushToast('패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치).'); return; }
+    if (rt(id).capturing) {
+      const r = await api().captureStop?.({ endpointId: id }).catch(() => null);
+      setRt(id, { capturing: false });
+      if (r?.filePath) pushToast(`캡처 저장됨: ${r.filePath}`);
+      return;
+    }
+    if (!captureIface) { pushToast('설정에서 캡처할 네트워크 인터페이스를 먼저 선택하세요.'); return; }
+    const pick = await api().capturePickFolder?.().catch(() => null);
+    if (!pick || pick.canceled) return;
+    const ep = endpointsRef.current.find(e => e.id === id);
+    const r = await api().captureStart?.({ endpointId: id, label: ep?.label || id, iface: captureIface, dir: pick.dir })
+      .catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
+    if (r?.ok) setRt(id, { capturing: true, captureFile: r.filePath });
+    else pushToast(`캡처 시작 실패 — ${r?.error || '알 수 없는 오류'}`);
+  };
   const redial = (epId: string, remote: string) => {
     if (!remote.trim()) return;
     if (!endpoints.some(e => e.id === epId)) return; // 단말이 삭제된 기록
@@ -755,6 +790,8 @@ export const MicroSipWorkspace: React.FC<{
                     onRegister={() => register(e)}
                     onUnregister={() => unregister(e.id)}
                     onSetDialed={(s) => setRt(e.id, { dialed: s })}
+                    onToggleCapture={() => toggleCapture(e.id)}
+                    captureAvailable={captureAvailable}
                   />
                 ))}
               </div>
@@ -789,6 +826,12 @@ export const MicroSipWorkspace: React.FC<{
                   onUnregister={() => unregister(e.id)}
                   onRemove={() => removeEndpoint(e.id)}
                   onSave={(draft) => saveEndpointDraft(e.id, draft)}
+                  capturing={!!rt(e.id).capturing}
+                  captureAvailable={captureAvailable}
+                  onToggleCapture={() => toggleCapture(e.id)}
+                  captureInterfaces={captureInterfaces}
+                  captureIface={captureIface}
+                  onCaptureIfaceChange={setCaptureIface}
                 />
               ))}
             </div>
@@ -885,7 +928,7 @@ const MicroSipHeader: React.FC<{
       <span title={`스피커 음량 ${Math.round(p.spkLevel * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
         🔈<input type="range" min={0} max={2} step={0.05} value={p.spkLevel} onChange={e => p.onVolume(p.micLevel, Number(e.target.value))} style={{ width: 64 }} />
       </span>
-      <button onClick={p.onAdd} disabled={!p.canAdd} title={p.canAdd ? '단말 추가' : '최대 10대'}
+      <button onClick={p.onAdd} disabled={!p.canAdd} title={p.canAdd ? '단말 추가' : `최대 ${MAX_ENDPOINTS}대`}
         style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--win-accent, #2b6b9b)', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: p.canAdd ? 'pointer' : 'not-allowed', opacity: p.canAdd ? 1 : 0.5 }}>
         + 단말 ({p.epCount}/{MAX_ENDPOINTS})
       </button>
@@ -1387,7 +1430,8 @@ const PhoneCard: React.FC<{
   onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void; onVoicemail: () => void;
   onRegister: () => void; onUnregister: () => void;
   onSetDialed: (s: string) => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed }) => {
+  onToggleCapture: () => void; captureAvailable: boolean;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable }) => {
   // 재다이얼용 마지막 발신 번호 — sessionStorage 로 endpoint 별 영속 (앱 재시작 시 초기화)
   const lastDialedKey = `pepe-sip-last-${ep.id}`;
   const [lastDialed, setLastDialed] = useState<string>(() => {
@@ -1433,6 +1477,11 @@ const PhoneCard: React.FC<{
         {rt.mwi && <button onClick={onVoicemail} title={ep.voicemailNumber ? '음성사서함 듣기' : '음성사서함 도착'} disabled={!ep.voicemailNumber}
           style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 12, padding: 0 }}>📨</button>}
         <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={`${ep.username || '미설정'}@${ep.server || '—'}`}>{ep.username || '미설정'}@{ep.server || '—'}</span>
+        <button onClick={onToggleCapture} disabled={!captureAvailable}
+          title={captureAvailable ? (rt.capturing ? '패킷 캡처 중지' : '패킷 캡처 시작') : '패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치)'}
+          style={{ padding: '2px 6px', fontSize: 11, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: rt.capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: rt.capturing ? '#fff' : 'var(--win-text, #e6edf3)', cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4, flexShrink: 0 }}>
+          {rt.capturing ? '⏺' : '📡'}
+        </button>
         {rt.reg === 'registered'
           ? <button onClick={onUnregister} title="이 단말 등록 해제"
               style={{ padding: '2px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', flexShrink: 0 }}>해제</button>
@@ -1517,7 +1566,10 @@ const SettingsCard: React.FC<{
   onDnd: (on: boolean) => void; onMove: (dir: -1 | 1) => void;
   onRegister: () => void; onUnregister: () => void; onRemove: () => void;
   onSave: (draft: Partial<SipEndpoint>) => Promise<{ ok: boolean; error?: string }>;
-}> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove, onSave }) => {
+  capturing: boolean; captureAvailable: boolean; onToggleCapture: () => void;
+  captureInterfaces: { id: string; name: string }[]; captureIface: string; onCaptureIfaceChange: (id: string) => void;
+}> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove, onSave,
+  capturing, captureAvailable, onToggleCapture, captureInterfaces, captureIface, onCaptureIfaceChange }) => {
   // draft — 사용자가 입력한 변경분. 저장(register 성공) 시에만 ep 에 commit.
   const [draft, setDraft] = useState<Partial<SipEndpoint>>({});
   const [saving, setSaving] = useState(false);
@@ -1564,6 +1616,11 @@ const SettingsCard: React.FC<{
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button onClick={() => onMove(-1)} disabled={idx === 0} title="위로" style={{ ...inp, cursor: idx === 0 ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.4 : 1, padding: '6px 8px' }}>▲</button>
           <button onClick={() => onMove(1)} disabled={idx >= total - 1} title="아래로" style={{ ...inp, cursor: idx >= total - 1 ? 'not-allowed' : 'pointer', opacity: idx >= total - 1 ? 0.4 : 1, padding: '6px 8px' }}>▼</button>
+          <button onClick={onToggleCapture} disabled={!captureAvailable}
+            title={captureAvailable ? (capturing ? '패킷 캡처 중지' : '패킷 캡처 시작') : '패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치)'}
+            style={{ ...inp, cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4, background: capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: capturing ? '#fff' : 'var(--win-text, #e6edf3)' }}>
+            {capturing ? '⏺ 캡처 중' : '📡 캡처'}
+          </button>
           {reg === 'registered'
             ? <button onClick={onUnregister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-surface-2, #21262d)' }}>등록 해제</button>
             : <button onClick={onRegister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700 }}>등록</button>}
@@ -1583,6 +1640,21 @@ const SettingsCard: React.FC<{
         {field('비밀번호', <input type="password" value={cur.password} onChange={e => onChangeLocal({ password: e.target.value })} style={inp} />)}
         {field('표시 이름(선택)', <input value={cur.displayName || ''} onChange={e => onChangeLocal({ displayName: e.target.value })} style={inp} />)}
         {field('아웃바운드 프록시(선택)', <input value={cur.proxy || ''} onChange={e => onChangeLocal({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
+      </Section>
+
+      {/* 📡 패킷 캡처 — 인터페이스는 워크스페이스 전체 공통 설정(단말별 아님) */}
+      <Section title="📡 패킷 캡처">
+        {!captureAvailable && (
+          <div style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+            패킷 캡처를 사용할 수 없습니다 — capture-local-package(install-capture-local.bat) 를 설치한 뒤 앱을 재시작하세요.
+          </div>
+        )}
+        {field('캡처 인터페이스 (모든 단말 공통)', (
+          <select value={captureIface} onChange={e => onCaptureIfaceChange(e.target.value)} disabled={!captureAvailable} style={inp}>
+            <option value="">인터페이스 선택...</option>
+            {captureInterfaces.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        ))}
       </Section>
 
       {/* 🎚 코덱 */}

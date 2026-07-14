@@ -7575,6 +7575,20 @@ mark.claude-search-hit.current {
   cursor: pointer;
   object-fit: contain;
 }
+.messenger-sticker-preview {
+  display: block;
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 10px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  object-fit: contain;
+}
+.messenger-file-card.sticker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
 .messenger-attachments {
   border: 1px solid rgba(166, 200, 230, 0.16);
   border-radius: 8px;
@@ -7955,6 +7969,117 @@ mark.claude-search-hit.current {
   cursor: pointer;
 }
 .messenger-emoji-item:hover {
+  background: rgba(104, 184, 228, 0.18);
+}
+.messenger-emoji-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+.messenger-emoticon-pack-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 4px;
+}
+.messenger-emoticon-pack-strip {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.messenger-emoticon-pack-strip::-webkit-scrollbar {
+  height: 4px;
+}
+.messenger-emoticon-pack-strip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+}
+.messenger-emoticon-pack-card {
+  flex: 0 0 auto;
+  width: 72px;
+  min-height: 74px;
+  border: 1px solid rgba(104, 184, 228, 0.14);
+  border-radius: 12px;
+  background: rgba(7, 16, 27, 0.82);
+  color: var(--win-text, #e8f3ff);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 6px 4px 5px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+.messenger-emoticon-pack-card:hover {
+  background: rgba(20, 34, 52, 0.95);
+  border-color: rgba(104, 184, 228, 0.32);
+}
+.messenger-emoticon-pack-card.active {
+  background: rgba(30, 61, 92, 0.96);
+  border-color: rgba(104, 184, 228, 0.55);
+  box-shadow: 0 0 0 1px rgba(104, 184, 228, 0.25) inset;
+}
+.messenger-emoticon-pack-cover {
+  width: 54px;
+  height: 42px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  flex: 0 0 auto;
+}
+.messenger-emoticon-pack-name {
+  font-size: 11px;
+  line-height: 1.1;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.messenger-emoticon-refresh-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(104, 184, 228, 0.22);
+  background: rgba(14, 24, 37, 0.9);
+  color: var(--win-text, #dcefff);
+  border-radius: 10px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.messenger-emoticon-refresh-btn:hover:not(:disabled) {
+  background: rgba(25, 40, 58, 0.96);
+}
+.messenger-emoticon-refresh-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.messenger-emoticon-pack-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 12px 6px;
+  color: var(--win-text, #dcefff);
+  font-size: 12px;
+}
+.messenger-emoticon-pack-heading small {
+  color: var(--win-text-dim, #86a0b6);
+}
+.messenger-emoticon-items-grid {
+  max-height: 230px;
+}
+.messenger-emoticon-item {
+  padding: 4px;
+  background: rgba(255,255,255,0.02);
+}
+.messenger-emoticon-item:hover {
   background: rgba(104, 184, 228, 0.18);
 }
 .messenger-compose-editor {

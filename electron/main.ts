@@ -40,12 +40,15 @@ import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, get
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar, resolveBinary as resolveSipdBinary } from './sipSidecar';
+import { getCaptureManager, isCaptureAvailable, listInterfaces as listCaptureInterfaces } from './captureSidecar';
 import { getSippSidecar, disposeSippSidecar, resolveBinary as resolveSippBinary, type SippTestOptions } from './sippSidecar';
 import { loadSippScenarios, saveSippScenario, deleteSippScenario } from './sippScenarioStore';
 import { getRecents as getOfficeRecents, addRecent as addOfficeRecent, removeRecent as removeOfficeRecent } from './officeRecentsStore';
 import { getMediaRecents, addMediaRecent, removeMediaRecent, updateMediaPosition } from './mediaRecentsStore';
-import { mediaProbeFile, mediaDecryptToTemp, decodeLocalCodec, type MediaCodec } from './mediaCodec';
-import { decodeToWav, resolveBinary as resolveGstreamerBinary } from './gstreamerSidecar';
+import { getMediaPlaylist, addMediaPlaylistItems, removeMediaPlaylistItem, reorderMediaPlaylist } from './mediaPlaylistStore';
+import { mediaProbeFile, mediaDecryptToTemp, decodeLocalCodec, encodeAlaw, encodeUlaw, parseWavHeader, mediaEncryptToFile, type MediaCodec } from './mediaCodec';
+import { isCryptoNativeAvailable } from './cryptoNative';
+import { decodeToWav, encodeFromWav, resampleWavTo8kMono, resolveBinary as resolveGstreamerBinary } from './gstreamerSidecar';
 import { probePcapFile, extractRtpStreamToTemp } from './pcapParser';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
@@ -1077,7 +1080,7 @@ const PEPE_MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
 app.whenReady().then(() => {
@@ -1087,9 +1090,22 @@ app.whenReady().then(() => {
   // 설치 후 부분 삭제가 불가능하기 때문.
   const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor']);
   protocol.handle(PEPE_PROTOCOL, async (request) => {
-    const { pathname } = new URL(request.url);
+    const requestUrl = new URL(request.url);
+    const { pathname } = requestUrl;
     const relPath = decodeURIComponent(pathname === '' ? '/' : pathname);
     const topSeg = relPath.split('/').filter(Boolean)[0];
+    if (topSeg === '__local-file') {
+      const rawPath = String(requestUrl.searchParams.get('path') || '').trim();
+      if (!rawPath) return new Response('Bad Request', { status: 400 });
+      const filePath = path.resolve(rawPath);
+      try {
+        const data = await fs.promises.readFile(filePath);
+        const mime = PEPE_MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+        return new Response(data, { status: 200, headers: { 'content-type': mime } });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+    }
     const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
     const baseDir = isExternal
       ? (app.isPackaged ? path.join(process.resourcesPath, topSeg) : path.join(process.cwd(), 'resources', topSeg))
@@ -1117,7 +1133,7 @@ app.whenReady().then(() => {
   cleanupAiMirrorTempRoots(false);
   registerPepeInstance();
   createWindow();
-  restoreStickyNotes();
+  if (loadUIPrefs().stickyNoteAutoShow !== false) restoreStickyNotes();
   installX11DisplayHook();
   void messengerStartService();
 
@@ -1272,6 +1288,7 @@ app.on('before-quit', () => {
   try { remoteShareServer.stop(); } catch {}
   try { stopAllBundledX11(); } catch {}
   try { getSipSidecar().dispose(); } catch {}
+  try { getCaptureManager().stopAll(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}
   // 매 기동 시 재생성되는 정적 임시 스크립트 정리 — %TEMP% 에 남아 있는 것 즉시 삭제.
@@ -1407,7 +1424,7 @@ type MessengerMessage = {
   id: string;
   peerId: string;
   direction: 'in' | 'out';
-  kind: 'text' | 'file' | 'worklog-share';
+  kind: 'text' | 'file' | 'sticker' | 'worklog-share';
   text?: string;
   fileName?: string;
   filePath?: string;
@@ -1420,6 +1437,8 @@ type MessengerMessage = {
   shareHandledAt?: number;
 };
 type MessengerPrefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center' | 'edge'; popupHoldSec?: number };
+type MessengerEmoticonAsset = { name: string; path: string; size: number; updatedAt: number; ext: string };
+type MessengerEmoticonPack = { id: string; name: string; rootDir: string; cover: MessengerEmoticonAsset; items: MessengerEmoticonAsset[] };
 
 const MSG_DISCOVERY_PORT = 39455;
 // Presence: a peer is "online" while we've heard from it within this window.
@@ -1435,6 +1454,73 @@ let messengerPort = 0;
 let messengerPrefs: MessengerPrefs = {};
 const messengerPeers = new Map<string, MessengerPeer>();
 let messengerMessages: MessengerMessage[] = [];
+const MESSENGER_EMOTICON_EXTS = new Set(['.gif', '.png', '.jpg', '.jpeg', '.webp']);
+
+function messengerEmoticonRoots(): string[] {
+  const roots = new Set<string>();
+  const override = String(process.env.PEPE_EMOTICON_ROOT || '').trim();
+  if (override) roots.add(path.resolve(override));
+  if (app.isPackaged) roots.add(path.join(path.dirname(app.getPath('exe')), 'messenger-emoticons'));
+  roots.add(path.join(app.getPath('userData'), 'messenger-emoticons'));
+  return [...roots];
+}
+
+function messengerReadEmoticonAssets(dir: string): MessengerEmoticonAsset[] {
+  try {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter(entry => entry.isFile())
+      .map(entry => {
+        const filePath = path.join(dir, entry.name);
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!MESSENGER_EMOTICON_EXTS.has(ext)) return null;
+        const st = fs.statSync(filePath);
+        return {
+          name: entry.name,
+          path: filePath,
+          size: st.size,
+          updatedAt: st.mtimeMs,
+          ext,
+        } as MessengerEmoticonAsset;
+      })
+      .filter((v): v is MessengerEmoticonAsset => !!v)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  } catch {
+    return [];
+  }
+}
+
+function messengerReadEmoticonPacks(): MessengerEmoticonPack[] {
+  const packs: MessengerEmoticonPack[] = [];
+  const seen = new Set<string>();
+  for (const rootDir of messengerEmoticonRoots()) {
+    try {
+      if (!fs.existsSync(rootDir) || !fs.statSync(rootDir).isDirectory()) continue;
+      const entries = fs.readdirSync(rootDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      for (const entry of entries) {
+        const packName = entry.name.trim();
+        if (!packName) continue;
+        const key = packName.toLowerCase();
+        if (seen.has(key)) continue;
+        const packDir = path.join(rootDir, entry.name);
+        const assets = messengerReadEmoticonAssets(packDir);
+        if (assets.length === 0) continue;
+        const cover = assets[0];
+        packs.push({
+          id: `${rootDir}::${entry.name}`,
+          name: packName,
+          rootDir: packDir,
+          cover,
+          items: assets.slice(1),
+        });
+        seen.add(key);
+      }
+    } catch {}
+  }
+  return packs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+}
 
 function messengerDir() {
   const dir = path.join(app.getPath('userData'), 'messenger');
@@ -1524,7 +1610,13 @@ function messengerState() {
   const peers = [...messengerPeers.values()]
     .map(p => ({ ...p, online: now - p.lastSeen < MSG_ONLINE_WINDOW_MS }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return { self: { id: messengerId, name: messengerPrefs.displayName || os.userInfo().username || 'PePe', port: messengerPort, hidden: !!messengerPrefs.hidePresence }, peers, messages: messengerMessages, prefs: messengerPrefs };
+  return {
+    self: { id: messengerId, name: messengerPrefs.displayName || os.userInfo().username || 'PePe', port: messengerPort, hidden: !!messengerPrefs.hidePresence },
+    peers,
+    messages: messengerMessages,
+    prefs: messengerPrefs,
+    emoticonPacks: messengerReadEmoticonPacks(),
+  };
 }
 function messengerRemember(msg: MessengerMessage) {
   messengerMessages.push(msg);
@@ -1708,13 +1800,13 @@ function messengerWritePeer(peer: MessengerPeer, payload: any): Promise<void> {
     socket.on('error', reject);
   });
 }
-async function messengerSendFileBuffer(peer: MessengerPeer, fileName: string, filePath: string, data: Buffer) {
+async function messengerSendFileBuffer(peer: MessengerPeer, fileName: string, filePath: string, data: Buffer, kind: 'file' | 'sticker' = 'file') {
   if (data.length > 25 * 1024 * 1024) throw new Error('25MB 이하 파일만 전송 가능합니다');
   const msg: MessengerMessage = {
     id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     peerId: peer.id,
     direction: 'out',
-    kind: 'file',
+    kind,
     fileName,
     filePath,
     size: data.length,
@@ -1723,6 +1815,7 @@ async function messengerSendFileBuffer(peer: MessengerPeer, fileName: string, fi
   await messengerWritePeer(peer, {
     app: 'pepe-terminal-ssh',
     type: 'file',
+    kind,
     fromId: messengerId,
     fromName: messengerPrefs.displayName || os.userInfo().username || 'PePe',
     fromPort: messengerPort,
@@ -1733,6 +1826,9 @@ async function messengerSendFileBuffer(peer: MessengerPeer, fileName: string, fi
     ts: msg.ts,
   });
   messengerRemember(msg);
+}
+async function messengerSendStickerBuffer(peer: MessengerPeer, fileName: string, filePath: string, data: Buffer) {
+  return messengerSendFileBuffer(peer, fileName, filePath, data, 'sticker');
 }
 async function messengerSendWorklogShare(peer: MessengerPeer, share: WorklogSharePayload) {
   const msg: MessengerMessage = {
@@ -1793,7 +1889,8 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
     const data = Buffer.from(String(payload.dataBase64 || ''), 'base64');
     const savePath = path.join(messengerDownloadsDir(), `${Date.now()}-${fileName}`);
     fs.writeFileSync(savePath, data);
-    messengerRemember({ id: payload.messageId || `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind: 'file', fileName, filePath: savePath, size: data.length, ts: Number(payload.ts) || Date.now() });
+    const kind = payload.kind === 'sticker' ? 'sticker' : 'file';
+    messengerRemember({ id: payload.messageId || `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind, fileName, filePath: savePath, size: data.length, ts: Number(payload.ts) || Date.now() });
   } else if (payload.type === 'read') {
     // 상대가 내가 보낸 메시지를 읽었다는 확인 — 그 메시지엔 더 이상 회수(recall) 못 하게 표시.
     const msg = messengerMessages.find(m => m.id === payload.messageId && m.peerId === peerId && m.direction === 'out');
@@ -1809,7 +1906,7 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
       msg.recalled = true;
       msg.text = undefined;
       // 받은 파일은 우리가 messengerDownloadsDir() 에 직접 저장한 사본이라 안전하게 삭제 가능.
-      if (msg.kind === 'file' && msg.filePath) {
+      if ((msg.kind === 'file' || msg.kind === 'sticker') && msg.filePath) {
         try { if (fs.existsSync(msg.filePath)) fs.unlinkSync(msg.filePath); } catch {}
       }
       msg.filePath = undefined;
@@ -2014,6 +2111,36 @@ ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, filePaths }: { 
       }
     }
     return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('messenger:send-sticker-paths', async (_e, { peerId, filePaths }: { peerId: string; filePaths: string[] }) => {
+  if (messengerPrefs.hidePresence) return { success: false, error: 'presence hidden' };
+  const peer = messengerPeers.get(peerId);
+  if (!peer) return { success: false, error: 'peer not found' };
+  if (Date.now() - peer.lastSeen >= MSG_ONLINE_WINDOW_MS) return { success: false, error: 'peer is offline' };
+  const paths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
+  if (paths.length === 0) return { success: false, error: 'no files' };
+  try {
+    for (const filePath of paths) {
+      if (!fs.existsSync(filePath)) continue;
+      const st = fs.statSync(filePath);
+      if (!st.isFile()) continue;
+      await messengerSendStickerBuffer(peer, path.basename(filePath), filePath, fs.readFileSync(filePath));
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('messenger:open-emoticon-folder', async () => {
+  try {
+    const roots = messengerEmoticonRoots();
+    const primary = roots[0] || path.join(app.getPath('userData'), 'messenger-emoticons');
+    try { fs.mkdirSync(primary, { recursive: true }); } catch {}
+    await shell.openPath(primary);
+    return { success: true, path: primary };
   } catch (err: any) {
     return { success: false, error: String(err?.message || err) };
   }
@@ -3126,6 +3253,7 @@ ipcMain.handle('media:probe-file', (_e, { filePath }: { filePath: string }) => {
     return { error: String(e?.message || e) };
   }
 });
+ipcMain.handle('media:crypto-available', () => isCryptoNativeAvailable());
 ipcMain.handle('media:decrypt', (_e, { filePath, password }: { filePath: string; password: string }) => {
   try {
     return mediaDecryptToTemp(filePath, password);
@@ -3137,6 +3265,10 @@ ipcMain.handle('media-recents:get', () => getMediaRecents());
 ipcMain.handle('media-recents:add', (_e, { doc }: { doc: { filePath: string; fileName: string; durationSec?: number; codec?: string } }) => addMediaRecent(doc));
 ipcMain.handle('media-recents:remove', (_e, { filePath }: { filePath: string }) => removeMediaRecent(filePath));
 ipcMain.handle('media-recents:set-position', (_e, { filePath, positionSec }: { filePath: string; positionSec: number }) => updateMediaPosition(filePath, positionSec));
+ipcMain.handle('media-playlist:get', () => getMediaPlaylist());
+ipcMain.handle('media-playlist:add', (_e, { items }: { items: { filePath: string; fileName: string; codec?: string }[] }) => addMediaPlaylistItems(items));
+ipcMain.handle('media-playlist:remove', (_e, { filePath }: { filePath: string }) => removeMediaPlaylistItem(filePath));
+ipcMain.handle('media-playlist:reorder', (_e, { orderedFilePaths }: { orderedFilePaths: string[] }) => reorderMediaPlaylist(orderedFilePaths));
 // WAV/A-law/u-law/raw 는 GStreamer 없이 로컬 코드로 직접 디코딩 — 16bit PCM 을 렌더러로 넘겨 Web Audio API 로 재생.
 ipcMain.handle('media:decode-local', (_e, { filePath, codec }: { filePath: string; codec: MediaCodec }) => {
   try {
@@ -3188,6 +3320,125 @@ ipcMain.handle('pcap:extract-stream', (_e, { filePath, streamId, forcedCodec, ev
   } catch (e: any) {
     return { error: String(e?.message || e) };
   }
+});
+
+// ── 미디어 편집기 — "모든 코덱으로 저장" / "암호화 코덱 저장" ──
+// 렌더러에서 audioBufferToWav() 로 만든 WAV 바이트를 받아, 원본 파일의 코덱을 제외한 나머지
+// 6개 코덱(alaw/ulaw/opus/evs/amrwb/amrnb, wav 자체 제외 시 7개 중 원본 제외분)으로 각각
+// 인코딩해 지정 폴더에 저장한다. alaw/ulaw/wav 는 GStreamer 없이 로컬 코드로 바로 인코딩하고
+// (mediaCodec.ts), amrnb/amrwb/evs/opus 는 GStreamer 사이드카로 인코딩한다(gstreamerSidecar.ts).
+const ALL_MEDIA_CODECS: MediaCodec[] = ['wav', 'alaw', 'ulaw', 'amrnb', 'amrwb', 'evs', 'opus'];
+const MEDIA_CODEC_EXT: Record<MediaCodec, string> = {
+  wav: '.wav', alaw: '.alaw', ulaw: '.ulaw', amrnb: '.amrnb', amrwb: '.amrwb', evs: '.evs', opus: '.opus',
+  raw: '.raw', video: '', unknown: '',
+};
+
+/** WAV 바이트(16bit PCM)를 지정 코덱의 최종 파일 바이트(매직 헤더/컨테이너 포함)로 인코딩한다. */
+async function encodeWavToCodecBytes(wavBuf: Buffer, codec: MediaCodec): Promise<Buffer> {
+  if (codec === 'wav') return wavBuf;
+
+  if (codec === 'alaw' || codec === 'ulaw') {
+    // G.711(A-law/u-law)은 항상 8kHz 모노 입력이 필요 — 편집된 오디오가 다른 샘플레이트/채널
+    // (예: EVS/AMR-WB 원본의 16kHz)를 갖고 있으면 GStreamer 로 8kHz 모노로 리샘플링한 뒤 인코딩한다.
+    let { pcm, sampleRate, channels } = decodeLocalCodec_fromBuffer(wavBuf);
+    if (sampleRate !== 8000 || channels !== 1) {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pepe-media-resample-'));
+      const tempWavPath = path.join(tempDir, 'input.wav');
+      fs.writeFileSync(tempWavPath, wavBuf);
+      try {
+        const result = await resampleWavTo8kMono(tempWavPath);
+        if ('error' in result) throw new Error(result.error);
+        const resampledBuf = fs.readFileSync(result.outPath);
+        try { fs.unlinkSync(result.outPath); } catch {}
+        ({ pcm, sampleRate, channels } = decodeLocalCodec_fromBuffer(resampledBuf));
+      } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+      }
+    }
+    return codec === 'alaw' ? encodeAlaw(pcm) : encodeUlaw(pcm);
+  }
+
+  // amrnb/amrwb/evs/opus — GStreamer 사이드카 인코딩. 사이드카는 파일 경로 기반이라 WAV 를
+  // 임시 파일로 먼저 써야 한다(리샘플/모노 변환은 GStreamer 파이프라인이 audioresample 로 처리).
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pepe-media-enc-'));
+  const tempWavPath = path.join(tempDir, 'input.wav');
+  fs.writeFileSync(tempWavPath, wavBuf);
+  try {
+    const kind = codec as 'amrnb' | 'amrwb' | 'evs' | 'opus';
+    const result = await encodeFromWav(tempWavPath, kind);
+    if ('error' in result) throw new Error(result.error);
+    const rawBuf = fs.readFileSync(result.outPath);
+    try { fs.unlinkSync(result.outPath); } catch {}
+    if (kind === 'opus') return rawBuf; // oggmux 가 이미 완결된 Ogg 컨테이너를 만들어줌
+    const magic = kind === 'amrnb' ? '#!AMR\n' : kind === 'amrwb' ? '#!AMR-WB\n' : '#!EVS_MC1.0\n';
+    return Buffer.concat([Buffer.from(magic, 'latin1'), rawBuf]);
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// decodeLocalCodec 은 파일 경로를 받으므로, 이미 메모리에 있는 WAV 바이트를 임시파일 없이
+// 바로 파싱하기 위한 얇은 래퍼 (WAV 헤더 파싱 자체는 mediaCodec.ts 의 parseWavHeader 재사용).
+function decodeLocalCodec_fromBuffer(wavBuf: Buffer): { pcm: Int16Array; sampleRate: number; channels: number } {
+  const info = parseWavHeader(wavBuf);
+  const dataBuf = wavBuf.subarray(info.dataOffset, info.dataOffset + info.dataLength);
+  if (info.bitsPerSample !== 16) throw new Error(`지원하지 않는 WAV 비트: ${info.bitsPerSample}`);
+  const pcm = new Int16Array(dataBuf.buffer, dataBuf.byteOffset, dataBuf.length / 2);
+  return { pcm: pcm.slice(), sampleRate: info.sampleRate, channels: info.channels || 1 };
+}
+
+ipcMain.handle('media:save-all-codecs', async (_e, args: { wavData: ArrayBuffer; baseFileName: string; excludeCodec: MediaCodec }) => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  const pick = await dialog.showOpenDialog(mainWindow, {
+    title: '저장할 폴더 선택',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (pick.canceled || pick.filePaths.length === 0) return { success: false, canceled: true };
+  const targetDir = pick.filePaths[0];
+
+  const wavBuf = Buffer.from(args.wavData);
+  const codecs = ALL_MEDIA_CODECS.filter((c) => c !== args.excludeCodec);
+  const saved: string[] = [];
+  const failed: { codec: MediaCodec; error: string }[] = [];
+  for (const codec of codecs) {
+    try {
+      const bytes = await encodeWavToCodecBytes(wavBuf, codec);
+      const outPath = path.join(targetDir, `${args.baseFileName}${MEDIA_CODEC_EXT[codec]}`);
+      fs.writeFileSync(outPath, bytes);
+      saved.push(outPath);
+    } catch (e: any) {
+      failed.push({ codec, error: String(e?.message || e) });
+    }
+  }
+  return { success: true, targetDir, saved, failed };
+});
+
+ipcMain.handle('media:save-encrypted-all-codecs', async (_e, args: { wavData: ArrayBuffer; baseFileName: string; password: string; version: number }) => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  if (!Number.isInteger(args.version) || args.version < 1 || args.version > 99) {
+    return { success: false, error: '#!ENC 버전은 01~99 사이의 정수여야 합니다.' };
+  }
+  const pick = await dialog.showOpenDialog(mainWindow, {
+    title: '저장할 폴더 선택',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (pick.canceled || pick.filePaths.length === 0) return { success: false, canceled: true };
+  const targetDir = pick.filePaths[0];
+
+  const wavBuf = Buffer.from(args.wavData);
+  const saved: string[] = [];
+  const failed: { codec: MediaCodec; error: string }[] = [];
+  for (const codec of ALL_MEDIA_CODECS) {
+    try {
+      const bytes = await encodeWavToCodecBytes(wavBuf, codec);
+      const outPath = path.join(targetDir, `${args.baseFileName}${MEDIA_CODEC_EXT[codec]}`);
+      mediaEncryptToFile(bytes, args.password, outPath, args.version);
+      saved.push(outPath);
+    } catch (e: any) {
+      failed.push({ codec, error: String(e?.message || e) });
+    }
+  }
+  return { success: true, targetDir, saved, failed };
 });
 
 ipcMain.handle('sessions:export', async () => {
@@ -6515,6 +6766,27 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:im', async (_e, args: { endpointId: string; target: string; text: string }) => sip.sendIm(args?.endpointId, args?.target, args?.text));
   ipcMain.handle('sip:presence', (_e, args: { endpointId: string; online: boolean }) => { sip.setPresence(args?.endpointId, !!args?.online); return { ok: true }; });
   ipcMain.handle('sip:subscribe', (_e, args: { endpointId: string; target: string; subscribe: boolean }) => { sip.subscribePresence(args?.endpointId, args?.target, !!args?.subscribe); return { ok: true }; });
+}
+
+// ── MicroSIP 단말별 패킷 캡처 (dumpcap.exe, 로컬 설치 필요) ──
+{
+  const capture = getCaptureManager();
+  ipcMain.handle('capture:available', () => isCaptureAvailable());
+  ipcMain.handle('capture:list-interfaces', () => listCaptureInterfaces());
+  ipcMain.handle('capture:pick-folder', async () => {
+    if (!mainWindow) return { canceled: true };
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    return { canceled: false, dir: result.filePaths[0] };
+  });
+  ipcMain.handle('capture:start', (_e, args: { endpointId: string; label: string; iface: string; dir: string }) => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeLabel = String(args?.label || args?.endpointId || 'endpoint').replace(/[\\/:*?"<>|]/g, '_');
+    const outPath = path.join(args?.dir || '', `${safeLabel}_${stamp}.pcap`);
+    return capture.start(args?.endpointId, args?.iface, outPath);
+  });
+  ipcMain.handle('capture:stop', (_e, args: { endpointId: string }) => capture.stop(args?.endpointId));
+  ipcMain.handle('capture:status', (_e, args: { endpointId: string }) => capture.status(args?.endpointId));
 }
 
 // ── SIPp 워크스페이스 (네이티브 SIPp 부하 발생기) 제어 ──

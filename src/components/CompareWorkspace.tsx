@@ -124,6 +124,16 @@ const defaultExpandedFromRows = (rows: DiffRow[]): Set<string> => {
     if (!row.isDir) continue;
     if (splitRelPath(row.relPath).length <= 1) out.add(row.relPath);
   }
+  // 최상위(depth-1) 폴더만 펼치면, 그 안의 중첩 폴더(예: lib/UEnc)는 접힌 채로 남아
+  // 실제로 달라진 파일(예: lib/UEnc/UEnc.c)이 화면에 렌더링조차 안 되는 문제가 있었다
+  // (상위 폴더 행 자체는 자식의 diff 상태를 전달받아 "변경됨"으로 표시되지만, 그 안의
+  // 진짜 변경 파일은 펼치지 않으면 보이지 않음). 그래서 same 이 아닌 모든 항목의
+  // 조상 경로를 전부 펼쳐서, 몇 단계든 중첩된 변경 파일이 스캔 직후 바로 보이게 한다.
+  for (const row of rows) {
+    if (row.status === 'same') continue;
+    if (row.isDir) out.add(row.relPath);
+    for (const ancestor of ancestorPaths(row.relPath)) out.add(ancestor);
+  }
   return out;
 };
 const pruneExpanded = (expanded: Set<string>, rows: DiffRow[]): Set<string> => {

@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld('api', {
   messengerSendFiles: (peerId: string) => ipcRenderer.invoke('messenger:send-files', { peerId }),
   messengerPickFiles: () => ipcRenderer.invoke('messenger:pick-files'),
   messengerSendFilePaths: (peerId: string, filePaths: string[]) => ipcRenderer.invoke('messenger:send-file-paths', { peerId, filePaths }),
+  messengerSendStickerPaths: (peerId: string, filePaths: string[]) => ipcRenderer.invoke('messenger:send-sticker-paths', { peerId, filePaths }),
+  messengerOpenEmoticonFolder: () => ipcRenderer.invoke('messenger:open-emoticon-folder'),
   messengerSendRemoteFiles: (peerId: string, connId: string, remotePaths: string[]) => ipcRenderer.invoke('messenger:send-remote-files', { peerId, connId, remotePaths }),
   messengerScanRange: (prefix?: string) => ipcRenderer.invoke('messenger:scan-range', { prefix }),
   messengerDeleteConversation: (peerId: string) => ipcRenderer.invoke('messenger:delete-conversation', { peerId }),
@@ -201,6 +203,14 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('sip:event', handler);
   },
 
+  // MicroSIP 단말별 패킷 캡처 (dumpcap.exe, 로컬 설치 필요 — capture-local-package)
+  captureAvailable: () => ipcRenderer.invoke('capture:available'),
+  captureListInterfaces: () => ipcRenderer.invoke('capture:list-interfaces'),
+  capturePickFolder: () => ipcRenderer.invoke('capture:pick-folder'),
+  captureStart: (args: { endpointId: string; label: string; iface: string; dir: string }) => ipcRenderer.invoke('capture:start', args),
+  captureStop: (args: { endpointId: string }) => ipcRenderer.invoke('capture:stop', args),
+  captureStatus: (args: { endpointId: string }) => ipcRenderer.invoke('capture:status', args),
+
   // SIPp 워크스페이스 — 네이티브 SIPp 부하 발생기 제어. id 는 탭마다 독립된 인스턴스를
   // 구분하는 워크스페이스 탭 id (여러 SIPp 탭을 동시에 서로 다른 대상으로 돌릴 수 있음).
   sippStatus: (args: { id: string }) => ipcRenderer.invoke('sipp:status', args),
@@ -229,6 +239,7 @@ contextBridge.exposeInMainWorld('api', {
   // 미디어 플레이어 — 파일 열기/판별, #!ENC 복호화, 로컬 코덱(wav/alaw/ulaw/raw) 디코딩, 최근 재생 목록.
   mediaOpenFile: () => ipcRenderer.invoke('media:open-file'),
   mediaProbeFile: (filePath: string) => ipcRenderer.invoke('media:probe-file', { filePath }),
+  mediaCryptoAvailable: () => ipcRenderer.invoke('media:crypto-available'),
   mediaDecrypt: (filePath: string, password: string) => ipcRenderer.invoke('media:decrypt', { filePath, password }),
   mediaDecodeLocal: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-local', { filePath, codec }),
   mediaDecodeGstreamer: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-gstreamer', { filePath, codec }),
@@ -238,8 +249,14 @@ contextBridge.exposeInMainWorld('api', {
   mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
   mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),
   mediaRecentsSetPosition: (filePath: string, positionSec: number) => ipcRenderer.invoke('media-recents:set-position', { filePath, positionSec }),
+  mediaPlaylistGet: () => ipcRenderer.invoke('media-playlist:get'),
+  mediaPlaylistAdd: (items: { filePath: string; fileName: string; codec?: string }[]) => ipcRenderer.invoke('media-playlist:add', { items }),
+  mediaPlaylistRemove: (filePath: string) => ipcRenderer.invoke('media-playlist:remove', { filePath }),
+  mediaPlaylistReorder: (orderedFilePaths: string[]) => ipcRenderer.invoke('media-playlist:reorder', { orderedFilePaths }),
   pcapProbeFile: (filePath: string) => ipcRenderer.invoke('pcap:probe-file', { filePath }),
   pcapExtractStream: (filePath: string, streamId: string, forcedCodec?: string, evsFormat?: string) => ipcRenderer.invoke('pcap:extract-stream', { filePath, streamId, forcedCodec, evsFormat }),
+  mediaSaveAllCodecs: (args: { wavData: ArrayBuffer; baseFileName: string; excludeCodec: string }) => ipcRenderer.invoke('media:save-all-codecs', args),
+  mediaSaveEncryptedAllCodecs: (args: { wavData: ArrayBuffer; baseFileName: string; password: string; version: number }) => ipcRenderer.invoke('media:save-encrypted-all-codecs', args),
 
   onBrowserWebviewNewWindow: (cb: (p: { guestId: number; url: string }) => void) => {
     const handler = (_: any, p: any) => cb(p);

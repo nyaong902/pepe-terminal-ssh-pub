@@ -100,7 +100,9 @@ function buildDecodePipeline(kind: MediaCodecKind, inPath: string, outPath: stri
   }
 }
 
-export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ wavPath: string } | { error: string }> {
+// gst-launch 를 spawn 해서 종료를 기다리고, 결과 파일이 실제로 만들어졌는지까지 확인한다
+// (디코드/인코드 둘 다 "파이프라인 실행 → 출력 파일 검증"이라는 동일한 모양이라 공용 헬퍼로 뺐다).
+function runGstPipeline(args: string[], outPath: string, minOutSize: number): Promise<{ ok: true } | { error: string }> {
   return new Promise((resolve) => {
     const bin = resolveBinary();
     const root = sidecarRoot();
@@ -108,21 +110,7 @@ export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ w
       resolve({ error: 'GStreamer 사이드카 바이너리를 찾을 수 없습니다. gstreamer-sidecar/bin/<plat>/ 에 배치하거나 PEPE_GST_ROOT 환경변수로 경로를 지정하세요.' });
       return;
     }
-    if (kind === 'evs' && !isEvsPluginAvailable(root)) {
-      resolve({ error: EVS_UNAVAILABLE_MSG });
-      return;
-    }
-
-    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const outPath = path.join(os.tmpdir(), `pepe-gst-dec-${runId}.wav`);
-    // 레지스트리를 고정 파일로 재사용하면, 캐시된 바이너리 레지스트리가 우리 커스텀
-    // ipgevs 플러그인(자체 컴파일, brew 패키지가 아님)을 두 번째 실행부터 잘못 역직렬화해
-    // "gst_element_register: assertion 'g_type_is_a (type, GST_TYPE_ELEMENT)' failed" 로
-    // 등록 자체가 깨지는 문제가 있었다 — 실행마다 새 레지스트리 경로를 써서 매번 플러그인을
-    // 다시 스캔하게 한다(파일 1개 디코딩용 단발 프로세스라 캐싱 이점도 없다).
-    const registryPath = path.join(os.tmpdir(), `pepe-gst-registry-${runId}.bin`);
-    const args = buildDecodePipeline(kind, filePath, outPath);
-
+    const registryPath = path.join(os.tmpdir(), `pepe-gst-registry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bin`);
     const proc = spawn(bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -133,17 +121,91 @@ export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ w
         GST_REGISTRY: registryPath,
       },
     });
-
     let stderrBuf = '';
     proc.stderr.on('data', (d) => { stderrBuf += d.toString('utf-8'); });
     proc.on('error', (e) => resolve({ error: `GStreamer 실행 실패: ${e?.message || e}` }));
     proc.on('exit', (code) => {
       try { fs.unlinkSync(registryPath); } catch {}
-      if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 44) {
-        resolve({ wavPath: outPath });
+      if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > minOutSize) {
+        resolve({ ok: true });
       } else {
-        resolve({ error: `디코딩 실패 (exit ${code}): ${stderrBuf.slice(-500) || '알 수 없는 오류'}` });
+        resolve({ error: `GStreamer 처리 실패 (exit ${code}): ${stderrBuf.slice(-500) || '알 수 없는 오류'}` });
       }
     });
+  });
+}
+
+export function decodeToWav(filePath: string, kind: MediaCodecKind): Promise<{ wavPath: string } | { error: string }> {
+  return new Promise(async (resolve) => {
+    const root = sidecarRoot();
+    if (root && kind === 'evs' && !isEvsPluginAvailable(root)) {
+      resolve({ error: EVS_UNAVAILABLE_MSG });
+      return;
+    }
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outPath = path.join(os.tmpdir(), `pepe-gst-dec-${runId}.wav`);
+    const args = buildDecodePipeline(kind, filePath, outPath);
+    const result = await runGstPipeline(args, outPath, 44);
+    if ('error' in result) resolve({ error: result.error });
+    else resolve({ wavPath: outPath });
+  });
+}
+
+// ── 인코딩 — 미디어 편집기의 "모든 코덱으로 저장" 기능용. WAV 입력 → 각 코덱 출력. ──
+// EVS/AMR-NB/AMR-WB 는 통화 음성 코덱이라 8kHz(NB)/16kHz(WB/EVS) 모노가 표준 입력이므로
+// audioresample+audioconvert 로 맞춰준다. OPUS 는 48kHz 가 권장 샘플레이트.
+function buildEncodePipeline(kind: MediaCodecKind, inPath: string, outPath: string): string[] {
+  const src = ['filesrc', `location=${toGstPath(inPath)}`, '!', 'wavparse', '!', 'audioconvert', '!', 'audioresample'];
+  const sinkTo = (loc: string) => ['filesink', `location=${loc}`];
+  switch (kind) {
+    case 'amrnb':
+      return [...src, '!', 'audio/x-raw,rate=8000,channels=1', '!', 'amrnbenc', '!', ...sinkTo(toGstPath(outPath))];
+    case 'amrwb':
+      return [...src, '!', 'audio/x-raw,rate=16000,channels=1', '!', 'voamrwbenc', '!', ...sinkTo(toGstPath(outPath))];
+    case 'evs':
+      return [...src, '!', 'audio/x-raw,rate=16000,channels=1', '!', 'ipgevsenc', '!', ...sinkTo(toGstPath(outPath))];
+    case 'opus':
+      return [...src, '!', 'audio/x-raw,rate=48000', '!', 'opusenc', '!', 'oggmux', '!', ...sinkTo(toGstPath(outPath))];
+  }
+}
+
+/**
+ * WAV 파일을 지정 코덱의 raw 인코드 바이트로 변환한다 (저장 포맷 헤더/매직은 호출부에서 씌운다
+ * — AMR-NB/AMR-WB 인코더 raw 출력은 이미 [ToC][frame] storage 구조와 동일하고, OPUS 는
+ * oggmux 를 거쳐 완결된 Ogg 컨테이너를 그대로 파일로 쓴다).
+ */
+export function encodeFromWav(wavPath: string, kind: MediaCodecKind): Promise<{ outPath: string } | { error: string }> {
+  return new Promise(async (resolve) => {
+    const root = sidecarRoot();
+    if (root && kind === 'evs' && !isEvsPluginAvailable(root)) {
+      resolve({ error: EVS_UNAVAILABLE_MSG });
+      return;
+    }
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ext = kind === 'opus' ? '.ogg' : '.raw';
+    const outPath = path.join(os.tmpdir(), `pepe-gst-enc-${runId}${ext}`);
+    const args = buildEncodePipeline(kind, wavPath, outPath);
+    const result = await runGstPipeline(args, outPath, 0);
+    if ('error' in result) resolve({ error: result.error });
+    else resolve({ outPath });
+  });
+}
+
+/**
+ * 임의의 WAV 파일을 8kHz 모노 16bit WAV 로 리샘플링한다 — A-law/u-law(G.711) 저장은 항상
+ * 8kHz 모노 입력을 요구하는데, 편집된 오디오는 원본 코덱의 샘플레이트(예: EVS/AMR-WB 의
+ * 16kHz)를 그대로 갖고 있을 수 있어 로컬 인코더에 넘기기 전에 GStreamer 로 리샘플한다.
+ */
+export function resampleWavTo8kMono(wavPath: string): Promise<{ outPath: string } | { error: string }> {
+  return new Promise(async (resolve) => {
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outPath = path.join(os.tmpdir(), `pepe-gst-resample-${runId}.wav`);
+    const args = [
+      'filesrc', `location=${toGstPath(wavPath)}`, '!', 'wavparse', '!', 'audioconvert', '!', 'audioresample',
+      '!', 'audio/x-raw,rate=8000,channels=1', '!', 'wavenc', '!', 'filesink', `location=${toGstPath(outPath)}`,
+    ];
+    const result = await runGstPipeline(args, outPath, 44);
+    if ('error' in result) resolve({ error: result.error });
+    else resolve({ outPath });
   });
 }

@@ -417,6 +417,18 @@ function App() {
   const [stickyNoteSidebarOpen, setStickyNoteSidebarOpen] = useState(false);
   const [stickyNoteSearch, setStickyNoteSearch] = useState('');
   const [stickyNoteMenuOpenId, setStickyNoteMenuOpenId] = useState<string | null>(null);
+  // 기동 시 모든 스티커 메모를 자동으로 띄울지 여부 — ui-prefs(config.json) 에 저장되어
+  // 다음 실행 시 electron/main.ts 의 restoreStickyNotes() 호출 여부를 결정한다.
+  const [stickyNoteAutoShow, setStickyNoteAutoShowState] = useState(true);
+  useEffect(() => {
+    (window as any).api?.getUIPrefs?.().then((prefs: any) => {
+      if (prefs && typeof prefs.stickyNoteAutoShow === 'boolean') setStickyNoteAutoShowState(prefs.stickyNoteAutoShow);
+    }).catch(() => {});
+  }, []);
+  const setStickyNoteAutoShow = (next: boolean) => {
+    setStickyNoteAutoShowState(next);
+    try { (window as any).api?.setUIPrefs?.({ stickyNoteAutoShow: next }); } catch {}
+  };
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [showRuntimeLogs, setShowRuntimeLogs] = useState<boolean>(() => {
     try {
@@ -6698,6 +6710,11 @@ function App() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderBottom: '1px solid var(--win-border, #333)' }}>
                     <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--win-text, #ccc)' }}>스티커 메모</span>
                     <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={() => setStickyNoteAutoShow(!stickyNoteAutoShow)}
+                        title={stickyNoteAutoShow ? '자동 보이기 켜짐 — 앱 시작 시 모든 스티커 메모를 자동으로 표시합니다. 클릭하면 자동 숨기기로 전환됩니다.' : '자동 숨기기 켜짐 — 앱 시작 시 스티커 메모가 표시되지 않습니다. 클릭하면 자동 보이기로 전환됩니다.'}
+                        style={{ background: 'transparent', border: 0, color: 'var(--win-text-dim, #aaa)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '2px 6px' }}
+                      >{stickyNoteAutoShow ? '👁' : '🚫'}</button>
                       <button
                         onClick={() => { (window as any).api?.stickyNoteCreate?.(); }}
                         title="새 포스트잇"

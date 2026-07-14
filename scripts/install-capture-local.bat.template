@@ -1,0 +1,61 @@
+@echo off
+setlocal enabledelayedexpansion
+
+rem ============================================================
+rem  PePe Terminal(SSH) - MicroSIP 패킷 캡처 로컬 지원 설치 스크립트
+rem
+rem  MicroSIP 단말별 패킷 캡처 버튼은 Wireshark 배포판의 dumpcap.exe
+rem  (BSD 라이선스, Npcap 패킷 드라이버 필요)를 사용합니다. 이미 PC에
+rem  Wireshark 가 설치되어 있다면 이 패키지 설치 없이도 자동으로 감지되어
+rem  동작합니다. Wireshark 를 따로 설치하고 싶지 않다면, 이 패키지로
+rem  dumpcap.exe 만 별도 폴더에 설치할 수 있습니다.
+rem
+rem  주의: dumpcap.exe 는 실제 패킷 캡처를 위해 Npcap(또는 WinPcap) 드라이버가
+rem  시스템에 설치되어 있어야 동작합니다. Npcap 은 별도로 설치하세요
+rem  (https://npcap.com — 무료, Wireshark 설치 시 함께 설치됨).
+rem ============================================================
+
+set "TARGET_DIR=%USERPROFILE%\.pepe-capture-local"
+set "SCRIPT_DIR=%~dp0"
+
+echo.
+echo [PePe Terminal 패킷 캡처 로컬 지원 설치]
+echo.
+echo 설치 대상: %TARGET_DIR%
+echo.
+
+if exist "%TARGET_DIR%" (
+    echo 기존 설치가 발견되었습니다. 덮어씁니다...
+    rmdir /s /q "%TARGET_DIR%" 2>nul
+)
+
+mkdir "%TARGET_DIR%" 2>nul
+xcopy /e /i /y /q "%SCRIPT_DIR%dumpcap-bin\*" "%TARGET_DIR%\" >nul
+
+if not exist "%TARGET_DIR%\dumpcap.exe" (
+    echo.
+    echo [오류] 파일 복사에 실패했습니다. 관리자 권한 없이도 실행 가능한지 확인하세요.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo 파일 복사 완료.
+echo.
+echo PEPE_DUMPCAP 환경변수를 등록합니다...
+
+setx PEPE_DUMPCAP "%TARGET_DIR%\dumpcap.exe" >nul
+
+echo.
+echo ============================================================
+echo  설치 완료!
+echo.
+echo  PEPE_DUMPCAP = %TARGET_DIR%\dumpcap.exe
+echo.
+echo  주의: Npcap(또는 WinPcap) 드라이버가 설치되어 있지 않으면 실제
+echo  캡처는 동작하지 않습니다. https://npcap.com 에서 설치하세요.
+echo  이미 열려 있는 터미널/앱에는 즉시 적용되지 않습니다. 새 터미널을
+echo  열거나 PC를 재시작한 뒤부터 패킷 캡처 버튼이 정상적으로 동작합니다.
+echo ============================================================
+echo.
+pause

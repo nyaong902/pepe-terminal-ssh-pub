@@ -1,0 +1,62 @@
+@echo off
+setlocal enabledelayedexpansion
+
+rem ============================================================
+rem  PePe Terminal(SSH) - 암호화(EVC) 로컬 지원 설치 스크립트
+rem
+rem  git 클론만 받은 빌드에는 UEnc 호환 음원 암복호화에 필요한 시스템키가
+rem  들어있지 않아, 암호화된 음원 재생이나 "암호화 코덱 저장" 기능을 쓸 수
+rem  없습니다. 이 스크립트는 시스템키를 담은 네이티브 애드온
+rem  (pepe_crypto_native.node) 을 사용자 폴더
+rem  (%USERPROFILE%\.pepe-crypto-local)에 설치하고, PEPE_CRYPTO_ROOT
+rem  사용자 환경변수를 등록해 npm run dev / 빌드된 앱 모두에서 자동으로
+rem  암복호화 기능이 켜지도록 합니다.
+rem
+rem  주의: 이 폴더의 pepe_crypto_native.node 는 회사 소유 시스템키가 담긴
+rem  바이너리입니다. 사내 공유용으로만 사용하고, 외부/공개 경로로
+rem  재배포하지 마세요.
+rem ============================================================
+
+set "TARGET_DIR=%USERPROFILE%\.pepe-crypto-local"
+set "SCRIPT_DIR=%~dp0"
+
+echo.
+echo [PePe Terminal 암호화 로컬 지원 설치]
+echo.
+echo 설치 대상: %TARGET_DIR%
+echo.
+
+if exist "%TARGET_DIR%" (
+    echo 기존 설치가 발견되었습니다. 덮어씁니다...
+    rmdir /s /q "%TARGET_DIR%" 2>nul
+)
+
+mkdir "%TARGET_DIR%" 2>nul
+copy /y "%SCRIPT_DIR%pepe_crypto_native.node" "%TARGET_DIR%\pepe_crypto_native.node" >nul
+
+if not exist "%TARGET_DIR%\pepe_crypto_native.node" (
+    echo.
+    echo [오류] 파일 복사에 실패했습니다. 관리자 권한 없이도 실행 가능한지 확인하세요.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo 파일 복사 완료.
+echo.
+echo PEPE_CRYPTO_ROOT 환경변수를 등록합니다...
+
+setx PEPE_CRYPTO_ROOT "%TARGET_DIR%" >nul
+
+echo.
+echo ============================================================
+echo  설치 완료!
+echo.
+echo  PEPE_CRYPTO_ROOT = %TARGET_DIR%
+echo.
+echo  주의: 이미 열려 있는 터미널/앱에는 즉시 적용되지 않습니다.
+echo  새 터미널을 열거나 PC를 재시작한 뒤부터 암호화된 음원 재생 및
+echo  "암호화 코덱 저장" 기능이 정상적으로 동작합니다.
+echo ============================================================
+echo.
+pause
