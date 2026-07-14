@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { OfficeBackBar } from './OfficeBackBar';
 import { OfficeEmptyState } from './OfficeEmptyState';
 import { MediaPasswordPrompt } from './MediaPasswordPrompt';
+import { MediaPcapStreamPicker, type RtpStreamInfo, type RtpPayloadCodec, type EvsRtpFormat } from './MediaPcapStreamPicker';
 import { type Selection } from './MediaWaveform';
 import { MediaEditPanel } from './MediaEditPanel';
 import { getMediaRecents, addMediaRecent, removeMediaRecent, setMediaPosition, type MediaRecentDoc } from '../utils/mediaRecents';
@@ -21,7 +22,7 @@ const CODEC_LABEL: Record<MediaCodec, string> = {
   amrnb: 'AMR-NB', amrwb: 'AMR-WB', evs: 'EVS', opus: 'OPUS', video: '영상', unknown: '알 수 없음',
 };
 
-type PlayState = 'idle' | 'loading' | 'need-password' | 'ready' | 'playing' | 'paused' | 'error';
+type PlayState = 'idle' | 'loading' | 'need-password' | 'need-stream-pick' | 'ready' | 'playing' | 'paused' | 'error';
 
 type OpenMedia = {
   id: string;
@@ -33,6 +34,7 @@ type OpenMedia = {
   duration: number;
   position: number;
   videoUrl?: string;
+  volume: number;
 };
 
 let nextTabId = 0;
@@ -65,11 +67,13 @@ export function MediaWorkspace(props: {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recents, setRecents] = useState<MediaRecentDoc[]>([]);
   const [pendingPassword, setPendingPassword] = useState<{ id: string; filePath: string; fileName: string; error?: string } | null>(null);
+  const [pendingPcap, setPendingPcap] = useState<{ id: string; filePath: string; fileName: string; streams: RtpStreamInfo[]; error?: string } | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<Map<string, AudioBufferSourceNode>>(new Map());
+  const gainRef = useRef<Map<string, GainNode>>(new Map());
   const bufferRef = useRef<Map<string, AudioBuffer>>(new Map());
   const startedAtRef = useRef<Map<string, { ctxTime: number; offset: number }>>(new Map());
   const rafRef = useRef<number | null>(null);
@@ -159,7 +163,7 @@ export function MediaWorkspace(props: {
 
   const openPath = async (filePath: string, fileName: string) => {
     const id = `media-${++nextTabId}`;
-    setDocs(prev => [...prev, { id, filePath, fileName, codec: 'unknown', state: 'loading', duration: 0, position: 0 }]);
+    setDocs(prev => [...prev, { id, filePath, fileName, codec: 'unknown', state: 'loading', duration: 0, position: 0, volume: 1 }]);
     setActiveId(id);
 
     const probe = await api().mediaProbeFile?.(filePath);
@@ -208,10 +212,52 @@ export function MediaWorkspace(props: {
   const handleOpenFile = async () => {
     const result = await api().mediaOpenFile?.();
     if (!result || result.error) return;
+    if (result.isPcap) {
+      openPcapPath(result.filePath, result.fileName, result.streams as RtpStreamInfo[]);
+      return;
+    }
     await openPath(result.filePath, result.fileName);
   };
 
+  const isPcapFile = (fileName: string): boolean => /\.(pcap|pcapng|cap)$/i.test(fileName);
+
+  // pcap/pcapng — RTP 스트림을 찾아 목록으로 보여주고, 선택된 스트림만 추출해 재생.
+  const openPcapPath = (filePath: string, fileName: string, streams: RtpStreamInfo[]) => {
+    const id = `media-${++nextTabId}`;
+    setDocs(prev => [...prev, { id, filePath, fileName, codec: 'unknown', state: 'need-stream-pick', duration: 0, position: 0, volume: 1 }]);
+    setActiveId(id);
+    setPendingPcap({ id, filePath, fileName, streams });
+  };
+
+  const handleOpenPcapRecent = async (filePath: string, fileName: string) => {
+    const result = await api().pcapProbeFile?.(filePath);
+    if (!result || result.error) return;
+    const { streams } = result as { streams: RtpStreamInfo[] };
+    openPcapPath(filePath, fileName, streams);
+  };
+
+  const selectPcapStream = async (streamId: string, forcedCodec: RtpPayloadCodec, evsFormat: EvsRtpFormat) => {
+    if (!pendingPcap) return;
+    const { id, filePath, fileName } = pendingPcap;
+    const result = await api().pcapExtractStream?.(filePath, streamId, forcedCodec, evsFormat);
+    if (!result || result.error) {
+      setPendingPcap({ ...pendingPcap, error: result?.error || '스트림 추출 실패' });
+      return;
+    }
+    const { tempPath, codec } = result as { tempPath: string; codec: MediaCodec };
+    setPendingPcap(null);
+    const streamLabel = pendingPcap.streams.find(s => s.id === streamId);
+    const displayName = streamLabel ? `${fileName} — ${streamLabel.srcIp}:${streamLabel.srcPort}` : fileName;
+    patchDoc(id, { codec, fileName: displayName, state: 'loading' });
+    addMediaRecent({ filePath, fileName, codec }).then(setRecents);
+    await loadByCodec(id, tempPath, codec, displayName);
+  };
+
   const handleOpenRecent = async (doc: MediaRecentDoc) => {
+    if (isPcapFile(doc.fileName)) {
+      await handleOpenPcapRecent(doc.filePath, doc.fileName);
+      return;
+    }
     await openPath(doc.filePath, doc.fileName);
   };
 
@@ -241,6 +287,7 @@ export function MediaWorkspace(props: {
       try { src.onended = null; src.stop(); } catch { /* 이미 정지된 경우 무시 */ }
       sourceRef.current.delete(id);
     }
+    gainRef.current.delete(id);
   };
 
   const play = (id: string) => {
@@ -251,16 +298,27 @@ export function MediaWorkspace(props: {
     stopPlayback(id);
     const src = ctx.createBufferSource();
     src.buffer = buffer;
-    src.connect(ctx.destination);
+    const gain = ctx.createGain();
+    gain.gain.value = doc.volume;
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    gainRef.current.set(id, gain);
     const offset = doc.position >= doc.duration ? 0 : doc.position;
     src.start(0, offset);
     startedAtRef.current.set(id, { ctxTime: ctx.currentTime, offset });
     src.onended = () => {
       sourceRef.current.delete(id);
+      gainRef.current.delete(id);
       patchDoc(id, { state: 'ready', position: 0 });
     };
     sourceRef.current.set(id, src);
     patchDoc(id, { state: 'playing' });
+  };
+
+  const setVolume = (id: string, volume: number) => {
+    patchDoc(id, { volume });
+    const gain = gainRef.current.get(id);
+    if (gain) gain.gain.value = volume;
   };
 
   const pause = (id: string) => {
@@ -327,7 +385,7 @@ export function MediaWorkspace(props: {
           ))}
           <button
             onClick={handleOpenFile}
-            title="미디어 파일 열기"
+            title="미디어 파일 열기 (pcap/pcapng 도 지원)"
             style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text, #e6edf3)', fontSize: 13, cursor: 'pointer' }}
           >＋</button>
         </div>
@@ -339,7 +397,7 @@ export function MediaWorkspace(props: {
               recents={recents}
               onOpenRecent={handleOpenRecent}
               onRemoveRecent={handleRemoveRecent}
-              message="🎵🎬 미디어 플레이어 — 음원/영상 파일을 재생합니다. 왼쪽에서 최근 재생 항목을 선택하거나 아래 버튼으로 파일을 여세요."
+              message="🎵🎬 미디어 플레이어 — 음원/영상 파일 및 PCAP(RTP 스트림)을 재생합니다. 왼쪽에서 최근 재생 항목을 선택하거나 아래 버튼으로 파일을 여세요."
             />
             <button
               onClick={handleOpenFile}
@@ -355,15 +413,25 @@ export function MediaWorkspace(props: {
             <OfficeBackBar
               label={`${d.fileName} — ${CODEC_LABEL[d.codec]}`}
               right={isPlayable && d.codec !== 'video' ? (
-                <button
-                  onClick={() => { setEditMode(v => !v); setSelection(null); }}
-                  style={{ ...playBtnStyle, padding: '4px 10px', fontSize: 12 }}
-                >{editMode ? '재생 모드' : '✂️ 편집'}</button>
+                <>
+                  <span title={`음량 ${Math.round(d.volume * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+                    🔈<input
+                      type="range" min={0} max={2} step={0.05} value={d.volume}
+                      onChange={(e) => setVolume(d.id, Number(e.target.value))}
+                      style={{ width: 64 }}
+                    />
+                  </span>
+                  <button
+                    onClick={() => { setEditMode(v => !v); setSelection(null); }}
+                    style={{ ...playBtnStyle, padding: '4px 10px', fontSize: 12 }}
+                  >{editMode ? '재생 모드' : '✂️ 편집'}</button>
+                </>
               ) : undefined}
             />
             <div style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 }}>
               {d.state === 'loading' && <div style={{ color: 'var(--win-text-dim, #9aa7b3)' }}>불러오는 중...</div>}
               {d.state === 'need-password' && <div style={{ color: 'var(--win-text-dim, #9aa7b3)' }}>🔒 비밀번호 입력 대기 중...</div>}
+              {d.state === 'need-stream-pick' && <div style={{ color: 'var(--win-text-dim, #9aa7b3)' }}>📡 RTP 스트림 선택 대기 중...</div>}
               {d.state === 'error' && <div style={{ color: '#e5534b', textAlign: 'center', maxWidth: 420 }}>{d.error}</div>}
               {isPlayable && editMode && buffer && (
                 <MediaEditPanel
@@ -429,6 +497,19 @@ export function MediaWorkspace(props: {
           onCancel={() => {
             const id = pendingPassword.id;
             setPendingPassword(null);
+            closeDoc(id);
+          }}
+        />
+      )}
+      {pendingPcap && (
+        <MediaPcapStreamPicker
+          fileName={pendingPcap.fileName}
+          streams={pendingPcap.streams}
+          error={pendingPcap.error}
+          onSelect={selectPcapStream}
+          onCancel={() => {
+            const id = pendingPcap.id;
+            setPendingPcap(null);
             closeDoc(id);
           }}
         />
