@@ -27,6 +27,12 @@ export type RtpStreamInfo = {
   codec: RtpPayloadCodec; // 정적 PT(0/8) 는 자동 감지값, 동적 PT 는 'unsupported'(사용자가 UI 드롭다운에서 지정)
   packetCount: number;
   durationSec: number;
+  // 사용자가 코덱을 EVS 로 지정할 경우의 형식 추정값 — 페이로드 길이 분포를 EVS 프레임 크기
+  // 테이블과 비교해 판단(아래 guessEvsFormat 참고). EVS 여부와 무관하게 항상 채워둔다.
+  suggestedEvsFormat: EvsRtpFormat;
+  // 동적 PT(96+) 스트림의 코덱 추정값 — ToC 유효성 + 프레임 크기 테이블 일치를 보고 판단
+  // (아래 guessDynamicCodec 참고). 정적 PT(0/8)는 이미 codec 필드에 확정값이 있으므로 그대로 반영.
+  suggestedCodec: RtpPayloadCodec;
 };
 
 type RawPacket = {
@@ -242,7 +248,7 @@ function parseRtpHeader(buf: Buffer): RtpHeader | null {
 
 type StreamAccum = {
   info: RtpStreamInfo;
-  packets: { seq: number; payload: Buffer; tsSec: number; tsUsec: number }[];
+  packets: { seq: number; payload: Buffer; tsSec: number; tsUsec: number; rtpTimestamp: number }[];
 };
 
 function collectStreams(packets: RawPacket[], linkType: number): Map<string, StreamAccum> {
@@ -270,6 +276,8 @@ function collectStreams(packets: RawPacket[], linkType: number): Map<string, Str
           codec: payloadCodecForType(rtp.payloadType),
           packetCount: 0,
           durationSec: 0,
+          suggestedEvsFormat: 'header-full',
+          suggestedCodec: payloadCodecForType(rtp.payloadType),
         },
         packets: [],
       };
@@ -277,7 +285,7 @@ function collectStreams(packets: RawPacket[], linkType: number): Map<string, Str
     }
     const payload = ip.udpPayload.subarray(rtp.headerLen);
     if (payload.length === 0) continue;
-    stream.packets.push({ seq: rtp.seq, payload, tsSec: pkt.tsSec, tsUsec: pkt.tsUsec });
+    stream.packets.push({ seq: rtp.seq, payload, tsSec: pkt.tsSec, tsUsec: pkt.tsUsec, rtpTimestamp: rtp.timestamp });
     stream.info.packetCount++;
   }
   return streams;
@@ -295,6 +303,13 @@ export function probePcapFile(filePath: string): RtpStreamInfo[] {
     const last = stream.packets[stream.packets.length - 1];
     const durationSec = (last.tsSec - first.tsSec) + (last.tsUsec - first.tsUsec) / 1e6;
     stream.info.durationSec = Math.max(0, durationSec);
+    stream.info.suggestedEvsFormat = guessEvsFormat(
+      stream.packets.map((p) => p.payload.length),
+      stream.packets.map((p) => p.payload[0]),
+    );
+    stream.info.suggestedCodec = stream.info.codec !== 'unsupported'
+      ? stream.info.codec // 정적 PT(0/8) 는 이미 확정값이 있으므로 그대로 사용
+      : guessDynamicCodec(stream.packets.map((p) => p.payload));
     result.push(stream.info);
   }
   // 패킷 수가 많은(=유의미한 통화/스트림일 가능성이 높은) 순으로 정렬
@@ -361,12 +376,109 @@ function evsCompactFtLookup(byteLen: number): { ft: number; isWbIo: boolean } | 
   return null;
 }
 
+// RFC 4733/2833 DTMF telephone-event 패킷 감지 — 일부 SIP 클라이언트/장비가 음성과
+// DTMF 를 같은 SSRC/PT 로 섞어 보내는 경우가 있어(별도 PT 협상이 안 되거나 무시된 경우),
+// EVS ToC 파서가 이를 진짜 음성 프레임으로 오인해 파싱이 깨질 수 있다. DTMF 이벤트는
+// 페이로드 4바이트(event(1) + E/R/volume(1) + duration(2, big-endian)) 이고, 같은
+// 키 입력을 여러 패킷에 걸쳐 반복 전송하는 동안 RTP timestamp 가 고정된 채 duration 필드만
+// 20ms 프레임 간격만큼 계속 증가하는 것이 특징 — 이 두 조건으로 판별해 재조립 시 건너뛴다.
+function isDtmfEventPacket(payload: Buffer, rtpTimestamp: number, prevRtpTimestamp: number | null): boolean {
+  if (payload.length !== 4) return false;
+  if (prevRtpTimestamp === null) return false;
+  return rtpTimestamp === prevRtpTimestamp;
+}
+
+// 페이로드 길이 분포로 header-full 인지 compact 인지 추정한다.
+// - compact 해석: 페이로드 길이 자체가 프레임 크기 테이블과 정확히 일치해야 한다(ToC 없음).
+// - header-full 해석: 첫 바이트가 H=0(0x80 비트 없음, ToC) 이고 F=0(0x40 비트 없음, 단일
+//   프레임 — 멀티프레임/CMR 체이닝은 이 앱 범위 밖) 이면서, 남은 (길이-1)바이트가 그 ToC 의
+//   FT 가 가리키는 프레임 크기와 정확히 일치해야 한다 — 단순히 "길이-1이 테이블 어딘가에
+//   있다"만 보면 서로 다른 테이블(PRIMARY/AMR-WB-IO) 값끼리 우연히 겹쳐 오판할 수 있다
+//   (예: PRIMARY 에서 61바이트=FT6 인 경우, 61-1=60 이 AMR-WB-IO 테이블의 FT8과 우연히
+//   일치 — ToC 의 FT 필드가 가리키는 크기와 실제 대조해야 이런 오탐을 막는다).
+function guessEvsFormat(payloadLens: number[], firstBytes: number[]): EvsRtpFormat {
+  let headerFullHits = 0;
+  let compactHits = 0;
+  for (let i = 0; i < payloadLens.length; i++) {
+    const len = payloadLens[i];
+    const b0 = firstBytes[i];
+    if (evsCompactFtLookup(len)) compactHits++;
+    const isValidToc = (b0 & 0x80) === 0 && (b0 & 0x40) === 0; // H=0, F=0(단일 프레임)
+    if (isValidToc) {
+      const ft = b0 & 0x0f;
+      const isWbIo = (b0 & 0x20) !== 0;
+      const expectedSize = isWbIo ? EVS_AMRWB_IO_FT_SIZE[ft] : EVS_PRIMARY_FT_SIZE[ft];
+      if (expectedSize === len - 1) headerFullHits++;
+    }
+  }
+  return headerFullHits > compactHits ? 'header-full' : 'compact';
+}
+
+// 동적 PT(96+) 스트림의 코덱을 추정한다 — SDP 가 없어 확정할 수는 없으므로(Wireshark 도 동일
+// 한계) UI 기본 선택값을 위한 힌트일 뿐, 최종 판단은 사용자가 드롭다운에서 한다.
+// 검사 순서: EVS(header-full/compact ToC 구조) → AMR-NB/WB(CMR+ToC 구조, F=0 단일 프레임
+// 가정) → 매치 실패 시 A-law 로 폴백. 짧은 페이로드는 우연히 여러 테이블에 걸릴 수 있어
+// 매치 비율(패킷 수 대비)이 가장 높은 코덱을 채택한다.
+function guessDynamicCodec(payloads: Buffer[]): RtpPayloadCodec {
+  if (payloads.length === 0) return 'alaw';
+
+  let evsHits = 0;
+  let amrNbHits = 0;
+  let amrWbHits = 0;
+
+  for (const payload of payloads) {
+    const len = payload.length;
+    const b0 = payload[0];
+
+    if (evsCompactFtLookup(len)) evsHits++;
+    else {
+      const isValidEvsToc = (b0 & 0x80) === 0 && (b0 & 0x40) === 0; // H=0, F=0
+      if (isValidEvsToc) {
+        const ft = b0 & 0x0f;
+        const isWbIo = (b0 & 0x20) !== 0;
+        const expectedSize = isWbIo ? EVS_AMRWB_IO_FT_SIZE[ft] : EVS_PRIMARY_FT_SIZE[ft];
+        if (expectedSize === len - 1) evsHits++;
+      }
+    }
+
+    // AMR octet-aligned: payload[0]=CMR, payload[1]=ToC(F=0 가정 시 단일 프레임).
+    if (len >= 2) {
+      const toc = payload[1];
+      const isValidAmrToc = (toc & 0x80) === 0; // F=0
+      if (isValidAmrToc) {
+        const ft = (toc >> 3) & 0x0f;
+        if (AMR_NB_FT_SIZE[ft] === len - 2) amrNbHits++;
+        if (AMR_WB_FT_SIZE[ft] === len - 2) amrWbHits++;
+      }
+    }
+  }
+
+  const total = payloads.length;
+  const scores: { codec: RtpPayloadCodec; hits: number }[] = [
+    { codec: 'evs', hits: evsHits },
+    { codec: 'amrwb', hits: amrWbHits },
+    { codec: 'amrnb', hits: amrNbHits },
+  ];
+  scores.sort((a, b) => b.hits - a.hits);
+  const best = scores[0];
+  if (best.hits > total / 2) return best.codec;
+  return 'alaw';
+}
+
 function extractEvsPayloads(payload: Buffer, format: EvsRtpFormat): Buffer[] {
   if (format === 'header-full') {
     // [optional CMR(H=1)][ToC(H=0)][speech...] — CMR 바이트는 H 비트(0x80)로 구분.
     let offset = 0;
     if (payload.length > 0 && (payload[0] & 0x80) !== 0) offset = 1; // CMR 존재 시 스킵
     if (offset >= payload.length) return [];
+    const toc = payload[offset];
+    const ft = toc & 0x0f;
+    const isWbIo = (toc & 0x20) !== 0;
+    const expectedSize = isWbIo ? EVS_AMRWB_IO_FT_SIZE[ft] : EVS_PRIMARY_FT_SIZE[ft];
+    // ToC 가 가리키는 프레임 크기와 실제 남은 바이트 수가 일치해야 진짜 EVS 프레임이다.
+    // 이 스트림에 EVS 음성과 DTMF(RFC 4733) 등 다른 페이로드가 섞여 들어온 경우, 첫 바이트가
+    // 우연히 유효한 ToC 처럼 보여도 크기가 맞지 않으므로 여기서 걸러 파싱 전체가 깨지는 것을 막는다.
+    if (expectedSize < 0 || expectedSize !== payload.length - offset - 1) return [];
     return [payload.subarray(offset)]; // [ToC][speech] 그대로 — 저장 포맷과 동일
   }
   // compact: ToC 없음 — 길이로 프레임 타입 역산 후 ToC 합성.
@@ -493,8 +605,22 @@ export function extractRtpStreamToTemp(filePath: string, streamId: string, optio
   const codec = options?.forcedCodec && options.forcedCodec !== 'unsupported' ? options.forcedCodec : stream.info.codec;
   if (codec === 'unsupported') throw new Error(`지원하지 않는 페이로드 타입입니다 (PT=${stream.info.payloadType}). 재생할 코덱을 목록에서 지정해 주세요.`);
 
-  const sorted = sortBySeq(stream.packets);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pepe-pcap-rtp-'));
+
+  // DTMF(RFC 4733) 이벤트 패킷 필터링 — 일부 캡처는 EVS/AMR 등 음성 코덱과 DTMF 를 같은
+  // SSRC/PT 로 섞어 보내, 그대로 두면 파서가 DTMF 페이로드를 코덱 프레임으로 오인해
+  // 파싱이 중간에 깨진다. 원본 캡처 순서(시퀀스 정렬 이전) 기준으로 판별해야 "직전 패킷과
+  // timestamp 동일"이 실제 시간상 직전 패킷을 뜻하게 된다.
+  let packetsForCodec = stream.packets;
+  if (codec === 'evs' || codec === 'amrnb' || codec === 'amrwb') {
+    let prevTs: number | null = null;
+    packetsForCodec = stream.packets.filter((p) => {
+      const isDtmf = isDtmfEventPacket(p.payload, p.rtpTimestamp, prevTs);
+      prevTs = p.rtpTimestamp;
+      return !isDtmf;
+    });
+  }
+  const sorted = sortBySeq(packetsForCodec);
 
   if (codec === 'alaw' || codec === 'ulaw') {
     const merged = Buffer.concat(sorted.map((p) => p.payload));
