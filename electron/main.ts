@@ -46,6 +46,7 @@ import { getRecents as getOfficeRecents, addRecent as addOfficeRecent, removeRec
 import { getMediaRecents, addMediaRecent, removeMediaRecent, updateMediaPosition } from './mediaRecentsStore';
 import { mediaProbeFile, mediaDecryptToTemp, decodeLocalCodec, type MediaCodec } from './mediaCodec';
 import { decodeToWav } from './gstreamerSidecar';
+import { probePcapFile, extractRtpStreamToTemp } from './pcapParser';
 import { getTelnetBridge } from './telnetBridge';
 import { getSharedJdbcSidecar, shutdownAllJdbcSidecars, findSidecarJar, findJavaExecutable } from './jdbcBridge';
 import { listDrivers, upsertUserDriver, removeUserDriver, diagnoseDriver, getBundledDriversRoot, getUserJdbcDriversRoot, resolveDriverJarsExisting, parseMavenCoord, mavenCoordToUrl, JdbcDriverDef } from './driversStore';
@@ -3083,16 +3084,27 @@ const MEDIA_OPEN_FILTER = { name: 'Audio Files', extensions: ['wav', 'alaw', 'pc
 // mp4/m4v/mov/webm/ogv 는 GStreamer 사이드카나 로컬 디코딩 없이 Chromium 내장 디코더로 그대로
 // 재생한다(electron/mediaCodec.ts 의 VIDEO_EXTENSIONS 와 동일 목록).
 const MEDIA_OPEN_VIDEO_FILTER = { name: 'Video Files', extensions: ['mp4', 'm4v', 'mov', 'webm', 'ogv'] };
+const MEDIA_OPEN_PCAP_FILTER = { name: 'PCAP Files', extensions: ['pcap', 'pcapng', 'cap'] };
+const PCAP_EXT_RE = /\.(pcap|pcapng|cap)$/i;
 ipcMain.handle('media:open-file', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '미디어 파일 열기',
-    filters: [MEDIA_OPEN_FILTER, MEDIA_OPEN_VIDEO_FILTER, { name: 'All Files', extensions: ['*'] }],
+    filters: [MEDIA_OPEN_FILTER, MEDIA_OPEN_VIDEO_FILTER, MEDIA_OPEN_PCAP_FILTER, { name: 'All Files', extensions: ['*'] }],
     properties: ['openFile'],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  if (PCAP_EXT_RE.test(filePath)) {
+    try {
+      const streams = probePcapFile(filePath);
+      return { filePath, fileName: path.basename(filePath), isPcap: true, streams };
+    } catch (e: any) {
+      return { error: String(e?.message || e) };
+    }
+  }
   try {
-    return mediaProbeFile(result.filePaths[0]);
+    return { ...mediaProbeFile(filePath), isPcap: false };
   } catch (e: any) {
     return { error: String(e?.message || e) };
   }
@@ -3146,6 +3158,23 @@ ipcMain.handle('media:read-video', (_e, { filePath }: { filePath: string }) => {
   try {
     const data = fs.readFileSync(filePath);
     return { data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+
+// ── pcap/pcapng — RTP 스트림 탐색 및 재생용 추출 (파일 열기는 media:open-file 에 통합됨) ──
+ipcMain.handle('pcap:probe-file', (_e, { filePath }: { filePath: string }) => {
+  try {
+    const streams = probePcapFile(filePath);
+    return { filePath, fileName: path.basename(filePath), streams };
+  } catch (e: any) {
+    return { error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('pcap:extract-stream', (_e, { filePath, streamId, forcedCodec, evsFormat }: { filePath: string; streamId: string; forcedCodec?: string; evsFormat?: 'header-full' | 'compact' }) => {
+  try {
+    return extractRtpStreamToTemp(filePath, streamId, { forcedCodec: forcedCodec as any, evsFormat });
   } catch (e: any) {
     return { error: String(e?.message || e) };
   }

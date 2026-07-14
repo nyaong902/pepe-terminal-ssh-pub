@@ -237,6 +237,8 @@ contextBridge.exposeInMainWorld('api', {
   mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
   mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),
   mediaRecentsSetPosition: (filePath: string, positionSec: number) => ipcRenderer.invoke('media-recents:set-position', { filePath, positionSec }),
+  pcapProbeFile: (filePath: string) => ipcRenderer.invoke('pcap:probe-file', { filePath }),
+  pcapExtractStream: (filePath: string, streamId: string, forcedCodec?: string, evsFormat?: string) => ipcRenderer.invoke('pcap:extract-stream', { filePath, streamId, forcedCodec, evsFormat }),
 
   onBrowserWebviewNewWindow: (cb: (p: { guestId: number; url: string }) => void) => {
     const handler = (_: any, p: any) => cb(p);
