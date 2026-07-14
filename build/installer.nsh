@@ -20,11 +20,23 @@ Var IsUpdateRun        ; "1" = --updated 로 실행된 자동 업데이트 (cust
 
 ; 진단용 파일 로그 — 자동 업데이트 중 설치 창이 안 뜨는 문제의 실제 발생 지점을 확인하기 위함.
 ; 앱 쪽 update-debug.log 는 앱이 이미 종료된 뒤(설치 프로그램 실행 중)엔 아무것도 못 남기므로,
-; 설치 프로그램 자신이 %TEMP%\pepe-install-debug.log 에 직접 기록한다(권한/승격 여부 무관).
+; 설치 프로그램 자신이 직접 기록한다(권한/승격 여부 무관).
+;  - 경로: C:\Users\Public — 승격되어 다른 관리자 계정으로 실행돼도 항상 같은 위치, 표준 사용자도
+;    쓰기 가능하고 계정과 무관하게 찾기 쉽다(%TEMP% 는 실행 계정마다 달라 혼란을 준다).
+;  - append('a') 모드는 파일이 없으면 실패할 수 있으므로, 실패 시 write('w') 로 폴백해 반드시 생성.
+!define DBG_LOG_PATH "C:\Users\Public\pepe-install-debug.log"
 !macro DbgLog msg
-  FileOpen $9 "$TEMP\pepe-install-debug.log" a
-  FileWrite $9 "${msg}$\r$\n"
-  FileClose $9
+  ClearErrors
+  FileOpen $9 "${DBG_LOG_PATH}" a
+  ${If} ${Errors}
+    ClearErrors
+    FileOpen $9 "${DBG_LOG_PATH}" w
+  ${EndIf}
+  ${IfNot} ${Errors}
+    FileSeek $9 0 END
+    FileWrite $9 "${msg}$\r$\n"
+    FileClose $9
+  ${EndIf}
 !macroend
 
 Function nsShowDeleteDataPage
@@ -123,8 +135,20 @@ Function nsLeaveFeaturesPage
 FunctionEnd
 !endif
 
+; preInit — electron-builder .onInit 의 가장 첫 훅. 외부(비승격)·내부(승격) 인스턴스 모두 여기부터 실행된다.
+; initMultiUser(승격/설치모드 결정) 보다 앞이므로, "preInit 은 찍히는데 customInit 은 안 찍힘" = 승격/모드
+; 결정 단계에서 죽는다는 뜻. $CMDLINE 에 UAC 플러그인이 붙인 /UAC: 토큰이 있으면 승격된 내부 인스턴스다.
+!macro preInit
+  !insertmacro DbgLog "preInit: .onInit start v${VERSION} cmdline=[$CMDLINE]"
+  ${If} ${Silent}
+    !insertmacro DbgLog "preInit: Silent=YES"
+  ${Else}
+    !insertmacro DbgLog "preInit: Silent=NO"
+  ${EndIf}
+!macroend
+
 !macro customInit
-  !insertmacro DbgLog "customInit: ENTRY (installer process started, v${VERSION})"
+  !insertmacro DbgLog "customInit: ENTRY (past initMultiUser) v${VERSION} cmdline=[$CMDLINE]"
   ; 설치 화면이 뒤에 숨는 경우를 대비한 안전장치.
   BringToFront
   ; 모든 사용자 / 전용 모두 Program Files에 설치.

@@ -1,4 +1,4 @@
-# v2.2.22 (진단 빌드)
+# v2.2.23 (진단 빌드)
 
 ## 자동 업데이트 설치 창 진단
 
@@ -14,10 +14,16 @@ v2.1.13 이후 자동 업데이트로 설치가 진행될 때 컴포넌트 선�
 - 사용자 데이터 삭제 확인 페이지는 자동 업데이트 중에는 계속 건너뜁니다.
 - 기존에 저장된 컴포넌트 선택값이 있으면 일반 설치와 자동 업데이트 모두에서 체크 상태로 반영합니다.
 - 선택값이 없으면 안전하게 전체 설치를 기본값으로 사용합니다.
-- **진단 로그**: `customInit` 진입, `IsUpdateRun` 판별값, 각 커스텀 페이지 진입/`nsDialogs::Create`
-  결과/`nsDialogs::Show` 반환/페이지 이탈, `customInstall` 진입·완료까지 순서대로 기록됩니다.
+- **진단 로그**(v2.2.23 강화): 기록 위치를 `%TEMP%`에서 **`C:\Users\Public\pepe-install-debug.log`**로
+  변경했습니다 — 설치 프로그램이 승격되어 다른 관리자 계정으로 실행돼도 항상 같은 위치에 남고,
+  실행 계정과 무관하게 찾기 쉽습니다. 또한 append 실패 시 새로 생성하도록 로거를 보강했습니다.
+- `.onInit`의 가장 이른 지점(`preInit`)부터 기록합니다: `preInit`(승격 전, 모든 인스턴스) → `customInit`
+  (승격/설치모드 결정 이후) → 각 커스텀 페이지 진입/`nsDialogs::Create` 결과/`Show` 반환/이탈 →
+  `customInstall` 진입·완료. `$CMDLINE`도 함께 기록해 승격된 내부 인스턴스(UAC 토큰) 여부를 구분합니다.
+  → "preInit은 있는데 customInit이 없음" = 승격/모드 결정 단계에서 실패, "둘 다 없음" = 승격된
+  프로세스가 코드 실행 전에 종료된 것으로 원인을 좁힐 수 있습니다.
 
 ## 산출물
 
-- `PePe-Terminal-SSH-Setup-2.2.22.exe`
-- `PePe-Terminal-SSH-2.2.22-portable.exe`
+- `PePe-Terminal-SSH-Setup-2.2.23.exe`
+- `PePe-Terminal-SSH-2.2.23-portable.exe`
