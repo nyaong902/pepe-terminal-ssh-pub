@@ -509,6 +509,40 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       ? { ...t, source: localSrc, path: localHome, selected: new Set() } : t));
   };
 
+  // 커스텀 워크스페이스 탭을 닫았다가 다시 열거나 앱을 재시작한 뒤 복원된 경우 — reviveFeLayout
+  // 이 remote 소스를 lazy-remote 로 강등해뒀으므로, 여기서 자동으로 재연결하고 저장했던 경로로
+  // 이동한다(realizeLazyRemote 는 성공 시 홈 디렉토리로 이동시키므로, 그 다음에 원래 path 를
+  // 다시 적용). allSessionsList 가 아직 비어있으면(세션 목록 로드 전) 재시도한다.
+  const restoredReconnectDoneRef = useRef(false);
+  useEffect(() => {
+    if (!bootReady || !initDone) return;
+    if (!initialState?.layout) return;
+    if (restoredReconnectDoneRef.current) return;
+    if (allSessionsList.length === 0) return; // 세션 목록 로드 대기
+    restoredReconnectDoneRef.current = true;
+    (async () => {
+      const leaves = collectFeLeaves(layoutRef.current);
+      for (const leaf of leaves) {
+        for (let i = 0; i < leaf.panel.tabs.length; i++) {
+          const tab = leaf.panel.tabs[i];
+          if (tab.source.mode !== 'lazy-remote' || !tab.source.sessionId) continue;
+          const savedPath = tab.path;
+          const real = await realizeLazyRemote(tab.source, leaf.id);
+          if (!real) continue; // 세션이 삭제됐거나 자격증명이 없어 다이얼로그로 넘어간 경우
+          updatePanel(leaf.id, p => ({ ...p, tabs: p.tabs.map((t, idx) => idx === i ? { ...t, source: real } : t) }));
+          if (savedPath) {
+            for (let r = 0; r < 10; r++) {
+              try { const h = await api?.feHomeDir?.('remote', real.termId); if (h) break; } catch {}
+              await new Promise(res => setTimeout(res, 500));
+            }
+            setLeafPath(leaf.id, savedPath);
+          }
+        }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootReady, initDone, allSessionsList]);
+
   const handleSftpConnect = async () => {
     if (!sftpHost || !sftpUser || !showSftpConnect) return;
     const targetLeafId = showSftpConnect;

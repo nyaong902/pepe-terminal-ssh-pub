@@ -42,6 +42,9 @@ export type CustomWorkspaceTemplate = {
   slots: CustomWorkspaceSlot[];
   createdAt: number;
   updatedAt: number;
+  // 이 템플릿으로 연 탭의 마지막 워크스페이스 상태(슬롯별 SlotState) — 파일전송 슬롯의
+  // 좌우 패널 세션/경로 등을 포함. 탭을 닫거나 앱을 재시작한 뒤 다시 열 때 그대로 복원하는 데 쓴다.
+  lastWorkspaceState?: any;
 };
 
 export type CustomWorkspaceTemplateDraft = {

@@ -522,6 +522,8 @@ function App() {
               : [],
             createdAt: Number(tpl.createdAt) || Date.now(),
             updatedAt: Number(tpl.updatedAt) || Date.now(),
+            // 파일전송 등 슬롯의 좌우 세션/경로 상태 — 앱 재시작 후 이 템플릿을 다시 열 때 그대로 복원.
+            ...(tpl.lastWorkspaceState && typeof tpl.lastWorkspaceState === 'object' ? { lastWorkspaceState: tpl.lastWorkspaceState } : {}),
           })));
         }
         if (typeof prefs?.claudeChatWidth === 'number' && prefs.claudeChatWidth >= 280 && prefs.claudeChatWidth <= 1200) {
@@ -2499,7 +2501,9 @@ function App() {
         customTitle: true,
         customWorkspaceId: tpl.id,
         customWorkspaceTemplate: tpl,
-        workspaceState: {},
+        // 이전에 저장해둔 슬롯 상태(파일전송 좌우 세션/경로 등)가 있으면 그대로 복원 — 탭을
+        // 닫았다 다시 열거나 앱을 재시작한 뒤에도 자동으로 그 서버/디렉토리에 재연결된다.
+        workspaceState: tpl.lastWorkspaceState || {},
         color,
       }];
     });
@@ -2636,6 +2640,14 @@ function App() {
       if (tab.type === 'sipp') {
         try { (window as any).api?.sippDispose?.({ id: tab.id }); } catch {}
       }
+      // 커스텀 워크스페이스 탭이 닫히면, 그 시점의 슬롯 상태(파일전송 좌우 세션/경로 등)를
+      // 템플릿에 저장해둔다 — 나중에 같은 템플릿을 다시 열거나 앱을 재시작한 뒤에도 그대로 복원.
+      if (tab.type === 'customWorkspace' && tab.customWorkspaceId) {
+        const liveState = workspaceStateRef.current.get(tab.id) || tab.workspaceState;
+        if (liveState) {
+          setCustomWorkspaces(prev => prev.map(ws => ws.id === tab.customWorkspaceId ? { ...ws, lastWorkspaceState: liveState } : ws));
+        }
+      }
     }
     setTabs(prev => { const f = prev.filter(t => t.id !== id); return f.length === 0 ? prev : f; });
     // 닫히는 탭이 우측 분할 탭 자신이면 분할도 같은 배치에서 즉시 해제.
@@ -2668,6 +2680,27 @@ function App() {
   const fileExplorerStateRef = useRef<Map<string, any>>(new Map());
   // 그 외 모든 워크스페이스 (메신저/파일비교/브라우저/로그분석) 공통 — tab.id → state.
   const workspaceStateRef = useRef<Map<string, any>>(new Map());
+  // 커스텀 워크스페이스 탭의 슬롯 상태(파일전송 좌우 세션/경로 등)를 템플릿에 디바운스 동기화 —
+  // 탭을 닫을 때(closeTab)만 저장하면 탭을 열어둔 채 앱을 통째로 종료할 때 유실되므로, 열려있는
+  // 동안에도 주기적으로 customWorkspaces 에 반영해 기존 저장 이펙트(624-628행)가 disk 에 쓰게 한다.
+  // 매 상태 변경마다 바로 쓰지 않고 1.5초 디바운스로 묶어 잦은 입력(경로 이동 등) 중 I/O 급증을 피한다.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setCustomWorkspaces(prev => {
+        let changed = false;
+        const next = prev.map(ws => {
+          const tab = tabs.find(t => t.type === 'customWorkspace' && t.customWorkspaceId === ws.id);
+          if (!tab) return ws;
+          const liveState = workspaceStateRef.current.get(tab.id) || tab.workspaceState;
+          if (!liveState || liveState === ws.lastWorkspaceState) return ws;
+          changed = true;
+          return { ...ws, lastWorkspaceState: liveState };
+        });
+        return changed ? next : prev;
+      });
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [tabs]);
   // 다른 탭에서 끌어온 sibling 세션 스냅샷 — FileExplorer 가 비어보이지 않도록 보관.
   const [carriedSiblingSessions, setCarriedSiblingSessions] = useState<{ termId: string; sessionId: string; sessionName: string; host: string }[]>([]);
   const seedReattach = useCallback(async (tab: Tab, siblings?: { termId: string; sessionId: string; sessionName: string; host: string; quickSession?: any }[]) => {

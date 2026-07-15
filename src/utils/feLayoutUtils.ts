@@ -136,17 +136,27 @@ export function serializeFeLayout(node: FeLayoutNode): any {
   return { id: node.id, type: node.type, sizes: node.sizes, children: node.children.map(serializeFeLayout) };
 }
 
-/** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null. */
+/** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null.
+ * remote(실제 연결) 소스는 termId(연결 세션의 임시 id)가 새 실행/재마운트에서는 이미 무효하므로
+ * 그대로 되살리지 않고 lazy-remote(세션 참조만 유지, 선택 시 자동 재연결)로 강등해서 복원한다 —
+ * 그래야 FileExplorer 가 마운트 후 자동으로 다시 SFTP 연결을 맺고 저장된 path 로 이동할 수 있다.
+ */
 export function reviveFeLayout(saved: any, localLabel: string): FeLayoutNode | null {
   if (!saved || typeof saved !== 'object') return null;
   if (saved.type === 'leaf') {
     const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
-    const tabs: FeTab[] = rawTabs.map((t: any) => ({
-      id: String(t?.id || makeId('fetab')),
-      source: t?.source || { mode: 'local', label: localLabel },
-      path: String(t?.path || ''),
-      selected: new Set<string>(Array.isArray(t?.selected) ? t.selected : []),
-    }));
+    const tabs: FeTab[] = rawTabs.map((t: any) => {
+      let source: PanelSource = t?.source || { mode: 'local', label: localLabel };
+      if (source.mode === 'remote' && source.sessionId) {
+        source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label };
+      }
+      return {
+        id: String(t?.id || makeId('fetab')),
+        source,
+        path: String(t?.path || ''),
+        selected: new Set<string>(Array.isArray(t?.selected) ? t.selected : []),
+      };
+    });
     if (tabs.length === 0) return null;
     const activeIdx = Math.min(Math.max(0, Number(saved.panel?.activeIdx) || 0), tabs.length - 1);
     return { id: String(saved.id || makeId('fenode')), type: 'leaf', panel: { id: String(saved.panel?.id || makeId('fepanel')), tabs, activeIdx } };
