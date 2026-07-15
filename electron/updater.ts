@@ -14,25 +14,45 @@ import { spawn } from 'child_process';
 // 최신 Node 에선 이미 제거돼 호출 즉시 TypeError 로 죽는다(현장 로그로 확인). 그 패키지를
 // 거치지 않고, sudo-prompt 가 Windows 에서 내부적으로 하는 것과 동일한 방식
 // (PowerShell Start-Process -Verb RunAs) 를 직접 호출한다.
-function elevatedRunWindows(filePath: string, args: string[], log: (msg: string) => void, done: () => void): void {
+//
+// v2.2.9~v2.2.19 에 걸쳐 "우리가 언제/어떻게 PePe 자신을 죽여야 설치가 성공하는가"를 여러
+// 방식(elevate.exe 직접 spawn, app.quit 유지/제거, 외부 프로세스로 Stop-Process, 자기 자신의
+// process.exit)으로 계속 바꿔봤지만 전부 현장에서 재현 실패했다 — Windows 업데이트 재시작 대기
+// 상태도 원인이 아님을 재부팅 후 재현으로 배제했다. 반면 "구버전 PePe.exe 를 수동으로 완전히
+// 종료한 뒤 설치 파일을 더블클릭"하면 100% 정상 설치된다.
+//
+// v2.2.19 최종 방향 전환: 우리가 직접 종료 타이밍을 제어하려는 시도를 전부 그만둔다. NSIS
+// (electron-builder 템플릿, allowOnlyOneInstallerInstance.nsh 의 CHECK_APP_RUNNING)는 이미
+// 설치 시작 시 실행 중인 PePe.exe 를 자동으로 감지해서 "종료하고 계속/재시도/취소" 대화상자를
+// 띄우는 표준 기능을 내장하고 있다 — 이게 정확히 "수동 더블클릭"이 항상 성공하는 이유다.
+// 이제 앱은 app.quit() 도, 자기 자신을 죽이려는 어떤 시도도 하지 않고 승격된 설치 프로그램만
+// 실행한다. NSIS 가 그 대화상자를 띄우면 사용자가 확인 → NSIS 자신이 PePe.exe 를 종료 →
+// 설치 진행, 순서가 된다.
+function elevatedRunWindows(filePath: string, args: string[], log: (msg: string) => void): void {
   const escSingle = (s: string) => s.replace(/'/g, "''");
   const argList = args.map(a => `'${escSingle(a)}'`).join(',');
-  // Start-Process 자체가 UAC 를 띄우고 즉시 반환한다(대상 프로세스 종료를 기다리지 않음) —
-  // $err 로 Start-Process 호출 자체(경로 문제, UAC 취소 등)의 실패만 STDOUT 에 남겨 로그로 확인.
-  const psScript = `try { Start-Process -FilePath '${escSingle(filePath)}' -ArgumentList ${argList} -Verb RunAs -ErrorAction Stop; Write-Output 'ELEVATE_OK' } catch { Write-Output ('ELEVATE_FAIL: ' + $_.Exception.Message) }`;
+  const watcherLog = 'C:\\Users\\Public\\pepe-watcher-debug.log';
+  const psScript = `
+function Log($msg) { Add-Content -Path '${watcherLog}' -Value "$(Get-Date -Format o) $msg" }
+try {
+  Log 'elevatedRunWindows: Start-Process -Verb RunAs 호출 직전'
+  Start-Process -FilePath '${escSingle(filePath)}' -ArgumentList ${argList} -Verb RunAs -ErrorAction Stop
+  Log 'elevatedRunWindows: ELEVATE_OK'
+} catch {
+  Log "elevatedRunWindows: ELEVATE_FAIL - $($_.Exception.Message)"
+}
+`;
+  // v2.2.20 — 현장 재현 실험(2026-07-16)으로 확정: detached:true 로 spawn 한 PowerShell 자식은
+  // Windows 에서 스크립트 실행 자체가 시작되지 않는다(로그 파일조차 안 만들어짐 — Add-Content
+  // 같은 가장 단순한 동작도 실행 안 됨). detached 를 빼고 stdio:'ignore' 만 쓰면 정상 동작
+  // 확인됨(unref() 만으로도 부모 이벤트 루프를 막지 않고 백그라운드 실행됨). Electron 메인
+  // 프로세스는 app.quit() 을 호출하지 않으므로 이 자식이 완료될 때까지 계속 살아있어 문제 없다.
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psScript], {
     windowsHide: true,
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: 'ignore',
   });
-  let out = '';
-  let finished = false;
-  const finish = () => { if (finished) return; finished = true; done(); };
-  child.stdout?.on('data', (d) => { out += d.toString(); });
-  child.stderr?.on('data', (d) => { out += d.toString(); });
-  child.on('error', (e) => { log(`elevatedRunWindows: powershell.exe spawn 자체 실패: ${String(e?.message || e)}`); finish(); });
-  child.on('exit', (code) => { log(`elevatedRunWindows: powershell 종료(code=${code}) 출력: ${out.trim() || '(없음)'}`); finish(); });
   child.unref();
+  log(`elevatedRunWindows: 승격 실행 예약됨(pid=${child.pid}) — installer="${filePath}" ${args.join(' ')}, 로그=${watcherLog}. app.quit() 은 호출하지 않음 — NSIS 의 CHECK_APP_RUNNING 이 실행 중인 앱을 감지해 종료 확인 후 설치를 진행한다.`);
 }
 
 // 패키지 빌드에선 main.ts 가 console.log 를 무력화해서(6번째 줄), electron-updater 의 진단 로그가
@@ -119,7 +139,17 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
     // 자체에서 조용히 실패하는 것으로 보인다. v2.2.28 에서 sudo-prompt 로 우회를 시도했지만,
     // sudo-prompt(9.2.1) 자체가 Electron 42 내장 Node 에서 이미 제거된 util.isObject/isFunction
     // 을 써서 호출 즉시 TypeError 로 죽는 것으로 현장 로그에서 확인됨 — 그 패키지를 완전히
-    // 건너뛰고 PowerShell Start-Process -Verb RunAs 를 직접 호출한다(elevatedRunWindows).
+    // 건너뛰고 PowerShell Start-Process -Verb RunAs 를 직접 호출한다.
+    //
+    // v2.2.16~19 에 걸쳐 app.quit() 유지/제거, 우리가 직접 강제 종료(killSelfThenElevatedRun)
+    // 등 여러 방식을 현장에서 재현 실험했지만 전부 재현 실패(customInit 로그까지만 찍히고
+    // customInstall 진입 전에 멈춤 — pepe-install-debug.log 로 확정). Windows 업데이트 재시작
+    // 대기 상태도 재부팅 후 재현으로 원인이 아님을 배제했다.
+    // v2.2.19 — 최종적으로 "우리가 종료 타이밍을 제어하지 않는다"로 방향을 바꿨다. 앱은
+    // app.quit() 을 호출하지 않고 승격된 설치 프로그램만 실행한다. NSIS 의 CHECK_APP_RUNNING
+    // 이 실행 중인 PePe.exe 를 감지해 "종료하고 계속" 대화상자를 띄우고, 사용자가 확인하면
+    // NSIS 자신이 앱을 종료한 뒤 설치를 진행한다 — 이게 "수동으로 앱을 미리 끄고 설치 파일을
+    // 더블클릭"했을 때 항상 성공하던 것과 완전히 동일한 경로다.
     (async () => {
       try {
         const installerPath: string | undefined = (autoUpdater as any).installerPath;
@@ -129,14 +159,7 @@ export function setupAutoUpdater(getWindow: () => BrowserWindow | null) {
           return;
         }
         unblockFile(installerPath);
-        logUpdate(`PowerShell Start-Process 로 설치 프로그램 승격 실행: "${installerPath}" --updated --force-run`);
-        // Start-Process -Verb RunAs 로 승격된 프로세스는 Windows AppInfo 서비스가 별도로 띄우므로
-        // 우리 앱 프로세스가 먼저 종료돼도 살아남는다. powershell 래퍼가 ELEVATE_OK/FAIL 을 로그로
-        // 남길 때까지(또는 최대 4초) 기다렸다가 종료 — 그래야 실패 원인이 로그에 남는다.
-        let quit = false;
-        const doQuit = () => { if (quit) return; quit = true; app.quit(); };
-        elevatedRunWindows(installerPath, ['--updated', '--force-run'], logUpdate, doQuit);
-        setTimeout(doQuit, 4000);
+        elevatedRunWindows(installerPath, ['--updated', '--force-run'], logUpdate);
       } catch (e: any) {
         logUpdate(`승격 실행 예외: ${String(e?.stack || e)}`);
       }
