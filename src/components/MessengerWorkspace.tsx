@@ -199,6 +199,8 @@ export const MessengerWorkspace: React.FC<{
   const [emojiCategory, setEmojiCategory] = useState<string>('pepe');
   const [selectedEmoticonPackId, setSelectedEmoticonPackId] = useState('');
   const [emoticonReloading, setEmoticonReloading] = useState(false);
+  // 이모티콘에 마우스를 올리면 확대 미리보기 — 작은 그리드 썸네일만으로는 그림을 알아보기 어려워서.
+  const [emoticonPreview, setEmoticonPreview] = useState<{ path: string; name: string } | null>(null);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('messenger:recentEmojis') || '[]') || []; } catch { return []; }
   });
@@ -249,7 +251,13 @@ export const MessengerWorkspace: React.FC<{
     })();
     const off = (window as any).api?.onMessengerEvent?.((p: any) => {
       if (p?.state) {
-        setState(p.state);
+        // main 프로세스가 3초 keepalive 마다 실제 등록된 피어만 담은 state 를 다시 보내는데,
+        // 그대로 덮어쓰면 렌더러 로컬에서만 존재하는 테스트용 더미 사용자(addDummyPeer)가
+        // 매번 사라진다 — 기존 더미는 유지한 채 실제 피어 목록만 갱신한다.
+        setState(prev => {
+          const dummies = prev.peers.filter(pr => pr.id.startsWith('dummy-peer-'));
+          return { ...p.state, peers: [...p.state.peers, ...dummies] };
+        });
         setSelectedPeerId((cur) => cur || p.state.peers?.[0]?.id || '');
       }
       if (p?.type === 'scan-progress') {
@@ -705,7 +713,10 @@ export const MessengerWorkspace: React.FC<{
   const deletePeer = async (peerId: string) => {
     const peer = state.peers.find(p => p.id === peerId);
     if (!confirm(t('deletePeerConfirm', { name: peer?.name || t('selectedUserFallback') }))) return;
-    const res = await (window as any).api?.messengerDeletePeer?.(peerId);
+    // 테스트용 더미 사용자는 실제 등록된 피어가 아니라 렌더러 로컬 상태에만 있으므로,
+    // main 프로세스 IPC 를 거치지 않고 바로 로컬에서 제거한다.
+    const isDummy = peerId.startsWith('dummy-peer-');
+    const res = isDummy ? { success: true } : await (window as any).api?.messengerDeletePeer?.(peerId);
     if (res?.success) {
       setMenu(null);
       setSelectedPeerId(cur => cur === peerId ? '' : cur);
@@ -715,6 +726,15 @@ export const MessengerWorkspace: React.FC<{
         messages: prev.messages.filter(m => m.peerId !== peerId),
       }));
     }
+  };
+
+  // 테스트용 온라인 더미 사용자 추가 — LAN 자동 탐색으로 상대가 안 잡힌 개발/테스트 환경에서
+  // UI(피어 목록, 채팅창 등)를 바로 확인할 수 있게 설정 패널에 버튼으로 노출. 실제로 등록되는
+  // 피어가 아니라 렌더러 로컬 상태에만 추가되고, 메시지 전송은 peer-not-found 로 조용히 무시된다.
+  const addDummyPeer = () => {
+    const id = `dummy-peer-${Date.now()}`;
+    const dummy: Peer = { id, name: `테스트 사용자 ${state.peers.filter(p => p.id.startsWith('dummy-peer-')).length + 1}`, host: '127.0.0.1', port: 0, lastSeen: Date.now(), online: true };
+    setState(prev => ({ ...prev, peers: [...prev.peers, dummy] }));
   };
 
   const clearAll = async () => {
@@ -795,6 +815,9 @@ export const MessengerWorkspace: React.FC<{
                 <button onClick={scanAssignedRanges} disabled={hidePresence}>{t('scanButton')}</button>
                 <small>{scanText || (hidePresence ? t('scanHintHidden') : t('scanHintNormal'))}</small>
               </div>
+              <button onClick={addDummyPeer} title="LAN 에서 상대가 안 잡힐 때 UI 테스트용 온라인 사용자를 추가합니다(우클릭 → 삭제로 제거 가능)">
+                + 테스트용 더미 사용자 추가
+              </button>
             </div>
           )}
           {saving && <div className="messenger-saving">{t('saving')}</div>}
@@ -1040,27 +1063,24 @@ export const MessengerWorkspace: React.FC<{
                     </div>
                     {isPackMode ? (
                       <>
-                        <div className="messenger-emoticon-pack-bar">
-                          <div className="messenger-emoticon-pack-strip">
-                            {emoticonPacks.map(pack => (
-                              <button
-                                key={pack.id}
-                                className={`messenger-emoticon-pack-card ${selectedEmoticonPack?.id === pack.id ? 'active' : ''}`}
-                                onClick={() => setSelectedEmoticonPackId(pack.id)}
-                                title={pack.name}
-                              >
-                                <img className="messenger-emoticon-pack-cover" src={fileUrl(pack.cover.path)} alt={pack.name} />
-                                <span className="messenger-emoticon-pack-name">{pack.name}</span>
-                              </button>
-                            ))}
+                        {/* 설치된 팩이 2개 이상일 때만 선택 바를 보여준다 — 1개뿐이면 자동 선택되므로
+                            이름표 카드 하나만 덩그러니 보이는 게 오히려 UI 잡음이라 숨긴다. */}
+                        {emoticonPacks.length > 1 && (
+                          <div className="messenger-emoticon-pack-bar">
+                            <div className="messenger-emoticon-pack-strip">
+                              {emoticonPacks.map(pack => (
+                                <button
+                                  key={pack.id}
+                                  className={`messenger-emoticon-pack-card ${selectedEmoticonPack?.id === pack.id ? 'active' : ''}`}
+                                  onClick={() => setSelectedEmoticonPackId(pack.id)}
+                                  title={pack.name}
+                                >
+                                  <span className="messenger-emoticon-pack-name">{pack.name}</span>
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                          <button
-                            className="messenger-emoticon-refresh-btn"
-                            onClick={() => void refreshEmoticonPacks()}
-                            title="이모티콘 목록 새로고침"
-                            disabled={emoticonReloading}
-                          >{emoticonReloading ? '새로고침 중' : '새로고침'}</button>
-                        </div>
+                        )}
                         {selectedEmoticonPack ? (
                           <>
                             <div className="messenger-emoticon-pack-heading">
@@ -1079,7 +1099,8 @@ export const MessengerWorkspace: React.FC<{
                                     key={`${selectedEmoticonPack.id}-${item.name}-${i}`}
                                     className="messenger-emoji-item messenger-emoticon-item"
                                     onClick={() => void sendSticker(item.path)}
-                                    title={item.name}
+                                    onMouseEnter={() => setEmoticonPreview({ path: item.path, name: item.name })}
+                                    onMouseLeave={() => setEmoticonPreview(null)}
                                   >
                                     <img src={fileUrl(item.path)} alt={item.name} />
                                   </button>
@@ -1103,6 +1124,11 @@ export const MessengerWorkspace: React.FC<{
                             <button key={`${em}-${i}`} className="messenger-emoji-item" onClick={() => insertEmoji(em)}>{em}</button>
                           ))
                         )}
+                      </div>
+                    )}
+                    {emoticonPreview && (
+                      <div className="messenger-emoticon-preview">
+                        <img src={fileUrl(emoticonPreview.path)} alt={emoticonPreview.name} />
                       </div>
                     )}
                   </div>
