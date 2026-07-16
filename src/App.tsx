@@ -509,6 +509,7 @@ function App() {
                   kind: slot?.kind || null,
                   // 터미널 슬롯의 마지막 연결 세션 — 앱 재시작 후 자동 재접속에 사용. 누락되면
                   // 저장돼 있어도 매번 새로 물어야 해서 여기서 같이 복원해야 함.
+                  // pwd(마지막 작업 디렉토리)도 함께 복원 — 연결 직후 그 경로로 자동 이동(cd)한다.
                   ...(slot?.lastSession && typeof slot.lastSession === 'object' && slot.lastSession.sessionId
                     ? { lastSession: {
                         id: String(slot.lastSession.id ?? slot.lastSession.sessionId),
@@ -516,6 +517,10 @@ function App() {
                         name: String(slot.lastSession.name || ''),
                         host: slot.lastSession.host ? String(slot.lastSession.host) : undefined,
                         username: slot.lastSession.username ? String(slot.lastSession.username) : undefined,
+                        theme: slot.lastSession.theme ? String(slot.lastSession.theme) : undefined,
+                        fontFamily: slot.lastSession.fontFamily ? String(slot.lastSession.fontFamily) : undefined,
+                        fontSize: typeof slot.lastSession.fontSize === 'number' ? slot.lastSession.fontSize : undefined,
+                        pwd: slot.lastSession.pwd ? String(slot.lastSession.pwd) : undefined,
                       } }
                     : {}),
                 }))

@@ -335,10 +335,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       const label = folder ? `⚪ ${s.name}  [${folder}] (${s.host})` : `⚪ ${s.name} (${s.host})`;
       newSources.push({ mode: 'lazy-remote', sessionId: s.id, label });
     }
-    // 3) 기존 SFTP 직접 연결 유지 — 수동(🔌) + 세션 우클릭 파일전송(🌐, termId=sftp-fe-…)
-    //    (이들은 sessions/allSessionsList 로 재현되지 않으므로 재구성 시 명시적으로 보존해야 함)
+    // 3) 기존 SFTP 직접 연결 유지 — 수동(🔌, termId=sftp-…) + 세션 우클릭 파일전송(🌐,
+    //    termId=sftp-fe-…) + lazy-remote 를 자동/수동으로 실제 연결한 것(termId=fe-lazy-…,
+    //    realizeLazyRemote 참고) 모두 sessions/allSessionsList 로 재현되지 않으므로 재구성 시
+    //    명시적으로 보존해야 한다 — 안 그러면 다른 탭에 갔다 돌아오는 등으로 이 effect 가 다시
+    //    실행될 때마다 드롭다운에서 사라지거나 lazy-remote(미연결) 로 되돌아가 보인다.
     for (const s of sources) {
-      if (s.mode === 'remote' && typeof s.termId === 'string' && s.termId.startsWith('sftp')
+      if (s.mode === 'remote' && typeof s.termId === 'string' && (s.termId.startsWith('sftp') || s.termId.startsWith('fe-lazy-'))
           && !newSources.find(n => n.termId === s.termId)) {
         newSources.push(s);
       }

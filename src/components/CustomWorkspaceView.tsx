@@ -6,7 +6,7 @@ import { VpnWorkspace } from './VpnWorkspace';
 import { MicroSipWorkspace } from './MicroSipWorkspace';
 import { FileExplorer } from './FileExplorer';
 import { Layout } from './Layout';
-import { registerTermSession, resetTermConnectState, termStore, promptPasswordAndConnect, applyThemeToTerm, applyFontToTerm } from './TerminalPanel';
+import { registerTermSession, resetTermConnectState, termStore, promptPasswordAndConnect, applyThemeToTerm, applyFontToTerm, subscribePwdChange } from './TerminalPanel';
 import {
   CUSTOM_WORKSPACE_KIND_ORDER,
   CUSTOM_WORKSPACE_LAYOUTS,
@@ -106,8 +106,9 @@ function TerminalSlot({
   singleSessionMode?: boolean;
   // 마지막 연결 세션 — 상태가 비어 있는(새로 생성된) 슬롯일 때 초기 레이아웃에 자동 반영되어
   // TerminalPanel 의 마운트 시 자동 접속 로직(activeSession.sessionId 존재 시)을 그대로 탄다.
-  initialSession?: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number };
-  onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number }) => void;
+  // pwd 가 있으면 연결 완료 후 그 경로로 자동 이동(cd 주입)한다.
+  initialSession?: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number; pwd?: string };
+  onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number; pwd?: string }) => void;
 }) {
   const debugIdRef = React.useRef(`cw-term-${workspaceId}:${slotId}`);
   const emitDebugLog = (...parts: any[]) => {
@@ -139,6 +140,19 @@ function TerminalSlot({
       };
       setTimeout(applyWhenReady, 50);
     }
+    // 마지막 작업 디렉토리(pwd)가 있으면, SSH 연결이 실제로 완료된 뒤 그 경로로 자동 이동한다 —
+    // App.tsx 의 세션 분리/재도킹(cdAfterConnect) 과 동일한 패턴(연결 완료 이벤트 대기 후 cd 주입).
+    if (initialSession.pwd) {
+      const targetCwd = initialSession.pwd.replace(/"/g, '\\"');
+      let off: (() => void) | undefined;
+      off = (window as any).api?.onSSHConnected?.((p: any) => {
+        if (p?.panelId !== termId) return;
+        try { off?.(); } catch {}
+        setTimeout(() => {
+          try { (window as any).api?.sendSSHInput?.(termId, `cd "${targetCwd}"\r`); } catch {}
+        }, 1500);
+      });
+    }
     return {
       ...initial,
       panel: {
@@ -150,6 +164,11 @@ function TerminalSlot({
   });
   const [selectedPanelId, setSelectedPanelId] = useState<string | null>(state?.selectedPanelId || null);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(state?.activeSlotId || null);
+  // 마지막으로 onSessionChange 로 보고한 세션의 메타데이터(host/username/theme/font) — pwd 추적
+  // 이펙트가 initialSession(마운트 시점의 값, 세션을 바꾸면 stale) 대신 이걸 참조해야 정확하다.
+  const lastSessionMetaRef = React.useRef<{ sessionId: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number } | null>(
+    initialSession ? { sessionId: initialSession.sessionId, host: initialSession.host, username: initialSession.username, theme: initialSession.theme, fontFamily: initialSession.fontFamily, fontSize: initialSession.fontSize } : null
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerNodeId, setPickerNodeId] = useState<string | null>(null);
   const [sessionQuery, setSessionQuery] = useState('');
@@ -196,6 +215,40 @@ function TerminalSlot({
     lastEmittedRef.current = nextSig;
     onStateChange(next);
   }, [layout, selectedPanelId, activeSlotId, onStateChange]);
+
+  // 마지막 작업 디렉토리(pwd) 추적 — 이 슬롯의 (단일 세션 모드 기준) 활성 세션이 바뀔 때마다
+  // OSC7 pwd 변경을 구독해, 워크스페이스 탭을 닫거나 앱을 재시작한 뒤에도 그 경로로 자동
+  // 이동(cd)할 수 있도록 lastSession.pwd 를 갱신해 저장한다(onSessionChange 재사용).
+  const activeSession = useMemo(() => {
+    const all = collectAllSessions(layout);
+    return all.find(s => s.termId && s.sessionId) || null;
+  }, [layout]);
+  useEffect(() => {
+    if (!activeSession?.termId || !activeSession.sessionId || !onSessionChange) return;
+    const termId = activeSession.termId;
+    const sessionId = activeSession.sessionId;
+    const sessionName = activeSession.sessionName;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = subscribePwdChange(termId, (pwd) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const meta = lastSessionMetaRef.current?.sessionId === sessionId ? lastSessionMetaRef.current : null;
+        onSessionChange({
+          id: sessionId,
+          sessionId,
+          name: sessionName,
+          host: meta?.host,
+          username: meta?.username,
+          theme: meta?.theme,
+          fontFamily: meta?.fontFamily,
+          fontSize: meta?.fontSize,
+          pwd,
+        });
+      }, 1500);
+    });
+    return () => { if (timer) clearTimeout(timer); off(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession?.termId, activeSession?.sessionId]);
 
   const updateLayout = (fn: (l: LayoutNode) => LayoutNode) => setLayout(prev => {
     const next = fn(prev);
@@ -295,6 +348,7 @@ function TerminalSlot({
     setSelectedPanelId(nodeId);
     setPickerOpen(false);
     setPickerNodeId(null);
+    lastSessionMetaRef.current = { sessionId: session.id, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize };
     try { onSessionChange?.({ id: session.id, sessionId: session.id, name: displayName, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize }); } catch {}
     try {
       emitDebugLog('[cw-debug][terminal-slot] connect-ssh', { termId: nextTermId, sessionId: session.id, displayName, singleSessionMode });
@@ -494,6 +548,7 @@ function TerminalSlot({
           return found;
         };
         const targetSession = findTargetSession(layout, nodeId);
+        lastSessionMetaRef.current = { sessionId, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize };
         try { onSessionChange?.({ id: sessionId, sessionId, name: displayName, host: session.host, username: session.username, theme: session.theme, fontFamily: session.fontFamily, fontSize: session.fontSize }); } catch {}
         emitDebugLog('[cw-debug][terminal-slot] connect-drop', {
           workspaceId,

@@ -26,6 +26,9 @@ export type CustomWorkspaceLastSession = {
   theme?: string;
   fontFamily?: string;
   fontSize?: number;
+  // 마지막으로 작업 중이던 원격 디렉토리(OSC7 로 추적) — 워크스페이스 탭을 다시 열 때
+  // 연결 직후 이 경로로 자동 이동(cd)한다.
+  pwd?: string;
 };
 
 export type CustomWorkspaceSlot = {
