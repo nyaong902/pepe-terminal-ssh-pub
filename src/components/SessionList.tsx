@@ -80,6 +80,11 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   const [pinned, setPinned] = useState<boolean>(true);
   const pinnedLoadedRef = useRef(false);
   const [visible, setVisible] = useState(true);
+  // Ctrl+S 토글 핸들러(effect, deps=[onSetTopPanel])에서 최신 pinned/visible 값을 읽기 위한 ref.
+  const pinnedRef = useRef(pinned);
+  const visibleRef = useRef(visible);
+  useEffect(() => { pinnedRef.current = pinned; }, [pinned]);
+  useEffect(() => { visibleRef.current = visible; }, [visible]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<'session' | 'folder'>('session');
   const [editing, setEditing] = useState<Session | null>(null);
@@ -153,6 +158,12 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
 
   useEffect(() => {
     const onFocusSearch = () => {
+      // unpinned(auto-hide) 상태에서 이미 펼쳐져 있으면 다시 닫는다 — Ctrl+W 커맨드 팔레트와 동일한
+      // 토글 동작. pinned 상태에선 애초에 항상 보이므로 닫을 필요 없이 검색창 포커스만 이동.
+      if (!pinnedRef.current && visibleRef.current) {
+        setVisible(false);
+        return;
+      }
       onSetTopPanel?.('session');
       setVisible(true);
       setPendingSearchFocus(true);

@@ -15,6 +15,9 @@ type Props = {
   // 기존 sizing 로직을 그대로 쓰고, 커스텀 워크스페이스 슬롯(그리드 셀, 크기가 작고 자주 리사이즈됨)만
   // 별도 sizing 로직을 쓴다 — 기존 탭 동작에 영향 없이 커스텀 워크스페이스의 "150px 고정" 버그만 고친다.
   embedded?: boolean;
+  // 탭 바 + 주소창/줌/DevTools/프록시 툴바를 아예 렌더하지 않음 — 사내 메신저처럼 고정된 단일
+  // 사이트를 임베드할 때, 브라우저 크롬 UI 없이 webview 만 꽉 채워 보여주고 싶을 때 사용.
+  chromeless?: boolean;
 };
 
 type ActiveSshTarget = {
@@ -35,7 +38,7 @@ type StoredSession = {
   hasJumps?: boolean;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, embedded = false }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, embedded = false, chromeless = false }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
   const webviewWrapRef = useRef<HTMLDivElement | null>(null);
@@ -977,15 +980,29 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     } catch {}
   };
 
-  const installBrowserCredentialHooks = async (url: string, username: string, password: string, siteKey: string) => {
+  const installBrowserCredentialHooks = async (url: string, username: string, password: string, siteKey: string, autoSubmit = false) => {
     const wv: any = webviewRef.current;
     if (!wv || !siteKey) return;
     const seq = ++credSyncSeqRef.current;
+    // teardown 은 아래 credSyncSeqRef 시퀀스 체크와 무관하게 항상 즉시 실행한다 — 네비게이션이
+    // 짧은 시간에 여러 번 겹치면(did-navigate/did-navigate-in-page/did-stop-loading 이 거의
+    // 동시에 발생) 먼저 시작된 이 함수의 await 가 끝나기 전에 나중 호출이 seq 를 증가시켜버려서,
+    // "본 스크립트"가 seq 불일치로 통째로 취소되는 경우가 있었다 — 그러면 teardown 도 같이
+    // 취소되어 이전(로그인 페이지) 클로저가 계속 살아남아 검색창 등을 계속 오염시켰다.
+    try {
+      await wv.executeJavaScript(`
+        if (window.__pepeBrowserCredTeardown) { try { window.__pepeBrowserCredTeardown(); } catch {} }
+      `, true);
+    } catch {}
     const script = `
       (() => {
-        const cred = ${JSON.stringify({ username, password, siteKey, sourceUrl: url })};
+        const cred = ${JSON.stringify({ username, password, siteKey, sourceUrl: url, autoSubmit })};
         const currentSiteKey = String(cred.siteKey || '').toLowerCase();
         const prefix = '__PEPE_BROWSER_CRED__:';
+        console.log('__PEPE_AUTOSUBMIT_DEBUG__:' + JSON.stringify({
+          tag: 'script-injected', href: location.href,
+          hasUsername: !!cred.username, hasPassword: !!cred.password, autoSubmit: cred.autoSubmit,
+        }));
         const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
         const setValue = (el, value) => {
           if (!el) return false;
@@ -1020,12 +1037,122 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         };
         const getInputs = () => Array.from(document.querySelectorAll('input')).filter((el) => !el.disabled && !el.readOnly);
         const pickBest = (inputs, scorer) => inputs.slice().sort((a, b) => scorer(b) - scorer(a))[0] || null;
-        const fill = () => {
+        // 로그인 버튼 후보 — <button type=submit>, input[type=submit], 텍스트에 로그인/login 이
+        // 들어간 button/a 요소. 스코어링으로 가장 그럴듯한 것 하나만 고른다(여러 버튼이 있는
+        // 페이지에서 엉뚱한 걸 누르지 않도록).
+        const findSubmitEl = (form) => {
+          const scope = form || document;
+          // button/input[submit]/role=button 외에, 클릭 가능한 커스텀 요소(div/span 에 클릭
+          // 핸들러만 붙인 SPA 버튼)도 후보에 넣는다 — "로그인" 텍스트를 가진 리프 노드까지 포함.
+          const candidates = Array.from(scope.querySelectorAll(
+            'button, input[type="submit"], a[role="button"], [role="button"], div, span'
+          ));
+          const scoreBtn = (el) => {
+            const text = (el.innerText || el.value || el.textContent || '').trim().toLowerCase();
+            const meta = [el.type, el.id, el.className].filter(Boolean).join(' ').toLowerCase();
+            const tag = el.tagName.toLowerCase();
+            let score = 0;
+            if (tag === 'button' || tag === 'a') score += 3;
+            if (el.type === 'submit') score += 3;
+            if (el.getAttribute && el.getAttribute('role') === 'button') score += 2;
+            // 텍스트가 정확히 "로그인"/"login" 뿐인 요소(자식 노드 없이 리프)를 우대 — div/span
+            // 후보 중 페이지 전체 텍스트를 다 포함하는 큰 컨테이너가 걸리는 걸 방지.
+            if (/^(login|log in|로그인|sign in)$/.test(text)) score += 6;
+            else if (/login|log in|로그인|sign in/.test(text)) score += 2;
+            if (/login|signin/.test(meta)) score += 2;
+            // 네이버웍스 로그인 페이지에서 실측된 실제 구조(id=loginBtn, class=btn_submit) — 있으면 확정 우대.
+            if (/\bloginbtn\b/.test(meta)) score += 10;
+            if (/\bbtn_submit\b/.test(meta)) score += 4;
+            if (text.length > 20) score -= 5; // 버튼 텍스트치고 너무 긴 컨테이너는 감점
+            if (el.children && el.children.length > 3) score -= 3; // 자식이 많으면 버튼이 아닐 확률↑
+            if (el.disabled) score -= 100;
+            const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            if (style && (style.display === 'none' || style.visibility === 'hidden')) score -= 100;
+            return score;
+          };
+          const best = pickBest(candidates.filter(el => !el.disabled), scoreBtn);
+          return best;
+        };
+        // 네이티브 el.click() 만으로는 반응하지 않는 SPA(React 등)를 위해, 실제 마우스 클릭과
+        // 동일한 이벤트 시퀀스(pointerdown→mousedown→pointerup→mouseup→click)를 모두 디스패치.
+        const simulateClick = (el) => {
+          const rect = el.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+          try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch {}
+          try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch {}
+          try { el.dispatchEvent(new PointerEvent('pointerup', opts)); } catch {}
+          try { el.dispatchEvent(new MouseEvent('mouseup', opts)); } catch {}
+          try { el.dispatchEvent(new MouseEvent('click', opts)); } catch {}
+          try { el.click(); } catch {}
+        };
+        // 값을 채운 뒤 자동 제출 — 같은 페이지에서 중복 시도하지 않도록 window 플래그로 1회만
+        // "시작"하되, 실제 클릭은 버튼이 활성화될 때까지 최대 5초간 200ms 간격으로 재시도한다.
+        // (많은 로그인 폼이 비밀번호 입력 직후에만 버튼을 활성화하며, 그 활성화가 프레임워크의
+        // 다음 렌더 틱에 일어나 setValue 직후엔 아직 disabled 인 경우가 흔하다.)
+        const autoSubmitIfReady = () => {
+          // cred 에 자격증명이 아예 없으면(이 페이지엔 해당 사항 없음) 절대 진행하지 않는다 —
+          // 아래 userOk/passOk 는 "해당 자격증명이 없으면 통과(!cred.username)"로 설계돼 있어서,
+          // username/password 가 둘 다 없는 페이지에서도 우연히 password 필드 하나만 있으면
+          // (talk.worksmobile.com 의 숨은 설정 폼 등) 자동제출이 발동해 페이지의 엉뚱한 버튼
+          // (정렬 버튼 등)을 로그인 버튼으로 오인해 클릭해버리는 사고가 여기서 났었다.
+          if (!cred.username && !cred.password) return;
+          if (!cred.autoSubmit || window.__pepeBrowserCredAutoSubmitting) return;
           const inputs = getInputs();
           const user = pickBest(inputs, scoreText);
           const pass = pickBest(inputs, scorePass);
+          // 완전일치(===) 대신 포함 관계로 완화 — 예: 저장된 계정은 "id@domain.com" 전체인데,
+          // 이 사이트처럼 아이디 입력칸에는 "id" 부분만 들어있고 "@domain.com" 은 옆에 별도
+          // 고정 텍스트로 표시되는 폼이 있어(네이버웍스가 그런 구조), 완전일치면 항상 실패했다.
+          const userValNorm = user ? String(user.value || '').trim().toLowerCase() : '';
+          const credUserNorm = String(cred.username || '').trim().toLowerCase();
+          const userOk = !cred.username || (!!userValNorm && (userValNorm === credUserNorm
+            || credUserNorm.startsWith(userValNorm) || userValNorm.startsWith(credUserNorm)));
+          const passOk = !cred.password || (pass && String(pass.value || '') === cred.password);
+          console.log('__PEPE_AUTOSUBMIT_DEBUG__:' + JSON.stringify({
+            tag: 'ready-check', userOk: !!userOk, passOk: !!passOk, hasPass: !!pass,
+            userVal: user ? String(user.value || '').trim().slice(0, 3) + '...' : null,
+            credUser: cred.username ? cred.username.slice(0, 3) + '...' : null,
+          }));
+          if (!userOk || !passOk || !pass) return;
+          window.__pepeBrowserCredAutoSubmitting = true;
+          let tries = 0;
+          const attempt = () => {
+            tries++;
+            const form = pass.form || pass.closest('form');
+            const btn = findSubmitEl(form);
+            console.log('__PEPE_AUTOSUBMIT_DEBUG__:' + JSON.stringify({
+              tries, found: !!btn,
+              btnTag: btn ? btn.tagName : null,
+              btnText: btn ? (btn.innerText || btn.value || btn.textContent || '').trim().slice(0, 30) : null,
+              btnDisabled: btn ? !!btn.disabled : null,
+              hasForm: !!form,
+            }));
+            if (btn && !btn.disabled) {
+              simulateClick(btn);
+              return;
+            }
+            if (tries >= 25) {
+              // 25 회(5초) 안에 버튼이 안 풀리면 form 자체 제출로 폴백.
+              try { if (form && form.requestSubmit) form.requestSubmit(); else if (form) form.submit(); } catch {}
+              return;
+            }
+            setTimeout(attempt, 200);
+          };
+          setTimeout(attempt, 150);
+        };
+        const fill = () => {
+          const inputs = getInputs();
+          const pass = pickBest(inputs, scorePass);
+          // 로그인 폼에는 반드시 password 타입 입력칸이 있다 — 이게 없는 페이지(로그인 후
+          // 넘어간 실제 서비스 화면의 검색창 등 일반 텍스트 입력창)까지 아이디로 오인해 채우는
+          // 사고를 막기 위해, 비밀번호 필드가 있는 페이지에서만 채운다.
+          if (!pass) return;
+          const user = pickBest(inputs, scoreText);
           if (cred.username && user && !String(user.value || '').trim()) setValue(user, cred.username);
-          if (cred.password && pass && !String(pass.value || '').trim()) setValue(pass, cred.password);
+          if (cred.password && !String(pass.value || '').trim()) setValue(pass, cred.password);
+          autoSubmitIfReady();
         };
         const capture = () => {
           const inputs = getInputs();
@@ -1039,24 +1166,38 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           if (!password) return;
           console.log(prefix + JSON.stringify({ url: location.href, siteKey: currentSiteKey, username, password }));
         };
-        if (!window.__pepeBrowserCredHooked) {
-          window.__pepeBrowserCredHooked = true;
-          document.addEventListener('focusin', (e) => {
-            const el = e.target;
-            if (!(el instanceof HTMLInputElement)) return;
-            if (!isTextLike(el) && !isPassLike(el)) return;
-            fill();
-          }, true);
-          document.addEventListener('submit', () => setTimeout(capture, 0), true);
-          document.addEventListener('keydown', (e) => {
-            const el = e.target;
-            if (!(el instanceof HTMLInputElement)) return;
-            if (e.key === 'Enter' && isPassLike(el)) setTimeout(capture, 0);
-          }, true);
-          const mo = new MutationObserver(() => fill());
-          mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
-          window.addEventListener('beforeunload', () => { try { mo.disconnect(); } catch {} }, { once: true });
+        // 이 사이트(talk.worksmobile.com)처럼 해시 라우팅 SPA 는 did-navigate-in-page 로 URL 만
+        // 바뀌고 document/window 는 그대로 유지된다 — 그래서 로그인 페이지에서 걸어둔 이전 훅이
+        // (cred 를 클로저로 캡처한 채) 계속 살아남아, siteKey/자격증명이 바뀐 뒤에도 옛 계정으로
+        // 계속 채워 넣는 사고가 났었다. window.__pepeBrowserCredHooked 로 최초 1회만 거는 대신,
+        // 매 스크립트 주입마다 이전 리스너/옵저버를 확실히 정리(teardown)하고 새로 건다.
+        if (window.__pepeBrowserCredTeardown) {
+          try { window.__pepeBrowserCredTeardown(); } catch {}
         }
+        const onFocusIn = (e) => {
+          const el = e.target;
+          if (!(el instanceof HTMLInputElement)) return;
+          if (!isTextLike(el) && !isPassLike(el)) return;
+          fill();
+        };
+        const onSubmit = () => setTimeout(capture, 0);
+        const onKeydown = (e) => {
+          const el = e.target;
+          if (!(el instanceof HTMLInputElement)) return;
+          if (e.key === 'Enter' && isPassLike(el)) setTimeout(capture, 0);
+        };
+        document.addEventListener('focusin', onFocusIn, true);
+        document.addEventListener('submit', onSubmit, true);
+        document.addEventListener('keydown', onKeydown, true);
+        const mo = new MutationObserver(() => fill());
+        mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        window.__pepeBrowserCredTeardown = () => {
+          document.removeEventListener('focusin', onFocusIn, true);
+          document.removeEventListener('submit', onSubmit, true);
+          document.removeEventListener('keydown', onKeydown, true);
+          try { mo.disconnect(); } catch {}
+        };
+        window.addEventListener('beforeunload', () => { try { window.__pepeBrowserCredTeardown?.(); } catch {} }, { once: true });
         fill();
         return true;
       })();
@@ -1082,7 +1223,9 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         siteKey = r.siteKey || target;
       }
     } catch {}
-    await installBrowserCredentialHooks(url, username, password, siteKey);
+    // chromeless(사내 메신저 등 고정 임베드)일 때만 자동 제출까지 — 일반 브라우저 탭에서는
+    // 사용자가 로그인 버튼을 직접 눌러야 하는 통상적인 동작을 유지한다.
+    await installBrowserCredentialHooks(url, username, password, siteKey, chromeless);
   };
 
   const go = async (target: string) => {
@@ -1227,6 +1370,12 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
             void (window as any).api.browserCredSave({ siteKey, url: String(data?.url || ''), username, password });
           }
         } catch {}
+        return;
+      }
+      // 자동 로그인 버튼 탐색/클릭 디버그 — 개발자도구 콘솔(F12)에서 확인 가능.
+      if (m.startsWith('__PEPE_AUTOSUBMIT_DEBUG__:')) {
+        console.log('[auto-submit]', m.slice('__PEPE_AUTOSUBMIT_DEBUG__:'.length));
+        return;
       }
     };
     wv.__pepeZoomHandlers = { onInput, injectWheelZoom, onConsole };
@@ -1247,8 +1396,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
 
   return (
     <div ref={browserPaneRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, height: '100%', background: '#1a1a1a', overflow: 'hidden' }}>
-      {/* 탭 바 — 링크가 새 창을 요청하면 새 탭으로 열림. + 로 빈 탭 추가. */}
-      <div style={{ display: 'flex', alignItems: 'stretch', background: '#1e1e1e', borderBottom: '1px solid #333', overflowX: 'auto', minHeight: 28 }}>
+      {/* 탭 바 — 링크가 새 창을 요청하면 새 탭으로 열림. + 로 빈 탭 추가. chromeless 면 렌더하지 않음. */}
+      {!chromeless && <div style={{ display: 'flex', alignItems: 'stretch', background: '#1e1e1e', borderBottom: '1px solid #333', overflowX: 'auto', minHeight: 28 }}>
         {tabs.map(tab => {
           const isActive = tab.id === activeTabId;
           const label = (tab.title || tab.url || '새 탭').slice(0, 32);
@@ -1277,8 +1426,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         <button onClick={() => openInNewTab('about:blank')}
           title="새 탭"
           style={{ background: 'transparent', color: '#888', border: 'none', padding: '0 12px', cursor: 'pointer', fontSize: 14 }}>+</button>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', background: '#222', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
+      </div>}
+      {!chromeless && <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', background: '#222', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
         <button className="panel-btn" disabled={!canBack} onClick={() => webviewRef.current?.goBack()} title={t('back')}>◀</button>
         <button className="panel-btn" disabled={!canFwd} onClick={() => webviewRef.current?.goForward()} title={t('forward')}>▶</button>
         <button className="panel-btn" onClick={() => loading ? webviewRef.current?.stop() : webviewRef.current?.reload()} title={loading ? t('stop') : t('refresh')}>{loading ? '✕' : '⟳'}</button>
@@ -1384,8 +1533,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         <span style={{ color: '#9aa3ad', fontSize: 12, marginLeft: 2 }} title={proxyState ? `SOCKS5 127.0.0.1:${proxyState.localPort}` : t('directConnect')}>
           {proxyBusy ? t('proxyApplying') : currentProxyLabel}
         </span>
-      </div>
-      {testResult ? (
+      </div>}
+      {!chromeless && testResult ? (
         <div style={{ padding: '4px 10px 0', color: testOk ? '#86efac' : '#fda4af', fontSize: 12, lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
           {testResult}
         </div>

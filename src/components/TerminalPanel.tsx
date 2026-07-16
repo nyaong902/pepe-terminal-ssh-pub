@@ -1026,6 +1026,10 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
       // 전송돼버린다 — 팔레트가 열리면서 동시에 터미널 라인이 지워지고, 그 직후 입력이 먹통처럼
       // 보이는 원인이었다.
       if (matchKeybinding(e, 'commandPalette')) return false;
+      // 메신저/AI채팅/작업일지/스티커메모 바로가기(기본 Ctrl+M/N/,/.) — 위 커맨드 팔레트와 동일한
+      // 이유로 이 목록에 없으면 xterm 이 그대로 처리해 ^M/^N 등 원시 제어문자가 PTY 로 전송된다.
+      if (matchKeybinding(e, 'openMessenger') || matchKeybinding(e, 'openAiChat')
+        || matchKeybinding(e, 'openWorkLog') || matchKeybinding(e, 'openStickyNotes')) return false;
       // 세션 복제 분할 단축키도 앱으로 전달
       if (matchKeybinding(e, 'cloneSplitH') || matchKeybinding(e, 'cloneSplitV')) return false;
       // 연결된 세션 분할 단축키도 앱으로 전달

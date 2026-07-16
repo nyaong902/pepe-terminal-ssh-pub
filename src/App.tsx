@@ -48,6 +48,7 @@ import { SessionList } from './components/SessionList';
 import { SessionEditor } from './components/SessionEditor';
 import { type CustomWorkspaceTemplate, normalizeCustomWorkspaceTemplate } from './utils/customWorkspaces';
 import { weekdayLabel } from './components/WorkLogWorkspace';
+import { COMPANY_MESSENGER_DOMAIN, COMPANY_MESSENGER_SITE_KEY } from './utils/companyMessenger';
 import {
   LayoutNode,
   PanelSession,
@@ -112,6 +113,7 @@ function addBroadcastHistory(text: string) {
 
 // 분리된(탭 tear-off) 창 여부 — main 이 #detached 해시로 로드.
 const IS_DETACHED_WINDOW = typeof window !== 'undefined' && /detached/.test(window.location.hash);
+
 
 function App() {
   const { t: tOpt } = useTranslation('options');
@@ -232,6 +234,9 @@ function App() {
   }, [selectedPanelId, activeTabId]);
   const [showSearch, setShowSearch] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  // 커맨드 팔레트 항목 드래그 재배열 순서(id 배열) — 빈 배열이면 기본 순서 그대로 사용.
+  const [commandPaletteOrder, setCommandPaletteOrder] = useState<string[]>([]);
+  const commandPaletteOrderLoadedRef = useRef(false);
   // 비밀번호 저장 권유 모달 — 'ssh-fresh-password-success' 이벤트로 트리거됨
   const [savePwdPrompt, setSavePwdPrompt] = useState<{ termId: string; sessionId: string; password: string; hostHint?: string } | null>(null);
   // 비밀번호 입력 모달들 — 동시에 여러 세션 비밀번호 입력 가능 (단일 모달이 다른 세션
@@ -378,6 +383,27 @@ function App() {
   const [optionsTab, setOptionsTab] = useState<'terminal' | 'session' | 'workspace' | 'mcp' | 'debug' | 'messenger' | 'keybindings'>('terminal');
   const [aiMcpAttachmentMode, setAiMcpAttachmentMode] = useState<'ssh' | 'local'>('ssh');
   const aiMcpAttachmentModeLoadedRef = useRef(false);
+  // 메신저 탭 모드 — 'mini'(기본, 자체 메신저) 또는 'company'(사내 웹 메신저 페이지를 임베드).
+  const [messengerMode, setMessengerMode] = useState<'mini' | 'company'>('mini');
+  const messengerModeLoadedRef = useRef(false);
+  // 사내 메신저(네이버웍스) 자동 로그인용 계정 — 아이디(도메인 앞부분)/비밀번호. 저장은 기존
+  // 브라우저 자격증명 저장소(browser-creds, siteKey=COMPANY_MESSENGER_SITE_KEY)에 위임한다.
+  const [companyMessengerId, setCompanyMessengerId] = useState('');
+  const [companyMessengerPassword, setCompanyMessengerPassword] = useState('');
+  const [companyMessengerCredSaved, setCompanyMessengerCredSaved] = useState(false);
+  const saveCompanyMessengerCred = async () => {
+    const id = companyMessengerId.trim();
+    if (!id) return;
+    try {
+      await (window as any).api?.browserCredSave?.({
+        siteKey: COMPANY_MESSENGER_SITE_KEY,
+        username: `${id}${COMPANY_MESSENGER_DOMAIN}`,
+        password: companyMessengerPassword,
+      });
+      setCompanyMessengerCredSaved(true);
+      setTimeout(() => setCompanyMessengerCredSaved(false), 2000);
+    } catch {}
+  };
   const [customWorkspaces, setCustomWorkspaces] = useState<CustomWorkspaceTemplate[]>([]);
   const customWorkspacesLoadedRef = useRef(false);
   const [customWorkspaceDialog, setCustomWorkspaceDialog] = useState<{ open: boolean; template?: CustomWorkspaceTemplate | null }>({ open: false, template: null });
@@ -549,6 +575,9 @@ function App() {
         if (prefs?.aiMcpAttachmentMode === 'local' || prefs?.aiMcpAttachmentMode === 'ssh') {
           setAiMcpAttachmentMode(prefs.aiMcpAttachmentMode);
         }
+        if (prefs?.messengerMode === 'mini' || prefs?.messengerMode === 'company') {
+          setMessengerMode(prefs.messengerMode);
+        }
       if (typeof prefs?.showRuntimeLogs === 'boolean') {
         setShowRuntimeLogs(prefs.showRuntimeLogs);
       }
@@ -569,6 +598,10 @@ function App() {
           setWordSeparator(prefs.wordSeparator);
           setWordSepValue(prefs.wordSeparator);
         }
+        if (Array.isArray(prefs?.commandPaletteOrder)) {
+          setCommandPaletteOrder(prefs.commandPaletteOrder.filter((id: unknown) => typeof id === 'string'));
+        }
+        commandPaletteOrderLoadedRef.current = true;
         terminalPinnedLoadedRef.current = true;
         remoteTreeWidthLoadedRef.current = true;
         remoteTreePinnedLoadedRef.current = true;
@@ -576,6 +609,7 @@ function App() {
         showClaudeChatLoadedRef.current = true;
         claudeChatViewLoadedRef.current = true;
         aiMcpAttachmentModeLoadedRef.current = true;
+        messengerModeLoadedRef.current = true;
         customWorkspacesLoadedRef.current = true;
       } catch {}
       showBroadcastLoadedRef.current = true;
@@ -1037,6 +1071,10 @@ function App() {
     if (remoteTreePinned) setRemoteTreeVisible(true);
   }, [remoteTreePinned]);
   useEffect(() => {
+    if (!commandPaletteOrderLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ commandPaletteOrder }); } catch {}
+  }, [commandPaletteOrder]);
+  useEffect(() => {
     if (!terminalPinnedLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ terminalPinned }); } catch {}
     if (terminalPinned) setTerminalVisible(true);
@@ -1076,6 +1114,20 @@ function App() {
     window.addEventListener('claude-prefill', onPrefill);
     return () => window.removeEventListener('claude-prefill', onPrefill);
   }, []);
+  // 옵션 화면(메신저 탭)이 열릴 때 저장된 사내메신저 계정을 불러와 입력칸에 채워둔다.
+  useEffect(() => {
+    if (!showOptions) return;
+    (async () => {
+      try {
+        const r: any = await (window as any).api?.browserCredGet?.({ siteKey: COMPANY_MESSENGER_SITE_KEY });
+        if (r?.ok && r?.found) {
+          const username = String(r.username || '');
+          setCompanyMessengerId(username.endsWith(COMPANY_MESSENGER_DOMAIN) ? username.slice(0, -COMPANY_MESSENGER_DOMAIN.length) : username);
+          setCompanyMessengerPassword(String(r.password || ''));
+        }
+      } catch {}
+    })();
+  }, [showOptions]);
   const [claudeChatWidth, setClaudeChatWidth] = useState<number>(360);
   const [claudeChatPinned, setClaudeChatPinned] = useState<boolean>(false);
   const [claudeChatVisible, setClaudeChatVisible] = useState<boolean>(false);
@@ -1097,6 +1149,10 @@ function App() {
     if (!aiMcpAttachmentModeLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ aiMcpAttachmentMode }); } catch {}
   }, [aiMcpAttachmentMode]);
+  useEffect(() => {
+    if (!messengerModeLoadedRef.current) return;
+    try { (window as any).api?.setUIPrefs?.({ messengerMode }); } catch {}
+  }, [messengerMode]);
   useEffect(() => {
     const onMessengerEvent = (p: any) => {
       // 모든 이벤트에서 prefs(나의 접속 숨기기) 동기화 — 상단 상태 표시 LED/문구 반영.
@@ -2204,19 +2260,29 @@ function App() {
         if (target && splitRightTabId !== target.id) setActiveTabId(target.id);
         return;
       }
-      // 메신저 / AI 채팅 / 파일전송 워크스페이스 바로가기
+      // 메신저 / AI 채팅 / 작업일지 워크스페이스 바로가기 — 툴바 아이콘과 동일하게 토글:
+      // 이미 그 화면이 열려 있으면(showClaudeChat && 같은 view) 닫고, 아니면 그 화면을 연다.
       if (matchKeybinding(e, 'openMessenger')) {
         e.preventDefault();
-        setShowClaudeChat(true);
-        setClaudeChatView('messenger');
-        setClaudeChatVisible(true);
+        if (showClaudeChat && claudeChatView === 'messenger') setShowClaudeChat(false);
+        else openClaudeChatView('messenger');
         return;
       }
       if (matchKeybinding(e, 'openAiChat')) {
         e.preventDefault();
-        setShowClaudeChat(true);
-        setClaudeChatView('ai');
-        setClaudeChatVisible(true);
+        if (showClaudeChat && claudeChatView === 'ai') setShowClaudeChat(false);
+        else openClaudeChatView('ai');
+        return;
+      }
+      if (matchKeybinding(e, 'openWorkLog')) {
+        e.preventDefault();
+        if (showClaudeChat && claudeChatView === 'worklog') setShowClaudeChat(false);
+        else openClaudeChatView('worklog');
+        return;
+      }
+      if (matchKeybinding(e, 'openStickyNotes')) {
+        e.preventDefault();
+        setStickyNoteSidebarOpen(v => !v);
         return;
       }
       if (matchKeybinding(e, 'openFileTransfer')) {
@@ -2416,7 +2482,7 @@ function App() {
     };
     window.addEventListener('keydown', handler, true); // capture phase
     return () => window.removeEventListener('keydown', handler, true);
-  }, [getActiveTermId, showOptions, openFileTransferTab, activeTab, tabs.length, microSipViewByTab]);
+  }, [getActiveTermId, showOptions, openFileTransferTab, activeTab, tabs.length, microSipViewByTab, showClaudeChat, claudeChatView]);
 
   // SFTP 진행률/완료 이벤트
   useEffect(() => {
@@ -2639,6 +2705,20 @@ function App() {
     { id: 'cmd-worklog', label: '작업일지 열기', icon: '🗓️', keywords: ['worklog', 'todo', '작업일지'], run: () => openClaudeChatView('worklog') },
     { id: 'cmd-options', label: '설정 열기', icon: '⚙️', keywords: ['settings', 'options', '옵션', '설정'], run: () => setShowOptions(true) },
   ];
+  // 커맨드 팔레트 항목을 사용자가 드래그로 재배열한 순서 — UIPrefs 에 저장된 id 순서를 적용하고,
+  // 거기 없는(새로 추가된) 항목은 원래 위치 그대로 뒤에 붙인다.
+  const orderedCommandPaletteCommands: CommandItem[] = commandPaletteOrder.length === 0
+    ? commandPaletteCommands
+    : (() => {
+        const byId = new Map(commandPaletteCommands.map(c => [c.id, c]));
+        const ordered: CommandItem[] = [];
+        for (const id of commandPaletteOrder) {
+          const c = byId.get(id);
+          if (c) { ordered.push(c); byId.delete(id); }
+        }
+        ordered.push(...commandPaletteCommands.filter(c => byId.has(c.id)));
+        return ordered;
+      })();
   const deleteCustomWorkspaceTemplate = useCallback((templateId: string) => {
     setCustomWorkspaces(prev => prev.filter(t => t.id !== templateId));
     const removedTabs = tabsRef.current.filter(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
@@ -5200,8 +5280,9 @@ function App() {
         )}
         {showCommandPalette && (
           <CommandPalette
-            commands={commandPaletteCommands}
+            commands={orderedCommandPaletteCommands}
             onClose={() => setShowCommandPalette(false)}
+            onReorder={setCommandPaletteOrder}
           />
         )}
 
@@ -6531,6 +6612,61 @@ function App() {
 
             {optionsTab === 'messenger' && (
               <div className="options-content">
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('messenger.modeHeading')}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <label className="settings-radio" style={{ alignItems: 'flex-start', gap: 10 }}>
+                      <input
+                        type="radio"
+                        name="messengerMode"
+                        checked={messengerMode === 'mini'}
+                        onChange={() => setMessengerMode('mini')}
+                      />
+                      <span>
+                        <div style={{ fontWeight: 600, color: '#ddd' }}>{tOpt('messenger.modeMiniTitle')}</div>
+                        <div style={{ color: '#888', fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>{tOpt('messenger.modeMiniDesc')}</div>
+                      </span>
+                    </label>
+                    <label className="settings-radio" style={{ alignItems: 'flex-start', gap: 10 }}>
+                      <input
+                        type="radio"
+                        name="messengerMode"
+                        checked={messengerMode === 'company'}
+                        onChange={() => setMessengerMode('company')}
+                      />
+                      <span>
+                        <div style={{ fontWeight: 600, color: '#ddd' }}>{tOpt('messenger.modeCompanyTitle')}</div>
+                        <div style={{ color: '#888', fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>{tOpt('messenger.modeCompanyDesc')}</div>
+                      </span>
+                    </label>
+                  </div>
+                  {messengerMode === 'company' && (
+                    <div style={{ marginTop: 12, marginLeft: 26, padding: 12, border: '1px solid #333', borderRadius: 6, background: '#1a1a1a' }}>
+                      <div style={{ color: '#ccc', fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{tOpt('messenger.companyAccountHeading')}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                        <input
+                          type="text"
+                          value={companyMessengerId}
+                          onChange={e => setCompanyMessengerId(e.target.value)}
+                          placeholder={tOpt('messenger.companyAccountIdPlaceholder')}
+                          style={{ flex: 1, padding: '6px 8px', background: '#111', border: '1px solid #333', borderRadius: 4, color: '#ddd', fontSize: 12 }}
+                        />
+                        <span style={{ color: '#888', fontSize: 12 }}>{COMPANY_MESSENGER_DOMAIN}</span>
+                      </div>
+                      <input
+                        type="password"
+                        value={companyMessengerPassword}
+                        onChange={e => setCompanyMessengerPassword(e.target.value)}
+                        placeholder={tOpt('messenger.companyAccountPasswordPlaceholder')}
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', marginBottom: 10, background: '#111', border: '1px solid #333', borderRadius: 4, color: '#ddd', fontSize: 12 }}
+                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button className="btn-cancel" onClick={saveCompanyMessengerCred} disabled={!companyMessengerId.trim()}>{tOpt('messenger.companyAccountSave')}</button>
+                        {companyMessengerCredSaved && <span style={{ color: '#8f8', fontSize: 12 }}>{tOpt('messenger.companyAccountSaved')}</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('messenger.heading')}</div>
                   <p style={{ color: '#888', fontSize: 12, margin: '0 0 12px' }}>
@@ -6678,7 +6814,7 @@ function App() {
           </div>
         </div>
       )}
-      {showClaudeChat && (() => {
+      {(() => {
         // 모든 연결된 SSH 세션 수집 (panel.sessions 내의 termId 들)
         const connectedSessions: { termId: string; label: string }[] = [];
         const seen = new Set<string>();
@@ -6754,7 +6890,7 @@ function App() {
               <div className="claude-chat-sidebar-trigger">
                 <div
                   className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-ai"
-                  onClick={() => { setStickyNoteSidebarOpen(false); if (claudeChatView === 'ai' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('ai'); } }}
+                  onClick={() => { setStickyNoteSidebarOpen(false); if (showClaudeChat && claudeChatView === 'ai' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('ai'); } }}
                   onMouseEnter={onEnterTriggerHover}
                   onMouseLeave={onLeaveTriggerHover}
                   style={{ cursor: 'pointer' }}
@@ -6764,7 +6900,7 @@ function App() {
                 </div>
                 <div
                   className="claude-chat-sidebar-trigger-top claude-chat-sidebar-trigger-messenger"
-                  onClick={() => { setStickyNoteSidebarOpen(false); if (claudeChatView === 'messenger' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('messenger'); } }}
+                  onClick={() => { setStickyNoteSidebarOpen(false); if (showClaudeChat && claudeChatView === 'messenger' && claudeChatVisible) { onClickTrigger(); } else { openClaudeChatView('messenger'); } }}
                   onMouseEnter={onEnterTriggerHover}
                   onMouseLeave={onLeaveTriggerHover}
                   style={{ cursor: 'pointer' }}
@@ -6916,7 +7052,7 @@ function App() {
             })()}
             <div
               className={`claude-chat-sidebar ${!claudeChatPinned ? 'auto-hide' : ''} ${!claudeChatPinned && !claudeChatVisible ? 'hidden' : ''}`}
-              style={{ width: `${claudeChatWidth}px`, right: claudeChatPinned ? '0px' : '20px' }}
+              style={{ width: `${claudeChatWidth}px`, right: claudeChatPinned ? '0px' : '20px', display: showClaudeChat ? undefined : 'none' }}
               onMouseEnter={onEnterSidebar}
               onMouseLeave={onLeaveSidebar}
             >
@@ -6995,12 +7131,13 @@ function App() {
               defaultSshSession={defaultSsh}
               pinned={claudeChatPinned}
               onTogglePin={() => setClaudeChatPinned(p => !p)}
-              visible={claudeChatPinned || claudeChatVisible}
+              visible={showClaudeChat && (claudeChatPinned || claudeChatVisible)}
               view={claudeChatView}
               onViewChange={setClaudeChatView}
               aiAgent={aiAgent}
               onAgentChange={setAiAgent}
               worklogFocusTodo={worklogFocusTodo}
+              messengerMode={messengerMode}
             />
             </div>
           </>

@@ -6,6 +6,8 @@ import { marked } from 'marked';
 import mermaid from 'mermaid';
 import { MessengerWorkspace } from './MessengerWorkspace';
 import { WorkLogWorkspace } from './WorkLogWorkspace';
+import { BrowserPane } from './BrowserPane';
+import { COMPANY_MESSENGER_LOGIN_URL } from '../utils/companyMessenger';
 import { adjustClaudeFontSize } from '../utils/claudeFont';
 import { useWorkLogAutoRecorder } from '../hooks/useWorkLogAutoRecorder';
 
@@ -1188,11 +1190,13 @@ type Props = {
   onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity') => void;
   // 알람 팝업 "작업일지 열기" 등 외부에서 특정 항목으로 스크롤+하이라이트 이동을 요청할 때.
   worklogFocusTodo?: { date: string; todoId: string } | null;
+  // 메신저 탭 모드 — 'mini'(기본, 자체 메신저) 또는 'company'(사내 웹 메신저를 임베드해 대체).
+  messengerMode?: 'mini' | 'company';
 };
 
 let sessionCounter = 0;
 
-export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo }) => {
+export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo, messengerMode = 'mini' }) => {
   const activeView = view;
   // 채팅창 내에서 독립적으로 전환 가능한 에이전트 (전역 설정과 분리)
   const [currentAgent, setCurrentAgentState] = useState<AgentType>(aiAgent);
@@ -4575,13 +4579,17 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>
-        <MessengerWorkspace
-          visible={visible && activeView === 'messenger'}
-          connectedSessions={connectedSessions.map(s => ({
-            panelId: s.termId,
-            sessionName: s.label,
-          }))}
-        />
+        {messengerMode === 'company' ? (
+          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} embedded chromeless />
+        ) : (
+          <MessengerWorkspace
+            visible={visible && activeView === 'messenger'}
+            connectedSessions={connectedSessions.map(s => ({
+              panelId: s.termId,
+              sessionName: s.label,
+            }))}
+          />
+        )}
       </div>
       {/* 작업일지도 동일하게 항상 마운트 + CSS 로만 숨김 — 탭 전환 시 날짜/입력 상태 보존. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'worklog' ? 'flex' : 'none' }}>
