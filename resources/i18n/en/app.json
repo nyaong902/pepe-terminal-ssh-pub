@@ -270,5 +270,11 @@
     "dontSave": "Don't save",
     "savedToast": "Password saved to session.",
     "save": "Save"
+  },
+  "worklogReminder": {
+    "title": "Work log reminder",
+    "dateLabel": "To-do for {{date}}",
+    "openWorklog": "Open work log",
+    "dismiss": "Dismiss"
   }
 }

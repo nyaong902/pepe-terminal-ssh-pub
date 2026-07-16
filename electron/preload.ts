@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('worklog:event', handler);
     return () => ipcRenderer.removeListener('worklog:event', handler);
   },
+  // 작업일지 알람 — main 프로세스가 1분마다 스캔해 도달한 알람을 여기로 push.
+  onWorklogReminder: (cb: (p: { date: string; todo: any }) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('worklog:reminder', handler);
+    return () => ipcRenderer.removeListener('worklog:reminder', handler);
+  },
   // 포스트잇 — 화면 어디든 붙일 수 있는 독립 창 (stickyNotes.json)
   stickyNoteCreate: () => ipcRenderer.invoke('sticky-note:create'),
   stickyNoteGet: (id: string) => ipcRenderer.invoke('sticky-note:get', id),
@@ -187,6 +193,7 @@ contextBridge.exposeInMainWorld('api', {
   sipReject: (args: { endpointId: string }) => ipcRenderer.invoke('sip:reject', args),
   sipHold: (args: { endpointId: string; hold: boolean }) => ipcRenderer.invoke('sip:hold', args),
   sipMute: (args: { endpointId: string; mute: boolean }) => ipcRenderer.invoke('sip:mute', args),
+  sipSpeakerMute: (args: { endpointId: string; mute: boolean }) => ipcRenderer.invoke('sip:speaker-mute', args),
   sipTransfer: (args: { endpointId: string; target: string }) => ipcRenderer.invoke('sip:transfer', args),
   sipRecord: (args: { endpointId: string; on: boolean }) => ipcRenderer.invoke('sip:record', args),
   sipSendDtmf: (args: { endpointId: string; digit: string }) => ipcRenderer.invoke('sip:send-dtmf', args),

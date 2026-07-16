@@ -8,7 +8,7 @@ import { getCurrentLanguage } from '../i18n';
 
 const api = () => (window as any).api || {};
 
-type Todo = {
+export type Todo = {
   id: string;
   text: string;
   done: boolean;
@@ -19,10 +19,16 @@ type Todo = {
   sharedFromPeerName?: string;
   sharedFromDate?: string;
   sharedFromMessageId?: string;
+  // 알람 — 지정 시각(epoch ms)에 도달하면 화면 중앙 팝업 + 소리로 알린다.
+  remindAt?: number;
+  // 이미 알림을 울렸는지 — 앱을 여러 번 껐다 켜도 같은 알람이 중복으로 울리지 않게 방지.
+  remindNotified?: boolean;
+  // 알람 울릴 때 소리도 낼지 — 기본 true(미지정 시 소리 남).
+  remindSound?: boolean;
 };
 
 type DayType = 'vacation' | 'trip';
-type WorklogDayRec = { todos: Todo[]; dayType?: DayType };
+export type WorklogDayRec = { todos: Todo[]; dayType?: DayType };
 type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
 type MessengerState = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: MessengerPeer[]; prefs?: { hidePresence?: boolean } };
 type WorklogDays = Record<string, WorklogDayRec>;
@@ -67,7 +73,7 @@ const dateRange = (from: string, to: string): string[] => {
 };
 // 네이티브 date input 은 로케일에 따라 요일 표기가 깨지거나(빈 "()") OS 마다 다르게 나와서,
 // 직접 Intl 로 계산한 요일을 별도 텍스트로 붙여 항상 정확하게 보여준다.
-const weekdayLabel = (dateStr: string): string => {
+export const weekdayLabel = (dateStr: string): string => {
   const d = new Date(dateStr + 'T00:00:00');
   if (isNaN(d.getTime())) return '';
   try {
@@ -76,6 +82,11 @@ const weekdayLabel = (dateStr: string): string => {
     // getCurrentLanguage() 가 Intl 이 못 알아듣는 값을 줄 경우 — 런타임 기본 로케일로 재시도.
     try { return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d); } catch { return ''; }
   }
+};
+export const weekdayLabelForDate = (d: Date): string => {
+  if (isNaN(d.getTime())) return '';
+  try { return new Intl.DateTimeFormat(getCurrentLanguage(), { weekday: 'short' }).format(d); }
+  catch { try { return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(d); } catch { return ''; } }
 };
 // 연/월 헤더 라벨과 월 박스 라벨도 Intl 로 로케일에 맞게 계산 — 언어별 번역 문자열 없이도 정확한 표기.
 const yearLabel = (year: number): string => {
@@ -125,17 +136,79 @@ const DateField: React.FC<{ value: string; onChange: (v: string) => void }> = ({
   );
 };
 
+// 알람 날짜/시간 입력 — 날짜는 DateField 와 같은 방식(버튼 + 숨긴 date input, 요일 표시)의 달력,
+// 시/분은 드롭다운. 네이티브 datetime-local 은 OS/로케일에 따라 요일 표기가 깨지거나(빈 "()")
+// 분 단위 스크럽이 불편해서 이렇게 분리했다. value/onChange 는 기존 datetime-local 문자열 그대로 사용.
+const ReminderDateTimeField: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [datePart, timePart] = value ? value.split('T') : ['', ''];
+  const [hh, mm] = timePart ? timePart.split(':') : ['', ''];
+  const wd = datePart ? weekdayLabel(datePart) : '';
+  const dateDisplay = datePart ? (wd ? `${datePart} (${wd})` : datePart) : '';
+  const openPicker = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    try {
+      if (typeof (el as any).showPicker === 'function') (el as any).showPicker();
+      else el.focus();
+    } catch { el.focus(); }
+  };
+  const setDatePart = (d: string) => { if (d) onChange(`${d}T${hh || '00'}:${mm || '00'}`); };
+  const setHour = (h: string) => { if (datePart) onChange(`${datePart}T${h}:${mm || '00'}`); };
+  const setMinute = (m: string) => { if (datePart) onChange(`${datePart}T${hh || '00'}:${m}`); };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+      <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+        <button
+          type="button"
+          onClick={openPicker}
+          style={{ width: '100%', textAlign: 'left', background: 'var(--win-bg, #14161f)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 6px', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}
+        >{dateDisplay || ' '}</button>
+        <input
+          ref={inputRef}
+          type="date"
+          value={datePart}
+          onChange={e => setDatePart(e.target.value)}
+          tabIndex={-1}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, pointerEvents: 'none' }}
+        />
+      </div>
+      <select
+        value={hh || '00'}
+        onChange={e => setHour(e.target.value)}
+        style={{ background: 'var(--win-bg, #14161f)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 4px', fontSize: 11 }}
+      >
+        {Array.from({ length: 24 }, (_, h) => pad2(h)).map(h => <option key={h} value={h}>{h}</option>)}
+      </select>
+      <span style={{ fontSize: 11, color: 'var(--win-text-dim, #8a93a6)' }}>:</span>
+      <select
+        value={mm || '00'}
+        onChange={e => setMinute(e.target.value)}
+        style={{ background: 'var(--win-bg, #14161f)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 4px', fontSize: 11 }}
+      >
+        {Array.from({ length: 60 }, (_, m) => pad2(m)).map(m => <option key={m} value={m}>{m}</option>)}
+      </select>
+    </div>
+  );
+};
+
 export const WorkLogWorkspace: React.FC<{
   visible?: boolean;
   aiAgent: AiOneShotAgent;
-}> = ({ visible = true, aiAgent }) => {
+  // 외부(알람 팝업의 "작업일지 열기")에서 특정 항목으로 점프해 스크롤 최상단 + 하이라이트 표시하고 싶을 때.
+  // 매번 새 객체 참조를 넘겨야 같은 항목을 다시 열어도 효과가 재적용된다.
+  focusTodo?: { date: string; todoId: string } | null;
+}> = ({ visible = true, aiAgent, focusTodo }) => {
   const { t } = useTranslation('workLog');
   const [loaded, setLoaded] = useState(false);
   const [days, setDays] = useState<WorklogDays>({});
   const [viewMode, setViewMode] = useState<ViewMode>('day');
+  const [highlightTodoId, setHighlightTodoId] = useState<string | null>(null);
+  const todosScrollRef = useRef<HTMLDivElement>(null);
   const [selectedDate, setSelectedDate] = useState(() => toDateStr(new Date()));
   const [newTodoText, setNewTodoText] = useState('');
   const [editingMemoId, setEditingMemoId] = useState<string | null>(null);
+  const editingCardRef = useRef<HTMLDivElement>(null);
 
   const [rangeFrom, setRangeFrom] = useState(() => startOfWeek(toDateStr(new Date())));
   const [rangeTo, setRangeTo] = useState(() => toDateStr(new Date()));
@@ -151,6 +224,23 @@ export const WorkLogWorkspace: React.FC<{
   const [shareError, setShareError] = useState('');
   // 월별 보기에서 날짜 우클릭 시 뜨는 휴가/출장 지정 메뉴.
   const [dayMenu, setDayMenu] = useState<{ date: string; x: number; y: number } | null>(null);
+  // 메모 편집 상태에서 인라인으로 보여주는 알람 입력 — 편집 중인 항목 id + 아직 저장 안 된 입력값.
+  const [inlineReminderId, setInlineReminderId] = useState<string | null>(null);
+  const [inlineReminderValue, setInlineReminderValue] = useState('');
+
+  // 알람 팝업 등 외부에서 특정 항목으로 이동 요청이 오면 — 해당 날짜/일별 보기로 전환하고,
+  // 목록이 스크롤되어 있거나 항목이 많아 안 보일 수 있으니 맨 위로 스크롤 + 하이라이트로 눈에 띄게 한다.
+  useEffect(() => {
+    if (!focusTodo) return;
+    setSelectedDate(focusTodo.date);
+    setViewMode('day');
+    setHighlightTodoId(focusTodo.todoId);
+    const raf = requestAnimationFrame(() => {
+      if (todosScrollRef.current) todosScrollRef.current.scrollTop = 0;
+    });
+    const clearTimer = setTimeout(() => setHighlightTodoId(null), 3000);
+    return () => { cancelAnimationFrame(raf); clearTimeout(clearTimer); };
+  }, [focusTodo]);
 
   useEffect(() => {
     let disposed = false;
@@ -219,6 +309,53 @@ export const WorkLogWorkspace: React.FC<{
   const updateMemo = (id: string, memo: string) => {
     persistDay(selectedDate, todos.map(t => t.id === id ? { ...t, memo } : t));
   };
+  // 날짜/시간 로컬 input(datetime-local) 형식(YYYY-MM-DDTHH:mm) ↔ epoch ms 변환.
+  const epochToLocalInput = (ms: number): string => {
+    const d = new Date(ms);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  };
+  const localInputToEpoch = (v: string): number | null => {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  };
+  const saveInlineReminder = (todoId: string) => {
+    if (inlineReminderId !== todoId) return;
+    const ms = localInputToEpoch(inlineReminderValue);
+    persistDay(selectedDate, todosForDate(selectedDate).map(t => t.id === todoId
+      ? { ...t, remindAt: ms ?? undefined, remindNotified: false }
+      : t));
+    setInlineReminderId(null);
+  };
+  const clearInlineReminder = (todoId: string) => {
+    persistDay(selectedDate, todosForDate(selectedDate).map(t => t.id === todoId
+      ? { ...t, remindAt: undefined, remindNotified: undefined }
+      : t));
+    setInlineReminderId(null);
+    setInlineReminderValue('');
+  };
+  const toggleReminderSound = (todoId: string) => {
+    persistDay(selectedDate, todosForDate(selectedDate).map(t => t.id === todoId
+      ? { ...t, remindSound: t.remindSound === false ? true : false }
+      : t));
+  };
+  // 편집 모드 종료(저장 버튼 또는 카드 바깥 클릭) — 메모는 이미 onChange 로 즉시 저장되고 있으므로
+  // 여기서는 편집 중이던 알람 값만 커밋한 뒤 편집 상태를 닫는다.
+  const finishEditingMemo = (todoId: string) => {
+    if (inlineReminderId === todoId) saveInlineReminder(todoId);
+    setEditingMemoId(null);
+  };
+  useEffect(() => {
+    if (!editingMemoId) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (editingCardRef.current && !editingCardRef.current.contains(e.target as Node)) {
+        finishEditingMemo(editingMemoId);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [editingMemoId, inlineReminderId, inlineReminderValue]);
   const openSharePicker = (date: string, todoId: string) => {
     setTodoMenu(null);
     setShareError('');
@@ -394,7 +531,7 @@ export const WorkLogWorkspace: React.FC<{
       </div>
 
       {/* 본문 — 보기 모드에 따라 연/월 달력 또는 일별 할 일 목록 */}
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={todosScrollRef} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {!loaded ? (
           <div style={{ color: 'var(--win-text-dim, #8a93a6)', fontSize: 12, padding: 12 }}>{t('loading')}</div>
         ) : viewMode === 'year' ? (
@@ -440,7 +577,9 @@ export const WorkLogWorkspace: React.FC<{
               e.preventDefault();
               setTodoMenu({ date: selectedDate, todoId: item.id, x: e.clientX, y: e.clientY });
             }}
-            style={{ border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 8, background: 'var(--win-surface, #1b1e29)', padding: '8px 10px', cursor: 'context-menu' }}
+            style={highlightTodoId === item.id
+              ? { border: '1px solid #ffd873', borderRadius: 8, background: 'rgba(255,196,0,0.12)', padding: '8px 10px', cursor: 'context-menu', boxShadow: '0 0 0 2px rgba(255,196,0,0.25)', transition: 'background 0.4s, box-shadow 0.4s' }
+              : { border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 8, background: 'var(--win-surface, #1b1e29)', padding: '8px 10px', cursor: 'context-menu', transition: 'background 0.4s, box-shadow 0.4s' }}
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
               <input type="checkbox" checked={item.done} onChange={() => toggleTodo(item.id)} style={{ marginTop: 3, cursor: 'pointer' }} />
@@ -449,16 +588,43 @@ export const WorkLogWorkspace: React.FC<{
                   {item.text}
                 </div>
                 {editingMemoId === item.id ? (
-                  <textarea
-                    autoFocus
-                    rows={3}
-                    value={item.memo || ''}
-                    onChange={e => updateMemo(item.id, e.target.value)}
-                    onBlur={() => setEditingMemoId(null)}
-                    onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setEditingMemoId(null); }}
-                    placeholder={t('memoPlaceholder')}
-                    style={{ width: '100%', marginTop: 4, fontSize: 11, background: 'var(--win-bg, #14161f)', color: 'var(--win-text-dim, #8a93a6)', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 6px', resize: 'vertical', fontFamily: 'inherit' }}
-                  />
+                  <div ref={editingCardRef}>
+                    <textarea
+                      autoFocus
+                      rows={3}
+                      value={item.memo || ''}
+                      onChange={e => updateMemo(item.id, e.target.value)}
+                      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') setEditingMemoId(null); }}
+                      placeholder={t('memoPlaceholder')}
+                      style={{ width: '100%', marginTop: 4, fontSize: 11, background: 'var(--win-bg, #14161f)', color: 'var(--win-text-dim, #8a93a6)', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 6px', resize: 'vertical', fontFamily: 'inherit' }}
+                    />
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(255,196,0,0.25)', background: 'rgba(255,196,0,0.05)' }}
+                    >
+                      <span style={{ fontSize: 12 }}>⏰</span>
+                      <span style={{ fontSize: 11, color: 'var(--win-text-dim, #8a93a6)', whiteSpace: 'nowrap' }}>{t('reminderDateTimeLabel')}</span>
+                      <ReminderDateTimeField
+                        value={inlineReminderId === item.id ? inlineReminderValue : epochToLocalInput(item.remindAt || Date.now())}
+                        onChange={v => { setInlineReminderId(item.id); setInlineReminderValue(v); }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => toggleReminderSound(item.id)}
+                        title={item.remindSound === false ? t('reminderSoundOff') : t('reminderSoundOn')}
+                        style={{ flex: '0 0 auto', background: 'transparent', border: '1px solid var(--win-border, #2a2e3a)', borderRadius: 4, padding: '3px 6px', fontSize: 12, cursor: 'pointer', color: 'var(--win-text, #e6edf3)' }}
+                      >{item.remindSound === false ? '🔕' : '🔔'}</button>
+                      {item.remindAt && (
+                        <button
+                          className="panel-btn"
+                          onClick={() => clearInlineReminder(item.id)}
+                          style={{ fontSize: 11, padding: '2px 8px', color: '#f38ba8', flex: '0 0 auto' }}
+                        >{t('reminderClear')}</button>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                      <button className="panel-btn primary" onClick={() => finishEditingMemo(item.id)} style={{ fontSize: 11, padding: '3px 10px' }}>{t('reminderSave')}</button>
+                    </div>
+                  </div>
                 ) : (
                   <div
                     onClick={() => setEditingMemoId(item.id)}
@@ -471,6 +637,14 @@ export const WorkLogWorkspace: React.FC<{
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '3px 8px', borderRadius: 999, border: '1px solid var(--win-border, #2a2e3a)', background: 'rgba(255,255,255,0.03)', color: 'var(--win-text-dim, #8a93a6)', fontSize: 10, lineHeight: 1.2 }}>
                     <span>🤝</span>
                     <span>{t('sharedFrom', { name: item.sharedFromPeerName || '', date: item.sharedFromDate || '' })}</span>
+                  </div>
+                )}
+                {item.remindAt && editingMemoId !== item.id && (
+                  <div
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, marginLeft: 6, padding: '3px 8px', borderRadius: 999, border: '1px solid rgba(255,196,0,0.35)', background: 'rgba(255,196,0,0.08)', color: '#ffd873', fontSize: 10, lineHeight: 1.2 }}
+                  >
+                    <span>⏰</span>
+                    <span>{(() => { const d = new Date(item.remindAt!); const wd = weekdayLabelForDate(d); return wd ? `${d.toLocaleString()} (${wd})` : d.toLocaleString(); })()}</span>
                   </div>
                 )}
               </div>

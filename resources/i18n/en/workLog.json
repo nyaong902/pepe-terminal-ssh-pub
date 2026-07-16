@@ -36,5 +36,14 @@
   "shareMissingTodo": "Could not find the item to share.",
   "shareFail": "Share failed: {{error}}",
   "shareSending": "Sending...",
-  "sharedFrom": "Shared from {{name}} · {{date}}"
+  "sharedFrom": "Shared from {{name}} · {{date}}",
+  "reminderDoubleClickHint": "Double-click to set a reminder",
+  "reminderTitle": "Set reminder",
+  "reminderDateTimeLabel": "Reminder date/time",
+  "reminderSave": "Save",
+  "reminderClear": "Clear reminder",
+  "reminderNotifyTitle": "Work log reminder",
+  "reminderNotifyDate": "To-do for {{date}}",
+  "reminderSoundOn": "Reminder sound on (click to mute)",
+  "reminderSoundOff": "Reminder sound off (click to unmute)"
 }

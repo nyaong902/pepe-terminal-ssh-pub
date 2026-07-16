@@ -15,6 +15,12 @@ export type WorklogTodo = {
   sharedFromPeerName?: string;
   sharedFromDate?: string;
   sharedFromMessageId?: string;
+  // 알람 — 지정 시각(epoch ms)에 도달하면 화면 중앙 팝업 + 소리로 알린다.
+  remindAt?: number;
+  // 이미 알림을 울렸는지 — 앱을 여러 번 껐다 켜도 같은 알람이 중복으로 울리지 않게 방지.
+  remindNotified?: boolean;
+  // 알람 울릴 때 소리도 낼지 — 기본 true(미지정 시 소리 남).
+  remindSound?: boolean;
 };
 
 export type WorklogDay = {

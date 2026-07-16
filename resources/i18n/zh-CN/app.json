@@ -267,5 +267,11 @@
     "dontSave": "不保存",
     "savedToast": "密码已保存到会话。",
     "save": "保存"
+  },
+  "worklogReminder": {
+    "title": "工作日志提醒",
+    "dateLabel": "{{date}} 的待办事项",
+    "openWorklog": "打开工作日志",
+    "dismiss": "关闭"
   }
 }

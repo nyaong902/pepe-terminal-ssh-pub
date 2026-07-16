@@ -270,5 +270,11 @@
     "dontSave": "저장 안 함",
     "savedToast": "비밀번호가 세션에 저장되었습니다.",
     "save": "저장"
+  },
+  "worklogReminder": {
+    "title": "작업일지 알림",
+    "dateLabel": "{{date}}의 할 일",
+    "openWorklog": "작업일지 열기",
+    "dismiss": "닫기"
   }
 }

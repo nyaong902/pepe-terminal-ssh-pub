@@ -54,7 +54,7 @@ export type SipEndpoint = {
 
 type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
 type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string };
+type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; speakerMuted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string };
 
 type MacroStep =
   | { type: 'key'; key: string }
@@ -596,6 +596,9 @@ export const MicroSipWorkspace: React.FC<{
   const answer = async (id: string) => { await api().sipAnswer?.({ endpointId: id }).catch(() => {}); };
   const reject = async (id: string) => { await api().sipReject?.({ endpointId: id }).catch(() => {}); setRt(id, { call: 'idle' }); };
   const toggleMute = async (id: string) => { const m = !rt(id).muted; setRt(id, { muted: m }); await api().sipMute?.({ endpointId: id, mute: m }).catch(() => {}); };
+  // 스피커 뮤트 — 마이크 뮤트와 반대 방향(상대 음성 → 내 스피커 전송을 끊음). 상대방은 계속
+  // 내 목소리를 들을 수 있고, 나만 상대방 소리가 안 들리게 된다.
+  const toggleSpeakerMute = async (id: string) => { const m = !rt(id).speakerMuted; setRt(id, { speakerMuted: m }); await api().sipSpeakerMute?.({ endpointId: id, mute: m }).catch(() => {}); };
   const toggleHold = async (id: string) => { const held = rt(id).call !== 'held'; setRt(id, { call: held ? 'held' : 'connected' }); await api().sipHold?.({ endpointId: id, hold: held }).catch(() => {}); };
   const toggleRecord = async (id: string) => { await api().sipRecord?.({ endpointId: id, on: !rt(id).recording }).catch(() => {}); };
 
@@ -783,6 +786,7 @@ export const MicroSipWorkspace: React.FC<{
                     onAnswer={() => answer(e.id)}
                     onReject={() => reject(e.id)}
                     onToggleMute={() => toggleMute(e.id)}
+                    onToggleSpeakerMute={() => toggleSpeakerMute(e.id)}
                     onToggleHold={() => toggleHold(e.id)}
                     onTransfer={() => transfer(e.id)}
                     onToggleRecord={() => toggleRecord(e.id)}
@@ -1427,11 +1431,11 @@ const regColor: Record<RegState, string> = { registered: '#3fb950', registering:
 const PhoneCard: React.FC<{
   ep: SipEndpoint; rt: EndpointRuntime;
   onKey: (k: string) => void; onBackspace: () => void; onCall: () => void; onHangup: () => void; onClear: () => void;
-  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void; onVoicemail: () => void;
+  onAnswer: () => void; onReject: () => void; onToggleMute: () => void; onToggleSpeakerMute: () => void; onToggleHold: () => void; onTransfer: () => void; onToggleRecord: () => void; onVoicemail: () => void;
   onRegister: () => void; onUnregister: () => void;
   onSetDialed: (s: string) => void;
   onToggleCapture: () => void; captureAvailable: boolean;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable }) => {
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleSpeakerMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable }) => {
   // 재다이얼용 마지막 발신 번호 — sessionStorage 로 endpoint 별 영속 (앱 재시작 시 초기화)
   const lastDialedKey = `pepe-sip-last-${ep.id}`;
   const [lastDialed, setLastDialed] = useState<string>(() => {
@@ -1520,12 +1524,15 @@ const PhoneCard: React.FC<{
           <button onClick={onReject} style={callBtn('#da3633')}>✖ 거절</button>
         </div>
       ) : (rt.call === 'connected' || rt.call === 'held') ? (
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
-          <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
-          <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
-          <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>↪</button>
-          <button onClick={onToggleRecord} title={rt.recording ? '녹음 중지' : '녹음'} style={{ ...callBtn(rt.recording ? '#da3633' : 'var(--win-surface-2, #21262d)'), flex: '0 0 52px', color: '#fff' }}>{rt.recording ? '⏹' : '⏺'}</button>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+            <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
+            <button onClick={onToggleSpeakerMute} title="스피커 뮤트" style={{ ...callBtn(rt.speakerMuted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.speakerMuted ? '🔈' : '🔊'}</button>
+            <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
+            <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>↪</button>
+            <button onClick={onToggleRecord} title={rt.recording ? '녹음 중지' : '녹음'} style={{ ...callBtn(rt.recording ? '#da3633' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.recording ? '⏹' : '⏺'}</button>
+          </div>
         </div>
       ) : inCall ? (
         <div style={{ display: 'flex', gap: 6 }}>

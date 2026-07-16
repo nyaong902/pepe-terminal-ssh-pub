@@ -36,5 +36,14 @@
   "shareMissingTodo": "Impossible de trouver l'élément à partager.",
   "shareFail": "Échec du partage : {{error}}",
   "shareSending": "Envoi...",
-  "sharedFrom": "Partagé par {{name}} · {{date}}"
+  "sharedFrom": "Partagé par {{name}} · {{date}}",
+  "reminderDoubleClickHint": "Double-cliquez pour définir un rappel",
+  "reminderTitle": "Définir un rappel",
+  "reminderDateTimeLabel": "Date/heure du rappel",
+  "reminderSave": "Enregistrer",
+  "reminderClear": "Supprimer le rappel",
+  "reminderNotifyTitle": "Rappel du journal de travail",
+  "reminderNotifyDate": "Tâche du {{date}}",
+  "reminderSoundOn": "Son du rappel activé (cliquer pour couper)",
+  "reminderSoundOff": "Son du rappel coupé (cliquer pour activer)"
 }

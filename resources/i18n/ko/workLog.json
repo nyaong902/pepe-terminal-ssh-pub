@@ -36,5 +36,14 @@
   "shareMissingTodo": "공유할 항목을 찾을 수 없습니다.",
   "shareFail": "공유 실패: {{error}}",
   "shareSending": "전송 중...",
-  "sharedFrom": "공유받음: {{name}} · {{date}}"
+  "sharedFrom": "공유받음: {{name}} · {{date}}",
+  "reminderDoubleClickHint": "더블클릭하여 알람 설정",
+  "reminderTitle": "알람 설정",
+  "reminderDateTimeLabel": "알림 날짜/시간",
+  "reminderSave": "저장",
+  "reminderClear": "알람 해제",
+  "reminderNotifyTitle": "작업일지 알림",
+  "reminderNotifyDate": "{{date}}의 할 일",
+  "reminderSoundOn": "알람 소리 켜짐 (클릭하여 끄기)",
+  "reminderSoundOff": "알람 소리 꺼짐 (클릭하여 켜기)"
 }

@@ -1408,6 +1408,30 @@ ipcMain.handle('worklog:save-day', (_e, { date, day }: { date: string; day: Work
   emitWorklogState();
   return true;
 });
+
+// 작업일지 알람 — 1분마다 모든 날짜를 스캔해 도달한 알람(remindAt<=now, 아직 안 울린 것)을
+// 찾아 렌더러에 broadcast 하고, 다시 안 울리도록 remindNotified 를 표시해 저장한다.
+// main 프로세스에서 도는 이유: 창이 백그라운드/최소화 상태여도(렌더러의 setInterval 은
+// Chromium 이 스로틀링할 수 있음) 항상 정확히 체크되어야 하기 때문.
+function scanWorklogReminders() {
+  const data = loadWorklog();
+  const now = Date.now();
+  for (const [date, day] of Object.entries(data.days)) {
+    let changed = false;
+    const nextTodos = day.todos.map(todo => {
+      if (!todo.remindAt || todo.remindNotified || todo.remindAt > now) return todo;
+      changed = true;
+      for (const win of BrowserWindow.getAllWindows()) {
+        try { win.webContents.send('worklog:reminder', { date, todo }); } catch {}
+      }
+      return { ...todo, remindNotified: true };
+    });
+    if (changed) saveWorklogDay(date, { ...day, todos: nextTodos });
+  }
+}
+setInterval(scanWorklogReminders, 60_000);
+// 앱 기동 시 곧바로 한 번 — 창이 닫혀있던 사이 지나버린 알람(remindAt 이 과거)도 뜨자마자 확인.
+setTimeout(scanWorklogReminders, 5_000);
 // 윈도우 테마 변경 — 저장 후 모든 창(메인/옵션·세션편집 팝아웃/분리된 탭)에 broadcast → 라이브 반영.
 ipcMain.handle('window-theme:set', (_e, id: string) => {
   const themeId = String(id || '');
@@ -6745,6 +6769,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:reject', async (_e, args: { endpointId: string }) => sip.reject(args?.endpointId));
   ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean }) => sip.hold(args?.endpointId, !!args?.hold));
   ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.mute(args?.endpointId, !!args?.mute));
+  ipcMain.handle('sip:speaker-mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.speakerMute(args?.endpointId, !!args?.mute));
   ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
   ipcMain.handle('sip:record', async (_e, args: { endpointId: string; on: boolean }) => {
     let file = '';

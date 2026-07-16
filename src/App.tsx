@@ -13,6 +13,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { FileExplorer } from './components/FileExplorer';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
+import { playReminderChime } from './utils/reminderChime';
 import { FileEditor } from './components/FileEditor';
 import { ClaudeChat } from './components/ClaudeChat';
 import { BrowserPane } from './components/BrowserPane';
@@ -46,6 +47,7 @@ import { useTranslation } from 'react-i18next';
 import { SessionList } from './components/SessionList';
 import { SessionEditor } from './components/SessionEditor';
 import { type CustomWorkspaceTemplate, normalizeCustomWorkspaceTemplate } from './utils/customWorkspaces';
+import { weekdayLabel } from './components/WorkLogWorkspace';
 import {
   LayoutNode,
   PanelSession,
@@ -1061,6 +1063,13 @@ function App() {
   const [messengerAttention, setMessengerAttention] = useState(false);
   const [messengerUnreadCount, setMessengerUnreadCount] = useState(0);
   const [messengerHidden, setMessengerHidden] = useState(false);
+  // 작업일지 알람 — main 프로세스가 push 하는 도달한 알람을 화면 중앙 팝업으로 표시.
+  // 여러 개가 동시에 도달하면 큐에 쌓아 하나씩 순서대로 보여준다(동시에 겹치지 않게).
+  const [worklogReminderQueue, setWorklogReminderQueue] = useState<{ date: string; todo: any }[]>([]);
+  const [worklogReminderShown, setWorklogReminderShown] = useState<{ date: string; todo: any } | null>(null);
+  // 알람 팝업 "작업일지 열기" 클릭 시 해당 항목으로 스크롤+하이라이트 이동 — 매번 새 객체를 넘겨야
+  // 같은 항목을 다시 열어도(팝업이 다시 뜬 경우) WorkLogWorkspace 의 focusTodo effect 가 재발동한다.
+  const [worklogFocusTodo, setWorklogFocusTodo] = useState<{ date: string; todoId: string } | null>(null);
   // 외부 워크스페이스의 prefill 요청 시 채팅창 자동 열기
   useEffect(() => {
     const onPrefill = () => setShowClaudeChat(true);
@@ -1119,6 +1128,38 @@ function App() {
     const off = (window as any).api?.onMessengerEvent?.(onMessengerEvent);
     return () => { if (off) off(); };
   }, [showClaudeChat, claudeChatView, claudeChatPinned, claudeChatVisible]);
+  // 작업일지 알람 — main 프로세스가 도달한 알람을 push 하면 큐에 쌓는다(팝업/소리/창 포커스는
+  // 아래 별도 이펙트가 큐 순서대로 하나씩 처리).
+  useEffect(() => {
+    const off = (window as any).api?.onWorklogReminder?.((p: { date: string; todo: any }) => {
+      setWorklogReminderQueue(prev => [...prev, p]);
+    });
+    return () => { if (off) off(); };
+  }, []);
+  // 큐에 쌓인 알람을 하나씩 꺼내 화면 중앙에 표시 — 표시 중인 게 없을 때만 다음 걸 꺼낸다.
+  // 팝업이 뜨는 순간 소리를 울리고, 앱이 백그라운드에 있어도 확실히 보이도록 창을 앞으로 가져온다.
+  useEffect(() => {
+    if (worklogReminderShown || worklogReminderQueue.length === 0) return;
+    const [next, ...rest] = worklogReminderQueue;
+    setWorklogReminderQueue(rest);
+    setWorklogReminderShown(next);
+    try { (window as any).api?.windowFocus?.(); } catch {}
+  }, [worklogReminderQueue, worklogReminderShown]);
+  // 알람 소리는 팝업이 떠 있는 동안 최소 1분간 반복 재생 — 한 번만 울리면 자리를 비운 사이 놓치기 쉬워서.
+  // 항목의 remindSound 가 false 면(사용자가 소리 껐음) 재생하지 않는다. 팝업이 닫히면(응답/새 알람 교체) 즉시 멈춘다.
+  useEffect(() => {
+    if (!worklogReminderShown) return;
+    if (worklogReminderShown.todo?.remindSound === false) return;
+    const REPEAT_MS = 4500;
+    const MIN_DURATION_MS = 60_000;
+    void playReminderChime().catch(() => {});
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - start >= MIN_DURATION_MS) { clearInterval(timer); return; }
+      void playReminderChime().catch(() => {});
+    }, REPEAT_MS);
+    return () => clearInterval(timer);
+  }, [worklogReminderShown]);
   useEffect(() => {
     if (!claudeChatPinnedLoadedRef.current) return;
     try { (window as any).api?.setUIPrefs?.({ claudeChatPinned }); } catch {}
@@ -6600,6 +6641,43 @@ function App() {
       {/* 하단 상태바 SFTP 진행률 — 파일전송 탭의 TransferLog 로 대체됨 */}
       <ConflictDialogQueue />
       <NotifyHost />
+      {worklogReminderShown && (
+        <div
+          onClick={() => setWorklogReminderShown(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'linear-gradient(180deg, #23283a, #1a1e2b)', color: '#e6edf3', borderRadius: 12, padding: 20, minWidth: 360, maxWidth: '70vw', border: '1px solid rgba(255,196,0,0.35)', boxShadow: '0 24px 72px rgba(0,0,0,0.55)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, color: '#ffd873' }}>
+              <span style={{ fontSize: 20 }}>⏰</span>
+              <span>{tApp('worklogReminder.title')}</span>
+            </div>
+            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+              {tApp('worklogReminder.dateLabel', { date: (() => { const wd = weekdayLabel(worklogReminderShown.date); return wd ? `${worklogReminderShown.date} (${wd})` : worklogReminderShown.date; })() })}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 14, wordBreak: 'break-word' }}>{worklogReminderShown.todo?.text}</div>
+            {worklogReminderShown.todo?.memo?.trim() && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{worklogReminderShown.todo.memo}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button
+                className="panel-btn primary"
+                onClick={() => {
+                  const target = worklogReminderShown;
+                  setWorklogReminderShown(null);
+                  setClaudeChatView('worklog');
+                  setShowClaudeChat(true);
+                  setClaudeChatVisible(true);
+                  if (target?.todo?.id) setWorklogFocusTodo({ date: target.date, todoId: target.todo.id });
+                }}
+              >{tApp('worklogReminder.openWorklog')}</button>
+              <button className="panel-btn" onClick={() => setWorklogReminderShown(null)}>{tApp('worklogReminder.dismiss')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {showClaudeChat && (() => {
         // 모든 연결된 SSH 세션 수집 (panel.sessions 내의 termId 들)
         const connectedSessions: { termId: string; label: string }[] = [];
@@ -6922,6 +7000,7 @@ function App() {
               onViewChange={setClaudeChatView}
               aiAgent={aiAgent}
               onAgentChange={setAiAgent}
+              worklogFocusTodo={worklogFocusTodo}
             />
             </div>
           </>

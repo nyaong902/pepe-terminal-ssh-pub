@@ -703,6 +703,19 @@ static void cmdMute(const std::string& id, bool mute) {
         else      mgr.getCaptureDevMedia().startTransmit(*am);
     } catch (...) {}
 }
+// 스피커 뮤트 — call 오디오 → playback 장치 전송을 끊거나 잇는다(마이크 뮤트와 반대 방향).
+// 상대방은 계속 내 목소리를 들을 수 있고, 나만 상대방 소리가 안 들리게 된다.
+static void cmdSpeakerMute(const std::string& id, bool mute) {
+    auto c = g_calls.find(id);
+    if (c == g_calls.end()) return;
+    AudioMedia* am = firstCallAudio(c->second);
+    if (!am) return;
+    try {
+        AudDevManager& mgr = Endpoint::instance().audDevManager();
+        if (mute) am->stopTransmit(mgr.getPlaybackDevMedia());
+        else      am->startTransmit(mgr.getPlaybackDevMedia());
+    } catch (...) {}
+}
 
 // 통화 녹음 — 상대 오디오 + 내 마이크를 WAV 로 기록.
 static void cmdRecord(const std::string& id, bool on, const std::string& file) {
@@ -925,6 +938,7 @@ int main() {
             else if (cmd == "reject")     cmdReject(msg.value("endpointId", ""));
             else if (cmd == "hold")       cmdHold(msg.value("endpointId", ""), msg.value("hold", false));
             else if (cmd == "mute")       cmdMute(msg.value("endpointId", ""), msg.value("mute", false));
+            else if (cmd == "speakerMute") cmdSpeakerMute(msg.value("endpointId", ""), msg.value("mute", false));
             else if (cmd == "transfer")   cmdTransfer(msg.value("endpointId", ""), msg.value("target", ""));
             else if (cmd == "record")     cmdRecord(msg.value("endpointId", ""), msg.value("on", false), msg.value("file", ""));
             else if (cmd == "dtmf")       cmdDtmf(msg.value("endpointId", ""), msg.value("digit", ""));

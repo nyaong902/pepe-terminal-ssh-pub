@@ -36,5 +36,14 @@
   "shareMissingTodo": "تعذر العثور على العنصر للمشاركة.",
   "shareFail": "فشلت المشاركة: {{error}}",
   "shareSending": "جارٍ الإرسال...",
-  "sharedFrom": "تمت المشاركة من {{name}} · {{date}}"
+  "sharedFrom": "تمت المشاركة من {{name}} · {{date}}",
+  "reminderDoubleClickHint": "انقر نقرًا مزدوجًا لتعيين تذكير",
+  "reminderTitle": "تعيين تذكير",
+  "reminderDateTimeLabel": "تاريخ/وقت التذكير",
+  "reminderSave": "حفظ",
+  "reminderClear": "إزالة التذكير",
+  "reminderNotifyTitle": "تذكير سجل العمل",
+  "reminderNotifyDate": "مهمة {{date}}",
+  "reminderSoundOn": "صوت التذكير مفعّل (انقر للكتم)",
+  "reminderSoundOff": "صوت التذكير مكتوم (انقر للتفعيل)"
 }

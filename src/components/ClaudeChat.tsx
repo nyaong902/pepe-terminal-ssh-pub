@@ -1186,11 +1186,13 @@ type Props = {
   onViewChange?: (view: 'ai' | 'messenger' | 'worklog') => void;
   aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
   onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity') => void;
+  // 알람 팝업 "작업일지 열기" 등 외부에서 특정 항목으로 스크롤+하이라이트 이동을 요청할 때.
+  worklogFocusTodo?: { date: string; todoId: string } | null;
 };
 
 let sessionCounter = 0;
 
-export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange }) => {
+export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo }) => {
   const activeView = view;
   // 채팅창 내에서 독립적으로 전환 가능한 에이전트 (전역 설정과 분리)
   const [currentAgent, setCurrentAgentState] = useState<AgentType>(aiAgent);
@@ -4583,7 +4585,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       </div>
       {/* 작업일지도 동일하게 항상 마운트 + CSS 로만 숨김 — 탭 전환 시 날짜/입력 상태 보존. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'worklog' ? 'flex' : 'none' }}>
-        <WorkLogWorkspace visible={visible && activeView === 'worklog'} aiAgent={currentAgent} />
+        <WorkLogWorkspace visible={visible && activeView === 'worklog'} aiAgent={currentAgent} focusTodo={worklogFocusTodo} />
       </div>
       {(activeView === 'messenger' || activeView === 'worklog') ? null : (
       <>

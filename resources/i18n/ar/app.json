@@ -267,5 +267,11 @@
     "dontSave": "عدم الحفظ",
     "savedToast": "تم حفظ كلمة المرور للجلسة.",
     "save": "حفظ"
+  },
+  "worklogReminder": {
+    "title": "تذكير سجل العمل",
+    "dateLabel": "مهمة {{date}}",
+    "openWorklog": "فتح سجل العمل",
+    "dismiss": "إغلاق"
   }
 }

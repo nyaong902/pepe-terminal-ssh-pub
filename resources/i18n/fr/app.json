@@ -267,5 +267,11 @@
     "dontSave": "Ne pas enregistrer",
     "savedToast": "Mot de passe enregistré dans la session.",
     "save": "Enregistrer"
+  },
+  "worklogReminder": {
+    "title": "Rappel du journal de travail",
+    "dateLabel": "Tâche du {{date}}",
+    "openWorklog": "Ouvrir le journal de travail",
+    "dismiss": "Fermer"
   }
 }

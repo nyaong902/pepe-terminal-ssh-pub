@@ -36,5 +36,14 @@
   "shareMissingTodo": "找不到要分享的项目。",
   "shareFail": "分享失败：{{error}}",
   "shareSending": "发送中...",
-  "sharedFrom": "收到分享：{{name}} · {{date}}"
+  "sharedFrom": "收到分享：{{name}} · {{date}}",
+  "reminderDoubleClickHint": "双击设置提醒",
+  "reminderTitle": "设置提醒",
+  "reminderDateTimeLabel": "提醒日期/时间",
+  "reminderSave": "保存",
+  "reminderClear": "清除提醒",
+  "reminderNotifyTitle": "工作日志提醒",
+  "reminderNotifyDate": "{{date}} 的待办事项",
+  "reminderSoundOn": "提醒声音已开启（点击静音）",
+  "reminderSoundOff": "提醒声音已静音（点击开启）"
 }
