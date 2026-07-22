@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
 import { MessengerWorkspace } from './MessengerWorkspace';
+import { PlainAppWorkspace } from './PlainAppWorkspace';
 import { WorkLogWorkspace } from './WorkLogWorkspace';
 import { BrowserPane } from './BrowserPane';
 import { COMPANY_MESSENGER_LOGIN_URL } from '../utils/companyMessenger';
@@ -1184,14 +1185,15 @@ type Props = {
   pinned?: boolean;
   onTogglePin?: () => void;
   visible?: boolean;
-  view?: 'ai' | 'messenger' | 'worklog';
-  onViewChange?: (view: 'ai' | 'messenger' | 'worklog') => void;
+  view?: 'ai' | 'messenger' | 'worklog' | 'plainApp';
+  onViewChange?: (view: 'ai' | 'messenger' | 'worklog' | 'plainApp') => void;
   aiAgent?: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity';
   onAgentChange?: (agent: 'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity') => void;
   // 알람 팝업 "작업일지 열기" 등 외부에서 특정 항목으로 스크롤+하이라이트 이동을 요청할 때.
   worklogFocusTodo?: { date: string; todoId: string } | null;
   // 메신저 탭 모드 — 'mini'(기본, 자체 메신저) 또는 'company'(사내 웹 메신저를 임베드해 대체).
   messengerMode?: 'mini' | 'company';
+  onOpenPlainApp?: () => void;
 };
 
 let sessionCounter = 0;
@@ -1276,6 +1278,23 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 에이전트 탭 툴팁 — React 포털로 document.body 에 렌더 (overflow 클립 회피)
   const [agentTooltip, setAgentTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [plainAppState, setPlainAppState] = useState<any>(null);
+  useEffect(() => {
+    const off = (window as any).api?.onPlainAppEvent?.((event: any) => {
+      if (!event) return;
+      if (event.type === 'state') {
+        setPlainAppState(event.state || null);
+        return;
+      }
+      if (event.type === 'connected') {
+        setPlainAppState(event.state || null);
+        onViewChange?.('plainApp');
+      }
+    });
+    return () => {
+      try { off?.(); } catch {}
+    };
+  }, [onViewChange]);
   // Git 상태 — 현재 cwd / 활성 SSH 세션 자동 감지
   const [gitStatus, setGitStatus] = useState<{ ok: boolean; branch?: string; additions?: number; deletions?: number } | null>(null);
   const [input, setInput] = useState('');
@@ -4359,11 +4378,12 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       <button className={`claude-chat-view-tab ${activeView === 'ai' ? 'active' : ''}`} onClick={() => onViewChange?.('ai')}>🤖 AI Chat</button>
       <button className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`} onClick={() => onViewChange?.('messenger')}>💬 {tt('messenger')}</button>
       <button className={`claude-chat-view-tab ${activeView === 'worklog' ? 'active' : ''}`} onClick={() => onViewChange?.('worklog')}>🗓 {tt('workLog')}</button>
+      <button className={`claude-chat-view-tab ${activeView === 'plainApp' ? 'active' : ''}`} onClick={() => onViewChange?.('plainApp')}>📱 pepe-connect</button>
     </div>
   );
 
   // 메신저/작업일지 뷰는 AI 에이전트 설치/로딩 상태와 무관하게 항상 표시 (custom LLM 등 미설정 시에도 탭 유지).
-  if (activeView !== 'messenger' && activeView !== 'worklog' && installed === null) {
+  if (activeView !== 'messenger' && activeView !== 'worklog' && activeView !== 'plainApp' && installed === null) {
     return (
       <div className="claude-chat-container">
         <div className="claude-chat-header">
@@ -4387,7 +4407,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       </div>
     );
   }
-  if (activeView !== 'messenger' && activeView !== 'worklog' && !installed) {
+  if (activeView !== 'messenger' && activeView !== 'worklog' && activeView !== 'plainApp' && !installed) {
     const notInstalledMsg = currentAgent === 'gemini' ? tt('notInstalledGemini') : currentAgent === 'codex' ? tt('notInstalledCodex') : currentAgent === 'custom' ? tt('notInstalledCustom') : currentAgent === 'antigravity' ? tt('notInstalledAntigravity') : tt('notInstalled');
     return (
       <div className="claude-chat-container">
@@ -4575,6 +4595,10 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           className={`claude-chat-view-tab ${activeView === 'worklog' ? 'active' : ''}`}
           onClick={() => onViewChange?.('worklog')}
         >🗓 {tt('workLog')}</button>
+        <button
+          className={`claude-chat-view-tab ${activeView === 'plainApp' ? 'active' : ''}`}
+          onClick={() => onViewChange?.('plainApp')}
+        >📱 pepe-connect</button>
       </div>
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
@@ -4595,7 +4619,15 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'worklog' ? 'flex' : 'none' }}>
         <WorkLogWorkspace visible={visible && activeView === 'worklog'} aiAgent={currentAgent} focusTodo={worklogFocusTodo} />
       </div>
-      {(activeView === 'messenger' || activeView === 'worklog') ? null : (
+      {/* pepe-connect 도 같은 영역에서 탭 전환만 바꿔 보여준다. */}
+      <div className="claude-chat-messenger-pane" style={{ display: activeView === 'plainApp' ? 'flex' : 'none' }}>
+        <PlainAppWorkspace
+          initialState={plainAppState}
+          onStateChange={setPlainAppState}
+          onTitleChange={() => {}}
+        />
+      </div>
+      {(activeView === 'messenger' || activeView === 'worklog' || activeView === 'plainApp') ? null : (
       <>
       {showUsagePanel && (
         <div className="claude-chat-usage-panel claude-chat-usage-popup"

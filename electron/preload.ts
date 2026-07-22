@@ -54,6 +54,19 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('window-theme:changed', handler);
   },
 
+  // 폰 미러링 QR 페어링 — 모바일 앱이 callbackUrl 로 POST 할 수 있도록 임시 LAN 서버를 띄운다.
+  plainAppStart: () => ipcRenderer.invoke('plainapp:start'),
+  plainAppState: () => ipcRenderer.invoke('plainapp:state'),
+  plainAppStop: () => ipcRenderer.invoke('plainapp:stop'),
+  // 서버(포트/네트워크 인터페이스 목록)는 그대로 두고 requestId 만 새로 발급 — QR 코드만
+  // 갱신되고 IP 목록 화면은 깜빡이지 않는다.
+  plainAppResetRequest: () => ipcRenderer.invoke('plainapp:reset-request'),
+  onPlainAppEvent: (cb: (p: any) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('plainapp:event', handler);
+    return () => ipcRenderer.removeListener('plainapp:event', handler);
+  },
+
   // PePe Messenger
   messengerStart: (prefs?: any) => ipcRenderer.invoke('messenger:start', prefs),
   messengerStop: () => ipcRenderer.invoke('messenger:stop'),

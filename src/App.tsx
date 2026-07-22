@@ -17,6 +17,7 @@ import { playReminderChime } from './utils/reminderChime';
 import { FileEditor } from './components/FileEditor';
 import { ClaudeChat } from './components/ClaudeChat';
 import { BrowserPane } from './components/BrowserPane';
+import { PlainAppWorkspace } from './components/PlainAppWorkspace';
 import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
@@ -72,7 +73,7 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sipp' | 'office' | 'media' | 'customWorkspace';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sipp' | 'office' | 'media' | 'customWorkspace';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
@@ -135,7 +136,7 @@ function App() {
   const [splitRightTabId, setSplitRightTabId] = useState<TabId | null>(null);
   const [splitRatio, setSplitRatio] = useState<number>(0.5); // 좌 비율 0.2~0.8
   // 지원 대상: 특수 워크스페이스 전체 + 터미널 (type undefined / 'terminal').
-  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sipp', 'fileExplorer', 'fileEditor', undefined];
+  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'plainApp', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sipp', 'fileExplorer', 'fileEditor', undefined];
   const canSplit = (tab: Tab | undefined) => !!tab && (tab.type === undefined || SPLITTABLE_TYPES.includes(tab.type));
   const splitRightTab = tabs.find(t => t.id === splitRightTabId) || null;
   // 활성 탭 자체를 분할 대상으로 설정 못 하게 — 자동 해제
@@ -569,7 +570,7 @@ function App() {
         if (typeof prefs?.showClaudeChat === 'boolean') {
           setShowClaudeChat(prefs.showClaudeChat);
         }
-        if (prefs?.claudeChatView === 'ai' || prefs?.claudeChatView === 'messenger') {
+        if (prefs?.claudeChatView === 'ai' || prefs?.claudeChatView === 'messenger' || prefs?.claudeChatView === 'worklog' || prefs?.claudeChatView === 'plainApp') {
           setClaudeChatView(prefs.claudeChatView);
         }
         if (prefs?.aiMcpAttachmentMode === 'local' || prefs?.aiMcpAttachmentMode === 'ssh') {
@@ -1084,7 +1085,7 @@ function App() {
     }, ms));
   }, [terminalPinned]);
   const [showClaudeChat, setShowClaudeChat] = useState(true);
-  const [claudeChatView, setClaudeChatView] = useState<'ai' | 'messenger' | 'worklog'>('ai');
+  const [claudeChatView, setClaudeChatView] = useState<'ai' | 'messenger' | 'worklog' | 'plainApp'>('ai');
   const claudeChatViewLoadedRef = useRef(false);
   const [messengerPopup, setMessengerPopup] = useState<{
     peerId: string;
@@ -1234,7 +1235,7 @@ function App() {
       setMessengerUnreadCount(0);
     }
   }, [showClaudeChat, claudeChatView, claudeChatPinned, claudeChatVisible]);
-  const openClaudeChatView = (view: 'ai' | 'messenger' | 'worklog') => {
+  const openClaudeChatView = (view: 'ai' | 'messenger' | 'worklog' | 'plainApp') => {
     setShowClaudeChat(true);
     setClaudeChatView(view);
     if (!claudeChatPinned) setClaudeChatVisible(true);
@@ -2585,6 +2586,7 @@ function App() {
     setActiveTabId(id);
   };
   const addBrowserTab = () => addSpecialTab('browser', tApp('tabs.browser'));
+  const addPlainAppTab = () => addSpecialTab('plainApp', '📱 pepe-connect');
   const addCompareTab = () => addSpecialTab('compare', tApp('tabs.compare'));
   const addLogAnalyzerTab = () => addSpecialTab('logAnalyzer', tApp('tabs.logAnalyzer'));
   const addVpnTab = () => addSpecialTab('vpn', tApp('tabs.vpn'));
@@ -2703,6 +2705,7 @@ function App() {
     { id: 'cmd-aiChat', label: 'AI Chat 열기', icon: '🤖', keywords: ['ai', 'chat', 'claude'], run: () => openClaudeChatView('ai') },
     { id: 'cmd-messenger', label: '메신저 열기', icon: '💬', keywords: ['messenger', '메신저'], run: () => openClaudeChatView('messenger') },
     { id: 'cmd-worklog', label: '작업일지 열기', icon: '🗓️', keywords: ['worklog', 'todo', '작업일지'], run: () => openClaudeChatView('worklog') },
+    { id: 'cmd-plainApp', label: 'pepe-connect', icon: '📱', keywords: ['phone', 'mirror', 'screen', 'plainapp', 'plain-web', 'pepe-connect', '폰 미러링', '미러링'], run: () => addPlainAppTab() },
     { id: 'cmd-options', label: '설정 열기', icon: '⚙️', keywords: ['settings', 'options', '옵션', '설정'], run: () => setShowOptions(true) },
   ];
   // 커맨드 팔레트 항목을 사용자가 드래그로 재배열한 순서 — UIPrefs 에 저장된 id 순서를 적용하고,
@@ -5461,6 +5464,20 @@ function App() {
                 onTitleChange={(title) => renameTab(t.id, `🌐 ${title}`)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
+              />
+            </ErrorBoundary>
+          </div>
+        ))}
+        {tabs.filter(t => t.type === 'plainApp').map(t => (
+          <div key={t.id} style={tabSlotStyle(t)}>
+            <ErrorBoundary label="PlainApp">
+              <PlainAppWorkspace
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onTitleChange={(title) => renameTab(t.id, title)}
+                onStateChange={(st: any) => {
+                  workspaceStateRef.current.set(t.id, st);
+                  setTabs(prev => prev.map(tab => tab.id === t.id ? { ...tab, workspaceState: st } : tab));
+                }}
               />
             </ErrorBoundary>
           </div>
