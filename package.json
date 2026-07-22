@@ -2,7 +2,7 @@
   "name": "pepe-terminal-ssh",
   "productName": "PePe Terminal(SSH)",
   "private": true,
-  "version": "2.2.21",
+  "version": "2.2.22",
   "description": "PePe Terminal(SSH)",
   "author": "Claude (feat. ghjeong[prompt])",
   "type": "commonjs",
@@ -97,12 +97,11 @@
     ],
     "extraResources": [
       {
-        "from": "resources/x11-server.zip",
-        "to": "x11-server.zip"
-      },
-      {
-        "from": "resources/x11-server/README.txt",
-        "to": "x11-server/README.txt"
+        "from": "resources/x11-server",
+        "to": "x11-server",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "docs",
