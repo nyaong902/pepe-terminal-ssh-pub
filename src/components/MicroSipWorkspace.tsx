@@ -663,28 +663,27 @@ export const MicroSipWorkspace: React.FC<{
       />
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {endpoints.length === 0 && (
-          <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 24, textAlign: 'center' }}>
-            단말이 없습니다. 우측 상단 <b>+ 단말</b> 으로 추가하세요 (최대 {MAX_ENDPOINTS}대).
-          </div>
-        )}
-
         {view === 'phones' && (
           // 단말이 많아지면 콜로그가 화면 밖으로 밀려나지 않도록 — 단말 영역(스크롤) + 콜로그(고정) 분리.
           // 프로비저닝 툴바도 같은 이유로 스크롤 영역 밖(고정)에 둔다 — sticky 로 스크롤 영역
           // 안쪽에 두면 카드 내용이 겹쳐 보이는 렌더링 문제가 있었다.
           <>
-            {endpoints.length > 0 && (
-              <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px 0 12px' }}>
-                <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
-                <button onClick={exportConfig} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(true)}>⬇ 내보내기</button>
-                <button onClick={() => importInputRef.current?.click()} title="JSON 설정 가져오기(덮어쓰기)" style={miniBtn(true)}>⬆ 가져오기</button>
-                <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
-                  onChange={e => { void importConfig(e.target.files?.[0]); e.target.value = ''; }} />
-                <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
+            <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px 0 12px' }}>
+              <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
+              <button onClick={exportConfig} disabled={endpoints.length === 0} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(endpoints.length > 0)}>⬆ 내보내기</button>
+              <button onClick={() => importInputRef.current?.click()} title="JSON 설정 가져오기(덮어쓰기)" style={miniBtn(true)}>⬇ 가져오기</button>
+              <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+                onChange={e => { void importConfig(e.target.files?.[0]); e.target.value = ''; }} />
+              <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
+              {endpoints.length > 0 && (
                 <button onClick={toggleAllCardsFlip} title="모든 단말 카드를 한꺼번에 설정면으로 뒤집기/되돌리기" style={{ ...miniBtn(true), marginLeft: 'auto' }}>
                   {anyCardFlipped ? '◀ 전체 통화 카드로' : '⚙ 전체 설정 보기'}
                 </button>
+              )}
+            </div>
+            {endpoints.length === 0 && (
+              <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 24, textAlign: 'center' }}>
+                단말이 없습니다. 우측 상단 <b>+ 단말</b> 으로 추가하세요 (최대 {MAX_ENDPOINTS}대).
               </div>
             )}
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
