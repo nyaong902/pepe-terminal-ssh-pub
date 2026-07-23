@@ -94,6 +94,9 @@ export const SswSoftphoneWorkspace: React.FC<{
   const autoRegDoneRef = useRef(false);
   // 진행 중 통화 추적(이벤트로 기록 항목 산출) — endpointId → 누적 상태
   const callTrackRef = useRef<Record<string, { dir: 'in' | 'out'; remote: string; sawConnected: boolean; connectedTs: number }>>({});
+  // 방금 이 단말에서 실제로 발신에 넘긴 문자열(dial prefix 적용 후) — 부가서비스(스타코드) 시험 시
+  // "발신: 입력값 → 실제 URI" 를 MiniSoftphone 처럼 전문 로그에 남기기 위해 기억해둔다.
+  const lastDialedTargetRef = useRef<Record<string, string>>({});
 
   // 뷰(탭)는 부모(initialView) ↔ 내부(view) 양방향 바인딩이다. 커스텀 워크스페이스(embedded) 는
   // 부모(CustomWorkspaceView)가 매 렌더마다 새 onViewChange 함수를 넘기고, 그 값을 다시 props 로
@@ -219,9 +222,13 @@ export const SswSoftphoneWorkspace: React.FC<{
         return;
       }
       // 활동 로그 적재 (reg/call/error/log/sip)
+      // 발신(calling) 전이는 MiniSoftphone 처럼 "발신: 입력값 → 실제 URI" 형태로 —
+      // 부가서비스(스타코드) 시험 시 내가 뭘 눌렀는지와 실제로 어떤 URI 로 나갔는지를 한 줄로 보여준다.
       const txt =
         ev.ev === 'reg' ? `등록: ${ev.reg}${ev.error ? ` (${ev.error})` : ''}` :
-        ev.ev === 'call' ? `통화: ${ev.call}${ev.remote ? ` ${ev.remote}` : ''}${ev.error ? ` (${ev.error})` : ''}` :
+        ev.ev === 'call' ? (ev.call === 'calling'
+          ? `발신: ${lastDialedTargetRef.current[ev.endpointId] || ''}  →  ${ev.remote || ''}`
+          : `통화: ${ev.call}${ev.remote ? ` ${ev.remote}` : ''}${ev.error ? ` (${ev.error})` : ''}`) :
         ev.ev === 'error' ? `오류: ${ev.error || ''}` :
         ev.ev === 'log' ? String(ev.text || '') :
         ev.ev === 'sip' ? `${ev.dir === 'out' ? '↗' : '↙'} ${ev.summary || ''}` : '';
@@ -531,6 +538,7 @@ export const SswSoftphoneWorkspace: React.FC<{
       pushToast(`${labelOfEp(id)} 통화 실패 — ${msg}`);
       return;
     }
+    lastDialedTargetRef.current[id] = target;
     setRt(id, { call: 'calling', remote: target, error: undefined });
     const r = await api().sipCall?.({ endpointId: id, target }).catch((err: any) => ({ ok: false, error: String(err?.message || err) }));
     if (!r?.ok) { setRt(id, { call: 'idle', error: r?.error }); pushToast(`${labelOfEp(id)} 통화 실패 — ${r?.error || 'SIP 엔진 미가용'}`); }
@@ -1749,25 +1757,27 @@ const SettingsCard: React.FC<{
           ⚙ 설정 닫기
         </button>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[reg] }} title={reg} />
-        <input value={cur.label} onChange={e => onChangeLocal({ label: e.target.value })} style={{ ...inp, fontWeight: 700, fontSize: 13, minWidth: 120 }} />
-        <select defaultValue="" onChange={e => { if (e.target.value) { onCopyFrom(e.target.value); e.target.value = ''; } }} title="다른 단말 설정 복사" style={inp}>
-          <option value="">설정 복사 ←</option>
-          {all.filter(x => x.id !== cur.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
-        </select>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <button onClick={() => onMove(-1)} disabled={idx === 0} title="위로" style={{ ...inp, cursor: idx === 0 ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.4 : 1, padding: '6px 8px' }}>▲</button>
-          <button onClick={() => onMove(1)} disabled={idx >= total - 1} title="아래로" style={{ ...inp, cursor: idx >= total - 1 ? 'not-allowed' : 'pointer', opacity: idx >= total - 1 ? 0.4 : 1, padding: '6px 8px' }}>▼</button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[reg], flexShrink: 0 }} title={reg} />
+          <input value={cur.label} onChange={e => onChangeLocal({ label: e.target.value })} style={{ ...inp, flex: 1, fontWeight: 700, fontSize: 13 }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <select defaultValue="" onChange={e => { if (e.target.value) { onCopyFrom(e.target.value); e.target.value = ''; } }} title="다른 단말 설정 복사" style={{ ...inp, flex: '1 1 100px', minWidth: 90 }}>
+            <option value="">설정 복사 ←</option>
+            {all.filter(x => x.id !== cur.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}
+          </select>
+          <button onClick={() => onMove(-1)} disabled={idx === 0} title="위로" style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: idx === 0 ? 'not-allowed' : 'pointer', opacity: idx === 0 ? 0.4 : 1, padding: '6px 8px' }}>▲</button>
+          <button onClick={() => onMove(1)} disabled={idx >= total - 1} title="아래로" style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: idx >= total - 1 ? 'not-allowed' : 'pointer', opacity: idx >= total - 1 ? 0.4 : 1, padding: '6px 8px' }}>▼</button>
           <button onClick={onToggleCapture} disabled={!captureAvailable}
             title={captureAvailable ? (capturing ? '패킷 캡처 중지' : '패킷 캡처 시작') : '패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치)'}
-            style={{ ...inp, cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4, background: capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: capturing ? '#fff' : 'var(--win-text, #e6edf3)' }}>
+            style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4, background: capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: capturing ? '#fff' : 'var(--win-text, #e6edf3)' }}>
             {capturing ? '⏺ 캡처 중' : '📡 캡처'}
           </button>
           {reg === 'registered'
-            ? <button onClick={onUnregister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-surface-2, #21262d)' }}>등록 해제</button>
-            : <button onClick={onRegister} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700 }}>등록</button>}
-          <button onClick={onRemove} title="단말 삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
+            ? <button onClick={onUnregister} style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: 'var(--win-surface-2, #21262d)' }}>해제</button>
+            : <button onClick={onRegister} style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700 }}>등록</button>}
+          <button onClick={onRemove} title="단말 삭제" style={{ ...inp, whiteSpace: 'nowrap', flexShrink: 0, cursor: 'pointer', color: '#f85149' }}>🗑</button>
         </div>
       </div>
       {/* 📇 계정 */}

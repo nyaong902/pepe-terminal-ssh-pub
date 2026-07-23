@@ -1064,29 +1064,11 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
         } catch {}
         showFontSizeOSD(el, newSize);
       }, { passive: false });
-      // 빈 셀 더블클릭 시 해당 줄 전체 선택
-      el.addEventListener('dblclick', (e: MouseEvent) => {
-        const screen = el.querySelector('.xterm-screen') as HTMLElement;
-        if (!screen) return;
-        const rect = screen.getBoundingClientRect();
-        const cols = (term as any).cols || 80;
-        const rows = (term as any).rows || 24;
-        const cellW = rect.width / cols;
-        const cellH = rect.height / rows;
-        const col = Math.floor((e.clientX - rect.left) / cellW);
-        const row = Math.floor((e.clientY - rect.top) / cellH);
-        const buf = term.buffer.active;
-        const vp = el.querySelector('.xterm-viewport') as HTMLElement;
-        const scrollRow = vp ? Math.round(vp.scrollTop / cellH) : 0;
-        const bufRow = scrollRow + row;
-        const line = buf.getLine(bufRow);
-        if (!line) return;
-        const text = line.translateToString(true);
-        if (col >= text.length && text.length > 0) {
-          // 빈 영역 더블클릭 → 줄 전체 선택
-          term.select(0, bufRow, text.length);
-        }
-      });
+      // (예전엔 빈 셀을 더블클릭하면 줄 전체를 선택하는 커스텀 로직이 있었다 — 화면 좌표를
+      // 셀 크기로 역산해 버퍼 행을 계산했는데, WebGL 렌더러의 서브픽셀 오차 때문에 실제로
+      // 클릭한 줄과 다른(엉뚱한) 줄이 통째로 선택되는 버그가 반복적으로 재현됐다. xterm 자체
+      // 더블클릭(공백도 하나의 "단어"로 취급해 그 구간만 선택)이 이미 올바르게 동작하므로,
+      // 신뢰할 수 없는 커스텀 오버라이드를 걷어내고 xterm 기본 동작을 그대로 쓴다.)
       // Ctrl+V / 브라우저 paste 가로채기 — 여러 줄 붙여넣기 다이얼로그
       el.addEventListener('paste', (e: ClipboardEvent) => {
         const text = e.clipboardData?.getData('text');
