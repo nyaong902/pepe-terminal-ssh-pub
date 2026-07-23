@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents, protocol } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents, protocol, session } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
 // dev 실행 시에만 [claude]/[codex]/[mcp-control] 등 디버그 로그 출력. console.error/warn 은 유지.
@@ -28,6 +28,10 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,In
 //   거의 쓰이지 않아 영향이 미미하고, userData 는 공유되어 자격증명은 그대로 동작.
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-http-cache');
+// pepe-connect(휴대폰 화면 미러링, <webview> 로 plain-app 웹 UI 임베드)가 H.264/Opus 를
+// 디코딩하는 데 WebCodecs API(VideoDecoder/AudioDecoder)를 쓰는데, 번들 Chromium 은 기본
+// 비활성 상태라 "VideoDecoder is not defined" 로 화면이 아예 안 뜬다 — 명시적으로 켜야 함.
+app.commandLine.appendSwitch('enable-blink-features', 'WebCodecs');
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -63,6 +67,7 @@ import { listLanguages, listNamespaces, loadNamespace, loadBundledNamespace, loa
 import { t, setCurrentLang } from './i18n';
 import { setupAutoUpdater, checkForUpdatesOnStartup } from './updater';
 import { RemoteShareServer, type RemoteShareStartOptions } from './remoteShareServer';
+import { PlainAppConnectServer } from './plainAppConnectServer';
 // MCP 서버 스크립트를 번들에 임베드 (vite ?raw) — 런타임에 임시 파일로 추출 후 spawn
 // @ts-ignore
 import mcpSshServerScript from './mcpSshServer.cjs?raw';
@@ -99,6 +104,15 @@ function pepeAppUrl(hash?: string): string {
 
 let mainWindow: BrowserWindow | null = null;
 const remoteShareServer = new RemoteShareServer(() => mainWindow);
+const plainAppConnectServer = new PlainAppConnectServer((event) => {
+  const payload = event.type === 'connected'
+    ? { type: 'connected', state: event.state, response: event.response }
+    : { type: 'state', state: event.state };
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('plainapp:event', payload); } catch {}
+  for (const w of detachedWindows) {
+    try { if (!w.isDestroyed()) w.webContents.send('plainapp:event', payload); } catch {}
+  }
+});
 // 분리된(탭 tear-off) 보조 앱 창들 — 터미널/파일전송 데이터 broadcast 대상
 const detachedWindows = new Set<BrowserWindow>();
 // 터미널/SFTP 데이터를 메인 + 모든 분리 창에 전달한다. 수신 측 렌더러는 자기 termId 만 처리하므로
@@ -1084,6 +1098,19 @@ const PEPE_MIME_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
 app.whenReady().then(() => {
+  // pepe-connect(휴대폰 화면 미러링) 는 폰이 즉석에서 만든 자체서명 HTTPS(8443)로 접속하는데,
+  // 위 certificate-error 이벤트는 일반 문서/서브리소스 로드에만 적용되고 WebSocket(wss://) 핸드셰이크와
+  // Service Worker 스크립트 페치에는 신뢰성 있게 적용되지 않는 게 Electron 의 알려진 한계다
+  // (electron/electron#15709, #19748) — 그래서 WebSocket 이 "closed before the connection is
+  // established" 로 반복 실패하고, 그 WebSocket 으로만 되는 로그인/실시간 미러링이 간헐적으로
+  // 안 되거나 여러 번 재시도된 뒤에야 겨우 붙었다. setCertificateVerifyProc 은 인증서 검증
+  // 로직 자체를 가로채므로 WebSocket 을 포함한 모든 연결에 적용되어 이 문제를 근본적으로 없앤다.
+  // pepe-connect 전용 partition 에만 적용해 다른 세션(브라우저 워크스페이스 등)에는 영향 없음.
+  // session.fromPartition() 은 app.ready 이전에는 호출할 수 없어 반드시 이 블록 안에 있어야 한다.
+  session.fromPartition('persist:pepe-connect').setCertificateVerifyProc((_request, callback) => {
+    callback(0); // 0 = net::OK(신뢰함). 이 partition 은 로컬 pepe-connect 페어링 전용이라 안전.
+  });
+
   // pepeapp://app/... → dist/... 로 매핑. office-editor/rhwp-studio/flowchart-editor 는 설치 시
   // 선택 해제될 수 있는 대용량 번들(build/installer.nsh 참고)이라 dist(app.asar) 밖의
   // resources/<name>(패키지) 또는 repo resources/<name>(dev) 에서 별도로 서빙한다 — asar 안에 있으면
@@ -1269,6 +1296,10 @@ app.whenReady().then(() => {
 ipcMain.handle('remote-share:state', () => remoteShareServer.state());
 ipcMain.handle('remote-share:start', (_event, options?: RemoteShareStartOptions) => remoteShareServer.start(options));
 ipcMain.handle('remote-share:stop', () => remoteShareServer.stop());
+ipcMain.handle('plainapp:state', () => plainAppConnectServer.state());
+ipcMain.handle('plainapp:start', () => plainAppConnectServer.ensureStarted());
+ipcMain.handle('plainapp:stop', () => plainAppConnectServer.stop());
+ipcMain.handle('plainapp:reset-request', () => plainAppConnectServer.resetRequest());
 
 app.on('window-all-closed', () => {
   // 단일 윈도우 앱 — macOS 에서도 마지막 창 닫히면 완전 종료 (activate 핸들러 없어 dock 클릭으로 복귀 불가).
@@ -1286,6 +1317,7 @@ app.on('before-quit', () => {
   // 종료 안전 장치 — 어떤 cleanup 도 실패해도 강제 종료가 무조건 진행되도록 setTimeout 을 가장 먼저 큐잉.
   setTimeout(() => { try { process.exit(0); } catch {} }, 600);
   try { remoteShareServer.stop(); } catch {}
+  try { plainAppConnectServer.stop(); } catch {}
   try { stopAllBundledX11(); } catch {}
   try { getSipSidecar().dispose(); } catch {}
   try { getCaptureManager().stopAll(); } catch {}

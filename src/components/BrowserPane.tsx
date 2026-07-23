@@ -11,6 +11,8 @@ type Props = {
   // 새 창 분리/병합 시 상태 복원용.
   initialState?: { editUrl?: string; zoom?: number; targetSessionId?: string; targetPanelId?: string } | null;
   onStateChange?: (state: { editUrl: string; zoom: number; targetSessionId: string; targetPanelId: string }) => void;
+  // 기본은 매번 독립 세션을 쓰되, 특수 워크스페이스는 안정적인 session partition 을 공유할 수 있게 한다.
+  partitionKey?: string;
   // 커스텀 워크스페이스 그리드 슬롯 안에 배치된 경우 true. 일반 브라우저 탭(전체 탭 하나를 차지)은
   // 기존 sizing 로직을 그대로 쓰고, 커스텀 워크스페이스 슬롯(그리드 셀, 크기가 작고 자주 리사이즈됨)만
   // 별도 sizing 로직을 쓴다 — 기존 탭 동작에 영향 없이 커스텀 워크스페이스의 "150px 고정" 버그만 고친다.
@@ -38,7 +40,7 @@ type StoredSession = {
   hasJumps?: boolean;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, embedded = false, chromeless = false }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, partitionKey, embedded = false, chromeless = false }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
   const webviewWrapRef = useRef<HTMLDivElement | null>(null);
@@ -69,8 +71,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const onTitleChangeRef = useRef<Props['onTitleChange']>(onTitleChange);
   const urlHistoryKey = 'pepe-browser-url-history';
   const partitionName = useMemo(
-    () => `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    [],
+    () => partitionKey?.trim() || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    [partitionKey],
   );
   // 복원된 URL 이 있으면 그걸로 시작.
   const startUrl = (initialState?.editUrl && initialState.editUrl.trim()) ? initialState.editUrl : initialUrl;
