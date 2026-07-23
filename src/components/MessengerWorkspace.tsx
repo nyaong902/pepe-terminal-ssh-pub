@@ -35,7 +35,7 @@ type Msg = {
 type EmoticonAsset = { name: string; path: string; size: number; updatedAt: number; ext: string };
 type EmoticonPack = { id: string; name: string; rootDir: string; cover: EmoticonAsset; items: EmoticonAsset[] };
 type Prefs = { enabled?: boolean; displayName?: string; retainEnabled?: boolean; retainDays?: number; downloadDir?: string; hidePresence?: boolean; popupNotify?: boolean; popupStyle?: 'toast' | 'center'; popupHoldSec?: number };
-type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs; emoticonPacks?: EmoticonPack[] };
+type State = { self?: { id: string; name: string; port: number; hidden?: boolean }; peers: Peer[]; messages: Msg[]; prefs: Prefs; emoticonPacks?: EmoticonPack[]; downloadsDir?: string };
 type RemoteEntry = { name: string; isDir: boolean; size?: number; mtime?: number };
 type ConnectedSession = { panelId: string; sessionId?: string; sessionName?: string; host?: string; port?: number };
 type PendingAttachment = { name: string; path: string; size: number; mime: string; previewUrl?: string };
@@ -80,6 +80,20 @@ function parentRemotePath(cur: string) {
 function canRevealFile(msg: Msg) {
   const p = msg.filePath || '';
   return msg.direction === 'in' || /^[A-Za-z]:[\\/]/.test(p) || /^\\\\/.test(p);
+}
+
+// filePath 가 앱이 자동 저장해둔 고정 폴더(downloadsDir) 안이면 아직 사용자가 "저장"을 안 한 것 —
+// 밖이면 다른 이름으로 저장을 이미 완료한 것이라 "위치 열기" 버튼을 "폴더 열기"로 바꿔 보여준다
+// (크롬 다운로드바가 저장 전엔 "저장", 저장 후엔 "폴더 열기"로 바뀌는 것과 같은 패턴).
+function isSavedElsewhere(msg: Msg, downloadsDir?: string): boolean {
+  if (!msg.filePath || !downloadsDir) return false;
+  const dir = downloadsDir.replace(/[\\/]+$/, '');
+  return path_dirname(msg.filePath) !== dir;
+}
+function path_dirname(p: string): string {
+  const norm = p.replace(/\\/g, '/');
+  const idx = norm.lastIndexOf('/');
+  return idx < 0 ? '' : p.slice(0, idx);
 }
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
@@ -173,6 +187,7 @@ export const MessengerWorkspace: React.FC<{
   const [text, setText] = useState(initialState?.text || '');
   const [saving, setSaving] = useState(false);
   const [scanText, setScanText] = useState('');
+  const [saveFileError, setSaveFileError] = useState<{ id: string; text: string } | null>(null);
   const [settingsExpanded, setSettingsExpanded] = useState(initialState?.settingsExpanded ?? false);
   // AI Chat 탭으로 갔다가 돌아오면 MessengerWorkspace 가 언마운트/재마운트되므로(탭 전환이 조건부
   // 렌더) 첨부 목록도 selectedPeerId/text 처럼 부모에 보고했다가 복원해야 유지됨.
@@ -345,6 +360,14 @@ export const MessengerWorkspace: React.FC<{
   const recallMessage = async (peerId: string, messageId: string) => {
     await (window as any).api?.messengerRecallMessage?.(peerId, messageId);
   };
+  const saveFileAs = async (m: Msg) => {
+    if (!m.filePath) return;
+    const res = await (window as any).api?.messengerSaveFileAs?.({ filePath: m.filePath, fileName: m.fileName, peerId: m.peerId, messageId: m.id });
+    if (res && !res.success && !res.canceled) {
+      setSaveFileError({ id: m.id, text: String(res.error || '') });
+      setTimeout(() => setSaveFileError(cur => (cur?.id === m.id ? null : cur)), 4000);
+    }
+  };
   const respondWorklogShare = async (message: Msg, decision: 'accepted' | 'rejected') => {
     setShareActionBusyId(message.id);
     setShareActionError('');
@@ -409,8 +432,8 @@ export const MessengerWorkspace: React.FC<{
     setText('');
     setPendingAttachments([]);
     if (attachments.length > 0) {
-      const paths = attachments.map(a => a.path);
-      const res = await (window as any).api?.messengerSendFilePaths?.(selectedPeerId, paths);
+      const files = attachments.map(a => ({ path: a.path, name: a.name }));
+      const res = await (window as any).api?.messengerSendFilePaths?.(selectedPeerId, files);
       if (!res?.success) setPendingAttachments(attachments);
     }
     if (body) {
@@ -944,12 +967,25 @@ export const MessengerWorkspace: React.FC<{
                       </div>
                       {m.filePath && (
                         <>
-                          <div className="messenger-file-path">{m.filePath}</div>
-                          {canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('revealFile')}</button>}
+                          {isSavedElsewhere(m, state.downloadsDir) && <div className="messenger-file-path">{m.filePath}</div>}
+                          <div className="messenger-file-card-actions">
+                            {isSavedElsewhere(m, state.downloadsDir) ? (
+                              canRevealFile(m) && <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('openFolder')}</button>
+                            ) : (
+                              <button className="messenger-file-action" onClick={() => saveFileAs(m)}>{t('saveFileAs')}</button>
+                            )}
+                          </div>
+                          {saveFileError?.id === m.id && <div className="messenger-file-save-error">{saveFileError.text}</div>}
                         </>
                       )}
                     </>
                   )}
+                  {m.kind === 'sticker' && m.filePath && (
+                    isSavedElsewhere(m, state.downloadsDir)
+                      ? <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('openFolder')}</button>
+                      : <button className="messenger-file-action" onClick={() => saveFileAs(m)}>{t('saveFileAs')}</button>
+                  )}
+                  {saveFileError?.id === m.id && m.kind === 'sticker' && <div className="messenger-file-save-error">{saveFileError.text}</div>}
                 </div>
               ) : (
                 <div>{m.text}</div>

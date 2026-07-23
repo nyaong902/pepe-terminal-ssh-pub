@@ -7847,6 +7847,18 @@ mark.claude-search-hit.current {
   cursor: pointer;
   font-size: 11px;
 }
+.messenger-file-card-actions {
+  display: flex;
+  gap: 6px;
+}
+.messenger-file-card-actions .messenger-file-action {
+  margin-top: 8px;
+}
+.messenger-file-save-error {
+  margin-top: 4px;
+  color: #ff8a8a;
+  font-size: 11px;
+}
 .messenger-compose {
   display: flex;
   flex-direction: column;

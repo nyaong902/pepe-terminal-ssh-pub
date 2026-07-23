@@ -1678,6 +1678,9 @@ function messengerState() {
     messages: messengerMessages,
     prefs: messengerPrefs,
     emoticonPacks: messengerReadEmoticonPacks(),
+    // 렌더러가 파일/이미지 메시지의 filePath 가 앱 관리 폴더 안(=아직 "저장" 안 함)인지, 밖(=사용자가
+    // 다른 이름으로 저장 완료)인지 판별해 "위치 열기"↔"폴더 열기" 버튼 라벨을 바꾸는 데 쓴다.
+    downloadsDir: messengerDownloadsDir(),
   };
 }
 function messengerRemember(msg: MessengerMessage) {
@@ -2127,6 +2130,38 @@ ipcMain.handle('messenger:mark-read', async (_e, { peerId, messageId }: { peerId
 ipcMain.handle('messenger:recall-message', async (_e, { peerId, messageId }: { peerId: string; messageId: string }) => {
   return messengerRecallMessage(peerId, messageId);
 });
+// 메신저로 받은/보낸 파일·이미지는 messengerDownloadsDir()(고정 폴더)에 자동 저장되지만, 사용자가
+// 원하는 위치에 별도로 저장할 수 있게 하는 다이얼로그. 그 고정 폴더 안의 앱 관리 사본이면 저장 후
+// 원본(폴더 안 사본)은 지우고 메시지의 filePath 를 새 위치로 갱신 — "위치 열기"/미리보기가 계속 그
+// 파일을 따라가게 한다. 📎 버튼으로 고른 사용자의 원본 파일(고정 폴더 밖)은 절대 지우지 않는다.
+ipcMain.handle('messenger:save-file-as', async (_e, args: { filePath: string; fileName?: string; peerId?: string; messageId?: string }) => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  try {
+    if (!args?.filePath || !fs.existsSync(args.filePath)) return { success: false, error: '원본 파일을 찾을 수 없습니다' };
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '파일 저장',
+      defaultPath: args.fileName || path.basename(args.filePath),
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { success: false, canceled: true };
+    fs.copyFileSync(args.filePath, result.filePath);
+    const managedByApp = path.dirname(args.filePath) === messengerDownloadsDir();
+    if (managedByApp) {
+      try { fs.unlinkSync(args.filePath); } catch {}
+      if (args.peerId && args.messageId) {
+        const msg = messengerMessages.find(m => m.id === args.messageId && m.peerId === args.peerId);
+        if (msg) {
+          msg.filePath = result.filePath;
+          messengerSaveMessages();
+          messengerEmit({ type: 'message-updated', message: msg, state: messengerState() });
+        }
+      }
+    }
+    return { success: true, filePath: result.filePath };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
 // 다이얼로그로 파일만 선택 — 바로 전송하지 않고 렌더러의 첨부 목록에 올릴 경로 목록을 반환.
 ipcMain.handle('messenger:pick-files', async () => {
   if (!mainWindow) return { success: false, error: 'no window' };
@@ -2152,25 +2187,37 @@ ipcMain.handle('messenger:send-files', async (_e, { peerId }: { peerId: string }
   return { success: true };
 });
 // 네이티브 다이얼로그 없이 — 드래그앤드롭 등으로 이미 알고 있는 파일 경로를 바로 전송.
-ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, filePaths }: { peerId: string; filePaths: string[] }) => {
+// files[].name 은 첨부 목록에 보이던 원래 표시명(예: "스크린샷 2026-...") — 붙여넣기 첨부는 디스크에는
+// 충돌 방지용 무작위 파일명(pepe-<ts>-<rand>.ext)으로 저장돼 있으므로, 지정이 없으면 그 파일명으로 폴백.
+ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, files }: { peerId: string; files: { path: string; name?: string }[] }) => {
   if (messengerPrefs.hidePresence) return { success: false, error: 'presence hidden' };
   const peer = messengerPeers.get(peerId);
   if (!peer) return { success: false, error: 'peer not found' };
   if (Date.now() - peer.lastSeen >= MSG_ONLINE_WINDOW_MS) return { success: false, error: 'peer is offline' };
-  const paths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
-  if (paths.length === 0) return { success: false, error: 'no files' };
-  // 드래그/붙여넣기 첨부는 chatCopyExternalFile/chatSavePastedBlob 이 이 임시 폴더로 복사해둔 사본이라
-  // 전송 후엔 필요 없음 — 전송 성공 시 삭제. (📎 버튼으로 고른 사용자의 원본 파일은 이 폴더 밖이라 안전)
+  const items = Array.isArray(files) ? files.filter(f => f?.path) : [];
+  if (items.length === 0) return { success: false, error: 'no files' };
+  // 드래그/붙여넣기 첨부는 chatCopyExternalFile/chatSavePastedBlob 이 이 임시 폴더로 복사해둔 사본이다.
+  // 예전엔 전송 성공 시 바로 지웠는데, 보낸 메시지의 filePath 가 그 지워진 경로를 그대로 가리키고
+  // 있어서 정작 채팅창에 남는 "내가 보낸" 말풍선의 이미지 미리보기/저장이 깨지는 버그가 있었다 —
+  // 받은 파일과 동일하게 영구 보관 폴더(messengerDownloadsDir)로 옮기고, 그 새 경로로 전송해서
+  // 말풍선이 항상 유효한 파일을 가리키게 한다. (📎 버튼으로 고른 사용자의 원본 파일은 이 폴더 밖이라
+  // 건드리지 않는다 — 이동 없이 그 경로 그대로 사용.)
   const attachTmpDir = path.join(os.tmpdir(), 'pepe-chat-attachments');
   try {
-    for (const filePath of paths) {
+    for (const item of items) {
+      const filePath = item.path;
       if (!fs.existsSync(filePath)) continue;
       const st = fs.statSync(filePath);
       if (!st.isFile()) continue;
-      await messengerSendFileBuffer(peer, path.basename(filePath), filePath, fs.readFileSync(filePath));
+      let sendPath = filePath;
+      const fileName = item.name || path.basename(filePath);
       if (path.dirname(filePath) === attachTmpDir) {
-        try { fs.unlinkSync(filePath); } catch {}
+        const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_');
+        const permPath = path.join(messengerDownloadsDir(), `${Date.now()}-${safeName}`);
+        try { fs.renameSync(filePath, permPath); sendPath = permPath; }
+        catch { try { fs.copyFileSync(filePath, permPath); fs.unlinkSync(filePath); sendPath = permPath; } catch {} }
       }
+      await messengerSendFileBuffer(peer, fileName, sendPath, fs.readFileSync(sendPath));
     }
     return { success: true };
   } catch (err: any) {
