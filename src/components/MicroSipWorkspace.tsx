@@ -10,7 +10,7 @@ import {
   type SipCodec, ALL_CODECS, type SipEndpoint, type RegState, type CallState, type EndpointRuntime,
   type MacroStep, type Macro, type Contact, type Conversations, type PresenceMap, normPeer,
   type CallHistEntry, MAX_ENDPOINTS, DIAL_KEYS, playDtmfTone,
-  cardGrid, cfgKey, api, uid, defaultEndpoint,
+  cardGrid, cfgKey, api, sipApi, uid, defaultEndpoint,
 } from '../utils/sipShared';
 
 export type { SipCodec, SipEndpoint };
@@ -25,6 +25,8 @@ export const MicroSipWorkspace: React.FC<{
   // 그대로 쓰고, embedded 일 때만 에코 차단 가드를 추가한다 — 기존 탭 동작 무변경 보장.
   embedded?: boolean;
 }> = ({ initialView = 'phones', onViewChange, embedded = false }) => {
+  // 이 워크스페이스는 항상 'microsip' 엔진(별도 sipd.exe 프로세스)으로만 통신한다 — SswSoftphoneWorkspace와 완전히 독립.
+  const api = () => sipApi('microsip');
   // 설정/기록 탭 제거(요청에 따라) — 예전에 저장된 initialView 가 그 값이면(과거 세션의 탭
   // 기억값) 빈 화면이 뜨지 않도록 단말 탭으로 되돌린다.
   const normalizeView = (v: MicroSipView): MicroSipView => (v === 'settings' || v === 'log') ? 'phones' : v;

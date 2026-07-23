@@ -15,6 +15,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as fs from 'fs';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 
 function platDir(): string {
   if (process.platform === 'win32') return 'win-x64';
@@ -27,7 +28,12 @@ export function resolveBinary(): string | null {
   const candidates: string[] = [];
   if (process.env.PEPE_SIPD) candidates.push(process.env.PEPE_SIPD);
   try {
-    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'sip-sidecar', platDir(), binName()));
+    if (app.isPackaged) {
+      // 포터블 빌드는 설치 프로그램(customInstall)을 거치지 않아 zip 이 안 풀린 채로 있을 수
+      // 있다 — 실제로 이 바이너리를 처음 찾는 시점에 zip 이 있으면 그때 풀어준다.
+      ensureBundleExtracted('sip-sidecar-win-x64', path.join('sip-sidecar', platDir()), binName());
+      candidates.push(path.join(process.resourcesPath, 'sip-sidecar', platDir(), binName()));
+    }
     else candidates.push(path.join(process.cwd(), 'sip-sidecar', 'bin', platDir(), binName()));
   } catch {}
   for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }
@@ -171,5 +177,13 @@ class SipSidecar extends EventEmitter {
   }
 }
 
-let inst: SipSidecar | null = null;
-export function getSipSidecar(): SipSidecar { if (!inst) inst = new SipSidecar(); return inst; }
+// MicroSIP과 SSW 소프트폰은 서로 완전히 독립된 sipd.exe 프로세스를 쓴다(엔진 공유 시 한쪽
+// 크래시/재시작이 다른 쪽 통화까지 끊는 문제를 피하기 위함) — 엔진 키별로 별도 인스턴스 보관.
+export type SipEngineKey = 'microsip' | 'ssw';
+const instances = new Map<SipEngineKey, SipSidecar>();
+export function getSipSidecar(engine: SipEngineKey = 'microsip'): SipSidecar {
+  let inst = instances.get(engine);
+  if (!inst) { inst = new SipSidecar(); instances.set(engine, inst); }
+  return inst;
+}
+export function getAllSipSidecars(): SipSidecar[] { return Array.from(instances.values()); }

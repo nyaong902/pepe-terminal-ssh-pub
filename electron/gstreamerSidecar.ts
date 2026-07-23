@@ -15,6 +15,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 
 function platDir(): string {
   if (process.platform === 'win32') return 'win-x64';
@@ -26,7 +27,15 @@ function sidecarRoot(): string | null {
   const candidates: string[] = [];
   if (process.env.PEPE_GST_ROOT) candidates.push(process.env.PEPE_GST_ROOT);
   try {
-    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'gstreamer-sidecar', platDir()));
+    if (app.isPackaged) {
+      // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 찾을 때 풀어준다.
+      ensureBundleExtracted(
+        'gstreamer-sidecar-win-x64',
+        path.join('gstreamer-sidecar', platDir()),
+        process.platform === 'win32' ? 'gst-launch-1.0.exe' : 'gst-launch-1.0',
+      );
+      candidates.push(path.join(process.resourcesPath, 'gstreamer-sidecar', platDir()));
+    }
     else candidates.push(path.join(process.cwd(), 'gstreamer-sidecar', 'bin', platDir()));
   } catch { /* app not ready 등 — 다음 후보로 */ }
   for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }

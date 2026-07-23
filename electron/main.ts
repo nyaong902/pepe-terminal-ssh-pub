@@ -43,7 +43,7 @@ import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
-import { getSipSidecar, resolveBinary as resolveSipdBinary } from './sipSidecar';
+import { getSipSidecar, getAllSipSidecars, resolveBinary as resolveSipdBinary } from './sipSidecar';
 import { getCaptureManager, isCaptureAvailable, listInterfaces as listCaptureInterfaces } from './captureSidecar';
 import { getSippSidecar, disposeSippSidecar, resolveBinary as resolveSippBinary, type SippTestOptions } from './sippSidecar';
 import { loadSippScenarios, saveSippScenario, deleteSippScenario } from './sippScenarioStore';
@@ -63,6 +63,7 @@ import { installX11DisplayHook } from './x11Display';
 import { startBundledX11, stopBundledX11, stopAllBundledX11, listRunningX11 } from './x11Bundled';
 import { stopEmbeddedX11 } from './x11Server';
 import { getVpnService } from './vpnService';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 import { listLanguages, listNamespaces, loadNamespace, loadBundledNamespace, loadOverrideNamespace, saveOverrideNamespace, addLanguage, removeLanguage } from './i18nStore';
 import { t, setCurrentLang } from './i18n';
 import { setupAutoUpdater, checkForUpdatesOnStartup } from './updater';
@@ -1134,6 +1135,11 @@ app.whenReady().then(() => {
       }
     }
     const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
+    if (isExternal && app.isPackaged) {
+      // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 요청이 올 때 풀어준다.
+      const marker: Record<string, string> = { 'office-editor': '_headers', 'rhwp-studio': 'favicon.ico', 'flowchart-editor': 'clear.html' };
+      ensureBundleExtracted(topSeg as string, topSeg as string, marker[topSeg as string] || '');
+    }
     const baseDir = isExternal
       ? (app.isPackaged ? path.join(process.resourcesPath, topSeg) : path.join(process.cwd(), 'resources', topSeg))
       : path.join(__dirname, '../dist');
@@ -1319,7 +1325,7 @@ app.on('before-quit', () => {
   try { remoteShareServer.stop(); } catch {}
   try { plainAppConnectServer.stop(); } catch {}
   try { stopAllBundledX11(); } catch {}
-  try { getSipSidecar().dispose(); } catch {}
+  try { for (const s of getAllSipSidecars()) s.dispose(); } catch {}
   try { getCaptureManager().stopAll(); } catch {}
   try { getSSHBridge().disconnectAll(); } catch {}
   try { shutdownAllJdbcSidecars(); } catch {}
@@ -6784,28 +6790,34 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   }
 });
 
-// ── MicroSIP (네이티브 PJSIP 사이드카) 제어 ──
+// ── MicroSIP / SSW 소프트폰 (네이티브 PJSIP 사이드카) 제어 ──
+// 둘은 완전히 독립된 sipd.exe 프로세스를 쓴다(getSipSidecar(engine), sipSidecar.ts 참고) — 한쪽
+// 엔진이 죽거나 재시작해도 다른 쪽 통화에 전혀 영향을 주지 않는다. 렌더러는 모든 sip:* 호출에
+// args.engine('microsip'|'ssw')을 실어 보내고, 이벤트는 payload.engine 을 보고 필터링한다.
 {
-  const sip = getSipSidecar();
-  sip.on('event', (payload: any) => {
-    for (const w of BrowserWindow.getAllWindows()) {
-      try { if (!w.isDestroyed()) w.webContents.send('sip:event', payload); } catch {}
-    }
-  });
-  ipcMain.handle('sip:engine-status', () => sip.ensureStarted());
-  ipcMain.handle('sip:register', async (_e, args: { endpoint: any }) => sip.register(args?.endpoint));
-  ipcMain.handle('sip:unregister', async (_e, args: { endpointId: string }) => sip.unregister(args?.endpointId));
-  ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string }) => sip.call(args?.endpointId, args?.target));
-  ipcMain.handle('sip:hangup', async (_e, args: { endpointId: string }) => sip.hangup(args?.endpointId));
-  ipcMain.handle('sip:answer', async (_e, args: { endpointId: string }) => sip.answer(args?.endpointId));
-  ipcMain.handle('sip:reject', async (_e, args: { endpointId: string }) => sip.reject(args?.endpointId));
-  ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean }) => sip.hold(args?.endpointId, !!args?.hold));
-  ipcMain.handle('sip:ctr-transfer', async (_e, args: { endpointId: string; digits: string; number: string }) => sip.ctrTransfer(args?.endpointId, args?.digits, args?.number));
-  ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.mute(args?.endpointId, !!args?.mute));
-  ipcMain.handle('sip:speaker-mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.speakerMute(args?.endpointId, !!args?.mute));
-  ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
-  ipcMain.handle('sip:send-info', async (_e, args: { endpointId: string; header: string; value: string }) => sip.sendInfo(args?.endpointId, args?.header, args?.value));
-  ipcMain.handle('sip:record', async (_e, args: { endpointId: string; on: boolean }) => {
+  const engineOf = (args: any): 'microsip' | 'ssw' => (args?.engine === 'ssw' ? 'ssw' : 'microsip');
+  for (const engine of ['microsip', 'ssw'] as const) {
+    const sip = getSipSidecar(engine);
+    sip.on('event', (payload: any) => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { if (!w.isDestroyed()) w.webContents.send('sip:event', { ...payload, engine }); } catch {}
+      }
+    });
+  }
+  ipcMain.handle('sip:engine-status', (_e, args: any) => getSipSidecar(engineOf(args)).ensureStarted());
+  ipcMain.handle('sip:register', async (_e, args: { endpoint: any; engine?: string }) => getSipSidecar(engineOf(args)).register(args?.endpoint));
+  ipcMain.handle('sip:unregister', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).unregister(args?.endpointId));
+  ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string; engine?: string }) => getSipSidecar(engineOf(args)).call(args?.endpointId, args?.target));
+  ipcMain.handle('sip:hangup', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).hangup(args?.endpointId));
+  ipcMain.handle('sip:answer', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).answer(args?.endpointId));
+  ipcMain.handle('sip:reject', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).reject(args?.endpointId));
+  ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean; engine?: string }) => getSipSidecar(engineOf(args)).hold(args?.endpointId, !!args?.hold));
+  ipcMain.handle('sip:ctr-transfer', async (_e, args: { endpointId: string; digits: string; number: string; engine?: string }) => getSipSidecar(engineOf(args)).ctrTransfer(args?.endpointId, args?.digits, args?.number));
+  ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean; engine?: string }) => getSipSidecar(engineOf(args)).mute(args?.endpointId, !!args?.mute));
+  ipcMain.handle('sip:speaker-mute', async (_e, args: { endpointId: string; mute: boolean; engine?: string }) => getSipSidecar(engineOf(args)).speakerMute(args?.endpointId, !!args?.mute));
+  ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string; engine?: string }) => getSipSidecar(engineOf(args)).transfer(args?.endpointId, args?.target));
+  ipcMain.handle('sip:send-info', async (_e, args: { endpointId: string; header: string; value: string; engine?: string }) => getSipSidecar(engineOf(args)).sendInfo(args?.endpointId, args?.header, args?.value));
+  ipcMain.handle('sip:record', async (_e, args: { endpointId: string; on: boolean; engine?: string }) => {
     let file = '';
     if (args?.on) {
       try {
@@ -6815,7 +6827,7 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
         file = path.join(dir, `${args.endpointId}-${stamp}.wav`);
       } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
     }
-    return sip.record(args?.endpointId, !!args?.on, file);
+    return getSipSidecar(engineOf(args)).record(args?.endpointId, !!args?.on, file);
   });
   // 미디어(WAV) 송출 — 파일 선택은 렌더러가 이 다이얼로그로 먼저 받아온 뒤 media-play 호출.
   ipcMain.handle('sip:media-pick-file', async () => {
@@ -6845,24 +6857,24 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
       return { ok: true, path: p };
     } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
   });
-  ipcMain.handle('sip:media-play', async (_e, args: { endpointId: string; file: string }) => sip.mediaPlay(args?.endpointId, args?.file));
-  ipcMain.handle('sip:media-stop', async (_e, args: { endpointId: string }) => sip.mediaStop(args?.endpointId));
-  ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
-  ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
-  ipcMain.handle('sip:set-account-audio-devices', (_e, args: { endpointId: string; input?: string; output?: string }) => {
-    sip.setAccountAudioDevices(args?.endpointId, args?.input, args?.output);
+  ipcMain.handle('sip:media-play', async (_e, args: { endpointId: string; file: string; engine?: string }) => getSipSidecar(engineOf(args)).mediaPlay(args?.endpointId, args?.file));
+  ipcMain.handle('sip:media-stop', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).mediaStop(args?.endpointId));
+  ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string; engine?: string }) => getSipSidecar(engineOf(args)).sendDtmf(args?.endpointId, args?.digit));
+  ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string; engine?: string }) => { getSipSidecar(engineOf(args)).setAudioDevices(args?.input, args?.output); return { ok: true }; });
+  ipcMain.handle('sip:set-account-audio-devices', (_e, args: { endpointId: string; input?: string; output?: string; engine?: string }) => {
+    getSipSidecar(engineOf(args)).setAccountAudioDevices(args?.endpointId, args?.input, args?.output);
     return { ok: true };
   });
-  ipcMain.handle('sip:set-account-volume', (_e, args: { endpointId: string; mic: number; speaker: number }) => {
-    sip.setAccountVolume(args?.endpointId, args?.mic, args?.speaker);
+  ipcMain.handle('sip:set-account-volume', (_e, args: { endpointId: string; mic: number; speaker: number; engine?: string }) => {
+    getSipSidecar(engineOf(args)).setAccountVolume(args?.endpointId, args?.mic, args?.speaker);
     return { ok: true };
   });
-  ipcMain.handle('sip:list-audio-devices', () => { sip.listAudioDevices(); return { ok: true }; });
-  ipcMain.handle('sip:volume', (_e, args: { mic: number; speaker: number }) => { sip.setVolume(Number(args?.mic), Number(args?.speaker)); return { ok: true }; });
-  ipcMain.handle('sip:dnd', (_e, args: { endpointId: string; dnd: boolean }) => { sip.setDnd(args?.endpointId, !!args?.dnd); return { ok: true }; });
-  ipcMain.handle('sip:im', async (_e, args: { endpointId: string; target: string; text: string }) => sip.sendIm(args?.endpointId, args?.target, args?.text));
-  ipcMain.handle('sip:presence', (_e, args: { endpointId: string; online: boolean }) => { sip.setPresence(args?.endpointId, !!args?.online); return { ok: true }; });
-  ipcMain.handle('sip:subscribe', (_e, args: { endpointId: string; target: string; subscribe: boolean }) => { sip.subscribePresence(args?.endpointId, args?.target, !!args?.subscribe); return { ok: true }; });
+  ipcMain.handle('sip:list-audio-devices', (_e, args: any) => { getSipSidecar(engineOf(args)).listAudioDevices(); return { ok: true }; });
+  ipcMain.handle('sip:volume', (_e, args: { mic: number; speaker: number; engine?: string }) => { getSipSidecar(engineOf(args)).setVolume(Number(args?.mic), Number(args?.speaker)); return { ok: true }; });
+  ipcMain.handle('sip:dnd', (_e, args: { endpointId: string; dnd: boolean; engine?: string }) => { getSipSidecar(engineOf(args)).setDnd(args?.endpointId, !!args?.dnd); return { ok: true }; });
+  ipcMain.handle('sip:im', async (_e, args: { endpointId: string; target: string; text: string; engine?: string }) => getSipSidecar(engineOf(args)).sendIm(args?.endpointId, args?.target, args?.text));
+  ipcMain.handle('sip:presence', (_e, args: { endpointId: string; online: boolean; engine?: string }) => { getSipSidecar(engineOf(args)).setPresence(args?.endpointId, !!args?.online); return { ok: true }; });
+  ipcMain.handle('sip:subscribe', (_e, args: { endpointId: string; target: string; subscribe: boolean; engine?: string }) => { getSipSidecar(engineOf(args)).subscribePresence(args?.endpointId, args?.target, !!args?.subscribe); return { ok: true }; });
 }
 
 // ── MicroSIP 단말별 패킷 캡처 (dumpcap.exe, 로컬 설치 필요) ──
@@ -7459,9 +7471,28 @@ function officeBundleAvailable(): boolean {
 // 있다)의 메뉴 항목을 렌더러에서 숨기기 위한 가용성 체크. 파일 존재 여부만 실시간으로 보고,
 // 설치 시점 값을 어딘가 저장해두지 않는다 — 나중에 사용자가 폴더를 수동으로 넣거나 빼도 항상
 // 실제 상태와 일치한다.
+//
+// SSW 소프트폰은 예외 — MicroSIP과 완전히 독립된 sipd.exe 프로세스로 뜨지만(getSipSidecar('ssw'),
+// sipSidecar.ts), 설치 파일(sip-sidecar-win-x64.zip)은 하나만 번들되어 같은 바이너리를 공유한다.
+// 그래서 파일 존재만으로는 "MicroSIP만 설치했나 / SSW만 설치했나"를 구분할 수 없다. installer.nsh가
+// 설치 시 사용자의 SSW 체크박스 선택을 레지스트리(HKCU\Software\PePeTerminal\Features\SswPhone)에
+// 별도로 저장해두므로, 그 값을 읽어 UI 노출 여부를 독립적으로 판단한다.
+function readSswPhoneFeatureFlag(): boolean {
+  if (process.platform !== 'win32') return true;
+  try {
+    const out = execSync('reg query "HKCU\\Software\\PePeTerminal\\Features" /v SswPhone', { stdio: 'pipe' }).toString();
+    const m = out.match(/SswPhone\s+REG_SZ\s+(\S+)/);
+    if (!m) return true;
+    return m[1] === '1';
+  } catch {
+    return true; // 레지스트리 값 없음(구버전 설치 등) — 기본 노출
+  }
+}
+
 ipcMain.handle('features:get-available', () => ({
   vpn: !!getVpnService().binaryPath(),
   microsip: !!resolveSipdBinary(),
+  sswPhone: !!resolveSipdBinary() && readSswPhoneFeatureFlag(),
   sipp: !!resolveSippBinary(),
   office: officeBundleAvailable(),
   media: !!resolveGstreamerBinary(),

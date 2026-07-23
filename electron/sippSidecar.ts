@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 
 function platDir(): string {
   if (process.platform === 'win32') return 'win-x64';
@@ -27,7 +28,11 @@ export function resolveBinary(): string | null {
   const candidates: string[] = [];
   if (process.env.PEPE_SIPP) candidates.push(process.env.PEPE_SIPP);
   try {
-    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'sipp-sidecar', platDir(), binName()));
+    if (app.isPackaged) {
+      // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 찾을 때 풀어준다.
+      ensureBundleExtracted('sipp-sidecar-win-x64', path.join('sipp-sidecar', platDir()), binName());
+      candidates.push(path.join(process.resourcesPath, 'sipp-sidecar', platDir(), binName()));
+    }
     else candidates.push(path.join(process.cwd(), 'sipp-sidecar', 'bin', platDir(), binName()));
   } catch {}
   for (const c of candidates) { try { if (c && fs.existsSync(c)) return c; } catch {} }

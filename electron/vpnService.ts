@@ -8,6 +8,7 @@ import net from 'net';
 import os from 'os';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 // sudo-prompt 는 callback 기반 — promise wrapper 사용
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sudo = require('sudo-prompt');
@@ -45,6 +46,8 @@ class VpnService extends EventEmitter {
     const platform = process.platform;
     const preferSystem = process.env.PEPE_VPN_PREFER_SYSTEM === '1';
     if (platform === 'win32') {
+      // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 찾을 때 풀어준다.
+      if (!dev) ensureBundleExtracted('openvpn-win', 'openvpn', 'openvpn.exe');
       const bundlePath = dev
         ? path.join(process.cwd(), 'resources', 'openvpn-win', 'openvpn.exe')
         : path.join(process.resourcesPath, 'openvpn', 'openvpn.exe');

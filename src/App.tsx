@@ -709,7 +709,7 @@ function App() {
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
   // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
   // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
-  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sipp: true, office: true, media: true });
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true });
   useEffect(() => {
     (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
   }, []);
@@ -2691,7 +2691,7 @@ function App() {
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
     ...(availableFeatures.vpn ? [{ id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() }] : []),
     ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
-    ...(availableFeatures.microsip ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
+    ...(availableFeatures.sswPhone ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
     ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
@@ -4238,7 +4238,7 @@ function App() {
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
         ...(availableFeatures.vpn ? [{ label: tMenu('tools.vpnWs'), action: addVpnTab }] : []),
         ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
-        ...(availableFeatures.microsip ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
+        ...(availableFeatures.sswPhone ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },

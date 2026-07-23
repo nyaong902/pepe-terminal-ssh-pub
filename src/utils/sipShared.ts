@@ -197,6 +197,26 @@ export const cfgKey = (ep: SipEndpoint) => JSON.stringify(Object.entries(ep).fil
 export const api = () => (window as any).api || {};
 export const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
+// MicroSIP과 SSW 소프트폰은 완전히 독립된 sipd.exe 프로세스를 쓴다(electron/sipSidecar.ts의
+// getSipSidecar(engine) 참고) — 한쪽 엔진이 죽거나 재시작해도 다른 쪽 통화에 영향을 주지 않는다.
+// 이 헬퍼는 window.api의 sip* 호출마다 자동으로 { engine } 을 실어 보내고, onSipEvent 콜백은
+// 자기 엔진의 이벤트(payload.engine)만 통과시킨다 — 두 워크스페이스가 서로의 이벤트를 안 본다.
+export type SipEngine = 'microsip' | 'ssw';
+export function sipApi(engine: SipEngine) {
+  const raw = api();
+  const wrapped: any = {};
+  for (const key of Object.keys(raw)) {
+    if (key === 'onSipEvent') {
+      wrapped[key] = (cb: (p: any) => void) => raw[key]((p: any) => { if (p?.engine === engine) cb(p); });
+    } else if (key.startsWith('sip') && !['sipMediaPickFile', 'sipMediaReadFile', 'sipMediaWriteTempWav'].includes(key)) {
+      wrapped[key] = (args?: any) => raw[key]({ ...(args || {}), engine });
+    } else {
+      wrapped[key] = raw[key];
+    }
+  }
+  return wrapped;
+}
+
 export function defaultEndpoint(n: number): SipEndpoint {
   return {
     id: uid('ep'),

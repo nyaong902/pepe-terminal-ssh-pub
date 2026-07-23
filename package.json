@@ -2,7 +2,7 @@
   "name": "pepe-terminal-ssh",
   "productName": "PePe Terminal(SSH)",
   "private": true,
-  "version": "2.2.22",
+  "version": "2.2.23",
   "description": "PePe Terminal(SSH)",
   "author": "Claude (feat. ghjeong[prompt])",
   "type": "commonjs",
@@ -15,11 +15,11 @@
     "download:jdbc": "node scripts/download-jdbc-drivers.js",
     "download:rg": "node scripts/download-ripgrep.js",
     "check:rg": "node scripts/download-ripgrep.js --check",
-    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
-    "build:skip-vpn": "node scripts/verify-openvpn-bundle.js --skip && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win",
-    "build:win:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
-    "build:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
-    "build:dev": "node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/run-electron-builder.js --dir",
+    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win",
+    "build:skip-vpn": "node scripts/verify-openvpn-bundle.js --skip && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win",
+    "build:win:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
+    "build:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
+    "build:dev": "node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --dir",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
@@ -97,11 +97,12 @@
     ],
     "extraResources": [
       {
-        "from": "resources/x11-server",
-        "to": "x11-server",
-        "filter": [
-          "**/*"
-        ]
+        "from": "resources/x11-server.zip",
+        "to": "x11-server.zip"
+      },
+      {
+        "from": "resources/x11-server/README.txt",
+        "to": "x11-server/README.txt"
       },
       {
         "from": "docs",
@@ -157,13 +158,6 @@
       },
       "extraResources": [
         {
-          "from": "resources/openvpn-win",
-          "to": "openvpn",
-          "filter": [
-            "**/*"
-          ]
-        },
-        {
           "from": "resources/jre/win-x64",
           "to": "jre",
           "filter": [
@@ -171,46 +165,32 @@
           ]
         },
         {
-          "from": "sip-sidecar/bin/win-x64",
-          "to": "sip-sidecar/win-x64",
-          "filter": [
-            "sipd.exe"
-          ]
+          "from": "resources/optional-bundles/openvpn-win.zip",
+          "to": "openvpn-win.zip"
         },
         {
-          "from": "sipp-sidecar/bin/win-x64",
-          "to": "sipp-sidecar/win-x64",
-          "filter": [
-            "sipp.exe"
-          ]
+          "from": "resources/optional-bundles/sip-sidecar-win-x64.zip",
+          "to": "sip-sidecar-win-x64.zip"
         },
         {
-          "from": "gstreamer-sidecar/bin/win-x64",
-          "to": "gstreamer-sidecar/win-x64",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/sipp-sidecar-win-x64.zip",
+          "to": "sipp-sidecar-win-x64.zip"
         },
         {
-          "from": "resources/office-editor",
-          "to": "office-editor",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/gstreamer-sidecar-win-x64.zip",
+          "to": "gstreamer-sidecar-win-x64.zip"
         },
         {
-          "from": "resources/rhwp-studio",
-          "to": "rhwp-studio",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/office-editor.zip",
+          "to": "office-editor.zip"
         },
         {
-          "from": "resources/flowchart-editor",
-          "to": "flowchart-editor",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/rhwp-studio.zip",
+          "to": "rhwp-studio.zip"
+        },
+        {
+          "from": "resources/optional-bundles/flowchart-editor.zip",
+          "to": "flowchart-editor.zip"
         }
       ]
     },

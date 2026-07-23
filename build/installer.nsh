@@ -99,6 +99,8 @@ Var MediaCheckbox
 Var MediaChecked
 Var OfficeCheckbox
 Var OfficeChecked
+Var SswPhoneCheckbox
+Var SswPhoneChecked
 
 Function nsShowFeaturesPage
   ; 삭제 확인 페이지와 달리, 이 페이지는 자동 업데이트 중에도 항상 보여준다(사용자 요청) —
@@ -125,7 +127,10 @@ Function nsShowFeaturesPage
   ${NSD_CreateCheckBox} 0 82u 100% 12u "오피스 — 한글/워드/엑셀/파워포인트/FlowChart 편집기 (약 220MB)"
   Pop $OfficeCheckbox
   ${NSD_SetState} $OfficeCheckbox $OfficeChecked
-  ${NSD_CreateLabel} 0 100u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
+  ${NSD_CreateCheckBox} 0 96u 100% 12u "SSW 소프트폰 (MicroSIP과 독립된 프로세스로 동작, 같은 설치 파일을 써서 추가 용량 없음)"
+  Pop $SswPhoneCheckbox
+  ${NSD_SetState} $SswPhoneCheckbox $SswPhoneChecked
+  ${NSD_CreateLabel} 0 114u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
   nsDialogs::Show
 FunctionEnd
 
@@ -135,6 +140,7 @@ Function nsLeaveFeaturesPage
   ${NSD_GetState} $SippCheckbox $SippChecked
   ${NSD_GetState} $MediaCheckbox $MediaChecked
   ${NSD_GetState} $OfficeCheckbox $OfficeChecked
+  ${NSD_GetState} $SswPhoneCheckbox $SswPhoneChecked
 FunctionEnd
 !endif
 
@@ -180,6 +186,7 @@ FunctionEnd
     StrCpy $SippChecked "1"
     StrCpy $MediaChecked "1"
     StrCpy $OfficeChecked "1"
+    StrCpy $SswPhoneChecked "1"
     ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
     ${IfNot} $R2 == ""
       StrCpy $VpnChecked $R2
@@ -199,6 +206,10 @@ FunctionEnd
     ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
     ${IfNot} $R2 == ""
       StrCpy $OfficeChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "SswPhone"
+    ${IfNot} $R2 == ""
+      StrCpy $SswPhoneChecked $R2
     ${EndIf}
 
   !endif
@@ -223,10 +234,35 @@ FunctionEnd
 !define MUI_FINISHPAGE_NOAUTOCLOSE
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
+; 선택 기능 zip 을 체크된 것만 그 자리에서 tar 로 푼다(체크 해제면 압축 해제 자체를 건너뛰고
+; zip 만 지운다) — scripts/zip-optional-bundles.js 가 빌드 시 만들어 electron-builder 가
+; resources\<Name>.zip 하나로만 번들해둔 것을 여기서 처리한다.
+;
+; 예전엔 electron-builder 가 각 기능 폴더를 통째로(파일 수십~수천 개) 번들해서, 체크
+; 해제해도 일단 전부 압축 해제된 뒤에야(NSIS 기본 동작) rmdir 로 지웠다 — 체크 해제가 설치
+; 시간에 전혀 영향을 못 준 진짜 원인. zip 하나만 번들해두면 체크 해제 시 그 압축 해제
+; 자체를 건너뛸 수 있어 그만큼 설치 시간이 실제로 줄어든다.
+!macro ExtractOrSkipBundle CheckedVar ZipName TargetRelDir Label
+  ${If} ${CheckedVar} == 1
+    DetailPrint "▶ ${Label} — 압축 해제 중..."
+    CreateDirectory "$INSTDIR\resources\${TargetRelDir}"
+    nsExec::ExecToLog 'cmd /c tar -xf "$INSTDIR\resources\${ZipName}.zip" -C "$INSTDIR\resources\${TargetRelDir}"'
+    Pop $0
+    ${If} $0 == 0
+      DetailPrint "  ✓ ${Label} 설치 완료"
+    ${Else}
+      DetailPrint "  ⚠ ${Label} 압축 해제 실패(code=$0) — 첫 사용 시 앱이 자동 재시도"
+    ${EndIf}
+  ${Else}
+    DetailPrint "▶ 선택 해제: ${Label} — 압축 해제 건너뜀"
+  ${EndIf}
+  Delete "$INSTDIR\resources\${ZipName}.zip"
+!macroend
+
 !macro customInstall
   ; nsLeaveFeaturesPage 에서 이미 사용자의 최종 체크 상태를 $VpnChecked 등에 읽어뒀다
   ; (nsDialogs 체크박스라 Section 플래그를 거칠 필요가 없다).
-  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked"
+  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
   SetAutoClose false
@@ -247,41 +283,28 @@ FunctionEnd
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Sipp" "$SippChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Media" "$MediaChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "SswPhone" "$SswPhoneChecked"
 
-  ; 선택 해제한 기능의 전용 번들 폴더 삭제 — electron-builder 가 resources 전체를 이미
-  ; 통째로 복사해둔 뒤라, 여기서 안 쓸 폴더만 걷어낸다(각 기능 전용, 다른 기능과 안 겹침).
-  ; NSIS 내장 RMDir /r 은 SetDetailsPrint both 상태에서 파일 하나마다 로그 줄을 찍어(특히
-  ; flowchart-editor/mxgraph 처럼 작은 파일 수천 개짜리 트리에서) 체감상 매우 느려진다 —
-  ; customUnInit 의 X11 폴더 삭제와 동일하게 cmd rmdir 한 방으로 통째로 지운다(로그 1줄, 훨씬 빠름).
-  ${If} $VpnChecked == 0
-    DetailPrint "▶ 선택 해제: VPN — 번들 삭제 중..."
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\openvpn"'
-    Pop $0
+  ; SSW 소프트폰은 MicroSIP과 완전히 같은 sip-sidecar(sipd.exe) 엔진을 쓴다(별도 바이너리 없음) —
+  ; 둘 중 하나라도 체크됐으면 엔진을 풀어야 한다. UI 노출 여부는 앱이 레지스트리의 SswPhone 값을
+  ; 따로 읽어 결정한다(electron/main.ts의 features:get-available).
+  StrCpy $R3 "0"
+  ${If} $MicroSipChecked == 1
+    StrCpy $R3 "1"
   ${EndIf}
-  ${If} $MicroSipChecked == 0
-    DetailPrint "▶ 선택 해제: MicroSIP — 번들 삭제 중..."
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\sip-sidecar"'
-    Pop $0
+  ${If} $SswPhoneChecked == 1
+    StrCpy $R3 "1"
   ${EndIf}
-  ${If} $SippChecked == 0
-    DetailPrint "▶ 선택 해제: SIPp — 번들 삭제 중..."
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\sipp-sidecar"'
-    Pop $0
-  ${EndIf}
-  ${If} $MediaChecked == 0
-    DetailPrint "▶ 선택 해제: 미디어 재생(GStreamer) — 번들 삭제 중..."
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\gstreamer-sidecar"'
-    Pop $0
-  ${EndIf}
-  ${If} $OfficeChecked == 0
-    DetailPrint "▶ 선택 해제: 오피스(한글/워드/엑셀/파워포인트/FlowChart) — 번들 삭제 중..."
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\office-editor"'
-    Pop $0
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\rhwp-studio"'
-    Pop $0
-    nsExec::ExecToLog 'cmd /c rmdir /S /Q "$INSTDIR\resources\flowchart-editor"'
-    Pop $0
-  ${EndIf}
+
+  ; 체크된 기능만 zip 을 그 자리에서 풀고, 체크 해제된 기능은 압축 해제 자체를 건너뛰고
+  ; zip 만 지운다(위 ExtractOrSkipBundle 매크로 참고 — 이게 이번에 진짜로 설치 시간을 줄이는 부분).
+  !insertmacro ExtractOrSkipBundle $VpnChecked "openvpn-win" "openvpn" "VPN"
+  !insertmacro ExtractOrSkipBundle $R3 "sip-sidecar-win-x64" "sip-sidecar\win-x64" "MicroSIP/SSW 소프트폰"
+  !insertmacro ExtractOrSkipBundle $SippChecked "sipp-sidecar-win-x64" "sipp-sidecar\win-x64" "SIPp"
+  !insertmacro ExtractOrSkipBundle $MediaChecked "gstreamer-sidecar-win-x64" "gstreamer-sidecar\win-x64" "미디어 재생(GStreamer)"
+  !insertmacro ExtractOrSkipBundle $OfficeChecked "office-editor" "office-editor" "오피스 — 한글/워드/엑셀/파워포인트"
+  !insertmacro ExtractOrSkipBundle $OfficeChecked "rhwp-studio" "rhwp-studio" "오피스 — 한글(rhwp-studio)"
+  !insertmacro ExtractOrSkipBundle $OfficeChecked "flowchart-editor" "flowchart-editor" "오피스 — FlowChart 편집기"
 
   DetailPrint "─────────────────────────────────────────"
   DetailPrint "✓ 1단계 완료: PePe Terminal 본체 파일 복사"
@@ -367,6 +390,31 @@ FunctionEnd
     DetailPrint "X11 서버 폴더 삭제 중 (한 번에 처리)..."
     nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\x11-server"'
     DetailPrint "X11 서버 폴더 삭제 완료"
+  ${endif}
+
+  ; 선택 설치 기능(VPN/MicroSIP/SIPp/미디어/오피스) 번들 폴더 삭제 — customInstall 이 zip 을
+  ; File 목록이 아니라 tar 로 직접 풀어 넣은 폴더들이라, electron-builder 가 자동 생성하는
+  ; 제거 목록(설치 시 File 로 넣은 항목만 앎)에 안 잡혀 있다. 안 지우면 제거 후에도 남는다.
+  ${if} ${FileExists} "$INSTDIR\resources\openvpn\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\openvpn"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\sip-sidecar\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\sip-sidecar"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\sipp-sidecar\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\sipp-sidecar"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\gstreamer-sidecar\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\gstreamer-sidecar"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\office-editor\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\office-editor"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\rhwp-studio\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\rhwp-studio"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\flowchart-editor\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\flowchart-editor"'
   ${endif}
 !macroend
 

@@ -56,6 +56,10 @@ resources/x11-server/*
 !resources/x11-server/README.txt
 resources/x11-server.zip
 
+# 선택 설치 기능 번들 zip — scripts/zip-optional-bundles.js 가 빌드 시마다 새로 생성(원본은
+# sip-sidecar/gstreamer-sidecar/resources 등에 이미 추적됨. 커밋 불필요/산출물).
+resources/optional-bundles/
+
 # Claude Code 로컬 설정 (사용자별 환경)
 .claude/
 java-sidecar/lib/
