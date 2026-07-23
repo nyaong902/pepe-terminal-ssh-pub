@@ -23,6 +23,7 @@ type Props = {
   onAddLogAnalyzerTab?: () => void;
   onAddVpnTab?: () => void;
   onAddMicroSipTab?: () => void;
+  onAddSswPhoneTab?: () => void;
   onAddSippTab?: () => void;
   onAddOfficeTab?: () => void;
   onAddMediaTab?: () => void;
@@ -48,7 +49,7 @@ type Props = {
   availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean };
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -275,6 +276,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 { label: t('logAnalyzerWorkspace'), onClick: () => onAddLogAnalyzerTab?.() },
                 ...((availableFeatures?.vpn ?? true) ? [{ label: t('vpnWorkspace'), onClick: () => onAddVpnTab?.() }] : []),
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() }] : []),
+                ...((availableFeatures?.microsip ?? true) ? [{ label: '📡 SSW 소프트폰', onClick: () => onAddSswPhoneTab?.() }] : []),
                 ...((availableFeatures?.sipp ?? true) ? [{ label: '📶 SIPp', onClick: () => onAddSippTab?.() }] : []),
                 ...((availableFeatures?.office ?? true) ? [{ label: '📄 오피스', onClick: () => onAddOfficeTab?.() }] : []),
                 ...((availableFeatures?.media ?? true) ? [{ label: '🎵 미디어', onClick: () => onAddMediaTab?.() }] : []),

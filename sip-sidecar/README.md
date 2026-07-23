@@ -94,33 +94,62 @@ objcopy --keep-global-symbol=init_encoder --keep-global-symbol=evs_enc \
 ## 제어 프로토콜 (stdio, 1줄=1 JSON)
 요청(→) / 이벤트(←):
 ```
-→ {"cmd":"register","endpoint":{"id","server","domain","port","transport","username","authId","password","displayName","proxy","hideCallerId":false,"disableSessionTimer":false,"publishPresence":true,"codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","dnd":false,"callWaiting":true,"keepAlive":15,"regExpiry":300,"dtmfMode":"rfc2833|info|inband","srtp":"disabled|optional|mandatory","iceEnabled":false,"stunServer":"host:port","turnServer":"host:port","turnUser","turnPassword"}}
+→ {"cmd":"register","endpoint":{"id","server","domain","port","transport","username","authId","password","displayName","proxy","hideCallerId":false,"disableSessionTimer":false,"publishPresence":true,"mwiSubscribe":true,"codecs":["evs","amrwb","amr","alaw","ulaw"],"autoAnswer","dnd":false,"callWaiting":true,"keepAlive":15,"regExpiry":300,"dtmfMode":"rfc2833|info|inband(200ms 단일톤, 톤제너레이터로 마이크와 믹스)","srtp":"disabled|optional|mandatory","iceEnabled":false,"stunServer":"host:port","turnServer":"host:port","turnUser","turnPassword","rtpPortMin":0,"rtpPortMax":0,"localSipPort":0,"userAgent":"","contactForced":"","divertHeader":"(번호만)","rpidHeader":"(번호만)","paiHeader":"(번호만)","paiPrivacy":"none|header|session|user|id|critical","rejectCode":486,"rejectTiming":"immediate|after180","rejectDelaySec":0,"callerIdPriority":["rpid","from","pai"],"holdViaInfo":false,"rtpTimeoutSec":0}}
 → {"cmd":"unregister","endpointId":"ep-.."}
 → {"cmd":"call","endpointId":"ep-..","target":"1001"}
 → {"cmd":"hangup","endpointId":"ep-.."}
 → {"cmd":"answer","endpointId":"ep-.."}
-→ {"cmd":"reject","endpointId":"ep-.."}
-→ {"cmd":"hold","endpointId":"ep-..","hold":true}
+→ {"cmd":"reject","endpointId":"ep-.."}   // endpoint 의 rejectCode/rejectTiming/rejectDelaySec 사용
+→ {"cmd":"hold","endpointId":"ep-..","hold":true}    // holdViaInfo=true 계정은 재협상 대신 SIP INFO 플래시(0x10 04 00 00)로 신호
 → {"cmd":"mute","endpointId":"ep-..","mute":true}
 → {"cmd":"transfer","endpointId":"ep-..","target":"2002"}   // blind transfer(REFER)
+→ {"cmd":"sendInfo","endpointId":"ep-..","header":"P-Enbloc-Info","value":"*20138012341234*"}  // 범용 in-dialog INFO(커스텀 헤더 1개)
+→ {"cmd":"ctrTransfer","endpointId":"ep-..","digits":"20","number":"01012341234"}  // SSW CTR 전용: 보류신호→200ms→P-Enbloc-Info 포함 신호 순서 보장
 → {"cmd":"record","endpointId":"ep-..","on":true,"file":"C:/.../ep-..-<ts>.wav"}  // 통화 녹음(WAV)
+→ {"cmd":"mediaPlay","endpointId":"ep-..","file":"C:/.../test.wav"}   // 통화 상대에게 WAV/MP3 재생 송출
+→ {"cmd":"mediaStop","endpointId":"ep-.."}
 → {"cmd":"dtmf","endpointId":"ep-..","digit":"1"}          // dtmfMode 에 따라 RFC2833/SIP INFO
 → {"cmd":"audio","input":"<장치 name|>","output":"<장치 name|>"}  // 빈 값=기본 장치
 → {"cmd":"listAudio"}                                          // 오디오 장치 목록 요청
 → {"cmd":"volume","mic":1.0,"speaker":1.0}                     // 마이크/스피커 음량(1=기본, -1=변경안함)
-→ {"cmd":"dnd","endpointId":"ep-..","dnd":true}                // 방해 금지(인입 486 Busy 자동 거절)
+→ {"cmd":"dnd","endpointId":"ep-..","dnd":true}                // 방해 금지(인입을 rejectCode/rejectTiming 대로 자동 거절)
 → {"cmd":"im","endpointId":"ep-..","target":"1001","text":"안녕"}      // pager MESSAGE 송신
 → {"cmd":"presence","endpointId":"ep-..","online":true}                // 자신의 프레즌스 게시
 → {"cmd":"subscribe","endpointId":"ep-..","target":"1001","subscribe":true}  // 상대 프레즌스 구독/해제
 ← {"ev":"reg","endpointId":"ep-..","reg":"registered|registering|failed|unregistered","error":"?"}
-← {"ev":"call","endpointId":"ep-..","call":"calling|ringing|incoming|connected|held|ended","remote":"?"}
+← {"ev":"call","endpointId":"ep-..","call":"calling|ringing|incoming|connected|held|ended","remote":"?"}   // remote 는 callerIdPriority 순서로 RPID/PAI/From 중 선택
 ← {"ev":"audio-devices","inputs":[{"idx":0,"name":".."}],"outputs":[{"idx":0,"name":".."}]}  // ready 직후 + listAudio 응답
 ← {"ev":"im","endpointId":"ep-..","from":"sip:1001@..","text":"안녕","dir":"in"}            // 수신 IM
 ← {"ev":"im-status","endpointId":"ep-..","to":"sip:1001@..","code":200,"reason":"OK"}       // 송신 IM 전달 상태
 ← {"ev":"presence","endpointId":"ep-..","buddy":"sip:1001@..","status":"online|offline|unknown","note":"?"}
 ← {"ev":"record","endpointId":"ep-..","recording":true,"file":"..","error":"?"}
+← {"ev":"media","endpointId":"ep-..","playing":true,"file":"..","error":"?"}
 ← {"ev":"mwi","endpointId":"ep-..","waiting":true}   // 음성사서함(MWI NOTIFY)
 ```
+
+### SSW(SKB) 콜플로우 정밀 이식 — MiniSoftphone(C#/SIPSorcery) 캡처 기준 (네이티브 재빌드 필요)
+- `holdViaInfo` — true 면 보류/재개를 표준 re-INVITE 대신 in-dialog SIP INFO(`Content-Type: audio/telephone-event`, body `0x10 04 00 00`, `Supported: replaces`)로 신호한다. 실단말(MOIMSTONE) 캡처 기준 — SKB 교환기가 이 시그널링을 기대한다. SSW 소프트폰이 새로 만드는 단말은 기본 true, 일반 MicroSIP 계정은 기본 false(표준 서버 호환).
+- CTR(호전환) 실행 직후엔 SSW 소프트폰 UI 의 보류 버튼이 "↩ 호전환 복귀"로 바뀐다(`EndpointRuntime.ctrActive`, MiniSoftphone: `_ctrTransferActive`). 눌러도 실제로 보내는 신호는 평소 보류와 완전히 동일(같은 INFO 플래시) — 순수 UI 상태 표시일 뿐, 다시 누르면(또는 통화 종료 시) 해제된다.
+- `ctrTransfer` — CTR(호전환)을 ①보류신호(P-Enbloc 없음) → 200ms 대기 → ②같은 신호 + `P-Enbloc-Info: <sip:*20+번호+*@내Contact호스트>` 순서로 보낸다(캡처 기준 — 기존 `sendInfo` 두 번 연속 호출은 타이밍/바디/헤더 포맷이 달라 부정확했음). SSW 소프트폰 UI 상 CTR 버튼은 보류 중이 아니어도 활성 통화 중이면 활성화된다(MiniSoftphone: `HeldLine() ?? ActiveTalkingLine()` — 보류를 우선하되 없으면 활성 통화로 대체).
+- **통화 중 두 번째 인입 — 진짜 통화중대기(2회선)는 없다.** MiniSoftphone 소스엔 `_lineA`/`_lineB`/`SwitchCwCall`/`AnswerWaitingAsync` 같은 2회선 스캐폴딩이 있어 한때 이걸 진짜 기능으로 오해해 이식(`g_waitingCalls`/`switchCall` 명령/UI 전환 버튼)했었으나, 재확인 결과 `_waitingUas`(대기 콜을 채워야 할 필드)에 값이 할당되는 코드가 전혀 없어 **죽은 코드**였다 — 실제로 실행되는 경로는 `callWaiting` 체크박스뿐이라 전부 되돌렸다: `callWaiting`(기본 on) 켜짐 → 항상 `486 Busy Here` + `Reason: Q.850;cause=17;text="User busy"` 로 거절, 꺼짐 → 아무 응답도 안 보내고 무시. 어느 쪽이든 두 번째 콜은 절대 연결/대기되지 않는다(기존 통화는 그대로 보존). DND 자동 거절은 별개로 기존처럼 `rejectCode`/`rejectTiming` 설정을 그대로 사용.
+- `divertHeader`/`rpidHeader`/`paiHeader` 입력값은 이제 "번호만" — 데몬이 `<sip:번호@domain>;reason=unconditional;counter=1`(Diversion), `<sip:번호@domain:port>;party=calling;id-type=subscriber;privacy=off;screen=yes`(RPID), `<sip:번호@domain>`(PAI)로 자동 포맷한다(전에는 입력값을 그대로 헤더 값으로 보내 SBC 가 거부/무시할 수 있었음).
+- `paiPrivacy` — `Privacy` 헤더(RFC 3323). `paiHeader` 가 있을 때만 같이 보냄(`hideCallerId`가 이미 `Privacy: id`를 넣었으면 중복 방지로 생략).
+- `rtpTimeoutSec` — RTP 무응답(무음) 자동 종료(초), 0=사용 안 함. 보류 중(`MyCall::held`)인 통화는 감시 제외. 5초 간격 백그라운드 스레드(`rtpWatchdogLoop`)가 `Call::getStreamStat(0).rtcp.rxStat.pkt` 로 수신 패킷 변화를 감시. MiniSoftphone 기본 60초.
+- `mwiSubscribe` — 음성사서함(MWI) SUBSCRIBE 여부, 기본 true. MiniSoftphone 은 SUBSCRIBE 를 전혀 하지 않고 순수 수동(NOTIFY 수신만) 이라 SSW 소프트폰은 기본 false.
+- `authId` — INVITE 의 From 헤더(`op.txOption.localUri`)를 계정 번호 대신 이 값으로 override(비어있으면 기존과 동일). REGISTER 의 AOR/idUri 는 그대로 유지 — MiniSoftphone 은 로그인 계정과 표시 번호가 다른 트렁크에서 발신 From 을 authId 기준으로 만든다.
+- REGISTER 요청에 항상 `Allow: ACK, BYE, CANCEL, INFO, INVITE, NOTIFY, OPTIONS, PRACK, REFER, REGISTER, SUBSCRIBE` 헤더를 명시(이전엔 pjsip 자동 생성 목록에 의존) — MiniSoftphone 과 동일한 고정 문자열.
+- 자동응답(`autoAnswer`)은 이제 180 Ringing 을 먼저 보내고 1초 지연 후 200 OK(이전엔 180 자체를 생략하고 즉시 200) — MiniSoftphone 과 동일한 타이밍.
+- SSW 소프트폰 신규 단말 기본값: `disableSessionTimer:true`(SKB SBC 가 세션타이머 refresh re-INVITE 와 충돌해 491→BYE 로 끊는 문제 회피 — MiniSoftphone 은 세션타이머 자체를 협상 안 함), `regExpiry:120`(MiniSoftphone 기본값, 일반 계정은 300 유지).
+- **통화 중 재등록 지연 — 부분 포팅**: MiniSoftphone 은 진행 중인 호가 있으면 재등록을 15초 뒤로 미룬다. pjsip 의 만료 기반 자동 REGISTER 갱신(내부 타이머)은 pjsua2 공개 API 로 가로챌 훅이 없어(disable/delay 콜백 없음 — `AccountRegConfig.delayBeforeRefreshSec` 는 만료 몇 초 전에 보낼지 고정값일 뿐 통화 상태를 못 봄) 그대로 두지만, 우리가 직접 트리거하는 "설정 변경 → 재등록" 경로(`SswSoftphoneWorkspace.tsx` 의 `attemptReRegister`)는 앱에서 완전히 제어 가능하므로 통화/벨울림 중이면 15초 뒤로 재시도하도록 이미 막았다.
+- `dtmfMode:"inband"` 구현 — `cmdDtmfInband`(`pjsua2::ToneGenerator`)가 표준 DTMF 주파수로 200ms 단일 톤을 만들어 통화 오디오에 믹스해서 보낸다(MiniSoftphone 은 동일 200ms/표준 주파수지만 마이크 바이트를 직접 톤으로 대체 — 우리는 PJSIP 컨퍼런스 브리지로 믹스, SBC 톤 검출 결과는 동일).
+
+### 이전에 추가된 명령/필드 (네이티브 재빌드 필요 — 위 CTR/sendInfo 와 동일 상황)
+- `rtpPortMin`/`rtpPortMax` — 계정별 RTP 포트 범위(`AccountConfig.mediaConfig.transportConfig`). 둘 다 0 이면 자동.
+- `contactForced` — Contact 헤더 고정(`AccountSipConfig.contactForced`). 비우면 자동(권장).
+- `divertHeader`/`rpidHeader`/`paiHeader` — 발신(INVITE) 시 Diversion/Remote-Party-ID/P-Asserted-Identity 헤더 추가(값 있을 때만).
+- `rejectCode`/`rejectTiming`/`rejectDelaySec` — 수신 거절(수동 거절 버튼, DND/통화중대기 자동 거절 공통) 시 보낼 상태 코드와 타이밍. `after180`이면 180 송신 후 `rejectDelaySec`초 뒤 별도 스레드로 최종 코드 전송.
+- `callerIdPriority` — 수신 시 표시할 발신번호를 고를 헤더 우선순위(`rpid`/`from`/`pai`). `SipRxData.wholeMsg` 원문에서 헤더 줄을 직접 찾는다(저수준 `pjsip_msg` API 미사용).
+- `mediaPlay`/`mediaStop` — `AudioMediaPlayer` 로 WAV/MP3 파일을 통화 상대에게 재생 송출(`record`와 대칭 구조, `g_players` 로 추적).
 - 단말당 1개의 PJSUA account, 최대 10개 동시. 각 account 의 코덱 우선순위는 `pjsua_codec_set_priority` 로 endpoint.codecs 순서대로 설정.
 - 오디오 장치: PJMEDIA snd dev 인덱스로 매핑(렌더러의 deviceId ↔ 데몬의 장치 목록 동기화 필요). 대안: 데몬이 장치 열거를 제공하고 UI 가 그 목록에서 선택.
 

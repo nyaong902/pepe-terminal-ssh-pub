@@ -116,21 +116,45 @@ class SipSidecar extends EventEmitter {
   async answer(endpointId: string): Promise<{ ok: boolean }> { this.send({ cmd: 'answer', endpointId }); return { ok: true }; }
   async reject(endpointId: string): Promise<{ ok: boolean }> { this.send({ cmd: 'reject', endpointId }); return { ok: true }; }
   async hold(endpointId: string, hold: boolean): Promise<{ ok: boolean }> { this.send({ cmd: 'hold', endpointId, hold }); return { ok: true }; }
+  // SSW CTR(호전환) — 보류 신호(INFO) → 200ms → P-Enbloc-Info 포함 INFO 순서를 sipd 내부에서
+  // 처리한다(정확한 타이밍이 필요해 sendInfo 를 두 번 부르는 대신 전용 명령으로 분리).
+  async ctrTransfer(endpointId: string, digits: string, number: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'ctrTransfer', endpointId, digits, number }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
   async mute(endpointId: string, mute: boolean): Promise<{ ok: boolean }> { this.send({ cmd: 'mute', endpointId, mute }); return { ok: true }; }
   async speakerMute(endpointId: string, mute: boolean): Promise<{ ok: boolean }> { this.send({ cmd: 'speakerMute', endpointId, mute }); return { ok: true }; }
   async transfer(endpointId: string, target: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
     return this.send({ cmd: 'transfer', endpointId, target }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
   }
+  // in-dialog INFO 요청에 커스텀 헤더 하나를 실어 보낸다 — SSW PBX CTR(호전환)처럼 표준 REFER
+  // 가 아니라 커스텀 헤더(P-Enbloc-Info 등)로 동작하는 부가서비스용. sipd.cpp cmdSendInfo 참고.
+  async sendInfo(endpointId: string, header: string, value: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'sendInfo', endpointId, header, value }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
   async record(endpointId: string, on: boolean, file: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
     return this.send({ cmd: 'record', endpointId, on, file }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
   }
+  // 미디어(WAV) 송출 — 통화 상대에게 파일을 재생(테스트 톤/안내음). record 와 대칭 구조.
+  async mediaPlay(endpointId: string, file: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
+    return this.send({ cmd: 'mediaPlay', endpointId, file }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
+  }
+  async mediaStop(endpointId: string): Promise<{ ok: boolean }> { this.send({ cmd: 'mediaStop', endpointId }); return { ok: true }; }
   async sendDtmf(endpointId: string, digit: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.ensure()) return { ok: false, error: this.startError || 'sipd 미가용' };
     return this.send({ cmd: 'dtmf', endpointId, digit }) ? { ok: true } : { ok: false, error: 'sipd 전송 실패' };
   }
   setAudioDevices(input?: string, output?: string): void { this.send({ cmd: 'audio', input: input || '', output: output || '' }); }
+  setAccountAudioDevices(endpointId: string, input?: string, output?: string): void {
+    this.send({ cmd: 'account-audio', endpointId, input: input || '', output: output || '' });
+  }
+  setAccountVolume(endpointId: string, mic: number, speaker: number): void {
+    this.send({ cmd: 'account-volume', endpointId, mic, speaker });
+  }
   listAudioDevices(): void { this.send({ cmd: 'listAudio' }); }
   setVolume(mic: number, speaker: number): void { this.send({ cmd: 'volume', mic, speaker }); }
   setDnd(endpointId: string, dnd: boolean): void { this.send({ cmd: 'dnd', endpointId, dnd }); }

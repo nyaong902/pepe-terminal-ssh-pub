@@ -125,7 +125,26 @@ function parsePcapng(buf: Buffer): { packets: RawPacket[]; linkType: number } {
       // Interface Description Block: block_type(4) block_len(4) linktype(2) reserved(2) snaplen(4) [options] block_len(4)
       const linkType = r16(offset + 8);
       interfaceLinkTypes.push(linkType);
-      tsResolPerIf.push(1e6); // 옵션 파싱 생략, 기본 마이크로초 단위 가정(대부분의 캡처 도구 기본값)
+      // if_tsresol(옵션 코드 9)을 실제로 읽어야 한다 — 마이크로초로 가정하고 하드코딩했더니,
+      // Npcap/dumpcap 이 기본으로 쓰는 나노초 해상도 캡처에서 지속시간이 ~1000배 부풀려지는
+      // 버그가 있었다(예: 실제 5초 통화가 84분으로 표시). 옵션이 없으면 스펙 기본값(마이크로초).
+      let tsResol = 1e6;
+      let optOff = offset + 16; // linktype(2)+reserved(2)+snaplen(4) 뒤부터 옵션 시작
+      const blockEnd = offset + blockLen - 4; // 끝의 반복 block_len(4) 앞까지
+      while (optOff + 4 <= blockEnd) {
+        const optCode = r16(optOff);
+        const optLen = r16(optOff + 2);
+        if (optCode === 0) break; // opt_endofopt
+        const valOff = optOff + 4;
+        if (optCode === 9 && optLen >= 1 && valOff < buf.length) {
+          const raw = buf[valOff];
+          const isPowerOf2 = (raw & 0x80) !== 0;
+          const exp = raw & 0x7f;
+          tsResol = isPowerOf2 ? Math.pow(2, exp) : Math.pow(10, exp);
+        }
+        optOff += 4 + optLen + ((4 - (optLen % 4)) % 4); // 4바이트 경계로 패딩
+      }
+      tsResolPerIf.push(tsResol);
     } else if (blockType === 0x00000006) {
       // Enhanced Packet Block: block_type(4) block_len(4) if_id(4) ts_high(4) ts_low(4) cap_len(4) orig_len(4) data...
       const ifId = r32(offset + 8);
@@ -299,10 +318,21 @@ export function probePcapFile(filePath: string): RtpStreamInfo[] {
   const result: RtpStreamInfo[] = [];
   for (const stream of streams.values()) {
     if (stream.packets.length === 0) continue;
-    const first = stream.packets[0];
-    const last = stream.packets[stream.packets.length - 1];
-    const durationSec = (last.tsSec - first.tsSec) + (last.tsUsec - first.tsUsec) / 1e6;
-    stream.info.durationSec = Math.max(0, durationSec);
+    // A-law/u-law(PT 0/8) 는 clock rate 가 RFC 3551 로 고정(8000Hz, 1바이트=1샘플)이라 실제
+    // 재생될 오디오 길이 = 전체 페이로드 바이트 합 / 8000 로 정확히 계산된다. 이 값이 훨씬
+    // 정확하다 — "마지막 패킷 도착 시각 - 첫 패킷 도착 시각"(무선구간 지연/DTX 무음구간/통화
+    // 종료 시 뒤늦게 도착한 낙오 패킷 하나 때문에 실제 오디오는 거의 없는데도 그 사이 간격
+    // 전체가 "길이"로 잡히는 문제가 있었다(예: 32패킷짜리가 5초로 표시됐지만 실제 재생은 0초).
+    // 코덱을 확정할 수 없는 동적 PT 는 여전히 도착 시각 간격으로 대략 추정할 수밖에 없다.
+    if (stream.info.codec === 'alaw' || stream.info.codec === 'ulaw') {
+      const totalBytes = stream.packets.reduce((sum, p) => sum + p.payload.length, 0);
+      stream.info.durationSec = totalBytes / 8000;
+    } else {
+      const first = stream.packets[0];
+      const last = stream.packets[stream.packets.length - 1];
+      const durationSec = (last.tsSec - first.tsSec) + (last.tsUsec - first.tsUsec) / 1e6;
+      stream.info.durationSec = Math.max(0, durationSec);
+    }
     stream.info.suggestedEvsFormat = guessEvsFormat(
       stream.packets.map((p) => p.payload.length),
       stream.packets.map((p) => p.payload[0]),
@@ -312,9 +342,15 @@ export function probePcapFile(filePath: string): RtpStreamInfo[] {
       : guessDynamicCodec(stream.packets.map((p) => p.payload));
     result.push(stream.info);
   }
+  // RTP 버전(상위 2비트=2) 하나만으로는 오탐이 잦다 — DNS 응답 등 아무 UDP 페이로드도 대략
+  // 1/4 확률로 그 2비트가 우연히 일치해 "1패킷짜리 가짜 스트림"이 만들어진다(예: 168.126.63.1:53
+  // KT DNS 응답이 RTP로 오인식된 사례). 진짜 RTP 는 20ms 간격으로 수십~수천 패킷이 이어지므로,
+  // 이런 우연의 일치로는 사실상 나오기 힘든 최소 패킷 수 기준으로 걸러낸다.
+  const MIN_RTP_STREAM_PACKETS = 4;
+  const filtered = result.filter((s) => s.packetCount >= MIN_RTP_STREAM_PACKETS);
   // 패킷 수가 많은(=유의미한 통화/스트림일 가능성이 높은) 순으로 정렬
-  result.sort((a, b) => b.packetCount - a.packetCount);
-  return result;
+  filtered.sort((a, b) => b.packetCount - a.packetCount);
+  return filtered;
 }
 
 function sortBySeq<T extends { seq: number }>(items: T[]): T[] {

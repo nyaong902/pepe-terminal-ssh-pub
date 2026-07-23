@@ -3233,9 +3233,15 @@ probe_curl || probe_wget || probe_python
     const iconv = require('iconv-lite');
     const useIconv = iconv.encodingExists(enc) && enc !== 'utf-8' && enc !== 'utf8';
 
-    // 명령 문자열을 세션 인코딩 바이트로 변환해서 전달 (한글 깨짐 방지)
+    // 명령 문자열을 세션 인코딩 바이트로 변환해서 전달 (한글 깨짐 방지) — 단, worker 스레드로
+    // 프록시되는 연결(conn.__isWorkerConnProxy)은 이 Buffer 를 postMessage 로 그대로 전달해
+    // worker 안의 실제 ssh2 Client.exec() 로 넘기는데, 그쪽이 Buffer 인자를 받아들이지 않고
+    // "argument must be a string" 으로 던져(reject) 세션이 통째로 죽는 버그가 있었다(AI Chat
+    // 으로 EUC-KR 등 non-UTF8 인코딩 세션에 ssh_exec 사용 시 재현됨). worker 프록시 경로는
+    // 인코딩 없이 원래 문자열(UTF-8)을 그대로 보낸다 — 비-ASCII 문자가 포함된 명령의 바이트가
+    // 원격 로케일과 안 맞을 수 있는 드문 손실보다, 매번 크래시하는 쪽이 훨씬 나쁘다.
     const commandBuf: Buffer = useIconv ? iconv.encode(command, enc) : Buffer.from(command, 'utf-8');
-    const commandToSend: string | Buffer = useIconv ? commandBuf : command;
+    const commandToSend: string | Buffer = (useIconv && !conn.__isWorkerConnProxy) ? commandBuf : command;
 
     return new Promise((resolve, reject) => {
       let liveStream: any = null;

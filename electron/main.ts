@@ -6768,9 +6768,11 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sip:answer', async (_e, args: { endpointId: string }) => sip.answer(args?.endpointId));
   ipcMain.handle('sip:reject', async (_e, args: { endpointId: string }) => sip.reject(args?.endpointId));
   ipcMain.handle('sip:hold', async (_e, args: { endpointId: string; hold: boolean }) => sip.hold(args?.endpointId, !!args?.hold));
+  ipcMain.handle('sip:ctr-transfer', async (_e, args: { endpointId: string; digits: string; number: string }) => sip.ctrTransfer(args?.endpointId, args?.digits, args?.number));
   ipcMain.handle('sip:mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.mute(args?.endpointId, !!args?.mute));
   ipcMain.handle('sip:speaker-mute', async (_e, args: { endpointId: string; mute: boolean }) => sip.speakerMute(args?.endpointId, !!args?.mute));
   ipcMain.handle('sip:transfer', async (_e, args: { endpointId: string; target: string }) => sip.transfer(args?.endpointId, args?.target));
+  ipcMain.handle('sip:send-info', async (_e, args: { endpointId: string; header: string; value: string }) => sip.sendInfo(args?.endpointId, args?.header, args?.value));
   ipcMain.handle('sip:record', async (_e, args: { endpointId: string; on: boolean }) => {
     let file = '';
     if (args?.on) {
@@ -6783,8 +6785,46 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
     }
     return sip.record(args?.endpointId, !!args?.on, file);
   });
+  // 미디어(WAV) 송출 — 파일 선택은 렌더러가 이 다이얼로그로 먼저 받아온 뒤 media-play 호출.
+  ipcMain.handle('sip:media-pick-file', async () => {
+    if (!mainWindow) return null;
+    // pjsua2 AudioMediaPlayer(pjmedia_wav_player_port_create)는 비압축 PCM WAV만 지원한다.
+    // MP3/M4A/OGG 등은 렌더러가 Web Audio(decodeAudioData)로 디코드 후 WAV 로 변환해서 넘긴다
+    // (sip:media-read-file + sip:media-write-temp-wav, MicroSipWorkspace.tsx toggleMedia 참고).
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '송출할 오디오 파일 선택',
+      properties: ['openFile'],
+      filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'm4a', 'aac', 'ogg'] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+  // 임의 오디오 파일의 원본 바이트 — 렌더러에서 Web Audio(decodeAudioData)로 디코드하기 위함.
+  ipcMain.handle('sip:media-read-file', async (_e, args: { file: string }) => {
+    try { return fs.readFileSync(args.file).buffer; }
+    catch (e: any) { return { error: String(e?.message || e) }; }
+  });
+  // 렌더러가 디코드+WAV 인코딩(audioBufferToWav)한 바이트를 임시 파일로 저장 — sipMediaPlay 가
+  // 그 경로를 sipd 에 넘긴다. 저장 대화상자 없이 조용히 저장(office-doc:save-file 과 달리).
+  ipcMain.handle('sip:media-write-temp-wav', async (_e, args: { data: ArrayBuffer }) => {
+    try {
+      const p = path.join(require('os').tmpdir(), `pepe-sip-media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
+      fs.writeFileSync(p, Buffer.from(args.data));
+      return { ok: true, path: p };
+    } catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+  });
+  ipcMain.handle('sip:media-play', async (_e, args: { endpointId: string; file: string }) => sip.mediaPlay(args?.endpointId, args?.file));
+  ipcMain.handle('sip:media-stop', async (_e, args: { endpointId: string }) => sip.mediaStop(args?.endpointId));
   ipcMain.handle('sip:send-dtmf', async (_e, args: { endpointId: string; digit: string }) => sip.sendDtmf(args?.endpointId, args?.digit));
   ipcMain.handle('sip:set-audio-devices', (_e, args: { input?: string; output?: string }) => { sip.setAudioDevices(args?.input, args?.output); return { ok: true }; });
+  ipcMain.handle('sip:set-account-audio-devices', (_e, args: { endpointId: string; input?: string; output?: string }) => {
+    sip.setAccountAudioDevices(args?.endpointId, args?.input, args?.output);
+    return { ok: true };
+  });
+  ipcMain.handle('sip:set-account-volume', (_e, args: { endpointId: string; mic: number; speaker: number }) => {
+    sip.setAccountVolume(args?.endpointId, args?.mic, args?.speaker);
+    return { ok: true };
+  });
   ipcMain.handle('sip:list-audio-devices', () => { sip.listAudioDevices(); return { ok: true }; });
   ipcMain.handle('sip:volume', (_e, args: { mic: number; speaker: number }) => { sip.setVolume(Number(args?.mic), Number(args?.speaker)); return { ok: true }; });
   ipcMain.handle('sip:dnd', (_e, args: { endpointId: string; dnd: boolean }) => { sip.setDnd(args?.endpointId, !!args?.dnd); return { ok: true }; });

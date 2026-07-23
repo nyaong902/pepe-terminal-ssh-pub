@@ -1,180 +1,22 @@
 // src/components/MicroSipWorkspace.tsx
-// MicroSIP 유사 VoIP 단말 워크스페이스 (Phase 1 — UI 셸 + 제어 계층).
+// MicroSIP 유사 VoIP 단말 워크스페이스 — SswSoftphoneWorkspace.tsx 와는 완전히 별도 컴포넌트다
+// (같은 SIP 계정을 등록하면 여전히 같은 전화선을 공유하지만, 서로 다른 계정을 쓰면 화면/데이터가
+// 전혀 안 섞인다). 데이터 모델/엔진 연동 타입은 src/utils/sipShared.ts 공용.
 // 실제 SIP/RTP/코덱(AMR/AMR-WB/EVS/G.711)은 네이티브 PJSIP 사이드카가 담당하며,
 // 여기서는 window.api.sip* IPC 로 제어/상태만 다룬다. 사이드카 미연결 시 status='no-engine'.
 import React, { useEffect, useRef, useState } from 'react';
 import { notifyConfirm } from './Notify';
+import {
+  type SipCodec, ALL_CODECS, type SipEndpoint, type RegState, type CallState, type EndpointRuntime,
+  type MacroStep, type Macro, type Contact, type Conversations, type PresenceMap, normPeer,
+  type CallHistEntry, MAX_ENDPOINTS, DIAL_KEYS, playDtmfTone,
+  cardGrid, cfgKey, api, uid, defaultEndpoint,
+} from '../utils/sipShared';
 
-export type SipCodec = 'evs' | 'amrwb' | 'amr' | 'alaw' | 'ulaw';
-export const ALL_CODECS: { id: SipCodec; label: string }[] = [
-  { id: 'evs', label: 'EVS' },
-  { id: 'amrwb', label: 'AMR-WB' },
-  { id: 'amr', label: 'AMR' },
-  { id: 'alaw', label: 'G.711 A-law (alaw)' },
-  { id: 'ulaw', label: 'G.711 µ-law (ulaw)' },
-];
-
-export type SipEndpoint = {
-  id: string;
-  label: string;
-  server: string;          // registrar host (SIP 서버)
-  domain?: string;         // 도메인(AOR) — 미지정 시 server 사용
-  port: number;            // 5060
-  transport: 'udp' | 'tcp' | 'tls';
-  username: string;
-  authId?: string;
-  password: string;
-  displayName?: string;
-  proxy?: string;          // outbound proxy (선택)
-  hideCallerId?: boolean;  // 발신자 번호 숨기기 (Privacy)
-  disableSessionTimer?: boolean; // 세션 타이머 비활성화
-  publishPresence?: boolean;     // 계정 상태(프레즌스 PUBLISH), 기본 on
-  codecs: SipCodec[];      // 우선순위 순서
-  autoAnswer?: boolean;
-  autoRegister?: boolean;  // 워크스페이스 진입(엔진 준비) 시 자동 등록 (기본 on)
-  dnd?: boolean;           // 방해 금지 — 인입을 486 Busy 로 자동 거절
-  voicemailNumber?: string; // 음성사서함 접속 번호
-  dialPrefix?: string;       // 발신 시 앞에 붙이는 prefix (외부 회선 등; */# 코드·SIP URI 제외)
-  keepAlive?: number;        // UDP keep-alive(살아유지) 초, 기본 15
-  // ── 프로그램 설정(단말별) ──
-  ring?: boolean;            // 인입 벨소리 (단말별), 기본 on
-  callWaiting?: boolean;     // 통화 중 대기 — off 면 통화중 인입을 486 Busy 거절, 기본 on
-  autoRecord?: boolean;      // 연결 시 자동 녹음, 기본 off
-  // ── 고급 설정 ──
-  regExpiry?: number;                              // 등록 만료(초), 기본 300
-  dtmfMode?: 'rfc2833' | 'info' | 'inband';        // DTMF 전송 방식
-  srtp?: 'disabled' | 'optional' | 'mandatory';    // 미디어 암호화(SRTP)
-  // ── NAT 통과 ──
-  iceEnabled?: boolean;                            // ICE 사용
-  stunServer?: string;                             // STUN 서버 (host:port)
-  turnServer?: string;                             // TURN 서버 (host:port)
-  turnUser?: string;
-  turnPassword?: string;
-};
-
-type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
-type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; speakerMuted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string };
-
-type MacroStep =
-  | { type: 'key'; key: string }
-  | { type: 'hold'; ms: number }
-  | { type: 'call'; target: string }
-  | { type: 'answer' }
-  | { type: 'hangup' };
-type Macro = { id: string; name: string; steps: MacroStep[]; repeat?: number };
-
-type Contact = { id: string; name: string; number: string; epId?: string };
-
-type ImMsg = { id: string; dir: 'in' | 'out'; text: string; ts: number; status?: string };
-// 대화는 `${epId}|${peer}` 키로 묶는다. peer 는 정규화된 상대 식별자.
-type Conversations = Record<string, ImMsg[]>;
-// 프레즌스: `${epId}|${peer}` → 'online'|'offline'|'unknown'
-type PresenceMap = Record<string, string>;
-// sip:user@host / <...> → bare user(peer) 정규화
-const normPeer = (uri: string): string => {
-  let s = (uri || '').trim();
-  s = s.replace(/^<|>$/g, '');
-  const lt = s.indexOf('<'); if (lt >= 0) { const gt = s.indexOf('>', lt); s = gt > lt ? s.slice(lt + 1, gt) : s.slice(lt + 1); }
-  s = s.replace(/^sips?:/i, '');
-  const at = s.indexOf('@'); if (at >= 0) s = s.slice(0, at);
-  const semi = s.indexOf(';'); if (semi >= 0) s = s.slice(0, semi);
-  return s.trim();
-};
-
-type CallHistEntry = {
-  id: string;
-  epId: string;
-  dir: 'in' | 'out';
-  remote: string;
-  ts: number;            // 통화 시작 시각
-  durationSec: number;   // 연결 통화 시간(초)
-  result: 'answered' | 'missed' | 'no-answer';
-};
+export type { SipCodec, SipEndpoint };
+export { ALL_CODECS };
 
 export type MicroSipView = 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log';
-
-const MAX_ENDPOINTS = 100;
-const DIAL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
-
-// DTMF 톤 주파수 — RFC 4733 / ITU-T Q.23 표준
-const DTMF_FREQ: Record<string, [number, number]> = {
-  '1': [697, 1209], '2': [697, 1336], '3': [697, 1477],
-  '4': [770, 1209], '5': [770, 1336], '6': [770, 1477],
-  '7': [852, 1209], '8': [852, 1336], '9': [852, 1477],
-  '*': [941, 1209], '0': [941, 1336], '#': [941, 1477],
-};
-let _audioCtx: AudioContext | null = null;
-function playDtmfTone(key: string) {
-  const f = DTMF_FREQ[key];
-  if (!f) return;
-  try {
-    if (!_audioCtx) _audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const ctx = _audioCtx;
-    if (ctx.state === 'suspended') { void ctx.resume(); }
-    const t0 = ctx.currentTime;
-    const dur = 0.08; // 80ms
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(0.18, t0 + 0.005);
-    gain.gain.linearRampToValueAtTime(0, t0 + dur);
-    gain.connect(ctx.destination);
-    for (const freq of f) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      osc.start(t0);
-      osc.stop(t0 + dur);
-    }
-  } catch {}
-}
-// 단말/설정 카드 공통 최소 폭 — 둘 중 더 넓은(설정) 기준으로 맞춰 동일 grid 컬럼 폭 사용
-const CARD_MIN = 300;
-const cardGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN}px, 1fr))`, gap: 12, alignItems: 'start' };
-
-// 등록에 영향 없는 필드(id/label) 제외한 설정 직렬화 — 자동 재등록 트리거 비교용
-const REG_CFG_OMIT = new Set(['id', 'label']);
-const cfgKey = (ep: SipEndpoint) => JSON.stringify(Object.entries(ep).filter(([k]) => !REG_CFG_OMIT.has(k)).sort(([a], [b]) => a.localeCompare(b)));
-
-const api = () => (window as any).api || {};
-const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-
-function defaultEndpoint(n: number): SipEndpoint {
-  return {
-    id: uid('ep'),
-    label: `단말 ${n}`,
-    server: '',
-    domain: '',
-    port: 5060,
-    transport: 'udp',
-    username: '',
-    password: '',
-    displayName: '',
-    proxy: '',
-    hideCallerId: false,
-    disableSessionTimer: false,
-    publishPresence: true,
-    codecs: ['evs', 'amrwb', 'amr', 'alaw', 'ulaw'],
-    autoAnswer: false,
-    autoRegister: true,
-    dnd: false,
-    voicemailNumber: '',
-    dialPrefix: '',
-    keepAlive: 15,
-    ring: true,
-    callWaiting: true,
-    autoRecord: false,
-    regExpiry: 300,
-    dtmfMode: 'rfc2833',
-    srtp: 'disabled',
-    iceEnabled: false,
-    stunServer: '',
-    turnServer: '',
-    turnUser: '',
-    turnPassword: '',
-  };
-}
 
 export const MicroSipWorkspace: React.FC<{
   initialView?: MicroSipView;
@@ -183,21 +25,19 @@ export const MicroSipWorkspace: React.FC<{
   // 그대로 쓰고, embedded 일 때만 에코 차단 가드를 추가한다 — 기존 탭 동작 무변경 보장.
   embedded?: boolean;
 }> = ({ initialView = 'phones', onViewChange, embedded = false }) => {
-  const [view, setView] = useState<MicroSipView>(initialView);
+  // 설정/기록 탭 제거(요청에 따라) — 예전에 저장된 initialView 가 그 값이면(과거 세션의 탭
+  // 기억값) 빈 화면이 뜨지 않도록 단말 탭으로 되돌린다.
+  const normalizeView = (v: MicroSipView): MicroSipView => (v === 'settings' || v === 'log') ? 'phones' : v;
+  const [view, setView] = useState<MicroSipView>(normalizeView(initialView));
   const [activity, setActivity] = useState<{ ts: number; epId: string; text: string; kind: string; body?: string }[]>([]);
   const [endpoints, setEndpoints] = useState<SipEndpoint[]>([]);
   const [macros, setMacros] = useState<Macro[]>([]);
   const [runtime, setRuntime] = useState<Record<string, EndpointRuntime>>({});
   const [engineReady, setEngineReady] = useState<boolean | null>(null);
-  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
-  const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
-  // 네이티브 데몬(PJMEDIA)이 제공하는 장치 목록 — 엔진 ON 시 이쪽을 우선 사용
+  // 네이티브 데몬(PJMEDIA)이 제공하는 장치 목록 — 단말 카드의 마이크/스피커 선택에 사용
+  // (전역 공통 마이크/스피커 선택은 단말별 지정으로 대체되어 제거됨)
   const [sipInputs, setSipInputs] = useState<{ idx: number; name: string }[]>([]);
   const [sipOutputs, setSipOutputs] = useState<{ idx: number; name: string }[]>([]);
-  const [audioIn, setAudioIn] = useState('');
-  const [audioOut, setAudioOut] = useState('');
-  const [micLevel, setMicLevel] = useState(1);   // 0~2 (1=기본)
-  const [spkLevel, setSpkLevel] = useState(1);
   const [callHistory, setCallHistory] = useState<CallHistEntry[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [conversations, setConversations] = useState<Conversations>({});
@@ -225,59 +65,46 @@ export const MicroSipWorkspace: React.FC<{
   useEffect(() => {
     if (embedded && initialView === lastSyncedViewRef.current) return;
     lastSyncedViewRef.current = initialView;
-    setView(initialView);
+    setView(normalizeView(initialView));
   }, [initialView]);
   useEffect(() => {
     if (embedded && view === lastSyncedViewRef.current) return;
     lastSyncedViewRef.current = view;
     onViewChange?.(view);
+    // onViewChange 는 의도적으로 deps 에서 뺀다 — App.tsx 가 매 렌더마다 새 인라인 함수를 넘기는데
+    // 이걸 deps 에 넣으면 "onViewChange 호출 → 부모 재렌더 → 새 onViewChange 참조 → effect 재실행
+    // → onViewChange 재호출" 무한 루프(Maximum update depth exceeded)가 된다. view 변경 시에만
+    // 반응하면 충분하다(호출 시점엔 항상 최신 onViewChange 클로저를 쓰므로 값 자체는 안 낡는다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, onViewChange]);
+  }, [view]);
 
-  // ── 영속(UI prefs) ──
+  // ── 영속(UI prefs) ── — MicroSIP 탭과 SSW 소프트폰 탭은 서로 다른 저장 키를 써서 완전히
+  // 별개의 단말/매크로/연락처/통화기록을 갖는다(같은 sip-sidecar 엔진은 계속 공유하지만,
+  // 등록 계정 목록 자체는 두 워크스페이스가 서로 안 보이고 안 섞인다).
+  const prefsKey = 'microsip';
   useEffect(() => {
     (async () => {
       try {
         const prefs = await api().getUIPrefs?.().catch(() => ({}));
-        const ms = prefs?.microsip || {};
+        const ms = prefs?.[prefsKey] || {};
         if (Array.isArray(ms.endpoints)) setEndpoints(ms.endpoints);
         if (Array.isArray(ms.macros)) setMacros(ms.macros);
         if (Array.isArray(ms.callHistory)) setCallHistory(ms.callHistory);
         if (Array.isArray(ms.contacts)) setContacts(ms.contacts);
         if (ms.conversations && typeof ms.conversations === 'object') setConversations(ms.conversations);
         if (typeof ms.ringEnabled === 'boolean') setRingEnabled(ms.ringEnabled);
-        if (ms.audioIn) setAudioIn(ms.audioIn);
-        if (ms.audioOut) setAudioOut(ms.audioOut);
-        if (typeof ms.micLevel === 'number') setMicLevel(ms.micLevel);
-        if (typeof ms.spkLevel === 'number') setSpkLevel(ms.spkLevel);
       } catch {}
       loadedRef.current = true;
     })();
   }, []);
   const persist = (patch: Record<string, any>) => {
-    try { api().setUIPrefs?.({ microsip: { endpoints, macros, callHistory, contacts, conversations, ringEnabled, audioIn, audioOut, micLevel, spkLevel, ...patch } }); } catch {}
+    try { api().setUIPrefs?.({ [prefsKey]: { endpoints, macros, callHistory, contacts, conversations, ringEnabled, ...patch } }); } catch {}
   };
   useEffect(() => { if (loadedRef.current) persist({ endpoints }); /* eslint-disable-next-line */ }, [endpoints]);
   useEffect(() => { if (loadedRef.current) persist({ macros }); /* eslint-disable-next-line */ }, [macros]);
   useEffect(() => { if (loadedRef.current) persist({ callHistory }); /* eslint-disable-next-line */ }, [callHistory]);
   useEffect(() => { if (loadedRef.current) persist({ contacts }); /* eslint-disable-next-line */ }, [contacts]);
   useEffect(() => { if (loadedRef.current) persist({ conversations }); /* eslint-disable-next-line */ }, [conversations]);
-
-  // ── 오디오 장치 열거 (마이크/스피커 선택) ──
-  useEffect(() => {
-    const enumerate = async () => {
-      try {
-        // 라벨을 얻으려면 권한 필요 — 한 번 요청
-        try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch {}
-        const devs = await navigator.mediaDevices.enumerateDevices();
-        setAudioInputs(devs.filter(d => d.kind === 'audioinput'));
-        setAudioOutputs(devs.filter(d => d.kind === 'audiooutput'));
-      } catch {}
-    };
-    enumerate();
-    navigator.mediaDevices?.addEventListener?.('devicechange', enumerate);
-    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', enumerate);
-  }, []);
 
   // ── 패킷 캡처(dumpcap) 가용 여부 + 인터페이스 목록 ──
   useEffect(() => {
@@ -302,6 +129,11 @@ export const MicroSipWorkspace: React.FC<{
     })();
     const off = api().onSipEvent?.((ev: any) => {
       if (!ev) return;
+      // sip-sidecar 는 등록된 모든 단말(양쪽 워크스페이스 통틀어)의 이벤트를 모든 렌더러에
+      // 브로드캐스트한다 — 이 워크스페이스 인스턴스(MicroSIP 또는 SSW)가 소유하지 않은
+      // endpointId 의 이벤트는 무시해야 서로 화면이 안 섞인다. ready/audio-devices 는 엔진
+      // 전체 상태라 endpointId 가 없고, 그대로 통과시킨다.
+      if (ev.endpointId && ev.ev !== 'ready' && ev.ev !== 'audio-devices' && !endpointsRef.current.some(e => e.id === ev.endpointId)) return;
       if (ev.ev === 'ready') {
         setEngineReady(!!ev.ready);
         if (ev.ready) { try { api().sipListAudioDevices?.(); } catch {} }
@@ -423,6 +255,28 @@ export const MicroSipWorkspace: React.FC<{
   };
   const labelOfEp = (id: string) => endpointsRef.current.find(e => e.id === id)?.label || id;
 
+  // ── 호전환(↪) 대상 입력 — window.prompt() 는 이 앱(Electron)에서 동작하지 않아(알림/네이티브
+  // 다이얼로그 금지 정책) 인앱 모달로 대체. ──
+  const [transferPromptId, setTransferPromptId] = useState<string | null>(null);
+  const [transferInput, setTransferInput] = useState('');
+  const openTransferPrompt = (id: string) => { setTransferPromptId(id); setTransferInput(''); };
+  // 단말 카드 뒤집기 — 설정탭 제거에 따라 단말 카드 자체에 설정 버튼을 달아 그 카드만 뒤집어
+  // SettingsCard 를 보여준다(콜로그는 그대로 유지).
+  const [flippedCards, setFlippedCards] = useState<Record<string, boolean>>({});
+  const toggleCardFlip = (id: string) => setFlippedCards(prev => ({ ...prev, [id]: !prev[id] }));
+  // 단말 카드 전체를 한꺼번에 설정면으로 뒤집기/되돌리기 — 하나라도 앞면(통화)이면 "전체 보기"를
+  // 눌렀을 때 전부 뒤집고, 전부 뒤집혀 있으면 눌렀을 때 전부 되돌린다.
+  // 하나라도 설정면(뒤집힌 카드)이면 버튼이 "전체 통화 카드로"로 바뀌어, 누르면 전부 앞면으로
+  // 되돌린다. 전부 통화면(앞면)일 때만 눌러서 전체를 설정면으로 뒤집는다.
+  const anyCardFlipped = endpoints.some(e => flippedCards[e.id]);
+  const toggleAllCardsFlip = () => setFlippedCards(Object.fromEntries(endpoints.map(e => [e.id, !anyCardFlipped])));
+  const confirmTransfer = async () => {
+    const id = transferPromptId; const target = transferInput.trim();
+    setTransferPromptId(null);
+    if (!id || !target) return;
+    await api().sipTransfer?.({ endpointId: id, target }).catch(() => {});
+  };
+
   // ── 인입 벨소리 (WebAudio) ── 전역 마스터(ringEnabled) AND 단말별(ep.ring)
   const anyIncoming = endpoints.some(e => e.ring !== false && rt(e.id).call === 'incoming');
   useEffect(() => {
@@ -456,6 +310,18 @@ export const MicroSipWorkspace: React.FC<{
     if (ringTimerRef.current) clearInterval(ringTimerRef.current);
     try { ringCtxRef.current?.close(); } catch {}
   }, []);
+  // 워크스페이스 탭을 닫아도(컴포넌트 언마운트) sip-sidecar 는 계속 살아있어서, 통화/등록을
+  // 그대로 두면 UI 없이 계정이 포트를 물고 백그라운드에 남는다. 이 상태로 다른 워크스페이스
+  // (MicroSIP↔SSW 소프트폰)에서 같은 계정 구성으로 다시 등록/발신하면 남아있던 계정이 로컬
+  // SIP 포트를 계속 점유하고 있어 새 계정이 트랜스포트를 못 잡아 통화가 안 나간다 — 탭을 닫을
+  // 때 통화 중인 단말은 끊고, 등록돼 있던 단말은 모두 등록 해제해 포트/계정을 완전히 반납한다.
+  useEffect(() => () => {
+    for (const ep of endpointsRef.current) {
+      const call = runtimeRef.current[ep.id]?.call;
+      if (call && call !== 'idle') { try { api().sipHangup?.({ endpointId: ep.id }); } catch {} }
+      if (runtimeRef.current[ep.id]?.reg === 'registered') { try { api().sipUnregister?.({ endpointId: ep.id }); } catch {} }
+    }
+  }, []);
 
   // ── 단말 추가/삭제 ──
   const addEndpoint = () => {
@@ -472,6 +338,16 @@ export const MicroSipWorkspace: React.FC<{
   const updateEndpoint = (id: string, patch: Partial<SipEndpoint>) =>
     setEndpoints(prev => prev.map(e => (e.id === id ? { ...e, ...patch } : e)));
   const setDnd = (id: string, on: boolean) => { updateEndpoint(id, { dnd: on }); try { api().sipSetDnd?.({ endpointId: id, dnd: on }); } catch {} };
+  // 단말 전용 마이크/스피커 — 이미 통화 중이면 sipd 가 즉시 그 통화만 재라우팅한다.
+  const setAcctAudio = (id: string, audioIn: string, audioOut: string) => {
+    updateEndpoint(id, { audioIn, audioOut });
+    try { api().sipSetAccountAudioDevices?.({ endpointId: id, input: audioIn, output: audioOut }); } catch {}
+  };
+  // 단말 전용 마이크/스피커 음량 — 통화 중이면 sipd 가 즉시 그 통화 자신의 오디오에 적용한다.
+  const setAcctVolume = (id: string, micLevel: number, spkLevel: number) => {
+    updateEndpoint(id, { micLevel, spkLevel });
+    try { api().sipSetAccountVolume?.({ endpointId: id, mic: micLevel, speaker: spkLevel }); } catch {}
+  };
   const moveEndpoint = (id: string, dir: -1 | 1) => setEndpoints(prev => {
     const i = prev.findIndex(e => e.id === id); const j = i + dir;
     if (i < 0 || j < 0 || j >= prev.length) return prev;
@@ -506,9 +382,20 @@ export const MicroSipWorkspace: React.FC<{
       const obj = JSON.parse(await file.text());
       const epCount = Array.isArray(obj.endpoints) ? obj.endpoints.length : 0;
       if (!(await notifyConfirm('설정 가져오기', `설정을 가져오면 현재 단말/매크로/주소록을 덮어씁니다. (단말 ${epCount}개) 계속할까요?`))) return;
-      if (Array.isArray(obj.endpoints)) setEndpoints(obj.endpoints.slice(0, MAX_ENDPOINTS));
+      // 가져온 단말의 id 를 그대로 쓰면(예: 다른 워크스페이스 — MicroSIP↔SSW — 에서 내보낸 파일을
+      // 가져올 때) sip-sidecar 입장에선 같은 id 라 "같은 계정"이 돼버려 두 워크스페이스 화면이
+      // 서로 섞인다. 항상 새 id 를 발급하고, 연락처의 발신 단말 참조(epId)도 새 id 로 맞춘다.
+      const idMap: Record<string, string> = {};
+      const importedEndpoints: SipEndpoint[] = Array.isArray(obj.endpoints)
+        ? obj.endpoints.slice(0, MAX_ENDPOINTS).map((e: SipEndpoint) => {
+            const newId = uid('ep');
+            if (e.id) idMap[e.id] = newId;
+            return { ...e, id: newId };
+          })
+        : [];
+      if (importedEndpoints.length) setEndpoints(importedEndpoints);
       if (Array.isArray(obj.macros)) setMacros(obj.macros);
-      if (Array.isArray(obj.contacts)) setContacts(obj.contacts);
+      if (Array.isArray(obj.contacts)) setContacts(obj.contacts.map((c: Contact) => (c.epId && idMap[c.epId]) ? { ...c, epId: idMap[c.epId] } : c));
     } catch (e: any) {
       pushToast(`설정 파일을 읽을 수 없습니다: ${e?.message || e}`);
     }
@@ -636,11 +523,6 @@ export const MicroSipWorkspace: React.FC<{
     if (!epId || !peer.trim()) return;
     try { api().sipSubscribePresence?.({ endpointId: epId, target: peer, subscribe: sub }); } catch {}
   };
-  const transfer = async (id: string) => {
-    const target = (typeof window !== 'undefined' ? window.prompt('전환할 번호/대상(SIP)을 입력하세요:', '') : '') || '';
-    if (!target.trim()) return;
-    await api().sipTransfer?.({ endpointId: id, target: target.trim() }).catch(() => {});
-  };
   const sendDtmf = async (id: string, digit: string) => { await api().sipSendDtmf?.({ endpointId: id, digit }).catch(() => {}); };
   const pressKey = (id: string, key: string) => {
     const cur = rt(id);
@@ -649,15 +531,12 @@ export const MicroSipWorkspace: React.FC<{
     else setRt(id, { dialed: (cur.dialed || '') + key });
   };
   const switchViewByDelta = (delta: number) => {
-    const order: Exclude<MicroSipView, 'messages'>[] = ['phones', 'settings', 'macros', 'contacts', 'log'];
-    const idx = order.indexOf((view === 'messages' ? 'phones' : view) as Exclude<MicroSipView, 'messages'>);
+    // 설정/기록 탭 제거(요청에 따라) — 남은 뷰만 순환.
+    const order: Exclude<MicroSipView, 'messages' | 'settings' | 'log'>[] = ['phones', 'macros', 'contacts'];
+    const idx = order.indexOf((view === 'messages' || view === 'settings' || view === 'log' ? 'phones' : view) as Exclude<MicroSipView, 'messages' | 'settings' | 'log'>);
     const next = order[(idx + delta + order.length) % order.length];
     setView(next);
   };
-
-  // 음량(마이크/스피커) — 변경/엔진 준비 시 데몬에 적용
-  useEffect(() => { if (engineReady) { try { api().sipSetVolume?.({ mic: micLevel, speaker: spkLevel }); } catch {} } /* eslint-disable-next-line */ }, [engineReady, micLevel, spkLevel]);
-  const applyVolume = (mic: number, spk: number) => { setMicLevel(mic); setSpkLevel(spk); persist({ micLevel: mic, spkLevel: spk }); };
 
   // 엔진 준비 + 단말 로드 완료 후 1회: autoRegister 단말 자동 등록
   useEffect(() => {
@@ -689,12 +568,6 @@ export const MicroSipWorkspace: React.FC<{
     });
     /* eslint-disable-next-line */
   }, [endpoints, runtime]);
-
-  const applyAudioDevices = (inId: string, outId: string) => {
-    setAudioIn(inId); setAudioOut(outId);
-    persist({ audioIn: inId, audioOut: outId });
-    try { api().sipSetAudioDevices?.({ input: inId, output: outId }); } catch {}
-  };
 
   // ── 매크로 ──
   const runMacro = async (macro: Macro, targetIds: string[]) => {
@@ -748,6 +621,26 @@ export const MicroSipWorkspace: React.FC<{
           ))}
         </div>
       )}
+      {/* 호전환(↪) 대상 입력 모달 — window.prompt() 대체 */}
+      {transferPromptId && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setTransferPromptId(null)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', borderRadius: 10, padding: 16, width: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <b style={{ fontSize: 13 }}>↪ 호전환</b>
+            <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>전환할 번호/대상(SIP)을 입력하세요</span>
+            <input autoFocus value={transferInput} onChange={e => setTransferInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void confirmTransfer(); else if (e.key === 'Escape') setTransferPromptId(null); }}
+              placeholder="예: 1002 또는 sip:1002@example.com"
+              style={{ padding: '7px 9px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 }} />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setTransferPromptId(null)} style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer' }}>취소</button>
+              <button onClick={() => void confirmTransfer()} disabled={!transferInput.trim()}
+                style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, fontSize: 12, cursor: transferInput.trim() ? 'pointer' : 'not-allowed', opacity: transferInput.trim() ? 1 : 0.5 }}>전환</button>
+            </div>
+          </div>
+        </div>
+      )}
       <MicroSipHeader
         view={view} setView={setView}
         engineReady={engineReady}
@@ -757,10 +650,6 @@ export const MicroSipWorkspace: React.FC<{
         onHangupAll={hangupAll} onMuteAll={muteAll}
         hasActiveCall={endpoints.some(e => isActiveCall(rt(e.id).call))}
         ringEnabled={ringEnabled} onToggleRing={() => { setRingEnabled(v => { persist({ ringEnabled: !v }); return !v; }); }}
-        audioInputs={audioInputs} audioOutputs={audioOutputs}
-        sipInputs={sipInputs} sipOutputs={sipOutputs}
-        audioIn={audioIn} audioOut={audioOut} onAudio={applyAudioDevices}
-        micLevel={micLevel} spkLevel={spkLevel} onVolume={applyVolume}
         epCount={endpoints.length}
       />
 
@@ -773,29 +662,72 @@ export const MicroSipWorkspace: React.FC<{
 
         {view === 'phones' && (
           // 단말이 많아지면 콜로그가 화면 밖으로 밀려나지 않도록 — 단말 영역(스크롤) + 콜로그(고정) 분리.
+          // 프로비저닝 툴바도 같은 이유로 스크롤 영역 밖(고정)에 둔다 — sticky 로 스크롤 영역
+          // 안쪽에 두면 카드 내용이 겹쳐 보이는 렌더링 문제가 있었다.
           <>
+            {endpoints.length > 0 && (
+              <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px 0 12px' }}>
+                <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
+                <button onClick={exportConfig} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(true)}>⬇ 내보내기</button>
+                <button onClick={() => importInputRef.current?.click()} title="JSON 설정 가져오기(덮어쓰기)" style={miniBtn(true)}>⬆ 가져오기</button>
+                <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+                  onChange={e => { void importConfig(e.target.files?.[0]); e.target.value = ''; }} />
+                <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
+                <button onClick={toggleAllCardsFlip} title="모든 단말 카드를 한꺼번에 설정면으로 뒤집기/되돌리기" style={{ ...miniBtn(true), marginLeft: 'auto' }}>
+                  {anyCardFlipped ? '◀ 전체 통화 카드로' : '⚙ 전체 설정 보기'}
+                </button>
+              </div>
+            )}
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
               <div style={cardGrid}>
-                {endpoints.map(e => (
-                  <PhoneCard key={e.id} ep={e} rt={rt(e.id)}
-                    onKey={(k) => pressKey(e.id, k)}
-                    onBackspace={() => setRt(e.id, { dialed: (rt(e.id).dialed || '').slice(0, -1) })}
-                    onCall={() => makeCall(e.id, rt(e.id).dialed)}
-                    onHangup={() => hangup(e.id)}
-                    onClear={() => setRt(e.id, { dialed: '' })}
-                    onAnswer={() => answer(e.id)}
-                    onReject={() => reject(e.id)}
-                    onToggleMute={() => toggleMute(e.id)}
-                    onToggleSpeakerMute={() => toggleSpeakerMute(e.id)}
-                    onToggleHold={() => toggleHold(e.id)}
-                    onTransfer={() => transfer(e.id)}
-                    onToggleRecord={() => toggleRecord(e.id)}
-                    onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
-                    onRegister={() => register(e)}
-                    onUnregister={() => unregister(e.id)}
-                    onSetDialed={(s) => setRt(e.id, { dialed: s })}
-                    onToggleCapture={() => toggleCapture(e.id)}
-                    captureAvailable={captureAvailable}
+                {endpoints.map((e, idx) => (
+                  <FlippableCard key={e.id} flipped={!!flippedCards[e.id]}
+                    front={
+                      <PhoneCard ep={e} rt={rt(e.id)}
+                        onKey={(k) => pressKey(e.id, k)}
+                        onBackspace={() => setRt(e.id, { dialed: (rt(e.id).dialed || '').slice(0, -1) })}
+                        onCall={() => makeCall(e.id, rt(e.id).dialed)}
+                        onHangup={() => hangup(e.id)}
+                        onClear={() => setRt(e.id, { dialed: '' })}
+                        onAnswer={() => answer(e.id)}
+                        onReject={() => reject(e.id)}
+                        onToggleMute={() => toggleMute(e.id)}
+                        onToggleSpeakerMute={() => toggleSpeakerMute(e.id)}
+                        onToggleHold={() => toggleHold(e.id)}
+                        onTransfer={() => openTransferPrompt(e.id)}
+                        onToggleRecord={() => toggleRecord(e.id)}
+                        onVoicemail={() => e.voicemailNumber && makeCall(e.id, e.voicemailNumber)}
+                        onRegister={() => register(e)}
+                        onUnregister={() => unregister(e.id)}
+                        onSetDialed={(s) => setRt(e.id, { dialed: s })}
+                        onToggleCapture={() => toggleCapture(e.id)}
+                        captureAvailable={captureAvailable}
+                        onOpenSettings={() => toggleCardFlip(e.id)}
+                        sipInputs={sipInputs} sipOutputs={sipOutputs}
+                        onAudioChange={(i, o) => setAcctAudio(e.id, i, o)}
+                        onVolumeChange={(mic, spk) => setAcctVolume(e.id, mic, spk)}
+                      />
+                    }
+                    back={
+                      <SettingsCard ep={e} all={endpoints} reg={rt(e.id).reg}
+                        idx={idx} total={endpoints.length}
+                        onChange={(p) => updateEndpoint(e.id, p)}
+                        onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
+                        onDnd={(on) => setDnd(e.id, on)}
+                        onMove={(dir) => moveEndpoint(e.id, dir)}
+                        onRegister={() => register(e)}
+                        onUnregister={() => unregister(e.id)}
+                        onRemove={() => removeEndpoint(e.id)}
+                        onSave={(draft) => saveEndpointDraft(e.id, draft)}
+                        capturing={!!rt(e.id).capturing}
+                        captureAvailable={captureAvailable}
+                        onToggleCapture={() => toggleCapture(e.id)}
+                        captureInterfaces={captureInterfaces}
+                        captureIface={captureIface}
+                        onCaptureIfaceChange={setCaptureIface}
+                        onBack={() => toggleCardFlip(e.id)}
+                      />
+                    }
                   />
                 ))}
               </div>
@@ -808,40 +740,6 @@ export const MicroSipWorkspace: React.FC<{
           </>
         )}
 
-        {view === 'settings' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>프로비저닝:</span>
-              <button onClick={exportConfig} title="단말/매크로/주소록을 JSON 으로 내보내기" style={miniBtn(true)}>⬇ 내보내기</button>
-              <button onClick={() => importInputRef.current?.click()} title="JSON 설정 가져오기(덮어쓰기)" style={miniBtn(true)}>⬆ 가져오기</button>
-              <input ref={importInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
-                onChange={e => { void importConfig(e.target.files?.[0]); e.target.value = ''; }} />
-              <span style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 비밀번호 평문 포함 — 취급 주의</span>
-            </div>
-            <div style={cardGrid}>
-              {endpoints.map((e, idx) => (
-                <SettingsCard key={e.id} ep={e} all={endpoints} reg={rt(e.id).reg}
-                  idx={idx} total={endpoints.length}
-                  onChange={(p) => updateEndpoint(e.id, p)}
-                  onCopyFrom={(srcId) => copyFrom(e.id, srcId)}
-                  onDnd={(on) => setDnd(e.id, on)}
-                  onMove={(dir) => moveEndpoint(e.id, dir)}
-                  onRegister={() => register(e)}
-                  onUnregister={() => unregister(e.id)}
-                  onRemove={() => removeEndpoint(e.id)}
-                  onSave={(draft) => saveEndpointDraft(e.id, draft)}
-                  capturing={!!rt(e.id).capturing}
-                  captureAvailable={captureAvailable}
-                  onToggleCapture={() => toggleCapture(e.id)}
-                  captureInterfaces={captureInterfaces}
-                  captureIface={captureIface}
-                  onCaptureIfaceChange={setCaptureIface}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
         {view === 'macros' && (
           <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
             <MacrosView macros={macros} setMacros={setMacros} endpoints={endpoints} onRun={runMacro} />
@@ -849,7 +747,7 @@ export const MicroSipWorkspace: React.FC<{
         )}
 
         {view === 'contacts' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <ContactsView contacts={contacts} setContacts={setContacts} endpoints={endpoints} onDial={redial}
               presence={presence} onSubscribe={toggleSubscribe} />
           </div>
@@ -862,11 +760,6 @@ export const MicroSipWorkspace: React.FC<{
           </div>
         )}
 
-        {view === 'log' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
-            <CallHistory history={callHistory} endpoints={endpoints} onRedial={redial} onClear={() => setCallHistory([])} />
-          </div>
-        )}
       </div>
     </div>
   );
@@ -874,18 +767,12 @@ export const MicroSipWorkspace: React.FC<{
 
 // ───────────────────────── 헤더 ─────────────────────────
 const MicroSipHeader: React.FC<{
-  view: 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log'; setView: (v: any) => void;
+  view: MicroSipView; setView: (v: any) => void;
   engineReady: boolean | null; canAdd: boolean; onAdd: () => void; epCount: number;
   onRegisterAll: () => void; onUnregisterAll: () => void;
   onHangupAll: () => void; onMuteAll: () => void; hasActiveCall: boolean;
   ringEnabled: boolean; onToggleRing: () => void;
-  audioInputs: MediaDeviceInfo[]; audioOutputs: MediaDeviceInfo[];
-  sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
-  audioIn: string; audioOut: string; onAudio: (i: string, o: string) => void;
-  micLevel: number; spkLevel: number; onVolume: (mic: number, spk: number) => void;
 }> = (p) => {
-  // 네이티브 엔진이 장치를 제공하면(name 기준) 그 목록을, 아니면 브라우저 장치를 사용
-  const useSip = p.sipInputs.length > 0 || p.sipOutputs.length > 0;
   const tab = (id: MicroSipView, label: string) => (
     <button onClick={() => p.setView(id)}
       style={{ padding: '6px 12px', borderRadius: '8px 8px 0 0', border: '1px solid var(--win-border, #30363d)', borderBottom: 'none',
@@ -895,11 +782,10 @@ const MicroSipHeader: React.FC<{
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 0', borderBottom: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface, #161b22)', flexWrap: 'wrap' }}>
       {tab('phones', '☎ 단말')}
-      {tab('settings', '⚙ 설정')}
       {tab('macros', '⚡ 매크로')}
       {tab('contacts', '👤 주소록')}
       {/* 메시지 탭 숨김 (요청에 따라 비표시) — {tab('messages', '💬 메시지')} */}
-      {tab('log', '🗒 기록')}
+      {/* 설정/기록 탭 제거 (요청에 따라) — 설정은 단말 카드 ⚙ 버튼으로 뒤집어서 접근 */}
       <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
         style={miniBtn(p.epCount > 0)}>전체 등록</button>
       <button onClick={p.onUnregisterAll} disabled={p.epCount === 0} title="모든 단말 해제"
@@ -914,24 +800,6 @@ const MicroSipHeader: React.FC<{
         title={p.engineReady ? 'SIP 엔진 연결됨' : 'SIP 엔진(네이티브 사이드카) 미연결 — Phase 2에서 활성화'}>
         ● {p.engineReady ? 'SIP 엔진 ON' : 'SIP 엔진 미연결'}
       </span>
-      <select value={p.audioIn} onChange={e => p.onAudio(e.target.value, p.audioOut)} title={useSip ? '마이크(SIP 엔진)' : '마이크'} style={selStyle}>
-        <option value="">🎤 기본 마이크</option>
-        {useSip
-          ? p.sipInputs.map(d => <option key={d.idx} value={d.name}>🎤 {d.name}</option>)
-          : p.audioInputs.map(d => <option key={d.deviceId} value={d.deviceId}>🎤 {d.label || d.deviceId.slice(0, 8)}</option>)}
-      </select>
-      <select value={p.audioOut} onChange={e => p.onAudio(p.audioIn, e.target.value)} title={useSip ? '스피커(SIP 엔진)' : '스피커'} style={selStyle}>
-        <option value="">🔊 기본 스피커</option>
-        {useSip
-          ? p.sipOutputs.map(d => <option key={d.idx} value={d.name}>🔊 {d.name}</option>)
-          : p.audioOutputs.map(d => <option key={d.deviceId} value={d.deviceId}>🔊 {d.label || d.deviceId.slice(0, 8)}</option>)}
-      </select>
-      <span title={`마이크 음량 ${Math.round(p.micLevel * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
-        🎙<input type="range" min={0} max={2} step={0.05} value={p.micLevel} onChange={e => p.onVolume(Number(e.target.value), p.spkLevel)} style={{ width: 64 }} />
-      </span>
-      <span title={`스피커 음량 ${Math.round(p.spkLevel * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
-        🔈<input type="range" min={0} max={2} step={0.05} value={p.spkLevel} onChange={e => p.onVolume(p.micLevel, Number(e.target.value))} style={{ width: 64 }} />
-      </span>
       <button onClick={p.onAdd} disabled={!p.canAdd} title={p.canAdd ? '단말 추가' : `최대 ${MAX_ENDPOINTS}대`}
         style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--win-accent, #2b6b9b)', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: p.canAdd ? 'pointer' : 'not-allowed', opacity: p.canAdd ? 1 : 0.5 }}>
         + 단말 ({p.epCount}/{MAX_ENDPOINTS})
@@ -939,11 +807,13 @@ const MicroSipHeader: React.FC<{
     </div>
   );
 };
-const selStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 11, maxWidth: 160 };
 const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
 
 // ───────────────────────── 주소록 ─────────────────────────
 const presColor: Record<string, string> = { online: '#3fb950', offline: '#8b949e', unknown: '#d29922' };
+// 주소록 열 제목과 실제 행의 칸 폭을 완전히 동일하게 맞추기 위한 공유 grid 템플릿.
+// (프레즌스 점 / 이름 / 번호 / 발신 단말 / 구독 버튼 / 통화 버튼 / 삭제 버튼)
+const CONTACT_ROW_COLS = '9px 1fr 1fr 120px 32px 32px 32px';
 const ContactsView: React.FC<{
   contacts: Contact[]; setContacts: React.Dispatch<React.SetStateAction<Contact[]>>;
   endpoints: SipEndpoint[]; onDial: (epId: string, number: string) => void;
@@ -956,35 +826,54 @@ const ContactsView: React.FC<{
   const dialEp = (c: Contact) => (c.epId && endpoints.some(e => e.id === c.epId)) ? c.epId : endpoints[0]?.id;
   const presOf = (epId: string | undefined, number: string) => epId ? presence[`${epId}|${normPeer(number)}`] : undefined;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 760 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    // 제목/추가 버튼/열 제목은 스크롤과 무관하게 고정 — 리스트 부분만 내부에서 따로 스크롤한다.
+    // maxWidth 는 바깥(스크롤 컨테이너)이 아니라 안쪽 콘텐츠에만 걸어야 스크롤바가 패널의
+    // 진짜 오른쪽 끝에 붙는다 — 바깥에 걸면 컨테이너 자체가 좁아져 스크롤바가 중간에 생긴다.
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 12px 0 12px', maxWidth: 760 }}>
         <b style={{ fontSize: 13 }}>👤 주소록</b>
         <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>{contacts.length}건</span>
         <button onClick={add} style={{ ...inp, cursor: 'pointer', background: 'var(--win-accent, #2b6b9b)', color: '#fff', border: 'none', fontWeight: 700, marginLeft: 'auto' }}>+ 연락처 추가</button>
       </div>
-      {contacts.length === 0 && (
-        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>연락처가 없습니다. <b>+ 연락처 추가</b> 로 등록하세요.</div>
+      {contacts.length > 0 && (
+        // 입력값이 채워지면 placeholder 가 사라져 이름/번호/발신 단말 칸이 서로 구분 안 가는
+        // 문제가 있었다 — 목록 위에 열 제목을 붙이되, flex 는 아래 행(버튼 개수가 다름)과 항목
+        // 수가 달라 칸이 안 맞았다. grid 로 바꿔 행과 완전히 같은 열 폭을 공유해 정렬한다.
+        <div style={{ flex: '0 0 auto', display: 'grid', gridTemplateColumns: CONTACT_ROW_COLS, gap: 6, padding: '10px 12px 0 12px', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', maxWidth: 760 }}>
+          <span />
+          <span>이름</span>
+          <span>번호/SIP (수신 대상)</span>
+          <span>발신 단말</span>
+          <span />
+          <span />
+          <span />
+        </div>
       )}
-      {contacts.map(c => {
-        const ep = dialEp(c);
-        const pres = presOf(ep, c.number);
-        return (
-          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', flexWrap: 'wrap' }}>
-            <span title={pres ? `프레즌스: ${pres}` : '프레즌스 미구독'} style={{ width: 9, height: 9, borderRadius: 999, flex: '0 0 auto', background: pres ? presColor[pres] || '#8b949e' : 'transparent', border: pres ? 'none' : '1px solid var(--win-border, #30363d)' }} />
-            <input value={c.name} onChange={e => update(c.id, { name: e.target.value })} placeholder="이름" style={{ ...inp, flex: '1 1 110px', minWidth: 90 }} />
-            <input value={c.number} onChange={e => update(c.id, { number: e.target.value })} placeholder="번호/SIP" style={{ ...inp, flex: '1 1 110px', minWidth: 90, fontFamily: 'Consolas, monospace' }} />
-            <select value={c.epId || ''} onChange={e => update(c.id, { epId: e.target.value || undefined })} title="발신 단말" style={{ ...inp, flex: '0 1 120px' }}>
-              <option value="">단말 자동</option>
-              {endpoints.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
-            </select>
-            <button onClick={() => ep && c.number.trim() && onSubscribe(ep, c.number, !pres)} disabled={!c.number.trim() || !ep} title={pres ? '프레즌스 구독 해제' : '프레즌스 구독'}
-              style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>{pres ? '👁' : '👁‍🗨'}</button>
-            <button onClick={() => ep && onDial(ep, c.number)} disabled={!c.number.trim() || !ep} title={ep ? '통화' : '등록된 단말 없음'}
-              style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>📞</button>
-            <button onClick={() => remove(c.id)} title="삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
-          </div>
-        );
-      })}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, padding: 12 }}>
+        {contacts.length === 0 && (
+          <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12, maxWidth: 760 }}>연락처가 없습니다. <b>+ 연락처 추가</b> 로 등록하세요.</div>
+        )}
+        {contacts.map(c => {
+          const ep = dialEp(c);
+          const pres = presOf(ep, c.number);
+          return (
+            <div key={c.id} style={{ display: 'grid', gridTemplateColumns: CONTACT_ROW_COLS, alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', maxWidth: 760 }}>
+              <span title={pres ? `프레즌스: ${pres}` : '프레즌스 미구독'} style={{ width: 9, height: 9, borderRadius: 999, background: pres ? presColor[pres] || '#8b949e' : 'transparent', border: pres ? 'none' : '1px solid var(--win-border, #30363d)' }} />
+              <input value={c.name} onChange={e => update(c.id, { name: e.target.value })} placeholder="이름" style={{ ...inp, width: '100%', minWidth: 0 }} />
+              <input value={c.number} onChange={e => update(c.id, { number: e.target.value })} placeholder="번호/SIP" style={{ ...inp, width: '100%', minWidth: 0, fontFamily: 'Consolas, monospace' }} />
+              <select value={c.epId || ''} onChange={e => update(c.id, { epId: e.target.value || undefined })} title="발신 단말" style={{ ...inp, width: '100%', minWidth: 0 }}>
+                <option value="">단말 자동</option>
+                {endpoints.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+              </select>
+              <button onClick={() => ep && c.number.trim() && onSubscribe(ep, c.number, !pres)} disabled={!c.number.trim() || !ep} title={pres ? '프레즌스 구독 해제' : '프레즌스 구독'}
+                style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>{pres ? '👁' : '👁‍🗨'}</button>
+              <button onClick={() => ep && onDial(ep, c.number)} disabled={!c.number.trim() || !ep} title={ep ? '통화' : '등록된 단말 없음'}
+                style={{ ...inp, cursor: (c.number.trim() && ep) ? 'pointer' : 'not-allowed', background: '#238636', color: '#fff', border: 'none', fontWeight: 700, opacity: (c.number.trim() && ep) ? 1 : 0.5 }}>📞</button>
+              <button onClick={() => remove(c.id)} title="삭제" style={{ ...inp, cursor: 'pointer', color: '#f85149' }}>🗑</button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -1076,49 +965,34 @@ const MessagesView: React.FC<{
   );
 };
 
-// ───────────────────────── 통화 기록 ─────────────────────────
-const histResult: Record<CallHistEntry['result'], { label: string; color: string }> = {
-  answered: { label: '응답', color: '#3fb950' },
-  missed: { label: '부재중', color: '#f85149' },
-  'no-answer': { label: '무응답', color: '#d29922' },
-};
-const fmtDur = (s: number) => s <= 0 ? '' : `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-const CallHistory: React.FC<{
-  history: CallHistEntry[]; endpoints: SipEndpoint[];
-  onRedial: (epId: string, remote: string) => void; onClear: () => void;
-}> = ({ history, endpoints, onRedial, onClear }) => {
-  const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id;
-  const exists = (id: string) => endpoints.some(e => e.id === id);
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 760 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <b style={{ fontSize: 13 }}>📞 통화 기록</b>
-        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>최근 {history.length}건</span>
-        <button onClick={onClear} disabled={history.length === 0} style={{ ...miniBtn(history.length > 0), marginLeft: 'auto' }}>지우기</button>
-      </div>
-      {history.length === 0 && (
-        <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 16, textAlign: 'center', fontSize: 12 }}>통화 기록이 없습니다.</div>
-      )}
-      {history.map(h => {
-        const r = histResult[h.result];
-        return (
-          <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, background: 'var(--win-surface, #161b22)', border: '1px solid var(--win-border, #30363d)', fontSize: 12 }}>
-            <span title={h.dir === 'in' ? '수신' : '발신'} style={{ fontSize: 13, color: h.dir === 'in' ? '#58a6ff' : '#3fb950' }}>{h.dir === 'in' ? '↙' : '↗'}</span>
-            <span style={{ flex: 1, fontFamily: 'Consolas, monospace', color: 'var(--win-text, #e6edf3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.remote || '(번호 없음)'}</span>
-            <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>{labelOf(h.epId)}</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: r.color, whiteSpace: 'nowrap' }}>{r.label}{h.durationSec > 0 ? ` ${fmtDur(h.durationSec)}` : ''}</span>
-            <span style={{ fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>{new Date(h.ts).toLocaleString()}</span>
-            <button onClick={() => onRedial(h.epId, h.remote)} disabled={!h.remote || !exists(h.epId)} title={exists(h.epId) ? '재다이얼' : '단말 삭제됨'}
-              style={{ ...miniBtn(!!h.remote && exists(h.epId)), padding: '3px 8px' }}>↺</button>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
 // 활동 로그 색상 — 전화 탭 콜로그 패널에서 공통 사용
 const logKindColor: Record<string, string> = { reg: '#58a6ff', call: '#3fb950', error: '#f85149', log: '#8b949e', im: '#a371f7', sip: '#d29922' };
+
+// 활동 로그를 MiniSoftphone 식 전문(raw transcript) 텍스트로 변환 — "전문" 뷰 표시 및 저장에 공용.
+function formatActivityLog(
+  activity: { ts: number; epId: string; text: string; kind: string; body?: string; remote?: string; remoteName?: string }[],
+  labelOf: (id: string) => string,
+): string {
+  const chron = [...activity].reverse(); // activity 는 최신이 앞(index 0) — 시간순으로 뒤집는다.
+  const lines: string[] = [];
+  for (const a of chron) {
+    const t = new Date(a.ts);
+    const ts = `[${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}.${String(t.getMilliseconds()).padStart(3, '0')}]`;
+    if (a.kind === 'sip') {
+      const isOut = a.text.startsWith('↗');
+      const msg = a.text.replace(/^[↗↙]\s*/, '');
+      const isResp = /^SIP\/2\.0/.test(msg);
+      const remote = a.remote || a.remoteName || '?';
+      lines.push(`${ts} ${isOut ? '▶▶ 송신' : '◀◀ 수신'} ${isResp ? 'RESPONSE' : 'REQUEST '}  ${labelOf(a.epId)} ${isOut ? '→' : '←'} ${remote}`);
+      if (a.body) lines.push(a.body);
+      lines.push('');
+      lines.push('─'.repeat(60));
+    } else {
+      lines.push(`${ts} [${labelOf(a.epId)}] ${a.text}`);
+    }
+  }
+  return lines.join('\n');
+}
 
 // ───────────────────────── 폴드 가능 콜로그(전화 탭 하단) ─────────────────────────
 // sessionStorage 에 펼침 여부 저장 — 새로 시작할 때마다 fold 기본.
@@ -1165,10 +1039,40 @@ const CallLogPanel: React.FC<{
   };
   const panelHeightRef = useRef(panelHeight);
   panelHeightRef.current = panelHeight;
-  const [viewMode, setViewMode] = useState<'list' | 'seq'>(() => {
+  const [viewMode, setViewMode] = useState<'list' | 'seq' | 'raw'>(() => {
     try { return (sessionStorage.getItem('pepe-microsip-callog-mode') as any) || 'list'; } catch { return 'list'; }
   });
-  const setMode = (m: 'list' | 'seq') => { setViewMode(m); try { sessionStorage.setItem('pepe-microsip-callog-mode', m); } catch {} };
+  const setMode = (m: 'list' | 'seq' | 'raw') => { setViewMode(m); try { sessionStorage.setItem('pepe-microsip-callog-mode', m); } catch {} };
+  // 시퀀스/전문 뷰 — 새 메시지 도착 시 자동으로 그쪽(맨 아래)으로 스크롤. 사용자가 과거 기록을
+  // 보려고 위로 스크롤해둔 상태면 방해하지 않도록, 이미 맨 아래 근처에 있을 때만 따라간다.
+  const seqScrollRef = useRef<HTMLDivElement | null>(null);
+  const rawScrollRef = useRef<HTMLDivElement | null>(null);
+  const seqAtBottomRef = useRef(true);
+  const rawAtBottomRef = useRef(true);
+  const NEAR_BOTTOM_PX = 60;
+  const onSeqScroll = () => {
+    const el = seqScrollRef.current; if (!el) return;
+    seqAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  };
+  const onRawScroll = () => {
+    const el = rawScrollRef.current; if (!el) return;
+    rawAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  };
+  // 일시정지 — 켜지는 순간의 activity 를 얼려서 그 이후 새 이벤트는 화면에 반영하지 않는다
+  // (실제 통화/등록 처리 자체는 계속 정상 진행 — 로그 "표시"만 멈춘다).
+  const [paused, setPaused] = useState(false);
+  const frozenRef = useRef<typeof activity | null>(null);
+  if (paused && !frozenRef.current) frozenRef.current = activity;
+  if (!paused) frozenRef.current = null;
+  const liveActivity = (paused && frozenRef.current) ? frozenRef.current : activity;
+  const saveLog = async () => {
+    try {
+      const text = formatActivityLog(liveActivity, labelOf);
+      const data = new TextEncoder().encode(text).buffer;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      await api().officeDocSaveFile?.({ data, defaultName: `microsip-log-${stamp}.log`, filters: [{ name: 'Log', extensions: ['log', 'txt'] }] });
+    } catch {}
+  };
   // SIP 상세 메시지 표시 토글 — 끄면 목록에서 SIP 패킷 라인을 숨김(통화/등록 이벤트만 표시).
   const [showSip, setShowSip] = useState<boolean>(() => {
     try { return sessionStorage.getItem('pepe-microsip-callog-sip') !== '0'; } catch { return true; }
@@ -1179,10 +1083,25 @@ const CallLogPanel: React.FC<{
     return n;
   });
   // 최근 콜/에러 우선 필터 — 통화/등록 실패 같은 항목이 위로. showSip=false 면 sip 제외.
-  const recent = activity.filter(a => showSip || a.kind !== 'sip').slice(0, 30);
+  const recent = liveActivity.filter(a => showSip || a.kind !== 'sip').slice(0, 30);
   // 시퀀스 뷰는 sip 메시지만, 오래된 순 (위→아래로 시간 흐름)
-  const sipSeq = activity.filter(a => a.kind === 'sip').slice(0, 60).reverse();
-  const errorCount = activity.filter(a => a.kind === 'error').length;
+  const sipSeq = liveActivity.filter(a => a.kind === 'sip').slice(0, 60).reverse();
+  const errorCount = liveActivity.filter(a => a.kind === 'error').length;
+  // 전문(raw) 뷰 — MiniSoftphone 식 텍스트 트랜스크립트. 최근 200건만(과도한 렌더링 방지).
+  const rawText = viewMode === 'raw' ? formatActivityLog(liveActivity.slice(0, 200), labelOf) : '';
+  useEffect(() => {
+    if (viewMode !== 'seq' || !seqAtBottomRef.current) return;
+    const el = seqScrollRef.current; if (el) el.scrollTop = el.scrollHeight;
+  }, [sipSeq.length, viewMode]);
+  useEffect(() => {
+    if (viewMode !== 'raw' || !rawAtBottomRef.current) return;
+    const el = rawScrollRef.current; if (el) el.scrollTop = el.scrollHeight;
+  }, [rawText, viewMode]);
+  // 뷰 전환 시(목록→시퀀스/전문) 처음엔 항상 맨 아래(최신)부터 보이게.
+  useEffect(() => {
+    if (viewMode === 'seq') { seqAtBottomRef.current = true; const el = seqScrollRef.current; if (el) el.scrollTop = el.scrollHeight; }
+    if (viewMode === 'raw') { rawAtBottomRef.current = true; const el = rawScrollRef.current; if (el) el.scrollTop = el.scrollHeight; }
+  }, [viewMode]);
   return (
     <div style={{
       marginTop: 8, border: '1px solid var(--win-border, #30363d)', borderRadius: 8,
@@ -1221,6 +1140,11 @@ const CallLogPanel: React.FC<{
               style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: viewMode === 'seq' ? 'var(--win-accent, #2b6b9b)' : 'transparent', color: '#fff' }}>
               🔀 시퀀스
             </button>
+            <button onClick={() => setMode('raw')}
+              title="MiniSoftphone 식 전문(raw) 로그"
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: viewMode === 'raw' ? 'var(--win-accent, #2b6b9b)' : 'transparent', color: '#fff' }}>
+              🗒 전문
+            </button>
             {viewMode === 'list' && (
               <button onClick={toggleSip}
                 title={showSip ? 'SIP 상세 메시지 숨김' : 'SIP 상세 메시지 표시'}
@@ -1228,6 +1152,16 @@ const CallLogPanel: React.FC<{
                 {showSip ? '🟡 SIP 상세' : '⚪ SIP 상세'}
               </button>
             )}
+            <button onClick={() => setPaused(v => !v)}
+              title={paused ? '재개 — 새 이벤트 다시 표시' : '일시정지 — 화면 표시만 멈춤(실제 처리는 계속됨)'}
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', cursor: 'pointer', background: paused ? 'rgba(248,81,73,0.25)' : 'transparent', color: paused ? '#f85149' : 'var(--win-text-dim, #9aa7b3)' }}>
+              {paused ? '▶ 재개' : '⏸ 일시정지'}
+            </button>
+            <button onClick={saveLog} disabled={liveActivity.length === 0}
+              title="현재 로그를 텍스트 파일로 저장"
+              style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text-dim, #9aa7b3)', cursor: liveActivity.length > 0 ? 'pointer' : 'not-allowed', opacity: liveActivity.length > 0 ? 1 : 0.4 }}>
+              💾 저장
+            </button>
             <button onClick={onClear} disabled={activity.length === 0}
               style={{ fontSize: 10, padding: '2px 8px', borderRadius: 3, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text-dim, #9aa7b3)', cursor: activity.length > 0 ? 'pointer' : 'not-allowed', opacity: activity.length > 0 ? 1 : 0.4 }}>
               지우기
@@ -1265,7 +1199,7 @@ const CallLogPanel: React.FC<{
         const colCount = usedEps.length + usedRemotes.length;
         const headerW = 70;
         return (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 0, display: 'flex', flexDirection: 'column' }}>
+          <div ref={seqScrollRef} onScroll={onSeqScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 0, display: 'flex', flexDirection: 'column' }}>
             {/* sticky 헤더 — 단말 1...N + 원격 */}
             <div style={{
               display: 'flex', alignItems: 'center', padding: '6px 8px', gap: 8,
@@ -1376,6 +1310,20 @@ const CallLogPanel: React.FC<{
           </div>
         );
       })()}
+      {open && viewMode === 'raw' && (
+        <div ref={rawScrollRef} onScroll={onRawScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 8 }}>
+          {rawText ? (
+            <pre style={{
+              margin: 0, color: '#c9d1d9', fontFamily: 'Consolas, monospace', fontSize: 10, lineHeight: 1.5,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>{rawText}</pre>
+          ) : (
+            <div style={{ color: 'var(--win-text-dim, #9aa7b3)', padding: 12, textAlign: 'center', fontSize: 11 }}>
+              아직 기록이 없습니다.
+            </div>
+          )}
+        </div>
+      )}
       {open && viewMode === 'list' && (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
           {recent.length === 0 && (
@@ -1435,7 +1383,11 @@ const PhoneCard: React.FC<{
   onRegister: () => void; onUnregister: () => void;
   onSetDialed: (s: string) => void;
   onToggleCapture: () => void; captureAvailable: boolean;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleSpeakerMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable }) => {
+  onOpenSettings: () => void;
+  sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
+  onAudioChange: (input: string, output: string) => void;
+  onVolumeChange: (mic: number, spk: number) => void;
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleSpeakerMute, onToggleHold, onTransfer, onToggleRecord, onVoicemail, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable, onOpenSettings, sipInputs, sipOutputs, onAudioChange, onVolumeChange }) => {
   // 재다이얼용 마지막 발신 번호 — sessionStorage 로 endpoint 별 영속 (앱 재시작 시 초기화)
   const lastDialedKey = `pepe-sip-last-${ep.id}`;
   const [lastDialed, setLastDialed] = useState<string>(() => {
@@ -1473,26 +1425,57 @@ const PhoneCard: React.FC<{
   }, [rt.call]);
   const mmss = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
   return (
-    <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[rt.reg] }} title={rt.reg} />
-        <b style={{ fontSize: 13 }}>{ep.label}</b>
-        {ep.dnd && <span title="방해 금지" style={{ fontSize: 11 }}>🌙</span>}
+    <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 10, background: 'var(--win-surface, #161b22)', padding: 9, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: regColor[rt.reg], flexShrink: 0 }} title={rt.reg} />
+        <b style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }} title={ep.label}>{ep.label}</b>
+        {ep.dnd && <span title="방해 금지" style={{ fontSize: 10, flexShrink: 0 }}>🌙</span>}
         {rt.mwi && <button onClick={onVoicemail} title={ep.voicemailNumber ? '음성사서함 듣기' : '음성사서함 도착'} disabled={!ep.voicemailNumber}
-          style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 12, padding: 0 }}>📨</button>}
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={`${ep.username || '미설정'}@${ep.server || '—'}`}>{ep.username || '미설정'}@{ep.server || '—'}</span>
-        <button onClick={onToggleCapture} disabled={!captureAvailable}
-          title={captureAvailable ? (rt.capturing ? '패킷 캡처 중지' : '패킷 캡처 시작') : '패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치)'}
-          style={{ padding: '2px 6px', fontSize: 11, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: rt.capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: rt.capturing ? '#fff' : 'var(--win-text, #e6edf3)', cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4, flexShrink: 0 }}>
-          {rt.capturing ? '⏺' : '📡'}
-        </button>
-        {rt.reg === 'registered'
-          ? <button onClick={onUnregister} title="이 단말 등록 해제"
-              style={{ padding: '2px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', flexShrink: 0 }}>해제</button>
-          : <button onClick={onRegister} title="이 단말 등록" disabled={!ep.server.trim() || !ep.username.trim()}
-              style={{ padding: '2px 8px', fontSize: 10, borderRadius: 4, border: 'none', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: (ep.server.trim() && ep.username.trim()) ? 'pointer' : 'not-allowed', opacity: (ep.server.trim() && ep.username.trim()) ? 1 : 0.5, flexShrink: 0 }}>등록</button>}
+          style={{ border: 'none', background: 'transparent', cursor: ep.voicemailNumber ? 'pointer' : 'default', fontSize: 11, padding: 0, flexShrink: 0 }}>📨</button>}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button onClick={onToggleCapture} disabled={!captureAvailable}
+            title={captureAvailable ? (rt.capturing ? '패킷 캡처 중지' : '패킷 캡처 시작') : '패킷 캡처를 사용할 수 없습니다 (capture-local-package 미설치)'}
+            style={{ padding: '1px 4px', fontSize: 9, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: rt.capturing ? '#da3633' : 'var(--win-surface-2, #21262d)', color: rt.capturing ? '#fff' : 'var(--win-text, #e6edf3)', cursor: captureAvailable ? 'pointer' : 'not-allowed', opacity: captureAvailable ? 1 : 0.4 }}>
+            {rt.capturing ? '⏺' : '📡'}
+          </button>
+          <button onClick={onOpenSettings} title="이 단말 설정 보기"
+            style={{ padding: '1px 4px', fontSize: 9, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer' }}>
+            ⚙
+          </button>
+          {rt.reg === 'registered'
+            ? <button onClick={onUnregister} title="이 단말 등록 해제"
+                style={{ padding: '1px 5px', fontSize: 9, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer' }}>해제</button>
+            : <button onClick={onRegister} title="이 단말 등록" disabled={!ep.server.trim() || !ep.username.trim()}
+                style={{ padding: '1px 5px', fontSize: 9, borderRadius: 4, border: 'none', background: 'var(--win-accent, #2b6b9b)', color: '#fff', fontWeight: 700, cursor: (ep.server.trim() && ep.username.trim()) ? 'pointer' : 'not-allowed', opacity: (ep.server.trim() && ep.username.trim()) ? 1 : 0.5 }}>등록</button>}
+        </div>
       </div>
-      <div style={{ minHeight: 26, padding: '2px 4px 2px 8px', borderRadius: 6, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ fontSize: 9, color: 'var(--win-text-dim, #9aa7b3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: -4 }} title={`${ep.username || '미설정'}@${ep.server || '—'}`}>{ep.username || '미설정'}@{ep.server || '—'}</div>
+      {/* 이 단말 전용 마이크/스피커 — 비워두면(자동) 상단 공통(전역) 장치를 쓰고, 지정하면
+          이 단말의 통화만 그 장치로 별도 라우팅한다(다른 단말과 동시에 서로 다른 장치 가능).
+          변경 즉시 적용(통화 중이면 그 자리에서 재연결). */}
+      <div style={{ display: 'flex', gap: 4 }}>
+        <select value={ep.audioIn || ''} onChange={e => onAudioChange(e.target.value, ep.audioOut || '')} title="이 단말 마이크"
+          style={{ flex: 1, minWidth: 0, padding: '1px 2px', fontSize: 9, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)' }}>
+          <option value="">🎤 자동</option>
+          {sipInputs.map(d => <option key={d.idx} value={d.name}>🎤 {d.name}</option>)}
+        </select>
+        <select value={ep.audioOut || ''} onChange={e => onAudioChange(ep.audioIn || '', e.target.value)} title="이 단말 스피커"
+          style={{ flex: 1, minWidth: 0, padding: '1px 2px', fontSize: 9, borderRadius: 4, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)' }}>
+          <option value="">🔊 자동</option>
+          {sipOutputs.map(d => <option key={d.idx} value={d.name}>🔊 {d.name}</option>)}
+        </select>
+      </div>
+      {/* 이 단말 전용 마이크/스피커 음량(1.0=조정 없음) — 통화 자신의 오디오에 직접 적용되므로
+          위 장치 지정(전용/자동)과 무관하게 항상 즉시 반영된다. */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span title={`마이크 음량 ${Math.round((ep.micLevel ?? 1) * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 9, flex: 1 }}>
+          🎙<input type="range" min={0} max={2} step={0.05} value={ep.micLevel ?? 1} onChange={e => onVolumeChange(Number(e.target.value), ep.spkLevel ?? 1)} style={{ width: '100%' }} />
+        </span>
+        <span title={`스피커 음량 ${Math.round((ep.spkLevel ?? 1) * 100)}%`} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 9, flex: 1 }}>
+          🔈<input type="range" min={0} max={2} step={0.05} value={ep.spkLevel ?? 1} onChange={e => onVolumeChange(ep.micLevel ?? 1, Number(e.target.value))} style={{ width: '100%' }} />
+        </span>
+      </div>
+      <div style={{ minHeight: 22, padding: '2px 4px 2px 8px', borderRadius: 6, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', display: 'flex', alignItems: 'center', gap: 4 }}>
         {(inCall || incoming) ? (
           <span style={{ flex: 1, fontFamily: 'Consolas, monospace', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rt.remote || ''}</span>
         ) : (
@@ -1512,46 +1495,65 @@ const PhoneCard: React.FC<{
           {(rt.call === 'connected' || rt.call === 'held') ? mmss : (rt.call !== 'idle' ? rt.call : '')}
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
         {DIAL_KEYS.map(k => (
           <button key={k} onClick={() => onKey(k)}
-            style={{ padding: '6px 0', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>{k}</button>
+            style={{ padding: '4px 0', borderRadius: 5, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{k}</button>
         ))}
       </div>
       {incoming ? (
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 4 }}>
           <button onClick={onAnswer} style={callBtn('#238636')}>📞 받기</button>
           <button onClick={onReject} style={callBtn('#da3633')}>✖ 거절</button>
         </div>
       ) : (rt.call === 'connected' || rt.call === 'held') ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
-            <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
-            <button onClick={onToggleSpeakerMute} title="스피커 뮤트" style={{ ...callBtn(rt.speakerMuted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.speakerMuted ? '🔈' : '🔊'}</button>
-            <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
-            <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>↪</button>
-            <button onClick={onToggleRecord} title={rt.recording ? '녹음 중지' : '녹음'} style={{ ...callBtn(rt.recording ? '#da3633' : 'var(--win-surface-2, #21262d)'), padding: '9px 0', color: '#fff' }}>{rt.recording ? '⏹' : '⏺'}</button>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
+            <button onClick={onToggleMute} title="마이크 뮤트" style={{ ...callBtn(rt.muted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '6px 0', color: '#fff' }}>{rt.muted ? '🔇' : '🎤'}</button>
+            <button onClick={onToggleSpeakerMute} title="스피커 뮤트" style={{ ...callBtn(rt.speakerMuted ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '6px 0', color: '#fff' }}>{rt.speakerMuted ? '🔈' : '🔊'}</button>
+            <button onClick={onToggleHold} title="홀드" style={{ ...callBtn(rt.call === 'held' ? '#d29922' : 'var(--win-surface-2, #21262d)'), padding: '6px 0', color: '#fff' }}>{rt.call === 'held' ? '▶' : '⏸'}</button>
+            <button onClick={onTransfer} title="호전환" style={{ ...callBtn('var(--win-surface-2, #21262d)'), padding: '6px 0', color: '#fff' }}>↪</button>
+            <button onClick={onToggleRecord} title={rt.recording ? '녹음 중지' : '녹음'} style={{ ...callBtn(rt.recording ? '#da3633' : 'var(--win-surface-2, #21262d)'), padding: '6px 0', color: '#fff' }}>{rt.recording ? '⏹' : '⏺'}</button>
           </div>
         </div>
       ) : inCall ? (
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 4 }}>
           <button onClick={onHangup} style={callBtn('#da3633')}>⛔ 끊기</button>
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 4 }}>
           <button onClick={callAndRemember} style={callBtn('#238636')}>📞 통화</button>
           <button onClick={redial} disabled={!lastDialed} title={lastDialed ? `재다이얼: ${lastDialed}` : '재다이얼 (이전 발신 없음)'}
-            style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)', opacity: lastDialed ? 1 : 0.4, cursor: lastDialed ? 'pointer' : 'not-allowed' }}>↻</button>
-          <button onClick={onBackspace} title="지우기" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>⌫</button>
-          <button onClick={onClear} title="초기화" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 48px', color: 'var(--win-text, #e6edf3)' }}>C</button>
+            style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 36px', color: 'var(--win-text, #e6edf3)', opacity: lastDialed ? 1 : 0.4, cursor: lastDialed ? 'pointer' : 'not-allowed' }}>↻</button>
+          <button onClick={onBackspace} title="지우기" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 36px', color: 'var(--win-text, #e6edf3)' }}>⌫</button>
+          <button onClick={onClear} title="초기화" style={{ ...callBtn('var(--win-surface-2, #21262d)'), flex: '0 0 36px', color: 'var(--win-text, #e6edf3)' }}>C</button>
         </div>
       )}
       {rt.error && <div style={{ fontSize: 10, color: '#f85149' }}>{rt.error}</div>}
     </div>
   );
 };
-const callBtn = (bg: string): React.CSSProperties => ({ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: bg, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' });
+const callBtn = (bg: string): React.CSSProperties => ({ flex: 1, padding: '6px 0', borderRadius: 7, border: 'none', background: bg, color: '#fff', fontWeight: 700, fontSize: 11, cursor: 'pointer' });
+// 단말 카드 뒤집기 — 카드 뒷면에 SettingsCard 를 보여준다(설정탭 제거에 따라, 카드에서 바로 설정).
+// 회전 중간(90도, 카드가 옆으로 선 순간이라 어차피 안 보임) 시점에 내용을 바꿔치기해 두 면의
+// 높이가 달라도 그리드 셀 크기 계산이 어긋나지 않게 한다.
+const FlippableCard: React.FC<{ flipped: boolean; front: React.ReactNode; back: React.ReactNode }> = ({ flipped, front, back }) => {
+  const [showBack, setShowBack] = useState(flipped);
+  useEffect(() => {
+    const t = setTimeout(() => setShowBack(flipped), 150);
+    return () => clearTimeout(t);
+  }, [flipped]);
+  return (
+    <div style={{ perspective: 1200 }}>
+      <div style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)', transition: 'transform 0.3s ease' }}>
+        <div style={{ transform: showBack ? 'rotateY(180deg)' : 'none' }}>
+          {showBack ? back : front}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ───────────────────────── 설정 카드 ─────────────────────────
 // 접이식 섹션 (단말 설정 그룹화)
@@ -1575,12 +1577,15 @@ const SettingsCard: React.FC<{
   onSave: (draft: Partial<SipEndpoint>) => Promise<{ ok: boolean; error?: string }>;
   capturing: boolean; captureAvailable: boolean; onToggleCapture: () => void;
   captureInterfaces: { id: string; name: string }[]; captureIface: string; onCaptureIfaceChange: (id: string) => void;
+  onBack?: () => void;
 }> = ({ ep, all, reg, idx, total, onChange, onCopyFrom, onDnd, onMove, onRegister, onUnregister, onRemove, onSave,
-  capturing, captureAvailable, onToggleCapture, captureInterfaces, captureIface, onCaptureIfaceChange }) => {
+  capturing, captureAvailable, onToggleCapture, captureInterfaces, captureIface, onCaptureIfaceChange, onBack }) => {
   // draft — 사용자가 입력한 변경분. 저장(register 성공) 시에만 ep 에 commit.
   const [draft, setDraft] = useState<Partial<SipEndpoint>>({});
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string>('');
+  const [showPw, setShowPw] = useState(false);
+  const [showTurnPw, setShowTurnPw] = useState(false);
   const cur: SipEndpoint = { ...ep, ...draft };
   const dirty = Object.keys(draft).length > 0;
   const patch = (p: Partial<SipEndpoint>) => { setSaveErr(''); setDraft(prev => ({ ...prev, ...p })); };
@@ -1597,11 +1602,11 @@ const SettingsCard: React.FC<{
   void onChange;
   const onChangeLocal = patch;
   const field = (label: string, node: React.ReactNode) => (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)', flex: 1, minWidth: 0 }}>
       <span>{label}</span>{node}
     </label>
   );
-  const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 };
+  const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12, boxSizing: 'border-box', minWidth: 0 };
   const toggleCodec = (c: SipCodec) => {
     const has = cur.codecs.includes(c);
     onChangeLocal({ codecs: has ? cur.codecs.filter(x => x !== c) : [...cur.codecs, c] });
@@ -1613,6 +1618,14 @@ const SettingsCard: React.FC<{
   };
   return (
     <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 14 }}>
+      {onBack && (
+        // 설정 카드 내용이 길어 아래로 스크롤한 상태에서도 닫기 버튼을 다시 찾으러 위로 스크롤하지
+        // 않도록 카드 스크롤 영역(바깥 overflow:auto) 기준으로 상단에 고정한다.
+        <button onClick={onBack} title="설정 닫기 — 통화 카드로 돌아가기"
+          style={{ position: 'sticky', top: 4, zIndex: 2, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 10, padding: '4px 10px', fontSize: 11, borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }}>
+          ⚙ 설정 닫기
+        </button>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ width: 9, height: 9, borderRadius: 999, background: regColor[reg] }} title={reg} />
         <input value={cur.label} onChange={e => onChangeLocal({ label: e.target.value })} style={{ ...inp, fontWeight: 700, fontSize: 13, minWidth: 120 }} />
@@ -1637,6 +1650,7 @@ const SettingsCard: React.FC<{
       {/* 📇 계정 */}
       <Section title="📇 계정" defaultOpen>
         {field('SIP 서버 (registrar)', <input value={cur.server} onChange={e => onChangeLocal({ server: e.target.value })} placeholder="sip.example.com" style={inp} />)}
+        {field('SIP Proxy', <input value={cur.proxy || ''} onChange={e => onChangeLocal({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
         {field('도메인 (미지정 시 서버와 동일)', <input value={cur.domain || ''} onChange={e => onChangeLocal({ domain: e.target.value })} placeholder="example.com" style={inp} />)}
         <div style={{ display: 'flex', gap: 8 }}>
           {field('포트', <input type="number" value={cur.port} onChange={e => onChangeLocal({ port: Number(e.target.value) || 5060 })} style={inp} />)}
@@ -1644,9 +1658,14 @@ const SettingsCard: React.FC<{
         </div>
         {field('사용자(번호)', <input value={cur.username} onChange={e => onChangeLocal({ username: e.target.value })} style={inp} />)}
         {field('인증 ID(로그인, 선택)', <input value={cur.authId || ''} onChange={e => onChangeLocal({ authId: e.target.value })} style={inp} />)}
-        {field('비밀번호', <input type="password" value={cur.password} onChange={e => onChangeLocal({ password: e.target.value })} style={inp} />)}
+        {field('비밀번호', (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input type={showPw ? 'text' : 'password'} value={cur.password} onChange={e => onChangeLocal({ password: e.target.value })} style={{ ...inp, flex: 1 }} />
+            <button type="button" onClick={() => setShowPw(v => !v)} title={showPw ? '비밀번호 숨기기' : '비밀번호 보기'}
+              style={{ ...inp, flex: '0 0 auto', cursor: 'pointer', padding: '6px 10px' }}>{showPw ? '🙈' : '👁'}</button>
+          </div>
+        ))}
         {field('표시 이름(선택)', <input value={cur.displayName || ''} onChange={e => onChangeLocal({ displayName: e.target.value })} style={inp} />)}
-        {field('아웃바운드 프록시(선택)', <input value={cur.proxy || ''} onChange={e => onChangeLocal({ proxy: e.target.value })} placeholder="proxy:5060" style={inp} />)}
       </Section>
 
       {/* 📡 패킷 캡처 — 인터페이스는 워크스페이스 전체 공통 설정(단말별 아님) */}
@@ -1707,7 +1726,13 @@ const SettingsCard: React.FC<{
         {field('STUN 서버(host:port)', <input value={cur.stunServer || ''} onChange={e => onChangeLocal({ stunServer: e.target.value })} placeholder="stun.example.com:3478" style={inp} />)}
         {field('TURN 서버(host:port)', <input value={cur.turnServer || ''} onChange={e => onChangeLocal({ turnServer: e.target.value })} placeholder="turn.example.com:3478" style={inp} />)}
         {cur.turnServer ? field('TURN 사용자', <input value={cur.turnUser || ''} onChange={e => onChangeLocal({ turnUser: e.target.value })} style={inp} />) : null}
-        {cur.turnServer ? field('TURN 비밀번호', <input type="password" value={cur.turnPassword || ''} onChange={e => onChangeLocal({ turnPassword: e.target.value })} style={inp} />) : null}
+        {cur.turnServer ? field('TURN 비밀번호', (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <input type={showTurnPw ? 'text' : 'password'} value={cur.turnPassword || ''} onChange={e => onChangeLocal({ turnPassword: e.target.value })} style={{ ...inp, flex: 1 }} />
+            <button type="button" onClick={() => setShowTurnPw(v => !v)} title={showTurnPw ? '비밀번호 숨기기' : '비밀번호 보기'}
+              style={{ ...inp, flex: '0 0 auto', cursor: 'pointer', padding: '6px 10px' }}>{showTurnPw ? '🙈' : '👁'}</button>
+          </div>
+        )) : null}
       </Section>
 
       {/* ⚙ 통화 · 프로그램 */}
@@ -1738,7 +1763,6 @@ const SettingsCard: React.FC<{
             <input type="checkbox" checked={!!cur.dnd} onChange={e => onDnd(e.target.checked)} /> 🌙 방해 금지(DND)
           </label>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)' }}>※ 마이크/스피커·음량은 상단 공통(전역) 설정을 사용합니다.</div>
       </Section>
       {/* 저장 / 취소 액션 바 — 변경분(draft) 이 있을 때만 활성. 저장 시 재등록 후 결과 확인. */}
       <div style={{

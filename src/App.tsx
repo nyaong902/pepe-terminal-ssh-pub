@@ -21,6 +21,7 @@ import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
 import { MicroSipWorkspace, type MicroSipView } from './components/MicroSipWorkspace';
+import { SswSoftphoneWorkspace, type SswSoftphoneView } from './components/SswSoftphoneWorkspace';
 import { SippWorkspace } from './components/SippWorkspace';
 import { OfficeLauncher } from './components/OfficeLauncher';
 import { MediaLauncher } from './components/MediaLauncher';
@@ -72,7 +73,7 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sipp' | 'office' | 'media' | 'customWorkspace';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'customWorkspace';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
@@ -135,7 +136,7 @@ function App() {
   const [splitRightTabId, setSplitRightTabId] = useState<TabId | null>(null);
   const [splitRatio, setSplitRatio] = useState<number>(0.5); // 좌 비율 0.2~0.8
   // 지원 대상: 특수 워크스페이스 전체 + 터미널 (type undefined / 'terminal').
-  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sipp', 'fileExplorer', 'fileEditor', undefined];
+  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sswPhone', 'sipp', 'fileExplorer', 'fileEditor', undefined];
   const canSplit = (tab: Tab | undefined) => !!tab && (tab.type === undefined || SPLITTABLE_TYPES.includes(tab.type));
   const splitRightTab = tabs.find(t => t.id === splitRightTabId) || null;
   // 활성 탭 자체를 분할 대상으로 설정 못 하게 — 자동 해제
@@ -157,7 +158,7 @@ function App() {
   const activeTabIdRef = useRef(activeTabId);
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
   const closeTabRef = useRef<(id: TabId) => void>(() => {});
-  const [microSipViewByTab, setMicroSipViewByTab] = useState<Record<string, MicroSipView>>({});
+  const [microSipViewByTab, setMicroSipViewByTab] = useState<Record<string, MicroSipView | SswSoftphoneView>>({});
   // 탭별로 선택된 패널 ID 기억
   const [selectedPanelByTab, setSelectedPanelByTab] = useState<Record<string, string | null>>({});
   const selectedPanelId = selectedPanelByTab[activeTabId] ?? null;
@@ -2300,16 +2301,17 @@ function App() {
         if (activeTab && tabs.length > 1) closeTabRef.current(activeTab.id);
         return;
       }
-      if (activeTab?.type === 'microsip' && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
+      if ((activeTab?.type === 'microsip' || activeTab?.type === 'sswPhone') && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
         e.preventDefault();
-        type VisibleMicroSipView = Exclude<MicroSipView, 'messages'>;
-        const order: VisibleMicroSipView[] = ['phones', 'settings', 'macros', 'contacts', 'log'];
-        const currentView: VisibleMicroSipView = (microSipViewByTab[activeTab.id] && microSipViewByTab[activeTab.id] !== 'messages')
-          ? microSipViewByTab[activeTab.id] as VisibleMicroSipView
+        // 설정/기록 탭 제거(요청에 따라, 설정은 단말 카드 뒤집기로 대체) — SSW 소프트폰은 매크로
+        // 탭도 함께 제거.
+        const order: string[] = activeTab.type === 'sswPhone' ? ['phones', 'contacts'] : ['phones', 'macros', 'contacts'];
+        const currentView: string = (microSipViewByTab[activeTab.id] && microSipViewByTab[activeTab.id] !== 'messages')
+          ? microSipViewByTab[activeTab.id]
           : 'phones';
         const curIdx = order.indexOf(currentView);
         const delta = matchKeybinding(e, 'prevTab') ? -1 : 1;
-        const nextView = order[(curIdx + delta + order.length) % order.length];
+        const nextView = order[((curIdx < 0 ? 0 : curIdx) + delta + order.length) % order.length] as MicroSipView | SswSoftphoneView;
         setMicroSipViewByTab(prev => ({ ...prev, [activeTab.id]: nextView }));
         workspaceStateRef.current.set(activeTab.id, { ...(workspaceStateRef.current.get(activeTab.id) || {}), microsipView: nextView });
         return;
@@ -2359,7 +2361,7 @@ function App() {
       }
       if (!(e.ctrlKey || e.metaKey)) return;
       // 미니탭 순환
-      if (activeTab?.type !== 'microsip' && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
+      if (activeTab?.type !== 'microsip' && activeTab?.type !== 'sswPhone' && (matchKeybinding(e, 'nextTab') || matchKeybinding(e, 'prevTab'))) {
         if (!activeTab) return;
         const leaves: { nodeId: string; sessions: PanelSession[]; activeIdx: number }[] = [];
         const collect = (node: LayoutNode) => {
@@ -2589,6 +2591,7 @@ function App() {
   const addLogAnalyzerTab = () => addSpecialTab('logAnalyzer', tApp('tabs.logAnalyzer'));
   const addVpnTab = () => addSpecialTab('vpn', tApp('tabs.vpn'));
   const addMicroSipTab = () => addSpecialTab('microsip', '📞 MicroSIP');
+  const addSswPhoneTab = () => addSpecialTab('sswPhone', '📡 SSW 소프트폰');
   const addSippTab = () => addSpecialTab('sipp', '📶 SIPp');
   const addOfficeTab = () => addSpecialTab('office', '📄 오피스');
   const addMediaTab = () => addSpecialTab('media', '🎵 미디어');
@@ -2686,6 +2689,7 @@ function App() {
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
     ...(availableFeatures.vpn ? [{ id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() }] : []),
     ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
+    ...(availableFeatures.microsip ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
     ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
@@ -3741,7 +3745,7 @@ function App() {
     // 터미널이 아닌 워크스페이스(브라우저/파일비교/로그분석/VPN/다국어/SQL Tool)에서 더블클릭한 경우
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
-    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sipp', 'office', 'media'];
+    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media'];
     const isTermTabType = (t: TabType | undefined) => t === undefined || t === 'terminal';
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
       // 이미 우측 분할에 터미널 워크스페이스가 떠 있으면 — activeTab 을 전환하지 않고
@@ -4231,6 +4235,7 @@ function App() {
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
         ...(availableFeatures.vpn ? [{ label: tMenu('tools.vpnWs'), action: addVpnTab }] : []),
         ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
+        ...(availableFeatures.microsip ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
@@ -4906,6 +4911,7 @@ function App() {
           onAddLogAnalyzerTab={addLogAnalyzerTab}
           onAddVpnTab={addVpnTab}
           onAddMicroSipTab={addMicroSipTab}
+          onAddSswPhoneTab={addSswPhoneTab}
           onAddSippTab={addSippTab}
           onAddOfficeTab={addOfficeTab}
           onAddMediaTab={addMediaTab}
@@ -5469,7 +5475,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5480,7 +5486,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5498,6 +5504,19 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="MicroSIP">
               <MicroSipWorkspace
+                initialView={(microSipViewByTab[t.id] || t.workspaceState?.microsipView || workspaceStateRef.current.get(t.id)?.microsipView || 'phones') as any}
+                onViewChange={(view) => {
+                  setMicroSipViewByTab(prev => ({ ...prev, [t.id]: view }));
+                  workspaceStateRef.current.set(t.id, { ...(workspaceStateRef.current.get(t.id) || {}), microsipView: view });
+                }}
+              />
+            </ErrorBoundary>
+          </div>
+        ))}
+        {tabs.filter(t => t.type === 'sswPhone').map(t => (
+          <div key={t.id} style={tabSlotStyle(t)}>
+            <ErrorBoundary label="SSW 소프트폰">
+              <SswSoftphoneWorkspace
                 initialView={(microSipViewByTab[t.id] || t.workspaceState?.microsipView || workspaceStateRef.current.get(t.id)?.microsipView || 'phones') as any}
                 onViewChange={(view) => {
                   setMicroSipViewByTab(prev => ({ ...prev, [t.id]: view }));
@@ -5565,7 +5584,7 @@ function App() {
                     setCustomWorkspaces(prev => prev.map(ws => ws.id === normalized.id ? normalized : ws));
                     setTabs(prev => prev.map(tab => tab.type === 'customWorkspace' && tab.customWorkspaceId === normalized.id ? { ...tab, title: normalized.name, customWorkspaceTemplate: normalized } : tab));
                   }}
-                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sipp|office|media|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
+                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
                   connectedBrowserSessions={connectedBrowserSessions}
                   availableShells={availableShells}
                   onCloseTerm={releaseTermResources}
