@@ -12,6 +12,15 @@
 | [SIPp 워크스페이스](features/sipp.md) | SIP 부하 테스트 도구 |
 | [소프트폰 (MicroSIP / SSW)](features/softphone.md) | SIP 소프트폰 — 통화, Call Flow, SIP 메시지 시퀀스, 부가서비스 |
 | [미디어 워크스페이스](features/media.md) | 녹취 음원 재생, pcap에서 RTP 오디오 추출 |
+| [파일/디렉터리 비교](features/file-compare.md) | 로컬↔원격 파일·폴더 diff |
+| [로그 분석](features/log-analysis.md) | 실시간 로그 tail, 필터, AI 분석 |
+| [VPN (OpenVPN)](features/vpn.md) | .ovpn 프로필로 사내망 연결 |
+| [PePe Messenger](features/messenger.md) | 같은 네트워크 PePe 사용자와 채팅/파일 전송 |
+| [작업일지](features/work-journal.md) | 일일 할 일 + AI 주간 요약 |
+| [스티커 메모](features/sticky-notes.md) | 포스트잇형 메모 |
+| [옵션 (설정)](features/options.md) | 터미널/세션/단축키 등 전체 설정 |
+| [다국어 지원 (i18n 편집기)](features/i18n-editor.md) | UI 문구 번역 편집 + AI 번역 |
+| [PePe 원격 공유 / Pepe-Connect](features/pepe-connect.md) | 브라우저·모바일에서 PePe 화면 접근 |
 
 > 📌 이 문서는 계속 보강 중입니다. 아래 "기여 방법"을 참고해 화면을 추가해주세요.
 

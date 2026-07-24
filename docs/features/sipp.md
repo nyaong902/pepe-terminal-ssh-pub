@@ -4,6 +4,8 @@ SIP 부하 테스트 도구 SIPp을 PePe 안에서 GUI로 다룰 수 있는 워�
 
 📹 [데모 영상 보기](../videos/sipp-demo.mp4)
 
+![SIPp 시나리오 블록 조립 + 실시간 통계](../screenshots/sipp-02.png)
+
 ## 핵심 기능
 
 - 시나리오를 블록 조립식(코드 없이) 또는 raw XML로 직접 작성

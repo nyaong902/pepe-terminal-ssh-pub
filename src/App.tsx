@@ -4232,6 +4232,7 @@ function App() {
     {
       label: tMenu('tools.title'),
       items: [
+        { label: '📸 문서화용 캡처(임시)', action: () => { void (window as any).api?.devCaptureScreenshot?.(); } },
         { label: tMenu('tools.fileTransfer'), action: () => { void openFileTransferTab(tMenu('tools.fileTransfer')); }},
         { label: tMenu('tools.browserWs'), action: addBrowserTab },
         { label: tMenu('tools.compareWs'), action: addCompareTab },
@@ -4671,6 +4672,15 @@ function App() {
         ['--left-dock-width' as any]: `${leftDockWidth}px`,
       }}
     >
+      <button
+        onClick={() => { void (window as any).api?.devCaptureScreenshot?.(); }}
+        style={{
+          position: 'fixed', top: 4, right: 4, zIndex: 999999,
+          width: 160, height: 40, background: 'red', color: '#fff',
+          fontSize: 14, fontWeight: 900, border: '4px solid yellow',
+          cursor: 'pointer',
+        }}
+      >📸 CAPTURE</button>
       <SessionList
         onConnect={(sid, name, panelId, sessTheme, ff, fs, sb) => handleConnectSession(sid, name, panelId, sessTheme, ff, fs, sb)}
         workspaceTabs={tabs.map(t => ({ id: t.id, title: t.title }))}

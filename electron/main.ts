@@ -311,10 +311,16 @@ ipcMain.handle('dev:get-term-tab-map', () => Object.fromEntries(termIdToTabId));
 // Chromium 자체 리드백 API(webContents.capturePage)로 메인 윈도우 + 그 위에 떠 있는 격리 탭들을
 // 각각 읽어 sharp 로 올바른 위치에 합성해서 완전한 스크린샷 하나로 저장한다.
 ipcMain.handle('dev:capture-screenshot', async () => {
-  if (!mainWindow) return { success: false, error: 'no window' };
+  const dbgDir = path.join(app.getPath('userData'), 'doc-captures');
+  const dbgLog = (msg: string) => { try { fs.mkdirSync(dbgDir, { recursive: true }); fs.appendFileSync(path.join(dbgDir, 'debug.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch {} };
+  dbgLog('handler invoked');
+  if (!mainWindow) { dbgLog('no mainWindow'); return { success: false, error: 'no window' }; }
   try {
+    dbgLog('requiring sharp...');
     const sharp = require('sharp');
+    dbgLog('sharp ok, capturing mainWindow...');
     const baseImg = await mainWindow.webContents.capturePage();
+    dbgLog(`mainWindow captured, empty=${baseImg.isEmpty()}`);
     const layers: { input: Buffer; left: number; top: number }[] = [];
     for (const [, view] of tabViews) {
       try {
@@ -328,14 +334,17 @@ ipcMain.handle('dev:capture-screenshot', async () => {
         layers.push({ input: img.toPNG(), left: b.x, top: b.y });
       } catch {}
     }
+    dbgLog(`layers=${layers.length}, compositing...`);
     let pipeline = sharp(baseImg.toPNG());
     if (layers.length) pipeline = pipeline.composite(layers);
     const dir = path.join(app.getPath('userData'), 'doc-captures');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `capture-${Date.now()}.png`);
     await pipeline.png().toFile(file);
+    dbgLog(`saved ${file}`);
     return { success: true, file, layers: layers.length };
   } catch (e: any) {
+    dbgLog(`ERROR: ${String(e?.stack || e?.message || e)}`);
     return { success: false, error: String(e?.message || e) };
   }
 });

@@ -6,6 +6,9 @@ MicroSIP과 SSW(SK브로드밴드 PBX) 두 종류의 SIP 소프트폰 워크스�
 
 📹 [데모 영상 보기](../videos/softphone-demo.mp4)
 
+![MicroSIP — 다중 단말](../screenshots/microsip-01.png)
+![SSW 소프트폰 — 6단말 + 부가서비스](../screenshots/ssw-softphone-01.png)
+
 ## 기존 SIP 소프트폰과의 차이
 
 단순히 "따로 있던 프로그램을 하나로 합친 것"이 아니라, 가져온 기능들이 PePe 안에서 서로

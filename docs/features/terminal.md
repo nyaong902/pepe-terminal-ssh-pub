@@ -4,6 +4,9 @@ PePe Terminal(SSH)의 기본 기능 — SSH/SFTP 다중 세션을 하나의 창�
 
 ![터미널 기본 화면](../screenshots/terminal-01-basic.png)
 
+![파일 트리 패널](../screenshots/file-explorer-01.png)
+![파일 전송 탭 — 로컬/원격 듀얼 패널](../screenshots/file-transfer-02.png)
+
 ## 핵심 기능
 
 - **다중 세션**: 여러 서버에 동시 접속해 탭/미니탭/분할 화면으로 관리
