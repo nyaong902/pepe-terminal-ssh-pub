@@ -2,7 +2,9 @@
 
 녹취 음원 재생과 pcap(패킷 캡처) 파일에서 RTP 오디오를 바로 추출해 듣는 기능을 제공합니다.
 
-📹 [데모 영상 보기](../videos/media-pcap-rtp-demo.mp4)
+![미디어 워크스페이스 데모](../videos/media-pcap-rtp-demo.gif)
+
+📹 [전체 데모 영상 보기](../videos/media-pcap-rtp-demo.mp4)
 
 ## 핵심 기능
 

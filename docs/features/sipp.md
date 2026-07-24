@@ -2,7 +2,9 @@
 
 SIP 부하 테스트 도구 SIPp을 PePe 안에서 GUI로 다룰 수 있는 워크스페이스입니다.
 
-📹 [데모 영상 보기](../videos/sipp-demo.mp4)
+![SIPp 데모](../videos/sipp-demo.gif)
+
+📹 [전체 데모 영상 보기](../videos/sipp-demo.mp4)
 
 ![SIPp 시나리오 블록 조립 + 실시간 통계](../screenshots/sipp-02.png)
 

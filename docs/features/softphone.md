@@ -4,7 +4,9 @@ MicroSIP과 SSW(SK브로드밴드 PBX) 두 종류의 SIP 소프트폰 워크스�
 화면뿐 아니라 내부적으로도 완전히 독립된 sipd.exe 엔진 프로세스로 동작해, 한쪽이 죽거나
 재시작해도 다른 쪽 통화·등록 상태에는 전혀 영향을 주지 않습니다.
 
-📹 [데모 영상 보기](../videos/softphone-demo.mp4)
+![소프트폰 데모](../videos/softphone-demo.gif)
+
+📹 [전체 데모 영상 보기](../videos/softphone-demo.mp4) (단말별 번호/IP는 사내 정보 보호를 위해 GIF 미리보기에서 가림 처리했습니다)
 
 ![MicroSIP — 다중 단말](../screenshots/microsip-01.png)
 ![SSW 소프트폰 — 6단말 + 부가서비스](../screenshots/ssw-softphone-01.png)
