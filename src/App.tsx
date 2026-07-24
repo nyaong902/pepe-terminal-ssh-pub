@@ -4672,15 +4672,6 @@ function App() {
         ['--left-dock-width' as any]: `${leftDockWidth}px`,
       }}
     >
-      <button
-        onClick={() => { void (window as any).api?.devCaptureScreenshot?.(); }}
-        style={{
-          position: 'fixed', top: 4, right: 4, zIndex: 999999,
-          width: 160, height: 40, background: 'red', color: '#fff',
-          fontSize: 14, fontWeight: 900, border: '4px solid yellow',
-          cursor: 'pointer',
-        }}
-      >📸 CAPTURE</button>
       <SessionList
         onConnect={(sid, name, panelId, sessTheme, ff, fs, sb) => handleConnectSession(sid, name, panelId, sessTheme, ff, fs, sb)}
         workspaceTabs={tabs.map(t => ({ id: t.id, title: t.title }))}
