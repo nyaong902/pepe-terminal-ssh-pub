@@ -316,6 +316,7 @@ ipcMain.handle('dev:capture-screenshot', async () => {
   dbgLog('handler invoked');
   if (!mainWindow) { dbgLog('no mainWindow'); return { success: false, error: 'no window' }; }
   try {
+    await new Promise(r => setTimeout(r, 250));
     dbgLog('requiring sharp...');
     const sharp = require('sharp');
     dbgLog('sharp ok, capturing mainWindow...');

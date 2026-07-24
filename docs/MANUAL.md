@@ -1,4 +1,4 @@
-# PePe Terminal(SSH) 사용자 매뉴얼 (v2.0.9)
+# PePe Terminal(SSH) 사용자 매뉴얼 (v2.2.23)
 
 > SSH/SFTP 터미널 클라이언트 — 다중 세션, 분할 뷰, ProxyJump, 일괄 작업, Claude 채팅, SQL 도구 지원.
 

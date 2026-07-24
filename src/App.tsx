@@ -130,6 +130,13 @@ function App() {
   });
   // 빈 deps useEffect 에서 최신 tabs 참조용 — state 변경 시마다 ref 동기화
   const tabsRef = useRef(tabs);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F9') { void (window as any).api?.devCaptureScreenshot?.(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   const [activeTabId, setActiveTabId] = useState<TabId>(IS_DETACHED_WINDOW ? '' : 'tab-1');
   // 우측 분할로 함께 볼 워크스페이스 탭 — 특수 워크스페이스(브라우저·SQL·비교·로그·VPN·MicroSip·i18n) 만.
