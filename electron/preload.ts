@@ -475,6 +475,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   devToggleTabPocView: () => ipcRenderer.invoke('dev:toggle-poc-view'),
   devGetTabPids: () => ipcRenderer.invoke('dev:get-tab-pids'),
+  devCaptureScreenshot: (): Promise<{ success: boolean; file?: string; layers?: number; error?: string }> => ipcRenderer.invoke('dev:capture-screenshot'),
   devGetTermTabMap: () => ipcRenderer.invoke('dev:get-term-tab-map'),
   // ── 실제 탭 프로세스 분리 lifecycle (host 쪽에서 사용) ──────────────────
   tabCreateView: (tabId: string, route?: string) => ipcRenderer.invoke('tab:create-view', { tabId, route }),

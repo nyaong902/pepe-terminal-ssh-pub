@@ -317,6 +317,14 @@ export const SswSoftphoneWorkspace: React.FC<{
   // 단말 카드 뒤집기 — 설정탭으로 이동하면 콜로그 화면을 벗어나야 해서 불편하다는 피드백으로,
   // 단말 카드 자체에 설정 버튼을 달아 그 카드만 뒤집어 SettingsCard 를 보여준다(콜로그는 그대로 유지).
   const [flippedCards, setFlippedCards] = useState<Record<string, boolean>>({});
+  // 단말 카드의 "📡 SSW 부가서비스" 버튼(당겨받기 아래) — 그 카드 안에서 바로 펼쳐진다(팝업/플로팅
+  // 아님). 여러 단말을 동시에 비교/조작할 수 있어야 해서 단말 id 집합으로 열림 상태를 관리한다.
+  const [sswOpenIds, setSswOpenIds] = useState<Set<string>>(new Set());
+  const openSswPanel = (id: string) => setSswOpenIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const toggleCardFlip = (id: string) => setFlippedCards(prev => ({ ...prev, [id]: !prev[id] }));
   // 단말 카드 전체를 한꺼번에 설정면으로 뒤집기/되돌리기 — 하나라도 앞면(통화)이면 "전체 보기"를
   // 눌렀을 때 전부 뒤집고, 전부 뒤집혀 있으면 눌렀을 때 전부 되돌린다.
@@ -800,6 +808,9 @@ export const SswSoftphoneWorkspace: React.FC<{
                         onToggleCapture={() => toggleCapture(e.id)}
                         captureAvailable={captureAvailable}
                         onOpenSettings={() => toggleCardFlip(e.id)}
+                        sswOpen={sswOpenIds.has(e.id)} onToggleSswServices={() => openSswPanel(e.id)}
+                        onSswDial={(number) => makeCall(e.id, number)}
+                        onSswCtrTransfer={(digits, number) => ctrTransfer(e.id, digits, number)}
                         sipInputs={sipInputs} sipOutputs={sipOutputs}
                         onAudioChange={(i, o) => setAcctAudio(e.id, i, o)}
                         onVolumeChange={(mic, spk) => setAcctVolume(e.id, mic, spk)}
@@ -1102,15 +1113,26 @@ const CallLogPanel: React.FC<{
     const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n;
   });
   const labelOf = (id: string) => endpoints.find(e => e.id === id)?.label || id || '시스템';
-  const toggle = () => setOpen(v => {
-    const n = !v;
-    try { sessionStorage.setItem(CALL_LOG_FOLD_KEY, n ? '1' : '0'); } catch {}
-    return n;
-  });
   // 패널 높이 — 드래그로 조절. sessionStorage 보관.
   const [panelHeight, setPanelHeight] = useState<number>(() => {
     try { const v = parseInt(sessionStorage.getItem('pepe-microsip-callog-h') || '', 10); return isFinite(v) && v >= 120 ? v : 280; } catch { return 280; }
   });
+  const setOpenPersist = (n: boolean) => { setOpen(n); try { sessionStorage.setItem(CALL_LOG_FOLD_KEY, n ? '1' : '0'); } catch {} };
+  // 헤더 클릭 — 3단계 순환: 최대화(메시지 클릭으로 80vh 확장된 상태) → 절반(40vh) → 닫힘(초기
+  // 상태, 시퀀스/로그가 아예 안 보임) → 다시 절반(40vh) → ...  드래그로 임의 높이로 바꿔둔
+  // 경우엔 "최대화 근처"가 아니면 절반이 아니라 그냥 닫힘으로 취급한다.
+  const HALF_PANEL_H = () => Math.round(window.innerHeight * 0.4);
+  const toggle = () => {
+    const maxH = MAX_PANEL_H();
+    if (open && panelHeight >= maxH - 20) {
+      setPanelHeight(HALF_PANEL_H());
+    } else if (open) {
+      setOpenPersist(false);
+    } else {
+      setPanelHeight(HALF_PANEL_H());
+      setOpenPersist(true);
+    }
+  };
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -1139,6 +1161,21 @@ const CallLogPanel: React.FC<{
   // 보려고 위로 스크롤해둔 상태면 방해하지 않도록, 이미 맨 아래 근처에 있을 때만 따라간다.
   const seqScrollRef = useRef<HTMLDivElement | null>(null);
   const rawScrollRef = useRef<HTMLDivElement | null>(null);
+  // 시퀀스 뷰의 각 메시지 행 DOM — 클릭 시 그 행을 스크롤 맨 위로 올려서(펼친 내용이 잘리지
+  // 않게) 보여주는 데 쓴다.
+  const seqRowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  // 콜로그 패널 자체(카드 목록 위에 놓인 고정 높이 박스) 루트.
+  const panelRootRef = useRef<HTMLDivElement | null>(null);
+  // 메시지 클릭 시 스크롤로 옮기는 대신, 패널 자체를 화면에서 쓸 수 있는 만큼 꽉 채워서(드래그
+  // 리사이즈 핸들과 같은 상한 — 80vh) 펼친 내용을 넉넉하게 볼 수 있게 한다.
+  const MAX_PANEL_H = () => Math.round(window.innerHeight * 0.8);
+  const scrollSeqRowToTop = (i: number) => {
+    setPanelHeight(h => Math.max(h, MAX_PANEL_H()));
+    requestAnimationFrame(() => {
+      const el = seqRowRefs.current.get(i);
+      if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  };
   const seqAtBottomRef = useRef(true);
   const rawAtBottomRef = useRef(true);
   const NEAR_BOTTOM_PX = 60;
@@ -1196,7 +1233,7 @@ const CallLogPanel: React.FC<{
     if (viewMode === 'raw') { rawAtBottomRef.current = true; const el = rawScrollRef.current; if (el) el.scrollTop = el.scrollHeight; }
   }, [viewMode]);
   return (
-    <div style={{
+    <div ref={panelRootRef} style={{
       marginTop: 8, border: '1px solid var(--win-border, #30363d)', borderRadius: 8,
       background: 'var(--win-surface, #161b22)', overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
@@ -1343,11 +1380,13 @@ const CallLogPanel: React.FC<{
               const arrowLeft = colCenter(leftIdx);
               const arrowRight = 100 - colCenter(rightIdx);
               return (
-                <div key={`s${a.ts}-${i}`} style={{ flexShrink: 0, borderBottom: '1px dashed rgba(255,255,255,0.06)' }}>
-                  <div onClick={a.body ? () => toggleExpand(i + 10000) : undefined}
+                <div key={`s${a.ts}-${i}`}
+                  ref={el => { if (el) seqRowRefs.current.set(i, el); else seqRowRefs.current.delete(i); }}
+                  style={{ flexShrink: 0, borderBottom: '1px dashed rgba(255,255,255,0.06)' }}>
+                  <div onClick={() => { if (a.body) toggleExpand(i + 10000); scrollSeqRowToTop(i); }}
                     style={{
                       display: 'flex', alignItems: 'center', padding: '4px 8px', gap: 8,
-                      cursor: a.body ? 'pointer' : 'default',
+                      cursor: 'pointer',
                       background: isOpen ? 'rgba(255,255,255,0.03)' : 'transparent',
                     }}>
                     <span style={{ flex: `0 0 ${headerW}px`, fontFamily: 'Consolas, monospace', fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', whiteSpace: 'nowrap' }}>
@@ -1477,10 +1516,12 @@ const PhoneCard: React.FC<{
   onSetDialed: (s: string) => void;
   onToggleCapture: () => void; captureAvailable: boolean;
   onOpenSettings: () => void;
+  sswOpen: boolean; onToggleSswServices: () => void;
+  onSswDial: (number: string) => void; onSswCtrTransfer: (digits: string, number: string) => void;
   sipInputs: { idx: number; name: string }[]; sipOutputs: { idx: number; name: string }[];
   onAudioChange: (input: string, output: string) => void;
   onVolumeChange: (mic: number, spk: number) => void;
-}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleSpeakerMute, onToggleHold, onTransfer, onToggleRecord, onToggleMedia, onVoicemail, onPickup, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable, onOpenSettings, sipInputs, sipOutputs, onAudioChange, onVolumeChange }) => {
+}> = ({ ep, rt, onKey, onBackspace, onCall, onHangup, onClear, onAnswer, onReject, onToggleMute, onToggleSpeakerMute, onToggleHold, onTransfer, onToggleRecord, onToggleMedia, onVoicemail, onPickup, onRegister, onUnregister, onSetDialed, onToggleCapture, captureAvailable, onOpenSettings, sswOpen, onToggleSswServices, onSswDial, onSswCtrTransfer, sipInputs, sipOutputs, onAudioChange, onVolumeChange }) => {
   // 재다이얼용 마지막 발신 번호 — sessionStorage 로 endpoint 별 영속 (앱 재시작 시 초기화)
   const lastDialedKey = `pepe-sip-last-${ep.id}`;
   const [lastDialed, setLastDialed] = useState<string>(() => {
@@ -1630,6 +1671,21 @@ const PhoneCard: React.FC<{
       <button onClick={onPickup} disabled={rt.reg !== 'registered'}
         title={rt.reg === 'registered' ? '당겨받기 — Request-URI/To = *30*, From = 내 번호로 INVITE 전송' : '등록 후 사용 가능'}
         style={{ ...callBtn('var(--win-surface-2, #21262d)'), color: 'var(--win-text, #e6edf3)', opacity: rt.reg === 'registered' ? 1 : 0.4, cursor: rt.reg === 'registered' ? 'pointer' : 'not-allowed' }}>📲 당겨받기 (*30*)</button>
+      <button onClick={onToggleSswServices}
+        title="SSW 부가서비스(CFU/CFB/CTR 등)를 이 카드 안에서 바로 설정"
+        style={{
+          ...callBtn(sswOpen ? 'var(--win-accent, #2b6b9b)' : 'var(--win-surface-2, #21262d)'), color: sswOpen ? '#fff' : 'var(--win-text, #e6edf3)',
+          // 펼친 내용이 길어 아래로 스크롤해도 닫는 버튼을 다시 찾으러 위로 스크롤하지 않도록,
+          // 설정 카드의 "⚙ 설정 닫기"와 같은 방식으로 스크롤 영역 상단에 고정한다.
+          ...(sswOpen ? { position: 'sticky' as const, top: 4, zIndex: 2, boxShadow: '0 2px 6px rgba(0,0,0,0.4)' } : {}),
+        }}>
+        📡 SSW 부가서비스 {sswOpen ? '▲' : '▼'}
+      </button>
+      {sswOpen && (
+        <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 8, padding: 8, display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--win-bg, #0d1117)' }}>
+          <SswServicesPanel ep={ep} callState={rt.call} onDial={onSswDial} onCtrTransfer={onSswCtrTransfer} />
+        </div>
+      )}
       {rt.error && <div style={{ fontSize: 10, color: '#f85149' }}>{rt.error}</div>}
     </div>
   );
@@ -1669,6 +1725,78 @@ const Section: React.FC<{ title: string; defaultOpen?: boolean; children: React.
     </div>
   );
 };
+// SSW 부가서비스 컨트롤 목록 — SettingsCard(설정 카드 안 섹션)와 단말 카드의 "📡 부가서비스" 버튼이
+// 뜨는 모달 양쪽에서 그대로 재사용한다(중복 구현 대신 이 하나만 유지).
+const SswServicesPanel: React.FC<{
+  ep: SipEndpoint; callState: CallState;
+  onDial: (number: string) => void; onCtrTransfer: (digits: string, number: string) => void;
+}> = ({ callState, onDial, onCtrTransfer }) => {
+  const [sswValues, setSswValues] = useState<Record<string, string>>({});
+  const [sswNns, setSswNns] = useState<Record<string, string>>({});
+  const setSswValue = (svc: SswService, v: string) => setSswValues(prev => ({ ...prev, [svc.id]: v }));
+  const setSswNn = (svc: SswService, v: string) => setSswNns(prev => ({ ...prev, [svc.id]: v }));
+  const inp: React.CSSProperties = { padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12, boxSizing: 'border-box', minWidth: 0 };
+  // CTR(호전환)은 보류 중이 아니어도 활성 통화 중이면 바로 가능하다 — MiniSoftphone 도
+  // HeldLine() ?? ActiveTalkingLine() 로 보류를 우선하되 없으면 활성 통화로 대체한다.
+  const sswCanCtr = callState === 'held' || callState === 'connected';
+  const isSswValid = (svc: SswService, activate: boolean): boolean => {
+    const val = (sswValues[svc.id] || '').trim();
+    if (svc.id === 'cfnaTimer' && activate) {
+      const n = Number(val);
+      if (!val || Number.isNaN(n) || n < 5 || n > 30) return false;
+    }
+    if (activate && svc.needsValue !== false && !val) return false;
+    if (!activate && svc.offNeedsValue && !val) return false;
+    return true;
+  };
+  const triggerSsw = (svc: SswService, activate: boolean) => {
+    if (!isSswValid(svc, activate)) return;
+    const val = (sswValues[svc.id] || '').trim();
+    const nn = svc.hasNN ? (sswNns[svc.id] || '01') : '';
+    onDial(buildSswDial(svc, activate, val, nn));
+  };
+  const triggerSswCtr = (svc: SswService) => {
+    if (!sswCanCtr) return;
+    const num = (sswValues[svc.id] || '').trim();
+    if (!num) return;
+    onCtrTransfer(svc.digits, num);
+  };
+  return (
+    <>
+      <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)', marginBottom: 2 }}>SK브로드밴드 PBX 전용 스타코드 — 일반 통화처럼 해당 코드로 다이얼합니다.</div>
+      {SSW_SERVICES.map(svc => (
+        <div key={svc.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', flexWrap: 'wrap' }}>
+          <b style={{ fontSize: 12, flex: '0 0 130px' }}>{svc.label}</b>
+          <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flex: '1 1 180px', minWidth: 140 }}>{svc.desc}</span>
+          {svc.hasNN && (
+            <select value={sswNns[svc.id] || '01'} onChange={e => setSswNn(svc, e.target.value)} title="NN" style={{ ...inp, flex: '0 0 60px' }}>
+              {Array.from({ length: svc.nnMax || 9 }, (_, i) => String(i + 1).padStart(2, '0')).map(nn => <option key={nn} value={nn}>{nn}</option>)}
+            </select>
+          )}
+          <input value={sswValues[svc.id] || ''} onChange={e => setSswValue(svc, e.target.value)} placeholder={svc.hint}
+            style={{ ...inp, flex: '0 1 120px', minWidth: 80, fontFamily: 'Consolas, monospace' }} />
+          {svc.isTransfer ? (
+            <button onClick={() => triggerSswCtr(svc)} disabled={!sswCanCtr || !(sswValues[svc.id] || '').trim()}
+              title={sswCanCtr ? '호전환 (INFO 2회)' : '통화 중(또는 보류 중)이어야 합니다'}
+              style={miniBtn(sswCanCtr && !!(sswValues[svc.id] || '').trim())}>전환</button>
+          ) : (
+            <>
+              <button onClick={() => triggerSsw(svc, true)} disabled={!isSswValid(svc, true)}
+                title={`활성화: ${buildSswDial(svc, true, (sswValues[svc.id] || '').trim(), svc.hasNN ? (sswNns[svc.id] || '01') : '')}`}
+                style={{ ...miniBtn(isSswValid(svc, true)), background: '#238636', color: '#fff', border: 'none' }}>활성화</button>
+              {!svc.noOffButton && (
+                <button onClick={() => triggerSsw(svc, false)} disabled={svc.disabledOffButton || !isSswValid(svc, false)}
+                  title={svc.disabledOffButton ? '해제 코드 없음' : `해제: ${buildSswDial(svc, false, (sswValues[svc.id] || '').trim(), svc.hasNN ? (sswNns[svc.id] || '01') : '')}`}
+                  style={{ ...miniBtn(!svc.disabledOffButton && isSswValid(svc, false)), color: '#f85149' }}>해제</button>
+              )}
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  );
+};
+
 const SettingsCard: React.FC<{
   ep: SipEndpoint; all: SipEndpoint[]; reg: RegState; callState: CallState; idx: number; total: number;
   onChange: (p: Partial<SipEndpoint>) => void; onCopyFrom: (srcId: string) => void;
@@ -1716,37 +1844,6 @@ const SettingsCard: React.FC<{
     const i = cur.codecs.indexOf(c); if (i < 0) return;
     const j = i + dir; if (j < 0 || j >= cur.codecs.length) return;
     const next = [...cur.codecs];[next[i], next[j]] = [next[j], next[i]]; onChangeLocal({ codecs: next });
-  };
-  // ── SSW 부가서비스 입력값 — 이 단말(카드) 안에서만 유효, svc.id 로 구분 ──
-  const [sswValues, setSswValues] = useState<Record<string, string>>({});
-  const [sswNns, setSswNns] = useState<Record<string, string>>({});
-  const setSswValue = (svc: SswService, v: string) => setSswValues(prev => ({ ...prev, [svc.id]: v }));
-  const setSswNn = (svc: SswService, v: string) => setSswNns(prev => ({ ...prev, [svc.id]: v }));
-  // CTR(호전환)은 보류 중이 아니어도 활성 통화 중이면 바로 가능하다 — MiniSoftphone 도
-  // HeldLine() ?? ActiveTalkingLine() 로 보류를 우선하되 없으면 활성 통화로 대체한다.
-  const sswCanCtr = callState === 'held' || callState === 'connected';
-  const isSswValid = (svc: SswService, activate: boolean): boolean => {
-    const val = (sswValues[svc.id] || '').trim();
-    if (svc.id === 'cfnaTimer' && activate) {
-      const n = Number(val);
-      if (!val || Number.isNaN(n) || n < 5 || n > 30) return false;
-    }
-    if (activate && svc.needsValue !== false && !val) return false;
-    if (!activate && svc.offNeedsValue && !val) return false;
-    return true;
-  };
-  const triggerSsw = (svc: SswService, activate: boolean) => {
-    if (!isSswValid(svc, activate)) return;
-    const val = (sswValues[svc.id] || '').trim();
-    const nn = svc.hasNN ? (sswNns[svc.id] || '01') : '';
-    onDial(buildSswDial(svc, activate, val, nn));
-  };
-  const triggerSswCtr = (svc: SswService) => {
-    if (!sswCanCtr) return;
-    const num = (sswValues[svc.id] || '').trim();
-    if (!num) return;
-    // 정확한 타이밍(보류신호 → 200ms → P-Enbloc-Info 포함 신호)이 필요해 sipd 내부에서 처리한다.
-    onCtrTransfer(svc.digits, num);
   };
   return (
     <div style={{ border: '1px solid var(--win-border, #30363d)', borderRadius: 12, background: 'var(--win-surface, #161b22)', padding: 14 }}>
@@ -1845,38 +1942,9 @@ const SettingsCard: React.FC<{
         ))}
       </Section>
 
-      {/* 📡 SSW 부가서비스 (SK브로드밴드 PBX 스타코드) */}
+      {/* 📡 SSW 부가서비스 (SK브로드밴드 PBX 스타코드) — 실제 컨트롤은 SswServicesPanel 공용 컴포넌트 */}
       <Section title="📡 SSW 부가서비스">
-        <div style={{ fontSize: 10, color: 'var(--win-text-dim, #6e7681)', marginBottom: 2 }}>SK브로드밴드 PBX 전용 스타코드 — 일반 통화처럼 해당 코드로 다이얼합니다.</div>
-        {SSW_SERVICES.map(svc => (
-          <div key={svc.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8, background: 'var(--win-bg, #0d1117)', border: '1px solid var(--win-border, #30363d)', flexWrap: 'wrap' }}>
-            <b style={{ fontSize: 12, flex: '0 0 130px' }}>{svc.label}</b>
-            <span style={{ fontSize: 10, color: 'var(--win-text-dim, #9aa7b3)', flex: '1 1 180px', minWidth: 140 }}>{svc.desc}</span>
-            {svc.hasNN && (
-              <select value={sswNns[svc.id] || '01'} onChange={e => setSswNn(svc, e.target.value)} title="NN" style={{ ...inp, flex: '0 0 60px' }}>
-                {Array.from({ length: svc.nnMax || 9 }, (_, i) => String(i + 1).padStart(2, '0')).map(nn => <option key={nn} value={nn}>{nn}</option>)}
-              </select>
-            )}
-            <input value={sswValues[svc.id] || ''} onChange={e => setSswValue(svc, e.target.value)} placeholder={svc.hint}
-              style={{ ...inp, flex: '0 1 120px', minWidth: 80, fontFamily: 'Consolas, monospace' }} />
-            {svc.isTransfer ? (
-              <button onClick={() => triggerSswCtr(svc)} disabled={!sswCanCtr || !(sswValues[svc.id] || '').trim()}
-                title={sswCanCtr ? '호전환 (INFO 2회)' : '통화 중(또는 보류 중)이어야 합니다'}
-                style={miniBtn(sswCanCtr && !!(sswValues[svc.id] || '').trim())}>전환</button>
-            ) : (
-              <>
-                <button onClick={() => triggerSsw(svc, true)} disabled={!isSswValid(svc, true)}
-                  title={`활성화: ${buildSswDial(svc, true, (sswValues[svc.id] || '').trim(), svc.hasNN ? (sswNns[svc.id] || '01') : '')}`}
-                  style={{ ...miniBtn(isSswValid(svc, true)), background: '#238636', color: '#fff', border: 'none' }}>활성화</button>
-                {!svc.noOffButton && (
-                  <button onClick={() => triggerSsw(svc, false)} disabled={svc.disabledOffButton || !isSswValid(svc, false)}
-                    title={svc.disabledOffButton ? '해제 코드 없음' : `해제: ${buildSswDial(svc, false, (sswValues[svc.id] || '').trim(), svc.hasNN ? (sswNns[svc.id] || '01') : '')}`}
-                    style={{ ...miniBtn(!svc.disabledOffButton && isSswValid(svc, false)), color: '#f85149' }}>해제</button>
-                )}
-              </>
-            )}
-          </div>
-        ))}
+        <SswServicesPanel ep={cur} callState={callState} onDial={onDial} onCtrTransfer={onCtrTransfer} />
       </Section>
 
       {/* 📵 수신 거절 응답 */}

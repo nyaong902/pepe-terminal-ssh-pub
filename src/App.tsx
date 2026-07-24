@@ -5026,6 +5026,7 @@ function App() {
                 title={tApp('toolbar.dragHint')}
                 onMouseDown={onDragStart}
               >⋮⋮</span>
+              <button className="tool-btn" title="문서화용 스크린샷 캡처(임시)" onClick={() => { void (window as any).api?.devCaptureScreenshot?.(); }}>📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
           <button
             className="tool-btn"

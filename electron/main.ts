@@ -304,6 +304,41 @@ ipcMain.handle('dev:get-tab-pids', () => {
 });
 // 개발용 — termId->tabId 라우팅 매핑 확인 (SSH 이벤트가 엉뚱한 프로세스로 가는지 디버깅용).
 ipcMain.handle('dev:get-term-tab-map', () => Object.fromEntries(termIdToTabId));
+
+// ── 임시: 문서화용 스크린샷 캡처 ────────────────────────────────────────────
+// 격리된 탭(WebContentsView, 예: 브라우저/오피스/SQL Tool)은 mainWindow 위에 별도로 얹힌
+// 자체 GPU 합성 레이어라 일반 OS 화면 캡처 도구로는 안 잡힌다(검은 박스로 보임) — 이 핸들러는
+// Chromium 자체 리드백 API(webContents.capturePage)로 메인 윈도우 + 그 위에 떠 있는 격리 탭들을
+// 각각 읽어 sharp 로 올바른 위치에 합성해서 완전한 스크린샷 하나로 저장한다.
+ipcMain.handle('dev:capture-screenshot', async () => {
+  if (!mainWindow) return { success: false, error: 'no window' };
+  try {
+    const sharp = require('sharp');
+    const baseImg = await mainWindow.webContents.capturePage();
+    const layers: { input: Buffer; left: number; top: number }[] = [];
+    for (const [, view] of tabViews) {
+      try {
+        let visible = true;
+        try { visible = typeof (view as any).getVisible === 'function' ? (view as any).getVisible() : true; } catch {}
+        if (!visible) continue;
+        const b = view.getBounds();
+        if (!b || b.width <= 0 || b.height <= 0) continue;
+        const img = await view.webContents.capturePage();
+        if (img.isEmpty()) continue;
+        layers.push({ input: img.toPNG(), left: b.x, top: b.y });
+      } catch {}
+    }
+    let pipeline = sharp(baseImg.toPNG());
+    if (layers.length) pipeline = pipeline.composite(layers);
+    const dir = path.join(app.getPath('userData'), 'doc-captures');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `capture-${Date.now()}.png`);
+    await pipeline.png().toFile(file);
+    return { success: true, file, layers: layers.length };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
 // 실제 탭이 닫힐 때만 호출 — 탭 전환(다른 탭으로 이동)으로는 절대 호출되지 않는다.
 // (뷰 생성/파괴는 isolatedTabIds 멤버십 + 실제 탭 존재 여부로만 결정 — 렌더 마운트/언마운트와 무관.)
 ipcMain.on('tab:destroy-view', (_event, { tabId }: { tabId: string }) => {
@@ -8773,6 +8808,14 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
     const isOverloadText = (s: string) => /overloaded|\b529\b/i.test(s);
     const MAX_ATTEMPTS = 4; // 최초 1 + 재시도 3
     let attempt = 0;
+    // claude CLI 가 ~/.claude/.credentials.json 의 refreshToken 자체가 만료/무효화됐을 때 내는 문구.
+    // 재시도로는 해결이 안 되고(매번 같은 에러) 사용자가 직접 재로그인해야 하므로, 원문 그대로 보여주는
+    // 대신 어떻게 해야 하는지 바로 알 수 있는 안내를 앞에 붙여준다.
+    const isAuthExpiredText = (s: string) => /oauth session expired|failed to authenticate/i.test(s);
+    const authExpiredGuide = (raw: string) =>
+      `🔒 Claude 로그인 세션이 만료되어 자동 갱신에 실패했습니다.\n` +
+      `터미널이나 명령 프롬프트에서 \`claude /login\`(또는 \`claude login\`)을 실행해 다시 로그인한 뒤 PePe를 재시작해주세요.\n\n` +
+      `(원본 오류: ${raw.trim()})`;
 
     const launch = () => {
       attempt++;
@@ -8804,6 +8847,8 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
               continue;
             }
             sendAgentStream('claude:stream', { sessionId, requestId, message: msg });
+          } else if (isAuthExpiredText(trimmed)) {
+            sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: authExpiredGuide(trimmed) } });
           } else {
             sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'text', text: trimmed } });
           }
@@ -8814,6 +8859,10 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
         const err = data.toString();
         console.log('[claude] stderr:', err);
         if (isOverloadText(err) && !sawContent && attempt < MAX_ATTEMPTS) { sawOverload = true; return; }
+        if (isAuthExpiredText(err)) {
+          sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: authExpiredGuide(err) } });
+          return;
+        }
         sendAgentStream('claude:stream', { sessionId, requestId, message: { type: 'error', text: err } });
       });
       proc.on('error', (err: any) => {
