@@ -104,6 +104,18 @@ export function MediaWorkspace(props: {
     return audioCtxRef.current;
   };
 
+  // 미디어 워크스페이스 탭 자체가 닫힐 때(개별 문서 close 가 아니라 컴포넌트 언마운트) —
+  // AudioContext 를 닫지 않으면 실시간 오디오 렌더링 스레드가 탭을 닫은 뒤에도 계속 남아있고,
+  // 열려있던 문서들의 video Object URL 도 회수되지 않아 메모리가 누적된다.
+  useEffect(() => {
+    return () => {
+      try { audioCtxRef.current?.close(); } catch {}
+      audioCtxRef.current = null;
+      for (const url of videoUrlRef.current.values()) { try { URL.revokeObjectURL(url); } catch {} }
+      videoUrlRef.current.clear();
+    };
+  }, []);
+
   const patchDoc = (id: string, patch: Partial<OpenMedia>) => {
     setDocs(prev => prev.map(d => (d.id === id ? { ...d, ...patch } : d)));
   };

@@ -42,7 +42,11 @@ export function MediaWaveform({ buffer, position, selection, onSeek, onSelection
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buffer]);
 
-  useEffect(() => { draw(); });
+  // deps 없이 매 렌더마다 draw() 를 돌리면, 재생 중인 문서의 position 이 rAF 루프로 60fps
+  // 갱신될 때마다 MediaWorkspace 전체가 리렌더되면서 "재생 중이 아닌" 다른 열린 문서의
+  // 파형까지 전부 다시 그려지는 문제가 있었다(문서 개수만큼 배로 CPU/GPU 부담). position/
+  // selection/buffer 가 실제로 바뀔 때만 다시 그리도록 제한.
+  useEffect(() => { draw(); }, [position, selection, buffer]);
 
   const draw = () => {
     const canvas = canvasRef.current;

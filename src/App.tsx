@@ -2787,6 +2787,14 @@ function App() {
         if (liveState) {
           setCustomWorkspaces(prev => prev.map(ws => ws.id === tab.customWorkspaceId ? { ...ws, lastWorkspaceState: liveState } : ws));
         }
+        // customWorkspace 탭은 실제 세션이 tab.layout(항상 빈 placeholder)이 아니라
+        // liveState.layout 안에 있다 — 위의 collectAllSessions(tab.layout) 는 여기선 아무것도
+        // 못 찾아서 파일전송 등에서 연결한 SSH/SFTP 세션이 탭을 닫아도 해제되지 않고 백그라운드에
+        // 계속 살아있는 누수가 있었다. liveState.layout 기준으로 별도 해제.
+        try {
+          const cwSessions = collectAllSessions((liveState as any)?.layout);
+          for (const s of cwSessions) if (s.termId) releaseTermResources(s.termId);
+        } catch {}
       }
     }
     setTabs(prev => { const f = prev.filter(t => t.id !== id); return f.length === 0 ? prev : f; });

@@ -382,6 +382,9 @@ export const SswSoftphoneWorkspace: React.FC<{
       const call = runtimeRef.current[ep.id]?.call;
       if (call && call !== 'idle') { try { api().sipHangup?.({ endpointId: ep.id }); } catch {} }
       if (runtimeRef.current[ep.id]?.reg === 'registered') { try { api().sipUnregister?.({ endpointId: ep.id }); } catch {} }
+      // 패킷 캡처(dumpcap.exe)도 탭을 닫을 때 같이 정리 — 안 그러면 캡처 중이던 단말의
+      // dumpcap 프로세스가 앱 종료 전까지 백그라운드에 남아 계속 CPU/디스크를 쓴다.
+      if (runtimeRef.current[ep.id]?.capturing) { try { api().captureStop?.({ endpointId: ep.id }); } catch {} }
     }
   }, []);
 
