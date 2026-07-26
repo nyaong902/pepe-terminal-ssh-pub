@@ -2531,7 +2531,11 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   }, [sessionId]);
 
   // Git 상태 자동 갱신 — 활성 SSH 세션 우선, 아니면 로컬 cwd. 메시지 변경 / 세션 전환 시 폴링.
+  // ClaudeChat 은 사이드바가 닫혀있어도 display:none 으로만 숨겨지고 항상 마운트돼 있어서
+  // visible 가드가 없으면 앱 구동 직후부터 사이드바를 한 번도 연 적이 없어도 15초마다
+  // git 자식 프로세스(최대 3개, local 모드) 또는 SSH exec(remote 모드)가 영구히 반복 실행됐다.
   useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     const fetchGit = async () => {
       try {
@@ -2546,7 +2550,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     fetchGit();
     const t = setInterval(fetchGit, 15000); // 15s polling
     return () => { cancelled = true; clearInterval(t); };
-  }, [activeSshSession?.termId, messages.length]);
+  }, [visible, activeSshSession?.termId, messages.length]);
 
   // 자동 스크롤 — 메시지 변경 시 + agent 전환 후 messages 영역이 재마운트될 때
   useEffect(() => {
