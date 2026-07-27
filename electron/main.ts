@@ -703,7 +703,12 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    icon: path.join(__dirname, '../public/icon.ico'),
+    // '../public/icon.ico' 는 dev 모드(프로젝트 루트 기준)에서만 존재하는 경로 — electron-builder
+    // 의 files 목록에 public/ 이 없어 패키징된 앱(asar 안)에는 그 경로가 없고, 대신 vite 가 빌드 시
+    // public/* 를 그대로 복사해 넣는 dist/icon.ico 는 dev/패키징 양쪽 다 __dirname(dist-electron/)
+    // 의 형제 폴더로 항상 존재한다. 지금까지 이 경로가 틀려 패키징된 앱은 작업표시줄에 Electron
+    // 기본 아이콘이 뜨고 있었다(v1.0.0 부터의 잠재 버그, exe 자체 리소스 아이콘은 별도 경로로 정상).
+    icon: path.join(__dirname, '../dist/icon.ico'),
     frame: false,
     transparent: true,
     // transparent + drag-drop 의 Chromium 합성 이슈 우회 — 명시적 backgroundColor
@@ -3342,9 +3347,59 @@ const OFFICE_OPEN_FILTERS: Record<string, { name: string; extensions: string[] }
   pdf: { name: 'PDF Document', extensions: ['pdf'] },
   drawio: { name: 'draw.io Diagram', extensions: ['drawio', 'xml'] },
 };
+// OOXML(docx/xlsx/pptx) 안의 큰 임베디드 OLE 개체(ppt/embeddings/*.bin 등, 보통 엑셀 표나 다른
+// 문서가 삽입된 것) 를 미리 감지 — 자체 호스팅한 ONLYOFFICE 변환 엔진(x2t.wasm, 벤더 바이너리라
+// 우리가 못 고침)이 특정 임베디드 개체가 있는 파일을 열다가 그냥 "파일을 여는 동안 오류가
+// 발생했습니다" 네이티브 스타일 alert 로 조용히 실패하는 경우가 있어(office.ziziyi.com 에서도
+// 동일 파일로 재현 확인됨 — ONLYOFFICE 엔진 자체의 한계), 열기 전에 사용자에게 미리 알려준다.
+// zip 압축을 실제로 풀 필요 없이 ZIP 중앙 디렉터리(End of Central Directory → Central Directory
+// 레코드)만 파싱해 엔트리 이름/비압축 크기를 읽는다 — 의존성 추가 없이 가볍게 처리.
+function scanZipForLargeEmbeddings(buf: Buffer, thresholdBytes = 500 * 1024): { name: string; size: number }[] {
+  const found: { name: string; size: number }[] = [];
+  try {
+    // EOCD 레코드(고정 22바이트 + 가변 comment)를 파일 끝에서부터 찾는다.
+    const EOCD_SIG = 0x06054b50;
+    let eocdOffset = -1;
+    const maxCommentLen = 65535;
+    const searchStart = Math.max(0, buf.length - 22 - maxCommentLen);
+    for (let i = buf.length - 22; i >= searchStart; i--) {
+      if (buf.readUInt32LE(i) === EOCD_SIG) { eocdOffset = i; break; }
+    }
+    if (eocdOffset < 0) return found;
+    const entryCount = buf.readUInt16LE(eocdOffset + 10);
+    let cdOffset = buf.readUInt32LE(eocdOffset + 16);
+    const CD_SIG = 0x02014b50;
+    for (let i = 0; i < entryCount; i++) {
+      if (cdOffset + 46 > buf.length || buf.readUInt32LE(cdOffset) !== CD_SIG) break;
+      const nameLen = buf.readUInt16LE(cdOffset + 28);
+      const extraLen = buf.readUInt16LE(cdOffset + 30);
+      const commentLen = buf.readUInt16LE(cdOffset + 32);
+      const uncompressedSize = buf.readUInt32LE(cdOffset + 24);
+      const name = buf.toString('utf-8', cdOffset + 46, cdOffset + 46 + nameLen);
+      if (/embeddings?\/.*\.bin$/i.test(name) && uncompressedSize >= thresholdBytes) {
+        found.push({ name, size: uncompressedSize });
+      }
+      cdOffset += 46 + nameLen + extraLen + commentLen;
+    }
+  } catch {
+    // zip 파싱 실패는 조용히 무시 — 어디까지나 사전 경고용 베스트 에포트이지, 파일 열기 자체를
+    // 막을 이유는 아니다.
+  }
+  return found;
+}
+
 function readOfficeFile(filePath: string) {
   const data = fs.readFileSync(filePath);
-  return { filePath, fileName: path.basename(filePath), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  const ext = path.extname(filePath).toLowerCase();
+  let warning: string | undefined;
+  if (ext === '.pptx' || ext === '.docx' || ext === '.xlsx') {
+    const largeEmbeds = scanZipForLargeEmbeddings(data);
+    if (largeEmbeds.length > 0) {
+      const totalMb = (largeEmbeds.reduce((s, e) => s + e.size, 0) / (1024 * 1024)).toFixed(1);
+      warning = `이 파일에는 큰 임베디드 개체(삽입된 표/문서 등, 약 ${totalMb}MB)가 ${largeEmbeds.length}개 들어있어 편집기가 여는 데 실패할 수 있습니다. 실패 시 원본 앱(PowerPoint/Word/Excel)에서 해당 개체를 그림으로 바꿔 다시 저장해보세요.`;
+    }
+  }
+  return { filePath, fileName: path.basename(filePath), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), warning };
 }
 ipcMain.handle('office-doc:open-file', async (_e, { kind }: { kind: 'hwp' | 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'drawio' }) => {
   if (!mainWindow) return null;
@@ -6522,7 +6577,12 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
     y: bounds?.y,
     minWidth: 600,
     minHeight: 400,
-    icon: path.join(__dirname, '../public/icon.ico'),
+    // '../public/icon.ico' 는 dev 모드(프로젝트 루트 기준)에서만 존재하는 경로 — electron-builder
+    // 의 files 목록에 public/ 이 없어 패키징된 앱(asar 안)에는 그 경로가 없고, 대신 vite 가 빌드 시
+    // public/* 를 그대로 복사해 넣는 dist/icon.ico 는 dev/패키징 양쪽 다 __dirname(dist-electron/)
+    // 의 형제 폴더로 항상 존재한다. 지금까지 이 경로가 틀려 패키징된 앱은 작업표시줄에 Electron
+    // 기본 아이콘이 뜨고 있었다(v1.0.0 부터의 잠재 버그, exe 자체 리소스 아이콘은 별도 경로로 정상).
+    icon: path.join(__dirname, '../dist/icon.ico'),
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',

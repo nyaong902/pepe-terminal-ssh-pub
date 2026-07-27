@@ -21,6 +21,37 @@ function polarToXY(angleDeg: number, radius: number): { x: number; y: number } {
   return { x: CENTER + radius * Math.cos(rad), y: CENTER + radius * Math.sin(rad) };
 }
 
+// 몬데인 SBB 시계처럼 끝이 각진(rounded 아님) 막대 모양의 바늘 — 중심에서 tailLength 만큼
+// 반대쪽으로도 짧게 나온 막대를 그린다(실제 SBB 바늘은 중심 축을 살짝 지나 짧은 꼬리가 있다).
+function handRectPath(angleDeg: number, length: number, tailLength: number, width: number): string {
+  const dir = polarToXY(angleDeg, 1);
+  const dx = dir.x - CENTER, dy = dir.y - CENTER;
+  const px = -dy, py = dx; // 바늘 방향에 수직인 단위벡터
+  const hw = width / 2;
+  const tipX = CENTER + dx * length, tipY = CENTER + dy * length;
+  const tailX = CENTER - dx * tailLength, tailY = CENTER - dy * tailLength;
+  const p1 = { x: tailX + px * hw, y: tailY + py * hw };
+  const p2 = { x: tipX + px * hw, y: tipY + py * hw };
+  const p3 = { x: tipX - px * hw, y: tipY - py * hw };
+  const p4 = { x: tailX - px * hw, y: tailY - py * hw };
+  return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y} L ${p3.x} ${p3.y} L ${p4.x} ${p4.y} Z`;
+}
+
+// 눈금(시/분)도 몬데인 SBB 처럼 얇은 선이 아니라 두꺼운 막대로 — outerR~innerR 사이를 폭 width 로.
+function tickRectPath(angleDeg: number, outerR: number, innerR: number, width: number): string {
+  const dir = polarToXY(angleDeg, 1);
+  const dx = dir.x - CENTER, dy = dir.y - CENTER;
+  const px = -dy, py = dx;
+  const hw = width / 2;
+  const outerX = CENTER + dx * outerR, outerY = CENTER + dy * outerR;
+  const innerX = CENTER + dx * innerR, innerY = CENTER + dy * innerR;
+  const p1 = { x: innerX + px * hw, y: innerY + py * hw };
+  const p2 = { x: outerX + px * hw, y: outerY + py * hw };
+  const p3 = { x: outerX - px * hw, y: outerY - py * hw };
+  const p4 = { x: innerX - px * hw, y: innerY - py * hw };
+  return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y} L ${p3.x} ${p3.y} L ${p4.x} ${p4.y} Z`;
+}
+
 // 12시 방향에서 시계방향으로 sweepDeg 만큼 펼쳐진 파이(부채꼴) 조각의 SVG path.
 function pieSlicePath(sweepDeg: number, radius: number): string {
   const clamped = Math.max(0, Math.min(360, sweepDeg));
@@ -71,6 +102,13 @@ export default function ClockWidget() {
   const firedRef = useRef(false);
   // 팝업에 "N분 타이머 종료" 처럼 원래 설정 시간을 보여주기 위해 마지막으로 커밋된 총 시간 보관.
   const totalMsRef = useRef<number | null>(null);
+  // 좌클릭 더블클릭으로 흑백 반전(검은 바탕에 흰 바늘 ↔ 흰 바탕에 검은 바늘) — localStorage 에
+  // 저장해 위젯을 껐다 켜도 유지. 드래그(타이머 설정)와 겹치지 않도록 pointerUp 에서 클릭 간격만
+  // 재서 처리(실제 dblclick 이벤트는 pointer capture 때문에 잘 안 잡혀서 직접 타이밍 비교).
+  const [inverted, setInverted] = useState(() => {
+    try { return localStorage.getItem('pepe-clock-widget-inverted') === '1'; } catch { return false; }
+  });
+  const lastClickRef = useRef(0);
 
   // 현재 시각 — 초 단위 갱신(시침/분침/카운트다운용).
   useEffect(() => {
@@ -115,8 +153,13 @@ export default function ClockWidget() {
       return;
     }
     const ms = minutes * 60 * 1000;
-    const end = Date.now() + ms;
+    const commitNow = Date.now();
+    const end = commitNow + ms;
     setEndTime(end);
+    // now(state) 는 독립된 1초 setInterval 로만 갱신되므로, 커밋 순간과 마지막 tick 사이의
+    // 어긋난 시간만큼(최대 ~1초) endTime-now 가 ms 보다 커져 "30:01" 처럼 한 틱 높게 표시되는
+    // 문제가 있었다 — 커밋과 동시에 now 를 강제로 지금 시각에 맞춰 정확히 30:00 부터 시작하게 한다.
+    setNow(new Date(commitNow));
     totalMsRef.current = ms;
     firedRef.current = false;
     try { (window as any).api?.clockWidgetSetTimer?.(end, ms); } catch {}
@@ -150,22 +193,42 @@ export default function ClockWidget() {
 
   // 우클릭 드래그 — 창 이동. window:start-drag/drag-move/end-drag 는 다른 frameless 창(메인/분리
   // 창)에서 이미 쓰는 IPC 를 그대로 재사용 — 화면 좌표(screenX/Y) 기준으로 메인 프로세스가 직접
-  // BrowserWindow.setPosition 을 호출한다.
+  // BrowserWindow.setPosition 을 호출한다. 드래그 없이(거의 제자리에서) 뗀 우클릭만 더블클릭
+  // 판정 대상으로 삼아 흑백 반전 토글 — 창 이동 드래그와 구분된다.
   const draggingWindowRef = useRef(false);
+  const rightDownPointRef = useRef<{ x: number; y: number } | null>(null);
   const handleContextMenuDown = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button !== 2) return;
     e.preventDefault();
     draggingWindowRef.current = true;
+    rightDownPointRef.current = { x: e.screenX, y: e.screenY };
     try { (window as any).api?.windowStartDrag?.(e.screenX, e.screenY); } catch {}
     const onMove = (ev: MouseEvent) => {
       if (!draggingWindowRef.current) return;
       try { (window as any).api?.windowDragMove?.(ev.screenX, ev.screenY); } catch {}
     };
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
       draggingWindowRef.current = false;
       try { (window as any).api?.windowEndDrag?.(); } catch {}
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      const down = rightDownPointRef.current;
+      const isPlainClick = down != null
+        && Math.abs(ev.screenX - down.x) < 4
+        && Math.abs(ev.screenY - down.y) < 4;
+      if (isPlainClick) {
+        const nowMs = performance.now();
+        if (nowMs - lastClickRef.current < 400) {
+          setInverted(prev => {
+            const next = !prev;
+            try { localStorage.setItem('pepe-clock-widget-inverted', next ? '1' : '0'); } catch {}
+            return next;
+          });
+          lastClickRef.current = 0;
+        } else {
+          lastClickRef.current = nowMs;
+        }
+      }
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -184,17 +247,27 @@ export default function ClockWidget() {
   const hourAngle = (hours + minutes / 60) * 30;
   const minuteAngle = (minutes + seconds / 60) * 6;
 
-  const hourTip = polarToXY(hourAngle, RADIUS * 0.5);
-  const minuteTip = polarToXY(minuteAngle, RADIUS * 0.72);
+  // 몬데인 SBB 사진 비율 — 분침은 시 눈금(RADIUS*0.8) 바로 아래까지 거의 닿을 정도로 길고,
+  // 시침도 워치페이스 시 눈금 쪽에 가깝게 늘렸다(그래도 분침보다는 확연히 짧게 유지).
+  const hourHandPath = handRectPath(hourAngle, RADIUS * 0.68, RADIUS * 0.12, 9);
+  const minuteHandPath = handRectPath(minuteAngle, RADIUS * 0.94, RADIUS * 0.14, 6.5);
   const timerHandTip = polarToXY(sweepDeg, RADIUS * 0.9);
 
+  // 눈금도 몬데인 SBB 처럼 두꺼운 막대 — 시 눈금(12/1/2...)은 굵고 길게, 분 눈금은 시 눈금 대비
+  // 훨씬 짧지만 얇은 선보다는 살짝 두꺼운 막대로.
   const ticks = Array.from({ length: 60 }, (_, i) => {
     const isHour = i % 5 === 0;
-    const inner = isHour ? RADIUS * 0.82 : RADIUS * 0.88;
-    const p1 = polarToXY(i * 6, RADIUS * 0.96);
-    const p2 = polarToXY(i * 6, inner);
-    return { key: i, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, isHour };
+    const path = isHour
+      ? tickRectPath(i * 6, RADIUS * 0.97, RADIUS * 0.8, 6.5)
+      : tickRectPath(i * 6, RADIUS * 0.96, RADIUS * 0.9, 2.2);
+    return { key: i, path };
   });
+
+  // 좌클릭 더블클릭 시 흑백 반전 — 바탕/바늘/눈금 색만 서로 뒤바뀌고, 타이머(빨강) 관련 색은
+  // 유지한다(어느 배경에서도 눈에 띄어야 하므로).
+  const faceColor = inverted ? '#111111' : '#ffffff';
+  const inkColor = inverted ? '#ffffff' : '#111111';
+  const faceStroke = inverted ? '#3a3a3a' : '#d8d8d8';
 
   return (
     <svg
@@ -208,41 +281,49 @@ export default function ClockWidget() {
       onContextMenu={(e) => e.preventDefault()}
       style={{ display: 'block', cursor: 'pointer', userSelect: 'none' }}
     >
-      <title>좌클릭 드래그: 타이머 설정 · 우클릭 드래그: 위젯 이동</title>
-      <circle cx={CENTER} cy={CENTER} r={RADIUS} fill="#ffffff" stroke="#d8d8d8" strokeWidth={1} />
+      <title>좌클릭 드래그: 타이머 설정 · 우클릭 드래그: 위젯 이동 · 우클릭 더블클릭: 색 반전</title>
+      <circle cx={CENTER} cy={CENTER} r={RADIUS} fill={faceColor} stroke={faceStroke} strokeWidth={1} />
       {sweepDeg > 0 && (
         <path d={pieSlicePath(sweepDeg, RADIUS * 0.96)} fill="#e2231a" opacity={0.92} />
       )}
       {ticks.map(t => (
-        <line
-          key={t.key}
-          x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
-          stroke="#111111"
-          strokeWidth={t.isHour ? 3 : 1.4}
-          strokeLinecap="square"
-        />
+        <path key={t.key} d={t.path} fill={inkColor} />
       ))}
-      {/* 시침 */}
-      <line x1={CENTER} y1={CENTER} x2={hourTip.x} y2={hourTip.y} stroke="#111111" strokeWidth={6} strokeLinecap="round" />
-      {/* 분침 */}
-      <line x1={CENTER} y1={CENTER} x2={minuteTip.x} y2={minuteTip.y} stroke="#111111" strokeWidth={4} strokeLinecap="round" />
-      {/* 타이머 바늘(세컨드핸드 자리) — 파이 경계선과 같은 각도, 얇고 빨갛게 */}
+      {/* 시침 — 몬데인 SBB 스타일: 끝이 각진 두꺼운 막대, 중심 반대편으로 짧은 꼬리 */}
+      <path d={hourHandPath} fill={inkColor} />
+      {/* 분침 — 안쪽 시 눈금 근처까지 닿는 긴 막대 */}
+      <path d={minuteHandPath} fill={inkColor} />
+      {/* 타이머 바늘(세컨드핸드 자리) — 파이 경계선과 같은 각도, 얇고 빨갛게, 끝에 둥근 팁 */}
       {sweepDeg > 0 && (
         <line x1={CENTER} y1={CENTER} x2={timerHandTip.x} y2={timerHandTip.y} stroke="#e2231a" strokeWidth={1.5} strokeLinecap="round" />
       )}
-      <circle cx={CENTER} cy={CENTER} r={5} fill="#111111" />
-      {remainingMs > 0 && (
+      <circle cx={CENTER} cy={CENTER} r={5} fill={inkColor} />
+      {remainingMs > 0 ? (
         <text
           x={CENTER} y={CENTER + RADIUS * 0.45}
           textAnchor="middle"
           fontSize={15}
           fontWeight={700}
           fill="#e2231a"
-          stroke="#ffffff"
+          stroke={faceColor}
           strokeWidth={3}
           paintOrder="stroke"
           style={{ pointerEvents: 'none' }}
         >{formatCountdown(remainingMs)}</text>
+      ) : (
+        // 타이머가 동작하지 않을 때는 같은 자리에 현재 시각(HH:MM:SS)을 표시 — 잉크 색 글씨 +
+        // 바탕색 테두리로, 타이머 표시(빨간 글씨)와 구분되면서도 위젯이 비어 보이지 않게 한다.
+        <text
+          x={CENTER} y={CENTER + RADIUS * 0.45}
+          textAnchor="middle"
+          fontSize={15}
+          fontWeight={700}
+          fill={inkColor}
+          stroke={faceColor}
+          strokeWidth={3}
+          paintOrder="stroke"
+          style={{ pointerEvents: 'none' }}
+        >{`${String(now.getHours()).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`}</text>
       )}
     </svg>
   );

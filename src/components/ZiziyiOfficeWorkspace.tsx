@@ -36,6 +36,9 @@ export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocK
   const [docs, setDocs] = useState<OpenDoc[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  // 열기 전 사전 검사(큰 임베디드 OLE 개체 등)에서 나온 비차단 경고 — ONLYOFFICE 변환 엔진이
+  // 이런 파일에서 종종 실패하지만, 실제로 실패할지는 열어봐야 알 수 있어 열기 자체는 막지 않는다.
+  const [warning, setWarning] = useState('');
   const [recents, setRecents] = useState<RecentDoc[]>([]);
   useEffect(() => { getRecents(kind).then(setRecents); }, [kind]);
   const docsRef = useRef<OpenDoc[]>(docs);
@@ -91,6 +94,7 @@ export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocK
       return;
     }
     setError('');
+    setWarning(result.warning || '');
     openBytes(result.data, result.fileName);
     addRecent(kind, { filePath: result.filePath, fileName: result.fileName }).then(setRecents);
   };
@@ -103,6 +107,7 @@ export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocK
       return;
     }
     setError('');
+    setWarning(result.warning || '');
     openBytes(result.data, result.fileName);
     addRecent(kind, { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
@@ -119,6 +124,17 @@ export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocK
           </div>
         )}
       />
+      {warning && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', flex: '0 0 auto',
+          background: 'rgba(210,153,34,0.15)', borderBottom: '1px solid rgba(210,153,34,0.4)',
+          fontSize: 12, color: 'var(--win-text, #e6edf3)',
+        }}>
+          <span>⚠️</span>
+          <span style={{ flex: '1 1 0' }}>{warning}</span>
+          <span onClick={() => setWarning('')} style={{ cursor: 'pointer', opacity: 0.7, padding: '0 4px' }}>×</span>
+        </div>
+      )}
       {docs.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 8px 0', borderBottom: '1px solid var(--win-border, #30363d)', overflowX: 'auto', flex: '0 0 auto' }}>
           {docs.map(d => (
