@@ -7,6 +7,8 @@
 | 기능 | 설명 |
 |---|---|
 | [터미널 / 세션 관리](features/terminal.md) | SSH 다중 세션, 분할 화면, 파일 트리·전송 |
+| [파일 전송 워크스페이스](features/file-transfer.md) | 로컬↔원격 듀얼 패널 드래그앤드롭 전송, ClearCase 동적 뷰 지원 |
+| [SQL Tool](features/sql-tool.md) | JDBC 기반 DB 클라이언트 — 스키마 탐색, 쿼리 실행, 드라이버 관리자 |
 | [브라우저 워크스페이스](features/browser.md) | PePe 안에 내장된 웹 브라우저 탭 |
 | [AI Chat](features/ai-chat.md) | Claude 기반 에이전트 — 여러 SSH 세션을 함께 인식하고 직접 작업 수행 |
 | [SIPp 워크스페이스](features/sipp.md) | SIP 부하 테스트 도구 |

@@ -1,9 +1,10 @@
 // src/components/SessionEditor.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getThemeList, getThemeByName } from '../utils/terminalThemes';
 import { getAvailableMonoFonts } from '../utils/monoFonts';
 import { isValidHost, normalizeHost } from '../utils/hostValidate';
+import { DriverManagerModal } from './DriverManagerModal';
 
 type LoginScriptRule = {
   expect: string;
@@ -124,14 +125,15 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
   const [showDbmsPassword, setShowDbmsPassword] = useState(false);
   // 등록된 JDBC 드라이버 목록 (Driver Manager 와 동일 소스)
   const [jdbcDrivers, setJdbcDrivers] = useState<any[]>([]);
-  useEffect(() => {
-    (async () => {
-      try {
-        const list = await (window as any).api?.jdbcListDrivers?.();
-        if (Array.isArray(list)) setJdbcDrivers(list);
-      } catch {}
-    })();
+  const refreshJdbcDrivers = useCallback(async () => {
+    try {
+      const list = await (window as any).api?.jdbcListDrivers?.();
+      if (Array.isArray(list)) setJdbcDrivers(list);
+    } catch {}
   }, []);
+  useEffect(() => { void refreshJdbcDrivers(); }, [refreshJdbcDrivers]);
+  // 세션 편집 중에도 드라이버 등록/편집이 가능하도록 — 예전엔 SQL Tool 접속 후에만 열 수 있었음.
+  const [driverManagerOpen, setDriverManagerOpen] = useState(false);
   const [dbmsTestResult, setDbmsTestResult] = useState<string>('');
   const [dbmsTesting, setDbmsTesting] = useState<boolean>(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
@@ -756,6 +758,9 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                         </option>
                       ))}
                     </select>
+                    <button type="button" className="btn-cancel" onClick={() => setDriverManagerOpen(true)} title={t('dbms.driverManager')}>
+                      🔧 {t('dbms.driverManager')}
+                    </button>
                   </div>
 
                   <label>{t('fields.dbmsHost')}</label>
@@ -817,6 +822,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
           <button className="btn-save" style={{ background: '#2b9b6b', borderColor: '#3ac88b' }} onClick={saveAndConnect} title={t('tooltips.connectTitle')}>{t('actions.connect')}</button>
         </div>
       </div>
+      <DriverManagerModal open={driverManagerOpen} onClose={() => { setDriverManagerOpen(false); void refreshJdbcDrivers(); }} />
     </div>
   );
 };

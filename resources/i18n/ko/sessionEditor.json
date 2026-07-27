@@ -136,6 +136,7 @@
     "autoTrackTooltip": "터미널에서 cd 시 파일트리 경로 자동 갱신"
   },
   "dbms": {
+    "driverManager": "드라이버 관리자",
     "driverLoading": "(로딩...)",
     "directInput": "직접 입력",
     "copy": "복사",

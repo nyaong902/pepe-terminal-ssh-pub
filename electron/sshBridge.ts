@@ -2135,6 +2135,9 @@ probe_curl || probe_wget || probe_python
   }
 
   async handleSFTPDownload(panelId: string, remotePath: string, localPath: string, ctx?: any): Promise<void> {
+    // handleTransfer 최상단에서 이미 변환하지만, 이 함수가 다른 경로(예: 파일 편집기의 "다운로드")
+    // 에서 직접 호출될 수도 있어 방어적으로 한 번 더 변환 — 이미 변환된 경로면 즉시 no-op.
+    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = remotePath.split('/').pop() || remotePath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: remotePath, dstPath: localPath } : {};
     xferLog(`download start panelId=${panelId} remote=${remotePath} local=${localPath}`);
@@ -2199,6 +2202,8 @@ probe_curl || probe_wget || probe_python
   }
 
   async handleSFTPUpload(panelId: string, localPath: string, remotePath: string, ctx?: any): Promise<void> {
+    // 다운로드와 동일한 이유로 ClearCase dynamic view 경로(/vobs/...) 를 실경로로 변환.
+    remotePath = await this.resolveCcPath(panelId, remotePath);
     const filename = localPath.replace(/\\/g, '/').split('/').pop() || localPath;
     const extra = ctx ? { transferId: ctx.transferId, rel: ctx.rel ?? '', rootName: ctx.rootName, workspaceId: ctx.workspaceId, srcPath: localPath, dstPath: remotePath } : {};
     xferLog(`upload start panelId=${panelId} local=${localPath} remote=${remotePath}`);
@@ -2756,6 +2761,14 @@ probe_curl || probe_wget || probe_python
     ctx?: { transferId: string; rootName: string; rel: string; rootIsDir?: boolean; workspaceId?: string },
     workspaceId?: string,
   ): Promise<void> {
+    // ClearCase dynamic view(/vobs/...) 경로 변환 — handleSFTPListDir 는 이미 변환된 경로를
+    // 보여주지만, 이 함수(및 내부에서 쓰는 getSrcStatFull/isSrcDirectory/dstStat 등 stat 계열
+    // 헬퍼들)는 하나도 변환을 안 거쳐서 최초 stat 단계에서부터 "No such file" 로 죽었다 —
+    // handleSFTPDownload/Upload 에 도달하기도 전에 실패해 그쪽에 넣은 변환은 무용지물이었음.
+    // 여기 최상단에서 한 번 변환해두면, 재귀 호출(디렉토리 하위 항목)의 joinPath 도 이미
+    // 변환된 경로 위에 이어붙이므로 자식들도 자동으로 올바른 경로가 된다.
+    if (src.mode !== 'local' && src.termId) src = { ...src, path: await this.resolveCcPath(src.termId, src.path) };
+    if (dst.mode !== 'local' && dst.termId) dst = { ...dst, path: await this.resolveCcPath(dst.termId, dst.path) };
     // 최상위 호출이면 ctx 자동 생성 + transfer-start 이벤트 즉시 송출
     const isRoot = !ctx;
     if (isRoot) {

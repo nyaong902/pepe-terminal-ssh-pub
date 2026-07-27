@@ -764,7 +764,13 @@ function App() {
     restoreTermFocusRef.current();
   }, []);
   const manualHtml = useMemo(() => {
-    try { return marked.parse(manualMd) as string; } catch { return `<pre>${tApp('manual.loadFail')}</pre>`; }
+    try {
+      // docs/MANUAL.md 의 이미지 경로(screenshots/xxx.png)는 GitHub 에서 docs/ 기준 상대경로로
+      // 정상 렌더되지만, 앱 안에서는 그 경로가 실제로 서빙되지 않는다(docs/ 는 빌드에 안 들어감).
+      // public/manual-screenshots/ 에 같은 파일들을 복사해두고, 렌더링 시점에만 경로를 바꿔치기.
+      const remapped = manualMd.replace(/\]\(screenshots\//g, '](manual-screenshots/');
+      return marked.parse(remapped) as string;
+    } catch { return `<pre>${tApp('manual.loadFail')}</pre>`; }
   }, []);
   const [remotePickerSessions, setRemotePickerSessions] = useState<any[]>([]); // 전체 세션 리스트
   const [remotePickerFolders, setRemotePickerFolders] = useState<any[]>([]); // 폴더 맵

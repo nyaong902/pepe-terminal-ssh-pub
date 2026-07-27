@@ -136,6 +136,7 @@
     "autoTrackTooltip": "Auto-refresh file tree path on cd in terminal"
   },
   "dbms": {
+    "driverManager": "Driver Manager",
     "driverLoading": "(Loading...)",
     "directInput": "Direct input",
     "copy": "Copy",

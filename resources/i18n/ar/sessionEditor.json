@@ -153,6 +153,7 @@
     "autoTrackTooltip": "تحديث مسار شجرة الملفات تلقائيًا عند تنفيذ cd في الطرفية"
   },
   "dbms": {
+    "driverManager": "مدير التعريفات",
     "driverLoading": "(جارٍ التحميل...)",
     "directInput": "إدخال مباشر",
     "copy": "نسخ",

@@ -153,6 +153,7 @@
     "autoTrackTooltip": "终端中 cd 时自动刷新文件树路径"
   },
   "dbms": {
+    "driverManager": "驱动管理器",
     "driverLoading": "（加载中…）",
     "directInput": "直接输入",
     "copy": "复制",

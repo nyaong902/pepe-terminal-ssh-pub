@@ -153,6 +153,7 @@
     "autoTrackTooltip": "Actualiser auto le chemin de l'arborescence lors d'un cd dans le terminal"
   },
   "dbms": {
+    "driverManager": "Gestionnaire de pilotes",
     "driverLoading": "(Chargement...)",
     "directInput": "Saisie directe",
     "copy": "Copier",
