@@ -3,9 +3,12 @@
 // src/utils/layoutUtils.ts(터미널 세션용)와 동일한 트리 구조(row/column 분할, sizes)를 쓰되,
 // leaf 의 payload 가 PanelSession[] 대신 파일 브라우저 탭(FeTab[])이라는 점만 다르다.
 import { makeId } from './layoutUtils';
-import type { PanelSource } from '../components/FilePanel';
+import type { PanelSource, FileInfo } from '../components/FilePanel';
 
-export type FeTab = { id: string; source: PanelSource; path: string; selected: Set<string> };
+// entries — 마지막으로 로드된 디렉토리 목록 캐시. 창 분리/재합침으로 FilePanel 이 새
+// 렌더러에서 다시 마운트될 때, 빈 목록에서 시작해 SFTP readdir 을 기다리는 대신 이 캐시로
+// 즉시 그려주고 백그라운드에서 새로고침한다(깜빡임 방지 용도일 뿐 — 항상 최신은 loadDir 가 보장).
+export type FeTab = { id: string; source: PanelSource; path: string; selected: Set<string>; entries?: FileInfo[] };
 export type FePanel = { id: string; tabs: FeTab[]; activeIdx: number };
 
 export type FeLeafNode = { id: string; type: 'leaf'; panel: FePanel };
@@ -129,7 +132,7 @@ export function serializeFeLayout(node: FeLayoutNode): any {
       id: node.id, type: 'leaf',
       panel: {
         id: node.panel.id, activeIdx: node.panel.activeIdx,
-        tabs: node.panel.tabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected) })),
+        tabs: node.panel.tabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected), entries: t.entries })),
       },
     };
   }
@@ -137,17 +140,20 @@ export function serializeFeLayout(node: FeLayoutNode): any {
 }
 
 /** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null.
- * remote(실제 연결) 소스는 termId(연결 세션의 임시 id)가 새 실행/재마운트에서는 이미 무효하므로
+ * remote(실제 연결) 소스는 termId(연결 세션의 임시 id)가 새 실행/재마운트에서는 보통 이미 무효하므로
  * 그대로 되살리지 않고 lazy-remote(세션 참조만 유지, 선택 시 자동 재연결)로 강등해서 복원한다 —
  * 그래야 FileExplorer 가 마운트 후 자동으로 다시 SFTP 연결을 맺고 저장된 path 로 이동할 수 있다.
+ * 단, isLiveTermId 로 termId 가 "지금도 살아있는 연결"이라고 확인되면(창 분리/재합침처럼 백엔드
+ * 세션이 끊기지 않은 경우) 강등하지 않고 remote 그대로 유지 — 안 그러면 살아있는 연결인데도
+ * 매번 재연결 + 파일목록 재로딩이 발생한다.
  */
-export function reviveFeLayout(saved: any, localLabel: string): FeLayoutNode | null {
+export function reviveFeLayout(saved: any, localLabel: string, isLiveTermId?: (termId: string) => boolean): FeLayoutNode | null {
   if (!saved || typeof saved !== 'object') return null;
   if (saved.type === 'leaf') {
     const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
     const tabs: FeTab[] = rawTabs.map((t: any) => {
       let source: PanelSource = t?.source || { mode: 'local', label: localLabel };
-      if (source.mode === 'remote' && source.sessionId) {
+      if (source.mode === 'remote' && source.sessionId && !(source.termId && isLiveTermId?.(source.termId))) {
         source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label };
       }
       return {
@@ -155,6 +161,7 @@ export function reviveFeLayout(saved: any, localLabel: string): FeLayoutNode | n
         source,
         path: String(t?.path || ''),
         selected: new Set<string>(Array.isArray(t?.selected) ? t.selected : []),
+        entries: Array.isArray(t?.entries) ? t.entries : undefined,
       };
     });
     if (tabs.length === 0) return null;
@@ -163,7 +170,7 @@ export function reviveFeLayout(saved: any, localLabel: string): FeLayoutNode | n
   }
   if (saved.type === 'row' || saved.type === 'column') {
     const children = (Array.isArray(saved.children) ? saved.children : [])
-      .map((c: any) => reviveFeLayout(c, localLabel))
+      .map((c: any) => reviveFeLayout(c, localLabel, isLiveTermId))
       .filter((c: FeLayoutNode | null): c is FeLayoutNode => !!c);
     if (children.length === 0) return null;
     if (children.length === 1) return children[0];

@@ -138,7 +138,10 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
   // 언마운트 / 비활성 전환 시 dedicated SFTP 해제
   useEffect(() => {
     return () => {
-      if (mode === 'remote') {
+      // 탭 분리/재부착 중에는 같은 termId 를 쓰는 다른 탭(파일전송 등)의 dedicated SFTP 를
+      // 살려둬야 한다 — 분리 과정에서 이 트리가 잠깐 언마운트되는 것만으로 연결이 끊기면
+      // 안 그래도 살아있는 세션인데 재접속+목록 재로딩이 발생한다.
+      if (mode === 'remote' && !(window as any).__preserveFileExplorerConns) {
         try { (window as any).api?.feReleaseSftp?.(termId); } catch {}
       }
     };

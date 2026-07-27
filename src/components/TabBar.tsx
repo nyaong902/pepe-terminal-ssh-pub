@@ -1,5 +1,5 @@
 // src/components/TabBar.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Tab, TabColor } from '../App';
 import { ContextMenu } from './ContextMenu';
@@ -10,6 +10,21 @@ function numberBadge(n: number): string {
   if (n >= 1 && n <= 9) return NUMBER_KEYCAPS[n - 1];
   if (n === 10) return '🔟';
   return `${n}.`;
+}
+
+// 탭을 네이티브(HTML5) 드래그로 잡고 있는 동안 true — 이 시점에 자식 프로세스(PowerShell 아이콘
+// 추출 등)를 spawn 하면 Windows 의 OS 레벨 드래그 중첩 메시지 루프와 충돌해 렌더러가 완전히
+// 멈추는(강제종료해야 하는) 데드락이 발생할 수 있다. 다른 모듈(FilePanel 등)이 이 값을 참고해
+// 드래그 중엔 아이콘 요청 spawn 을 미룬다.
+export let isTabDragActive = false;
+const tabDragListeners = new Set<() => void>();
+export function onTabDragChange(fn: () => void): () => void {
+  tabDragListeners.add(fn);
+  return () => { tabDragListeners.delete(fn); };
+}
+function setTabDragActive(v: boolean) {
+  isTabDragActive = v;
+  tabDragListeners.forEach(fn => { try { fn(); } catch {} });
 }
 
 type ShellInfo = { name: string; path: string; icon?: string };
@@ -59,6 +74,57 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
   const [renameValue, setRenameValue] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // 탭 드래그(재정렬/분리) — HTML5 네이티브 drag-and-drop 대신 mousedown/mousemove/mouseup 로 직접
+  // 구현한다. .tab-bar-row 가 -webkit-app-region:drag(타이틀바) 인데, 그 안에서 네이티브 HTML5
+  // 드래그를 시작하면 Windows 에서 OS 창-드래그와 충돌해 렌더러가 완전히 멈추는(강제종료 필요)
+  // 알려진 Electron 버그가 있다(electron/electron#7107 등) — 네이티브 DnD 자체를 안 쓰면 원천 차단된다.
+  const pointerDragRef = useRef<{ tabId: string; startX: number; startY: number; moved: boolean } | null>(null);
+  const startPointerDrag = (tabId: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const st = { tabId, startX: e.clientX, startY: e.clientY, moved: false };
+    pointerDragRef.current = st;
+    const onMove = (ev: MouseEvent) => {
+      if (pointerDragRef.current !== st) return;
+      if (!st.moved) {
+        if (Math.abs(ev.clientX - st.startX) < 4 && Math.abs(ev.clientY - st.startY) < 4) return;
+        st.moved = true;
+        setDraggingId(st.tabId);
+        setTabDragActive(true);
+      }
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      const overItem = el?.closest('.tab-item') as HTMLElement | null;
+      const overId = overItem?.getAttribute('data-tab-id') || null;
+      setDragOverId(overId && overId !== st.tabId ? overId : null);
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (pointerDragRef.current !== st) return;
+      pointerDragRef.current = null;
+      if (!st.moved) return; // 그냥 클릭 — onClick 이 처리
+      setTabDragActive(false);
+      const sx = ev.screenX, sy = ev.screenY;
+      const clientX = ev.clientX, clientY = ev.clientY;
+      (async () => {
+        try {
+          const b: any = await (window as any).api?.getWindowBounds?.();
+          const outside = b && (sx < b.x || sx > b.x + b.width || sy < b.y || sy > b.y + b.height);
+          if (outside) {
+            onDetachTab?.(st.tabId, sx, sy);
+          } else {
+            const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+            const overItem = el?.closest('.tab-item') as HTMLElement | null;
+            const overId = overItem?.getAttribute('data-tab-id') || null;
+            if (overId && overId !== st.tabId) onReorderTabs?.(st.tabId, overId);
+          }
+        } catch {}
+        setDraggingId(null);
+        setDragOverId(null);
+      })();
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   const workspaceTabs = tabs;
   const getWorkspaceShortcutLabel = (tabId: string): string | null => {
     const idx = workspaceTabs.findIndex(tab => tab.id === tabId);
@@ -102,42 +168,13 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
       {tabs.map(tab => (
         <div
           key={tab.id}
+          data-tab-id={tab.id}
           className={`tab-item ${tab.id === activeTabId ? 'active' : ''}${draggingId === tab.id ? ' dragging' : ''}${dragOverId === tab.id && draggingId && draggingId !== tab.id ? ' drag-over' : ''}${tab.color && tab.color !== 'default' ? ` tab-color-${tab.color}` : ''}`}
-          draggable={renamingId !== tab.id}
-          onDragStart={e => {
-            setDraggingId(tab.id);
-            e.dataTransfer.effectAllowed = 'move';
-            try { e.dataTransfer.setData('application/x-pepe-tab', tab.id); } catch {}
-          }}
-          onDragEnd={e => {
-            const sx = e.screenX, sy = e.screenY;
-            setDraggingId(null); setDragOverId(null);
-            // 창 밖에 드롭하면 새 창으로 분리
-            if (!onDetachTab) return;
-            (async () => {
-              try {
-                const b: any = await (window as any).api?.getWindowBounds?.();
-                if (b && (sx < b.x || sx > b.x + b.width || sy < b.y || sy > b.y + b.height)) {
-                  onDetachTab(tab.id, sx, sy);
-                }
-              } catch {}
-            })();
-          }}
-          onDragOver={e => {
-            if (!draggingId || draggingId === tab.id) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            if (dragOverId !== tab.id) setDragOverId(tab.id);
-          }}
-          onDragLeave={() => { if (dragOverId === tab.id) setDragOverId(null); }}
-          onDrop={e => {
-            e.preventDefault();
-            if (draggingId && draggingId !== tab.id) onReorderTabs?.(draggingId, tab.id);
-            setDraggingId(null);
-            setDragOverId(null);
-          }}
           onClick={() => onChange(tab.id)}
-          onMouseDown={e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); onCloseTab(tab.id); } }}
+          onMouseDown={e => {
+            if (e.button === 1) { e.preventDefault(); e.stopPropagation(); onCloseTab(tab.id); return; }
+            if (e.button === 0 && renamingId !== tab.id) startPointerDrag(tab.id, e);
+          }}
           onAuxClick={e => { if (e.button === 1) { e.preventDefault(); onCloseTab(tab.id); } }}
           onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id }); }}
         >

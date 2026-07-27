@@ -306,23 +306,26 @@ ipcMain.handle('dev:get-tab-pids', () => {
 // 개발용 — termId->tabId 라우팅 매핑 확인 (SSH 이벤트가 엉뚱한 프로세스로 가는지 디버깅용).
 ipcMain.handle('dev:get-term-tab-map', () => Object.fromEntries(termIdToTabId));
 
-// ── 임시: 문서화용 스크린샷 캡처 ────────────────────────────────────────────
+// ── 화면 캡처 ────────────────────────────────────────────────────────────
 // 격리된 탭(WebContentsView, 예: 브라우저/오피스/SQL Tool)은 mainWindow 위에 별도로 얹힌
 // 자체 GPU 합성 레이어라 일반 OS 화면 캡처 도구로는 안 잡힌다(검은 박스로 보임) — 이 핸들러는
 // Chromium 자체 리드백 API(webContents.capturePage)로 메인 윈도우 + 그 위에 떠 있는 격리 탭들을
 // 각각 읽어 sharp 로 올바른 위치에 합성해서 완전한 스크린샷 하나로 저장한다.
+// 저장 위치는 ui-prefs.docCaptureDir 로 사용자가 지정 가능(설정 안 했으면 앱 데이터 폴더 하위 기본값).
+function getCaptureDir(): string {
+  try {
+    const dir = loadUIPrefs()?.docCaptureDir;
+    if (typeof dir === 'string' && dir.trim()) return dir;
+  } catch {}
+  return path.join(app.getPath('userData'), 'doc-captures');
+}
 ipcMain.handle('dev:capture-screenshot', async () => {
-  const dbgDir = path.join(app.getPath('userData'), 'doc-captures');
-  const dbgLog = (msg: string) => { try { fs.mkdirSync(dbgDir, { recursive: true }); fs.appendFileSync(path.join(dbgDir, 'debug.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch {} };
-  dbgLog('handler invoked');
-  if (!mainWindow) { dbgLog('no mainWindow'); return { success: false, error: 'no window' }; }
+  const dir = getCaptureDir();
+  if (!mainWindow) return { success: false, error: 'no window' };
   try {
     await new Promise(r => setTimeout(r, 250));
-    dbgLog('requiring sharp...');
     const sharp = require('sharp');
-    dbgLog('sharp ok, capturing mainWindow...');
     const baseImg = await mainWindow.webContents.capturePage();
-    dbgLog(`mainWindow captured, empty=${baseImg.isEmpty()}`);
     const layers: { input: Buffer; left: number; top: number }[] = [];
     for (const [, view] of tabViews) {
       try {
@@ -336,20 +339,20 @@ ipcMain.handle('dev:capture-screenshot', async () => {
         layers.push({ input: img.toPNG(), left: b.x, top: b.y });
       } catch {}
     }
-    dbgLog(`layers=${layers.length}, compositing...`);
     let pipeline = sharp(baseImg.toPNG());
     if (layers.length) pipeline = pipeline.composite(layers);
-    const dir = path.join(app.getPath('userData'), 'doc-captures');
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `capture-${Date.now()}.png`);
+    const stamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').slice(0, 19);
+    const file = path.join(dir, `capture-${stamp}.png`);
     await pipeline.png().toFile(file);
-    dbgLog(`saved ${file}`);
-    return { success: true, file, layers: layers.length };
+    return { success: true, file, dir, layers: layers.length };
   } catch (e: any) {
-    dbgLog(`ERROR: ${String(e?.stack || e?.message || e)}`);
     return { success: false, error: String(e?.message || e) };
   }
 });
+// 현재 유효한 캡처 저장 폴더 조회 (사용자 지정 없으면 기본값) — "저장 폴더 열기" 메뉴가
+// 실제로 캡처를 한 번 안 해봐도 정확한 경로를 알 수 있도록.
+ipcMain.handle('dev:get-capture-dir', () => getCaptureDir());
 // 실제 탭이 닫힐 때만 호출 — 탭 전환(다른 탭으로 이동)으로는 절대 호출되지 않는다.
 // (뷰 생성/파괴는 isolatedTabIds 멤버십 + 실제 탭 존재 여부로만 결정 — 렌더 마운트/언마운트와 무관.)
 ipcMain.on('tab:destroy-view', (_event, { tabId }: { tabId: string }) => {
@@ -4875,6 +4878,20 @@ ipcMain.handle('compare:read', async (_e, { mode, termId, filePath, maxBytes }: 
 const fileIconCache = new Map<string, string>(); // path → dataUrl
 // 확장자 → 아이콘 (SFTP/SSH 원격 파일용 — 로컬에 파일 없어도 확장자만으로 Windows 아이콘 추출)
 const extIconCache = new Map<string, string>(); // ext → dataUrl
+// 응답 없는 경로(오프라인 네트워크 매핑 폴더 등) 하나가 배치 전체를 물고 늘어지지 못하게 타임아웃.
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>(resolve => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(fallback); } }, ms);
+    p.then(v => { if (!done) { done = true; clearTimeout(timer); resolve(v); } },
+           () => { if (!done) { done = true; clearTimeout(timer); resolve(fallback); } });
+  });
+}
+
+// 확장자 기반 fallback 아이콘 — Windows Explorer 와 동일한 SHGetFileInfo API 로 추출(PowerShell
+// 한 번 spawn, exec 결과를 async 로 대기해 메인 프로세스를 막지 않음). 렌더러 멈춤의 실제 원인은
+// 탭바 네이티브 HTML5 드래그 + -webkit-app-region:drag 충돌이었음이 확인돼(TabBar.tsx 에서 해결)
+// PowerShell spawn 자체는 무해하므로 v2.2.23 수준의 아이콘 정밀도로 되돌린다.
 ipcMain.handle('fe:get-icons-by-ext', async (_e, { exts, isDir }: { exts: string[]; isDir?: boolean }) => {
   if (!Array.isArray(exts) || exts.length === 0) return { icons: {} };
   if (process.platform !== 'win32') return { icons: {} };
@@ -4943,7 +4960,7 @@ $results | ConvertTo-Json -Compress`;
     const tmpPs = path.join(os.tmpdir(), `pepe-ext-icons-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
-      const out: string = await new Promise<string>((resolve, reject) => {
+      const out: string = await withTimeout(new Promise<string>((resolve, reject) => {
         execFile('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
         ], { windowsHide: true, timeout: 30000, encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
@@ -4951,7 +4968,7 @@ $results | ConvertTo-Json -Compress`;
           if (err) reject(err);
           else resolve((stdout || '').trim());
         });
-      });
+      }), 15000, '');
       try { fs.unlinkSync(tmpPs); } catch {}
       try { fs.unlinkSync(tmpList); } catch {}
       if (out) {
@@ -4976,23 +4993,23 @@ $results | ConvertTo-Json -Compress`;
   return { icons: result };
 });
 
-// 배치 아이콘 추출 — 한 번의 PowerShell 호출로 여러 파일 처리 (개별 호출 시 process spawn 오버헤드 + 일부 실패 회피)
+// 배치 아이콘 추출 — 한 번의 PowerShell 호출로 여러 파일 처리(SHGetFileInfo, .lnk 타겟/폴더
+// desktop.ini custom icon 까지 Explorer 와 동일하게 처리). 존재 확인은 fs.promises.access
+// (비동기)로 — 오프라인 네트워크 매핑 폴더가 섞여도 메인 프로세스가 막히지 않도록.
 ipcMain.handle('fe:get-file-icons-batch', async (_e, { filePaths }: { filePaths: string[] }) => {
   if (!Array.isArray(filePaths) || filePaths.length === 0) return { icons: {} };
   if (process.platform !== 'win32') return { icons: {} };
   const result: Record<string, string> = {};
-  // 캐시 hit 먼저 처리
   const remaining: string[] = [];
-  for (const fp of filePaths) {
+  await Promise.all(filePaths.map(async fp => {
     const key = `${fp}|small`;
     if (fileIconCache.has(key)) {
       result[fp] = fileIconCache.get(key) || '';
-    } else if (fs.existsSync(fp)) {
-      remaining.push(fp);
-    } else {
-      result[fp] = '';
+      return;
     }
-  }
+    const ok = await withTimeout(fs.promises.access(fp).then(() => true, () => false), 1500, false);
+    if (ok) remaining.push(fp); else result[fp] = '';
+  }));
   if (remaining.length === 0) return { icons: result };
   try {
     const { execFile } = require('child_process');
@@ -5062,7 +5079,7 @@ $results | ConvertTo-Json -Compress`;
     try {
       fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
       // async execFile — main process 블록 안 함 → 렌더러의 windowFocus 요청 등이 즉시 처리됨
-      const out: string = await new Promise<string>((resolve, reject) => {
+      const out: string = await withTimeout(new Promise<string>((resolve, reject) => {
         execFile('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
         ], { windowsHide: true, timeout: 30000, encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
@@ -5070,7 +5087,7 @@ $results | ConvertTo-Json -Compress`;
           if (err) reject(err);
           else resolve((stdout || '').trim());
         });
-      });
+      }), 15000, '');
       try { fs.unlinkSync(tmpPs); } catch {}
       try { fs.unlinkSync(tmpList); } catch {}
       if (out) {

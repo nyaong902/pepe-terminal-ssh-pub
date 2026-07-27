@@ -3,7 +3,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FilePanel, PanelSource } from './FilePanel';
 import { TransferLog } from './TransferLog';
-import { setTermFocusBlocked } from './TerminalPanel';
+import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
 import type { PanelSession } from '../utils/layoutUtils';
 import {
@@ -57,7 +57,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 최초 1회 계산 값을 layout/selectedLeafId 두 state 가 같이 참조해야 하므로 ref 에 담아 공유.
   const initialLayoutRef = useRef<FeLayoutNode | null>(null);
   if (!initialLayoutRef.current) {
-    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel) || createInitialFeLayout(localLabel);
+    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isTermConnected) || createInitialFeLayout(localLabel);
   }
   const [layout, setLayout] = useState<FeLayoutNode>(() => initialLayoutRef.current!);
   const [selectedLeafId, setSelectedLeafId] = useState<string>(() => {
@@ -81,6 +81,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, path } : t) }));
   const setLeafSelected = (leafId: string, sel: Set<string>) =>
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, selected: sel } : t) }));
+  // 로드된 목록을 활성 탭에 캐싱 — 창 분리/재합침으로 재마운트될 때 initialFiles 로 즉시 표시하기 위함.
+  const setLeafEntries = (leafId: string, entries: any[]) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, entries } : t) }));
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -911,6 +914,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop(leafId, files, srcMode, srcTermId, srcPath)}
           onDisconnect={() => handleDisconnect(tab.source)}
           workspaceId={workspaceIdRef.current}
+          initialFiles={tab.entries}
+          onFilesLoaded={entries => setLeafEntries(leafId, entries)}
         />
       </>
     );

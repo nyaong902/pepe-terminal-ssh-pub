@@ -132,7 +132,7 @@ function App() {
   const tabsRef = useRef(tabs);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'F9') { void (window as any).api?.devCaptureScreenshot?.(); }
+      if (e.key === 'F9') { void runDevCapture(); }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -1678,17 +1678,62 @@ function App() {
   });
   useEffect(() => { try { localStorage.setItem('showToolbar', showToolbar ? '1' : '0'); } catch {} }, [showToolbar]);
 
-  // 인라인 토스트 알림 (alert 대체)
-  const showToast = useCallback((msg: string, duration = 3000) => {
+  // 인라인 토스트 알림 (alert 대체). onClick 을 주면 클릭 가능한 토스트로 표시(예: 캡처 결과 →
+  // 저장 폴더 열기) — hover 시 강조, 클릭하면 즉시 닫히고 onClick 실행.
+  const showToast = useCallback((msg: string, duration = 3000, onClick?: () => void) => {
     const el = document.createElement('div');
     el.textContent = msg;
     Object.assign(el.style, {
       position: 'fixed', bottom: '60px', left: '50%', transform: 'translateX(-50%)',
       background: '#1a1a2e', color: '#eee', padding: '8px 18px', borderRadius: '6px',
       fontSize: '13px', zIndex: '9999', border: '1px solid #444', whiteSpace: 'nowrap',
+      cursor: onClick ? 'pointer' : 'default',
     });
+    const remove = () => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); };
+    if (onClick) {
+      el.addEventListener('mouseenter', () => { el.style.background = '#2a2a4e'; el.style.borderColor = '#667'; });
+      el.addEventListener('mouseleave', () => { el.style.background = '#1a1a2e'; el.style.borderColor = '#444'; });
+      el.addEventListener('click', () => { onClick(); remove(); });
+    }
     document.body.appendChild(el);
-    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, duration);
+    const t = setTimeout(remove, duration);
+    if (onClick) el.addEventListener('click', () => clearTimeout(t), { once: true });
+  }, []);
+
+  // 문서화용 화면 캡처 — 결과를 클릭 가능한 토스트로 알리고, 클릭하면 저장 폴더에서 파일 선택.
+  const runDevCapture = useCallback(async () => {
+    try {
+      const r: any = await (window as any).api?.devCaptureScreenshot?.();
+      if (r?.success && r.file) {
+        const fileName = String(r.file).split(/[\\/]/).pop() || r.file;
+        showToast(`📸 캡처 저장됨: ${fileName} (클릭하여 폴더 열기)`, 5000, () => {
+          (window as any).api?.shellShowItem?.(r.file);
+        });
+      } else {
+        showToast(`📸 캡처 실패: ${r?.error || '알 수 없는 오류'}`, 4000);
+      }
+    } catch (err: any) {
+      showToast(`📸 캡처 실패: ${err?.message || err}`, 4000);
+    }
+  }, [showToast]);
+
+  // 캡처 저장 폴더 선택 — 고른 경로를 ui-prefs 에 영구 저장(docCaptureDir).
+  const pickCaptureFolder = useCallback(async () => {
+    try {
+      const r: any = await (window as any).api?.pickFolder?.();
+      if (!r?.path) return;
+      await (window as any).api?.setUIPrefs?.({ docCaptureDir: r.path });
+      showToast(`📸 캡처 저장 위치 변경됨: ${r.path}`, 4000, () => {
+        (window as any).api?.shellOpenPath?.(r.path);
+      });
+    } catch {}
+  }, [showToast]);
+
+  const openCaptureFolder = useCallback(async () => {
+    try {
+      const dir = await (window as any).api?.devGetCaptureDir?.();
+      if (dir) (window as any).api?.shellOpenPath?.(dir);
+    } catch {}
   }, []);
 
   // fs-visible class 는 Layout 컴포넌트가 fullscreenTermId prop 으로 직접 className 에 포함시킴
@@ -4284,7 +4329,9 @@ function App() {
     {
       label: tMenu('tools.title'),
       items: [
-        { label: '📸 문서화용 캡처(임시)', action: () => { void (window as any).api?.devCaptureScreenshot?.(); } },
+        { label: '📸 화면 캡처', shortcut: 'F9', action: () => { void runDevCapture(); } },
+        { label: '📸 캡처 저장 위치 변경...', action: () => { void pickCaptureFolder(); } },
+        { label: '📸 캡처 저장 폴더 열기', action: () => { void openCaptureFolder(); } },
         { label: tMenu('tools.fileTransfer'), action: () => { void openFileTransferTab(tMenu('tools.fileTransfer')); }},
         { label: tMenu('tools.browserWs'), action: addBrowserTab },
         { label: tMenu('tools.compareWs'), action: addCompareTab },
@@ -5079,7 +5126,12 @@ function App() {
                 title={tApp('toolbar.dragHint')}
                 onMouseDown={onDragStart}
               >⋮⋮</span>
-              <button className="tool-btn" title="문서화용 스크린샷 캡처(임시)" onClick={() => { void (window as any).api?.devCaptureScreenshot?.(); }}>📸</button>
+              <button
+                className="tool-btn"
+                title="화면 캡처 (F9) — 우클릭: 저장 위치 변경"
+                onClick={() => { void runDevCapture(); }}
+                onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
+              >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
           <button
             className="tool-btn"

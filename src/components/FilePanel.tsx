@@ -1,5 +1,5 @@
 // src/components/FilePanel.tsx
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { ContextMenu } from './ContextMenu';
@@ -57,6 +57,10 @@ type Props = {
   panelId: string;
   refreshKey?: number;
   workspaceId?: string;
+  // 창 분리/재합침으로 다시 마운트될 때 빈 목록 대신 즉시 그려줄 캐시된 목록(있으면).
+  initialFiles?: FileInfo[];
+  // loadDir 로 새 목록을 성공적으로 받아올 때마다 호출 — 부모가 캐시로 들고 있다가 다음 마운트 때 initialFiles 로 넘겨준다.
+  onFilesLoaded?: (files: FileInfo[]) => void;
 };
 
 const api = (window as any).api || {};
@@ -164,10 +168,10 @@ function getFileIcon(name: string, isDir: boolean, shellPath?: string): string {
   return '📁';
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId }) => {
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
   const { t } = useTranslation('fileExplorer');
   const [bootReady, setBootReady] = useState(false);
-  const [files, setFiles] = useState<FileInfo[]>([]);
+  const [files, setFiles] = useState<FileInfo[]>(initialFiles || []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
@@ -241,12 +245,12 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   };
   // 로컬 드라이브 목록 — 볼륨 라벨 + 드라이브 letter 포함 ({path, label}[])
   const [drives, setDrives] = useState<{ path: string; label: string; depth?: number }[]>([]);
-  // 로컬 파일 아이콘 캐시 (path → dataUrl) — Electron 의 app.getFileIcon 으로 lazy 로딩
-  const [iconCache, setIconCache] = useState<Map<string, string>>(new Map());
-  const iconRequestedRef = useRef<Set<string>>(new Set());
-  // 확장자 → 아이콘 캐시 (원격 SFTP 파일용 — 로컬에 파일 없어도 확장자만으로 Windows 아이콘 추출)
-  const [extIconCache, setExtIconCache] = useState<Map<string, string>>(new Map());
-  const extRequestedRef = useRef<Set<string>>(new Set());
+  // 네이티브(OS) 파일/확장자 아이콘 조회는 사용하지 않는다 — 비동기 IPC 로 가져오는 이상
+  // "이모지 → 네이티브 아이콘"으로 바뀌는 전환이 눈에 보이는 지연을 피할 수 없어서(사용자 피드백),
+  // Tabby 등 다른 터미널 앱들도 그러듯 확장자 기반 고정 아이콘(getFileIcon(), 동기·즉시 렌더)만
+  // 사용한다. 아래 iconCache/extIconCache 는 항상 빈 채로 남아 getFileIcon() 으로 흘러간다.
+  const iconCache = useMemo(() => new Map<string, string>(), []);
+  const extIconCache = useMemo(() => new Map<string, string>(), []);
   // 드라이브 / 특수 폴더 목록 — source 모드와 무관하게 항상 로드해서 source 드롭다운에 항상 노출
   useEffect(() => {
     (async () => {
@@ -303,122 +307,8 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     return () => { cancelled = true; };
   }, [renamingFile]);
 
-  // 확장자 기반 Windows shell 아이콘 lazy 로딩
-  // - 원격 SFTP: 모든 파일에 대해 사용 (path-specific 아이콘 없음)
-  // - 로컬: path-specific 로딩 전 깜빡임 방지용 fallback (dir 아이콘 + ext 아이콘)
-  // ★ 500ms debounce — PowerShell spawn 과 modal 타이밍 충돌 방지
-  useEffect(() => {
-    if (!bootReady) return;
-    if (source.mode !== 'remote' && source.mode !== 'local') return;
-    if (!files || files.length === 0) return;
-    if (renamingFile) return;
-    // ext-icon 은 path-specific 보다 우선 로드 (fallback 용도) — 짧은 debounce
-    const t = setTimeout(() => {
-      const fileExts = new Set<string>();
-      let needsDirIcon = false;
-      for (const f of files) {
-        if (f.isDir) { needsDirIcon = true; continue; }
-        const idx = f.name.lastIndexOf('.');
-        const ext = idx > 0 ? f.name.slice(idx + 1).toLowerCase() : '';
-        if (ext && !extRequestedRef.current.has('file:' + ext)) {
-          fileExts.add(ext);
-        }
-      }
-      (async () => {
-        if (fileExts.size > 0) {
-          const exts = Array.from(fileExts);
-          exts.forEach(e => extRequestedRef.current.add('file:' + e));
-          try {
-            const r: any = await api.feGetIconsByExt?.(exts, false);
-            if (r?.icons) {
-              setExtIconCache(prev => {
-                const next = new Map(prev);
-                for (const [ext, url] of Object.entries(r.icons)) {
-                  if (url && typeof url === 'string') next.set('file:' + ext, url);
-                }
-                return next;
-              });
-            }
-          } catch {}
-        }
-        if (needsDirIcon && !extRequestedRef.current.has('dir:')) {
-          extRequestedRef.current.add('dir:');
-          try {
-            const r: any = await api.feGetIconsByExt?.([''], true);
-            if (r?.icons && r.icons['']) {
-              setExtIconCache(prev => { const next = new Map(prev); next.set('dir:', r.icons['']); return next; });
-            }
-          } catch {}
-        }
-      })();
-    }, 100);
-    return () => clearTimeout(t);
-  }, [files, source.mode, renamingFile, bootReady]);
-
-  // 로컬 모드에서 파일 목록 변경 시 shell icon 을 BATCH 로 요청.
-  // ★ 500ms debounce — 빠른 연속 파일 작업(create/rename 등) 으로 PowerShell spawn 이
-  //   modal 열림 타이밍과 겹쳐 OS 포커스를 빼앗는 문제 방지
-  useEffect(() => {
-    if (!bootReady) return;
-    if (source.mode !== 'local') return;
-    if (!files || files.length === 0) return;
-    if (renamingFile) return;
-    const t = setTimeout(() => {
-      const fetchIcons = async () => {
-        const paths: string[] = [];
-        const shellPaths: string[] = []; // 가상 shell: 경로 — 개별 요청 (Win32 SHGetFileInfo+PIDL)
-        for (const f of files) {
-          if (f.shellPath && (f.shellPath.startsWith('shell-pidl:') || f.shellPath.startsWith('shell:') || f.shellPath.startsWith('::{'))) {
-            const key = f.shellPath;
-            if (iconRequestedRef.current.has(key)) continue;
-            iconRequestedRef.current.add(key);
-            shellPaths.push(key);
-            continue;
-          }
-          const fullPath = f.shellPath && /^([A-Z]:|\\\\)/i.test(f.shellPath)
-            ? f.shellPath
-            : (currentPath.endsWith(sep) ? currentPath + f.name : currentPath + sep + f.name);
-          if (iconRequestedRef.current.has(fullPath)) continue;
-          iconRequestedRef.current.add(fullPath);
-          paths.push(fullPath);
-        }
-        // 일반 파일 — batch
-        if (paths.length > 0) {
-          try {
-            const r: any = await api.feGetFileIconsBatch?.(paths);
-            if (r?.icons) {
-              setIconCache(prev => {
-                const next = new Map(prev);
-                for (const [p, url] of Object.entries(r.icons)) {
-                  if (url && typeof url === 'string') next.set(p, url);
-                }
-                return next;
-              });
-            }
-          } catch {}
-        }
-        // shell: 가상 폴더 — 개별 호출
-        if (shellPaths.length > 0) {
-          const results: Array<[string, string]> = [];
-          for (const sp of shellPaths) {
-            try {
-              const r: any = await api.feGetFileIcon?.(sp);
-              if (r?.dataUrl) results.push([sp, r.dataUrl]);
-            } catch {}
-          }
-          if (results.length > 0) {
-            setIconCache(prev => {
-              const next = new Map(prev);
-              for (const [p, url] of results) next.set(p, url);
-              return next;
-            });
-          }
-        }
-      };
-      fetchIcons();
-    }, 500);
-    return () => clearTimeout(t);
-  }, [files, source.mode, currentPath, renamingFile, bootReady]);
+  // 네이티브(OS) 아이콘 비동기 조회는 사용하지 않음 — getFileIcon() 확장자 기반 고정 아이콘만
+  // 즉시 렌더링한다(위 iconCache/extIconCache 는 항상 빈 Map).
 
   // 파일명 인코딩 — SSH/SFTP 원격 파일명 디코딩에 사용. localStorage 영속화.
   // (loadDir 보다 먼저 선언되어야 함 — useCallback 이 dep 로 사용)
@@ -433,6 +323,12 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     const raf = window.requestAnimationFrame(() => setBootReady(true));
     return () => window.cancelAnimationFrame(raf);
   }, []);
+
+  // onFilesLoaded 는 부모(FileExplorer)가 매 렌더마다 새 함수를 넘길 수 있어 ref 로 안정화 —
+  // loadDir 의 useCallback dep 에 직접 넣으면 부모 리렌더마다 loadDir 아이덴티티가 바뀌어
+  // useEffect([currentPath, loadDir, ...]) 가 재실행되며 재로딩 루프가 생긴다.
+  const onFilesLoadedRef = useRef(onFilesLoaded);
+  useEffect(() => { onFilesLoadedRef.current = onFilesLoaded; }, [onFilesLoaded]);
 
   // 디렉토리 오류 메시지 — ENOENT 류는 친화적 한글로 변환 후 모달로 노출, 그 외엔 인라인.
   const isPathNotFoundError = (err: string): boolean => {
@@ -457,7 +353,9 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           setError(errStr);
         }
       } else {
-        setFiles(result?.files || []);
+        const list = result?.files || [];
+        setFiles(list);
+        try { onFilesLoadedRef.current?.(list); } catch {}
       }
     } catch (e: any) {
       const errStr = String(e?.message || e);
@@ -1233,9 +1131,12 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           } catch {}
         }}
       >
-        {loading && <div className="fe-loading">{t('loading')}</div>}
+        {/* 캐시된 목록(initialFiles)이 있는 상태에서 백그라운드 새로고침 중이면 로딩 표시로
+            기존 목록을 가리지 않는다 — 안 그러면 창 분리/재합침 직후 목록이 있는데도
+            "로딩 중" 화면이 잠깐 덮어써서 비었다가 다시 채워지는 것처럼 깜빡인다. */}
+        {loading && files.length === 0 && <div className="fe-loading">{t('loading')}</div>}
         {error && <div className="fe-error">{error}</div>}
-        {!loading && !error && sortedFiles.map((file, idx) => (
+        {!error && (!loading || files.length > 0) && sortedFiles.map((file, idx) => (
           <div key={fileKey(file)} data-name={file.name} data-key={fileKey(file)}
             className={`fe-file-row ${selectedFiles.has(fileKey(file)) ? 'selected' : ''}`}
             onClick={e => handleClick(file, idx, e)}
