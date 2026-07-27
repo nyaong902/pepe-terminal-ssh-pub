@@ -770,7 +770,11 @@ function createWindow() {
       shell.openExternal(url).catch(() => {});
       return;
     }
-    if (!url.startsWith('file://')) return;
+    // file:// 도 아닌 그 외 URL(예: 매뉴얼/AI 응답 안의 상대경로 링크가 pepeapp:// 기준으로
+    // resolve 된 경우)은 드래그앤드롭 대상이 아니므로 무조건 막는다 — 안 막으면 Electron 이
+    // 실제로 그 URL 로 창을 이동시켜 존재하지 않는 경로("Not Found")로 넘어가면서 앱 전체
+    // (SPA) 가 통째로 사라지는 사고가 난다.
+    if (!url.startsWith('file://')) { event.preventDefault(); return; }
     const cur = mainWindow?.webContents.getURL() || '';
     if (url === cur) return;
     event.preventDefault();
@@ -6609,9 +6613,11 @@ function createDetachedWindow(payload: any, bounds?: { x?: number; y?: number; w
     try { detachedWindows.delete(win); } catch {}
     try { detachedInitPayloads.delete(wcId); } catch {}
   });
-  // http(s) 외부 링크는 기본 브라우저로 (메인 창과 동일 정책)
+  // http(s) 외부 링크는 기본 브라우저로, 그 외(내부 상대경로 등)는 전부 차단 — 안 막으면
+  // 존재하지 않는 경로로 이 창이 그대로 navigate 되어 화면이 통째로 사라진다 (메인 창과 동일 정책).
   win.webContents.on('will-navigate', (event, url) => {
-    if (/^https?:\/\//i.test(url)) { event.preventDefault(); shell.openExternal(url).catch(() => {}); }
+    if (/^https?:\/\//i.test(url)) { event.preventDefault(); shell.openExternal(url).catch(() => {}); return; }
+    event.preventDefault();
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) { shell.openExternal(url).catch(() => {}); return { action: 'deny' }; }

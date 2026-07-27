@@ -93,7 +93,9 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "!dist/**/*.map",
+      "!dist-electron/**/*.map"
     ],
     "extraResources": [
       {

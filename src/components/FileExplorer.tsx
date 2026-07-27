@@ -686,13 +686,20 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     // bootReady 가 false→true 로 바뀌기 전에는 .fe-dual 자체가 아직 렌더되지 않아 dualRef.current 가 null —
     // deps 를 비워두면 그 첫 실행에서만 관찰이 무산되고 이후 다시 붙지 않으므로 bootReady 를 의존성에 포함.
   }, [bootReady]);
+  // 탭이 display:none 으로 숨겨지면 .fe-dual 의 clientWidth/Height 가 0 이 되는데, 그때마다
+  // leafRects 를 빈 Map 으로 만들면 아래 렌더에서 모든 leaf 가 null 을 반환해 FilePanel 이
+  // 통째로 언마운트되고(→ bootReady/디렉토리 목록이 리셋), 탭을 다시 보이면 처음부터 새로
+  // 마운트되며 "재접속처럼" 보인다. 0 사이즈일 때는 새로 계산하지 않고 마지막으로 계산된
+  // (실제 크기였을 때의) geometry 를 그대로 재사용해 FilePanel 이 계속 마운트 상태를 유지하게 한다.
+  const lastGeometryRef = useRef<{ leafRects: Map<string, FeRect>; dividers: FeDividerInfo[] }>({ leafRects: new Map(), dividers: [] });
   const { leafRects, dividers } = React.useMemo(() => {
-    const leafRects = new Map<string, FeRect>();
-    const dividers: FeDividerInfo[] = [];
     if (containerSize.width > 0 && containerSize.height > 0) {
+      const leafRects = new Map<string, FeRect>();
+      const dividers: FeDividerInfo[] = [];
       computeFeGeometry(layout, { left: 0, top: 0, width: containerSize.width, height: containerSize.height }, leafRects, dividers);
+      lastGeometryRef.current = { leafRects, dividers };
     }
-    return { leafRects, dividers };
+    return lastGeometryRef.current;
   }, [layout, containerSize.width, containerSize.height]);
   // 분할선 드래그 — 해당 컨테이너의 sizes 를 픽셀 delta 로 조정
   const onDividerMouseDown = (e: React.MouseEvent, d: FeDividerInfo) => {

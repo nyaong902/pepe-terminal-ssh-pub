@@ -43,6 +43,14 @@ function serveExternalStaticDirs(): Plugin {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // CPU 진단용 — 프로덕션 빌드에도 sourcemap 을 남겨서, 문제 PC에서 뜬 DevTools Performance
+  // 트레이스의 난독화된 함수명(예: $q, N5e)을 실제 소스 위치로 역매핑할 수 있게 한다.
+  // 'hidden' = .js.map 은 그대로 생성하되 번들에 sourceMappingURL 참조를 안 남김(devtools가
+  // 자동으로 안 불러옴). package.json build.files 에서 *.map 을 제외해 설치본에는 아예 안 들어가고,
+  // 로컬 dist/에만 남아 트레이스 분석용으로 계속 쓸 수 있다.
+  build: {
+    sourcemap: 'hidden',
+  },
   plugins: [
     react(),
     serveExternalStaticDirs(),
@@ -52,6 +60,7 @@ export default defineConfig({
         entry: 'electron/main.ts',
         vite: {
           build: {
+            sourcemap: 'hidden',
             rollupOptions: {
               external: ['ssh2', 'cpu-features', 'iconv-lite', 'node-pty', 'webdav-server', 'electron-updater'],
             },

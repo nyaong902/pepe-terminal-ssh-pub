@@ -59,15 +59,20 @@ export const termStore: Map<string, { term: Terminal; fit: FitAddon; search: Sea
 // termId가 이 프로세스에 없으면(=다른 탭/패널 프로세스가 소유) term:call relay 로 넘긴다.
 // App.tsx/TabApp.tsx 는 항상 같은 이름으로 이 함수들을 부르면 되고, 소유 프로세스 판별과
 // IPC 왕복은 함수 내부에서 처리된다 — 호출부(App.tsx) 는 전혀 손댈 필요 없음.
+// dispatchInProgress 가 true 인 동안(= 지금 이 호출이 term:dispatch 로 이미 도착한 relay 그
+// 자체를 처리하는 중)은 무조건 로컬로 취급한다 — 안 그러면 termStore 에 아직 없는(레이스/유령)
+// termId 하나 때문에 "여기 없음 → 다시 relay → main 이 host(=여기)로 재전송 → 다시 여기 없음
+// → ..." 무한 IPC 핑퐁이 생겨 렌더러+메인 프로세스 CPU 를 영구적으로 잡아먹는 사고가 났었다.
+let dispatchInProgress = false;
 function relayIfRemote(termId: string, fn: string, args: any[]): boolean {
-  if (termStore.has(termId)) return false;
+  if (dispatchInProgress || termStore.has(termId)) return false;
   try { (window as any).api?.termCall?.(termId, fn, args); } catch {}
   return true;
 }
 // 반환값이 실제로 쓰이는 함수(Category C)용 — 원격이면 invoke relay 를 Promise 로 반환하고,
 // 로컬이면 null 을 반환해 호출부가 원래 동기 로직을 그대로 이어가게 한다.
 function invokeIfRemote<T>(termId: string, fn: string, args: any[], fallback: T): Promise<T> | null {
-  if (termStore.has(termId)) return null;
+  if (dispatchInProgress || termStore.has(termId)) return null;
   try { return ((window as any).api?.termInvoke?.(termId, fn, args) ?? Promise.resolve(fallback)) as Promise<T>; } catch { return Promise.resolve(fallback); }
 }
 // getOrCreateTerm 이 termStore 에 실제로 entry 를 넣는 시점(termStore.set 직후)에 1회성으로
@@ -2078,11 +2083,13 @@ function installTermRelayDispatchers() {
   if (termRelayDispatchersInstalled) return;
   termRelayDispatchersInstalled = true;
   window.api?.onTermDispatch?.(({ termId, fn, args }: { termId: string; fn: string; args: any[] }) => {
-    try { termCallWhitelist[fn]?.(termId, ...(args || [])); } catch {}
+    dispatchInProgress = true;
+    try { termCallWhitelist[fn]?.(termId, ...(args || [])); } catch {} finally { dispatchInProgress = false; }
   });
   window.api?.onTermDispatchInvoke?.(({ termId, fn, args, requestId }: { termId: string; fn: string; args: any[]; requestId: string }) => {
     let result: any;
-    try { result = termInvokeWhitelist[fn]?.(termId, ...(args || [])); } catch { result = undefined; }
+    dispatchInProgress = true;
+    try { result = termInvokeWhitelist[fn]?.(termId, ...(args || [])); } catch { result = undefined; } finally { dispatchInProgress = false; }
     window.api?.termInvokeReply?.(requestId, result);
   });
 }
