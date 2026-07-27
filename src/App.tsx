@@ -466,6 +466,37 @@ function App() {
     setStickyNoteAutoShowState(next);
     try { (window as any).api?.setUIPrefs?.({ stickyNoteAutoShow: next }); } catch {}
   };
+  // 시계 위젯(스위스 철도 시계 + 뽀모도로 타이머) 표시 여부 — 위젯 창이 자체적으로(우클릭 등)
+  // 닫힐 수도 있으므로 onClockWidgetVisibility 로 실제 창 상태와 툴바 버튼을 동기화한다.
+  const [clockWidgetVisible, setClockWidgetVisible] = useState(false);
+  useEffect(() => {
+    (window as any).api?.clockWidgetGetState?.().then((state: any) => {
+      if (state && typeof state.visible === 'boolean') setClockWidgetVisible(state.visible);
+    }).catch(() => {});
+    const off = (window as any).api?.onClockWidgetVisibility?.((visible: boolean) => setClockWidgetVisible(visible));
+    return () => { try { off?.(); } catch {} };
+  }, []);
+  // 뽀모도로 타이머 종료 — 위젯 창(220x220, 팝업 담기엔 너무 작음)이 아니라 메인 창에 화면
+  // 중앙 팝업으로 표시. worklog 알람과 동일하게 확인 누를 때까지 유지되고, 소리도 반복 재생.
+  const [clockTimerDone, setClockTimerDone] = useState<{ totalMs: number | null; ts: number } | null>(null);
+  useEffect(() => {
+    const off = (window as any).api?.onClockWidgetTimerDone?.((p: { totalMs: number | null; ts: number }) => {
+      setClockTimerDone(p);
+    });
+    return () => { try { off?.(); } catch {} };
+  }, []);
+  useEffect(() => {
+    if (!clockTimerDone) return;
+    const REPEAT_MS = 4500;
+    const MIN_DURATION_MS = 60_000;
+    void playReminderChime().catch(() => {});
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - start >= MIN_DURATION_MS) { clearInterval(timer); return; }
+      void playReminderChime().catch(() => {});
+    }, REPEAT_MS);
+    return () => clearInterval(timer);
+  }, [clockTimerDone]);
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [showRuntimeLogs, setShowRuntimeLogs] = useState<boolean>(() => {
     try {
@@ -5093,6 +5124,24 @@ function App() {
             </svg>
           </button>
           <button
+            className={`tool-btn ${clockWidgetVisible ? 'active' : ''}`}
+            title={clockWidgetVisible ? '시계 위젯 끄기' : '시계 위젯 켜기 (뽀모도로 타이머)'}
+            onClick={async () => {
+              try {
+                const next = await (window as any).api?.clockWidgetToggle?.();
+                if (typeof next === 'boolean') setClockWidgetVisible(next);
+              } catch {}
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9" fill="#ffffff" stroke="#333" strokeWidth="1.4" />
+              <path d="M12 12 L12 12 L17 8" fill="none" stroke="#e2231a" strokeWidth="1.6" strokeLinecap="round" />
+              <path d="M12 3 A9 9 0 0 1 17 8 L12 12 Z" fill="#e2231a" />
+              <line x1="12" y1="12" x2="12" y2="6" stroke="#111" strokeWidth="1.6" strokeLinecap="round" />
+              <line x1="12" y1="12" x2="15.5" y2="12" stroke="#111" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
             className={`tool-btn btn-pin${terminalPinned ? ' pinned' : ''}`}
             title={terminalPinned ? tApp('toolbar.terminalUnpin') : tApp('toolbar.terminalPin')}
             onClick={() => { const next = !terminalPinned; setTerminalPinned(next); if (!next) setTerminalVisible(false); }}
@@ -6863,6 +6912,26 @@ function App() {
                 }}
               >{tApp('worklogReminder.openWorklog')}</button>
               <button className="panel-btn" onClick={() => setWorklogReminderShown(null)}>{tApp('worklogReminder.dismiss')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {clockTimerDone && (
+        <div
+          onClick={() => setClockTimerDone(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'linear-gradient(180deg, #23283a, #1a1e2b)', color: '#e6edf3', borderRadius: 12, padding: 20, minWidth: 320, maxWidth: '70vw', border: '1px solid rgba(226,35,26,0.4)', boxShadow: '0 24px 72px rgba(0,0,0,0.55)', textAlign: 'center' }}
+          >
+            <div style={{ fontSize: 28 }}>⏰</div>
+            <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700 }}>타이머 종료</div>
+            <div style={{ marginTop: 6, fontSize: 13, color: 'var(--win-text-dim, #9aa7b3)' }}>
+              {clockTimerDone.totalMs ? `${Math.round(clockTimerDone.totalMs / 60000)}분 타이머가 끝났어요.` : '설정한 시간이 다 됐어요.'}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+              <button className="panel-btn primary" onClick={() => setClockTimerDone(null)}>확인</button>
             </div>
           </div>
         </div>

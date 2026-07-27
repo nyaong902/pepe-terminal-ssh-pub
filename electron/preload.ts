@@ -46,6 +46,26 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('sticky-note:list', listener);
     return () => ipcRenderer.removeListener('sticky-note:list', listener);
   },
+  // 시계 위젯(스위스 철도 시계 + 뽀모도로 타이머) — 단일 인스턴스 독립 창 (clockWidget.json)
+  clockWidgetToggle: () => ipcRenderer.invoke('clock-widget:toggle'),
+  clockWidgetGetState: () => ipcRenderer.invoke('clock-widget:get-state'),
+  clockWidgetSetTimer: (endTime: number | null, totalMs: number | null) => ipcRenderer.invoke('clock-widget:set-timer', { endTime, totalMs }),
+  clockWidgetClose: () => ipcRenderer.invoke('clock-widget:close'),
+  onClockWidgetVisibility: (cb: (visible: boolean) => void) => {
+    const listener = (_e: any, visible: boolean) => cb(visible);
+    ipcRenderer.on('clock-widget:visibility', listener);
+    return () => ipcRenderer.removeListener('clock-widget:visibility', listener);
+  },
+  // main 프로세스의 네이티브 Notification 모듈로 OS 알림을 띄운다 — 렌더러의 Web Notification API
+  // 보다 Windows 에서 훨씬 신뢰성 있게 뜬다(타이머 종료 알림 등).
+  notifyShow: (title: string, body: string) => ipcRenderer.invoke('notify:show', { title, body }),
+  // 뽀모도로 타이머 종료 — 위젯 창에서 호출하면 메인 앱 창에 화면 중앙 팝업을 띄운다.
+  clockWidgetNotifyDone: (totalMs: number | null) => ipcRenderer.invoke('clock-widget:notify-done', { totalMs }),
+  onClockWidgetTimerDone: (cb: (p: { totalMs: number | null; ts: number }) => void) => {
+    const listener = (_e: any, p: any) => cb(p);
+    ipcRenderer.on('clock-widget:timer-done', listener);
+    return () => ipcRenderer.removeListener('clock-widget:timer-done', listener);
+  },
   // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
   setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
   onWindowTheme: (cb: (id: string) => void) => {

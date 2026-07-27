@@ -10,6 +10,7 @@ import SessionEditorPopout from './SessionEditorPopout'
 import TabApp from './components/TabApp'
 import PanelHost from './components/PanelHost'
 import StickyNotePopout from './components/StickyNotePopout'
+import ClockWidget from './components/ClockWidget'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
@@ -73,6 +74,25 @@ if (window.location.hash.includes('panel-app')) {
   document.body.style.margin = '0';
   document.body.style.padding = '0';
   root = <StickyNotePopout noteId={noteId} />;
+} else if (window.location.hash.includes('clock-widget')) {
+  // 시계 위젯 독립 창 진입점 — '#clock-widget' (electron/main.ts 의 createClockWidgetWindow 가 로드)
+  // index.css 의 전역 `body { min-height: 100vh }` 가 이 작은(220x220) 창에도 적용되면 body 가
+  // 창보다 훨씬 커져 스크롤이 생기고 시계가 왼쪽 위 구석에 작게 표시되는 문제가 있었다 —
+  // 이 창에서만 명시적으로 크기를 창 크기에 고정하고 오버플로를 막는다.
+  document.documentElement.style.background = 'transparent';
+  document.documentElement.style.width = '100%';
+  document.documentElement.style.height = '100%';
+  document.documentElement.style.overflow = 'hidden';
+  document.body.classList.add('clock-widget-window');
+  document.body.style.background = 'transparent';
+  document.body.style.margin = '0';
+  document.body.style.padding = '0';
+  document.body.style.width = '100%';
+  document.body.style.height = '100%';
+  document.body.style.minHeight = '0';
+  document.body.style.minWidth = '0';
+  document.body.style.overflow = 'hidden';
+  root = <ClockWidget />;
 } else if (window.location.hash.includes('tab-poc')) {
   // 개발용 PoC — 실제 WebContentsView 가 이 frameless/transparent 창 위에서 정상
   // 렌더링/IPC 되는지만 확인하는 임시 경로. 실제 앱 UI 와는 무관.

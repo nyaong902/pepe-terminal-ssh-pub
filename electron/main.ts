@@ -1,5 +1,5 @@
 // electron/main.ts
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents, protocol, session } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, shell, clipboard, nativeImage, safeStorage, screen, webContents, protocol, session, Notification } from 'electron';
 
 // 패키지된(production/설치본) 빌드에서는 메인 프로세스 console.log(진단 로그)를 끈다.
 // dev 실행 시에만 [claude]/[codex]/[mcp-control] 등 디버그 로그 출력. console.error/warn 은 유지.
@@ -41,6 +41,7 @@ import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
+import { loadClockWidgetState, saveClockWidgetState, ClockWidgetState } from './clockWidgetStore';
 import { xferLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar, getAllSipSidecars, resolveBinary as resolveSipdBinary } from './sipSidecar';
@@ -1143,6 +1144,24 @@ const PEPE_MIME_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
+// Windows 는 앱을 특정 AppUserModelId 로 등록해야 OS 알림(Notification)이 신뢰성 있게 뜬다 —
+// 이게 없으면 dev 모드(패키징 안 된 electron.exe)에서는 알림이 "Electron" 이라는 이름 없는
+// 기본 AppID 로 시도되다 그냥 조용히 씹히는 경우가 흔하다. 렌더러(ClockWidget.tsx)의
+// `new Notification()` 이 안 뜨는 문제의 원인 중 하나로 추정 — main 프로세스에서 명시적으로 등록.
+app.setAppUserModelId('com.pepe.terminalssh');
+
+ipcMain.handle('notify:show', (_e, { title, body }: { title: string; body: string }) => {
+  // 렌더러(Web Notification API)는 Electron 에서 신뢰성이 낮아, main 프로세스의 네이티브
+  // Notification 모듈을 대신 쓴다 — OS 알림 센터에 훨씬 안정적으로 뜬다.
+  if (!Notification.isSupported()) return false;
+  try {
+    new Notification({ title, body, silent: true }).show();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 app.whenReady().then(() => {
   // pepe-connect(휴대폰 화면 미러링) 는 폰이 즉석에서 만든 자체서명 HTTPS(8443)로 접속하는데,
   // 위 certificate-error 이벤트는 일반 문서/서브리소스 로드에만 적용되고 WebSocket(wss://) 핸드셰이크와
@@ -1212,6 +1231,8 @@ app.whenReady().then(() => {
   registerPepeInstance();
   createWindow();
   if (loadUIPrefs().stickyNoteAutoShow !== false) restoreStickyNotes();
+  // 시계 위젯 — 마지막에 켜져 있었으면(진행 중이던 타이머 포함) 그대로 복원.
+  { const clockState = loadClockWidgetState(); if (clockState.visible) createClockWidgetWindow(clockState); }
   installX11DisplayHook();
   void messengerStartService();
 
@@ -6692,6 +6713,108 @@ ipcMain.handle('sticky-note:focus', (_e, id: string) => {
 ipcMain.handle('sticky-note:get-list', () => {
   const { notes } = loadStickyNotes();
   return notes.map(n => ({ id: n.id, html: n.html, updatedAt: n.updatedAt, minimized: minimizedStickyNoteIds.has(n.id) }));
+});
+
+// ── 시계 위젯(스위스 철도 시계 + 뽀모도로 타이머) — 단일 인스턴스 독립 창 ──────────
+// 포스트잇과 동일한 frameless/transparent/always-on-top 패턴이지만 창은 하나뿐이라
+// Map 이 아니라 단일 참조로 관리한다. 위치/타이머(endTime, totalMs)는 clockWidget.json 에
+// 저장되어 앱을 껐다 켜도 진행 중이던 타이머가 그대로 이어진다.
+let clockWidgetWindow: BrowserWindow | null = null;
+const CLOCK_WIDGET_SIZE = 220;
+
+function createClockWidgetWindow(state: ClockWidgetState) {
+  if (clockWidgetWindow && !clockWidgetWindow.isDestroyed()) return clockWidgetWindow;
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x: ax, y: ay, width: aw } = display.workArea;
+  const x = state.x ?? (ax + aw - CLOCK_WIDGET_SIZE - 40);
+  const y = state.y ?? (ay + 40);
+  const win = new BrowserWindow({
+    x: Math.round(x), y: Math.round(y),
+    width: CLOCK_WIDGET_SIZE, height: CLOCK_WIDGET_SIZE,
+    resizable: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  clockWidgetWindow = win;
+  win.on('system-context-menu', (e) => e.preventDefault());
+  win.once('ready-to-show', () => { try { win.show(); } catch {} });
+  let boundsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const saveBoundsDebounced = () => {
+    if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+    boundsSaveTimer = setTimeout(() => {
+      if (win.isDestroyed()) return;
+      const b = win.getBounds();
+      try { saveClockWidgetState({ x: b.x, y: b.y }); } catch {}
+    }, 300);
+  };
+  win.on('move', saveBoundsDebounced);
+  win.on('closed', () => {
+    if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+    clockWidgetWindow = null;
+    try { saveClockWidgetState({ visible: false }); } catch {}
+    try { mainWindow?.webContents.send('clock-widget:visibility', false); } catch {}
+  });
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'];
+  if (!app.isPackaged && devServerUrl) {
+    win.loadURL(devServerUrl + '#clock-widget');
+  } else {
+    win.loadURL(pepeAppUrl('clock-widget'));
+  }
+  return win;
+}
+
+ipcMain.handle('clock-widget:toggle', () => {
+  const state = loadClockWidgetState();
+  const nextVisible = !state.visible;
+  saveClockWidgetState({ visible: nextVisible });
+  if (nextVisible) {
+    createClockWidgetWindow(loadClockWidgetState());
+  } else if (clockWidgetWindow && !clockWidgetWindow.isDestroyed()) {
+    clockWidgetWindow.destroy();
+    clockWidgetWindow = null;
+  }
+  try { mainWindow?.webContents.send('clock-widget:visibility', nextVisible); } catch {}
+  return nextVisible;
+});
+
+ipcMain.handle('clock-widget:get-state', () => loadClockWidgetState());
+
+// 렌더러(위젯 창)가 마우스 드래그로 타이머를 설정/취소할 때 호출 — endTime=null 이면 취소.
+ipcMain.handle('clock-widget:set-timer', (_e, { endTime, totalMs }: { endTime: number | null; totalMs: number | null }) => {
+  const next = saveClockWidgetState({ endTime, totalMs });
+  return next;
+});
+
+// 뽀모도로 타이머 종료 — 위젯 창(작고 독립된 창)이 아니라 메인 앱 창에 화면 중앙 팝업(worklog
+// 알람과 동일한 스타일)으로 알린다. OS 알림(Notification)은 dev/미패키징 환경에서 신뢰성이
+// 낮아 앱 내 팝업으로 전환 — 메인 창이 백그라운드에 있어도 놓치지 않도록 포커스도 가져온다.
+ipcMain.handle('clock-widget:notify-done', (_e, { totalMs }: { totalMs: number | null }) => {
+  try { mainWindow?.webContents.send('clock-widget:timer-done', { totalMs, ts: Date.now() }); } catch {}
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  } catch {}
+});
+
+// 위젯을 닫기(X) 버튼 등으로 직접 닫을 때 — toggle 과 동일하지만 렌더러에서 자기 자신을 끌 때 사용.
+ipcMain.handle('clock-widget:close', () => {
+  saveClockWidgetState({ visible: false });
+  if (clockWidgetWindow && !clockWidgetWindow.isDestroyed()) {
+    clockWidgetWindow.destroy();
+    clockWidgetWindow = null;
+  }
+  try { mainWindow?.webContents.send('clock-widget:visibility', false); } catch {}
 });
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
 ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {

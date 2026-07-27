@@ -94,8 +94,10 @@ html, body {
   padding: 0;
 }
 
-/* 윈도우 전체 외곽선 (다른 앱과 구분) */
-#root::after {
+/* 윈도우 전체 외곽선 (다른 앱과 구분) — 메인 앱 창에만 적용. main.tsx 는 단일 엔트리라
+   이 CSS 가 sticky-note/clock-widget 등 다른 독립 창에도 번들에 실려 들어가므로,
+   시계 위젯처럼 완전히 동그랗고 사각 테두리가 없어야 하는 창에서는 꺼야 한다. */
+body:not(.clock-widget-window) #root::after {
   content: '';
   position: fixed;
   inset: 0;
