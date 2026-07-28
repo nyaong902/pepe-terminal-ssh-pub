@@ -5,6 +5,12 @@ PePe 안에 내장된 웹 브라우저 탭입니다. 별도 프로그램(Chrome/
 
 ![브라우저 워크스페이스](../screenshots/browser-01.png)
 
+![브라우저 데모](../videos/browser-demo.gif)
+
+📹 [전체 데모 영상 보기](../videos/browser-demo.mp4)
+
+![대시보드 예시 — 사내 EMS 접속 화면](../screenshots/browser-02.png)
+
 ## 특징
 
 - 탭 형태로 여러 페이지 동시에 열기
