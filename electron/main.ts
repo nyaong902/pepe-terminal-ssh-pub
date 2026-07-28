@@ -1211,6 +1211,24 @@ app.whenReady().then(() => {
         return new Response('Not Found', { status: 404 });
       }
     }
+    // 파일전송 패널에서 원격(SFTP) 파일을 Windows 탐색기로 직접 드래그해 놓을 때(DownloadURL 드래그)
+    // 쓰는 엔드포인트 — 실제로 OS 에 드롭될 때만 지연 호출되므로 사전 다운로드/동기 대기가 필요 없다.
+    if (topSeg === '__sftp-file') {
+      const termId = String(requestUrl.searchParams.get('termId') || '').trim();
+      const remotePath = String(requestUrl.searchParams.get('path') || '').trim();
+      if (!termId || !remotePath) return new Response('Bad Request', { status: 400 });
+      const tmpPath = path.join(os.tmpdir(), `pepe-drag-${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(remotePath)}`);
+      try {
+        await getSSHBridge().handleSFTPDownload(termId, remotePath, tmpPath);
+        const data = await fs.promises.readFile(tmpPath);
+        const mime = PEPE_MIME_TYPES[path.extname(remotePath).toLowerCase()] || 'application/octet-stream';
+        return new Response(data, { status: 200, headers: { 'content-type': mime } });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      } finally {
+        fs.promises.unlink(tmpPath).catch(() => {});
+      }
+    }
     const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
     if (isExternal && app.isPackaged) {
       // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 요청이 올 때 풀어준다.

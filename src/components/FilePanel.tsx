@@ -53,6 +53,8 @@ type Props = {
   currentPath: string;
   onPathChange: (path: string) => void;
   onFileDrop?: (files: string[], srcMode: string, srcTermId?: string, srcPath?: string) => void;
+  // Windows 탐색기 등 OS 밖에서 실제 파일을 끌어다 놓았을 때 — 절대경로 목록.
+  onOsFilesDrop?: (absPaths: string[]) => void;
   onDisconnect?: () => void;
   panelId: string;
   refreshKey?: number;
@@ -180,7 +182,7 @@ function setNameDragImage(e: React.DragEvent, label: string) {
   setTimeout(() => el.remove(), 0);
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
   const { t } = useTranslation('fileExplorer');
   const [bootReady, setBootReady] = useState(false);
   const [files, setFiles] = useState<FileInfo[]>(initialFiles || []);
@@ -1130,17 +1132,30 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           }
         }}
         onContextMenu={e => handleContextMenu(e)}
-        onDragOver={e => { if (e.dataTransfer.types.includes('text/fe-files')) { e.preventDefault(); e.currentTarget.classList.add('fe-drop-target'); } }}
+        onDragOver={e => {
+          if (e.dataTransfer.types.includes('text/fe-files') || e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            e.currentTarget.classList.add('fe-drop-target');
+          }
+        }}
         onDragLeave={e => { e.currentTarget.classList.remove('fe-drop-target'); }}
         onDrop={e => {
           e.currentTarget.classList.remove('fe-drop-target');
           const raw = e.dataTransfer.getData('text/fe-files');
-          if (!raw) return;
-          e.preventDefault();
-          try {
-            const data = JSON.parse(raw);
-            if (data.panelId !== panelId) onFileDrop?.(data.files, data.srcMode, data.srcTermId, data.srcPath);
-          } catch {}
+          if (raw) {
+            e.preventDefault();
+            try {
+              const data = JSON.parse(raw);
+              if (data.panelId !== panelId) onFileDrop?.(data.files, data.srcMode, data.srcTermId, data.srcPath);
+            } catch {}
+            return;
+          }
+          // Windows 탐색기 등에서 실제 OS 파일을 끌어다 놓은 경우 — Electron 의 File 은 .path 로 절대경로 노출.
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            e.preventDefault();
+            const absPaths = Array.from(e.dataTransfer.files).map(f => (f as any).path).filter(Boolean);
+            if (absPaths.length > 0) onOsFilesDrop?.(absPaths);
+          }
         }}
       >
         {/* 캐시된 목록(initialFiles)이 있는 상태에서 백그라운드 새로고침 중이면 로딩 표시로
@@ -1166,6 +1181,14 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
               e.dataTransfer.effectAllowed = 'copy';
               const label = filesToDrag.length > 1 ? t('dragCountLabel', { count: filesToDrag.length }) : `${file.isDir ? '📁' : '📄'} ${file.name}`;
               setNameDragImage(e, label);
+              // Windows 탐색기 등 앱 밖으로 직접 끌어다 놓기 — DownloadURL 은 브라우저 제약상 파일 1개만 지원(폴더 제외).
+              if (filesToDrag.length === 1 && !file.isDir) {
+                const fullPath = currentPath.endsWith(sep) ? currentPath + file.name : currentPath + sep + file.name;
+                const url = source.mode === 'local'
+                  ? `pepeapp://app/__local-file?path=${encodeURIComponent(fullPath)}`
+                  : `pepeapp://app/__sftp-file?termId=${encodeURIComponent(source.termId || '')}&path=${encodeURIComponent(fullPath)}`;
+                e.dataTransfer.setData('DownloadURL', `application/octet-stream:${file.name}:${url}`);
+              }
             }}
           >
             <span className="fe-col-name" style={{ width: colWidths.name }}>
@@ -1261,6 +1284,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
             const first = files.find(f => selectedNames[0] === f.name);
             const label = selectedNames.length > 1 ? t('dragCountLabel', { count: selectedNames.length }) : `${first?.isDir ? '📁' : '📄'} ${selectedNames[0] ?? ''}`;
             setNameDragImage(e, label);
+            if (selectedNames.length === 1 && first && !first.isDir) {
+              const fullPath = currentPath.endsWith(sep) ? currentPath + first.name : currentPath + sep + first.name;
+              const url = source.mode === 'local'
+                ? `pepeapp://app/__local-file?path=${encodeURIComponent(fullPath)}`
+                : `pepeapp://app/__sftp-file?termId=${encodeURIComponent(source.termId || '')}&path=${encodeURIComponent(fullPath)}`;
+              e.dataTransfer.setData('DownloadURL', `application/octet-stream:${first.name}:${url}`);
+            }
           }}
         />
       </div>

@@ -620,6 +620,33 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     setRefreshKey(k => k + 1);
   };
 
+  // Windows 탐색기 등 OS 밖에서 실제 파일(절대경로)을 끌어다 놓았을 때 — 항상 local 소스로 취급해
+  // 현재 패널(로컬이면 local→local 복사, 원격이면 local→remote 업로드)로 그대로 전송한다.
+  const handleOsFilesDrop = async (targetLeafId: string, absPaths: string[]) => {
+    const leaf = getLeaf(targetLeafId);
+    if (!leaf) return;
+    const dstTab = leaf.panel.tabs[leaf.panel.activeIdx];
+    if (!dstTab) return;
+    const dstSep = sep(dstTab.source);
+    const failures: { name: string; err: string }[] = [];
+    for (const absPath of absPaths) {
+      const name = absPath.split(/[\\/]/).pop() || absPath;
+      const dstFull = dstTab.path.endsWith(dstSep) ? dstTab.path + name : dstTab.path + dstSep + name;
+      const result = await doTransfer(
+        { mode: 'local', path: absPath },
+        { mode: dstTab.source.mode, termId: dstTab.source.termId, path: dstFull },
+        name,
+      );
+      if (!result.success) failures.push({ name, err: String(result.error || '') });
+    }
+    if (failures.length > 0) {
+      const preview = failures.slice(0, 5).map(f => `${f.name}: ${f.err}`).join('\n');
+      const more = failures.length > 5 ? `\n... 외 ${failures.length - 5}개` : '';
+      notifyError(t('transferFailSummary', { count: failures.length, defaultValue: `파일 전송 실패 ${failures.length}건` }), `${preview}${more}`);
+    }
+    setRefreshKey(k => k + 1);
+  };
+
   // 폴더 탭 추가 — 현재 활성 탭의 source/path 복제 (사용자가 현재 위치에서 가지 치기 의도)
   const addPanelTab = (leafId: string) => {
     const leaf = getLeaf(leafId);
@@ -912,6 +939,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           selectedFiles={tab.selected} onSelectionChange={sel => setLeafSelected(leafId, sel)}
           currentPath={tab.path} onPathChange={p => setLeafPath(leafId, p)}
           onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop(leafId, files, srcMode, srcTermId, srcPath)}
+          onOsFilesDrop={absPaths => handleOsFilesDrop(leafId, absPaths)}
           onDisconnect={() => handleDisconnect(tab.source)}
           workspaceId={workspaceIdRef.current}
           initialFiles={tab.entries}
