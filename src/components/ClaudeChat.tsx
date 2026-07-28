@@ -4639,7 +4639,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'company' ? 'flex' : 'none' }}>
-          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} chromeless externalizeLinks autoFitZoom autoFitBaseWidth={960} autoFitMinZoom={0.35} autoFitMaxZoom={1} />
+          {/* partitionKey 로 영속 세션 사용 — 기존엔 매 마운트마다 임시 partition 이라 로그인이
+              앱 재시작마다 풀려서, 대화 아카이브 백그라운드 스크래핑이 세션 만료로 끊기는 문제가 있었음. */}
+          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} partitionKey="persist:company-messenger" chromeless autoFitZoom autoFitBaseWidth={960} autoFitMinZoom={0.35} autoFitMaxZoom={1} />
         </div>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'mini' ? 'flex' : 'none' }}>
           <MessengerWorkspace
