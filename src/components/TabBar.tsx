@@ -79,10 +79,42 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
   // 드래그를 시작하면 Windows 에서 OS 창-드래그와 충돌해 렌더러가 완전히 멈추는(강제종료 필요)
   // 알려진 Electron 버그가 있다(electron/electron#7107 등) — 네이티브 DnD 자체를 안 쓰면 원천 차단된다.
   const pointerDragRef = useRef<{ tabId: string; startX: number; startY: number; moved: boolean } | null>(null);
+  // 네이티브 HTML5 드래그를 안 쓰기로 하면서(위 이유), 브라우저가 자동으로 그려주던 "마우스에 탭
+  // 모양이 붙어서 따라다니는" 드래그 고스트도 같이 사라졌다. 렌더러 안의 DOM 엘리먼트로는 앱 창
+  // 경계를 못 벗어나므로(분리하려고 창 밖으로 끌 때 안 보임), 별도의 작은 always-on-top 창을
+  // main 프로세스에 띄워 화면 좌표로 커서를 따라다니게 한다 — 클릭은 항상 통과시켜(ignore mouse
+  // events) 실제 드래그 판정(mousemove/mouseup)에는 전혀 관여하지 않는다.
+  const ghostActiveRef = useRef(false);
   const startPointerDrag = (tabId: string, e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const st = { tabId, startX: e.clientX, startY: e.clientY, moved: false };
     pointerDragRef.current = st;
+    const sourceEl = e.currentTarget as HTMLElement;
+    const rect = sourceEl.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+    const cs = window.getComputedStyle(sourceEl);
+    const createGhost = (screenX: number, screenY: number) => {
+      ghostActiveRef.current = true;
+      try {
+        (window as any).api?.tabDragGhostStart?.({
+          x: screenX - offsetX, y: screenY - offsetY,
+          width: rect.width, height: rect.height,
+          label: sourceEl.innerText || '',
+          bg: cs.backgroundColor, color: cs.color,
+          accent: cs.borderColor && cs.borderColor !== 'rgba(0, 0, 0, 0)' ? cs.borderColor : undefined,
+        });
+      } catch {}
+    };
+    const positionGhost = (screenX: number, screenY: number) => {
+      if (!ghostActiveRef.current) return;
+      try { (window as any).api?.tabDragGhostMove?.(screenX - offsetX, screenY - offsetY); } catch {}
+    };
+    const removeGhost = () => {
+      if (!ghostActiveRef.current) return;
+      ghostActiveRef.current = false;
+      try { (window as any).api?.tabDragGhostEnd?.(); } catch {}
+    };
     const onMove = (ev: MouseEvent) => {
       if (pointerDragRef.current !== st) return;
       if (!st.moved) {
@@ -90,7 +122,9 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
         st.moved = true;
         setDraggingId(st.tabId);
         setTabDragActive(true);
+        createGhost(ev.screenX, ev.screenY);
       }
+      positionGhost(ev.screenX, ev.screenY);
       const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
       const overItem = el?.closest('.tab-item') as HTMLElement | null;
       const overId = overItem?.getAttribute('data-tab-id') || null;
@@ -99,6 +133,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
     const onUp = (ev: MouseEvent) => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      removeGhost();
       if (pointerDragRef.current !== st) return;
       pointerDragRef.current = null;
       if (!st.moved) return; // 그냥 클릭 — onClick 이 처리

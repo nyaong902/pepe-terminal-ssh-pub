@@ -420,6 +420,9 @@ contextBridge.exposeInMainWorld('api', {
   agentIsRunning: (args: { sessionId?: string; requestId?: string }) => ipcRenderer.invoke('agent:is-running', args),
   getCursorPoint: () => ipcRenderer.invoke('window:cursor-point'),
   getWindowBounds: () => ipcRenderer.invoke('window:get-bounds'),
+  tabDragGhostStart: (opts: { x: number; y: number; width: number; height: number; label: string; bg?: string; color?: string; accent?: string }) => ipcRenderer.send('tab-drag:ghost-start', opts),
+  tabDragGhostMove: (x: number, y: number) => ipcRenderer.send('tab-drag:ghost-move', { x, y }),
+  tabDragGhostEnd: () => ipcRenderer.send('tab-drag:ghost-end'),
   onWindowMaximized: (cb: (m: boolean) => void) => {
     const listener = (_e: any, m: boolean) => cb(m);
     ipcRenderer.on('window:maximized', listener);

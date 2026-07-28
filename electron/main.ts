@@ -6964,6 +6964,62 @@ ipcMain.handle('window:cursor-point', () => { try { return screen.getCursorScree
 // 호출 창이 화면 어디에 있는지 (드롭 좌표가 창 밖인지 판정용)
 ipcMain.handle('window:get-bounds', (e) => { try { return winOf(e)?.getBounds() || null; } catch { return null; } });
 
+// 탭 드래그 "고스트" — 마우스에 탭 모양이 붙어 따라다니는 미리보기. TabBar.tsx 가 HTML5 네이티브
+// 드래그 대신 mousedown/mousemove 로 직접 드래그를 구현하면서(-webkit-app-region:drag 충돌로 인한
+// 렌더러 멈춤 버그 회피), 브라우저가 자동으로 그려주던 드래그 이미지도 같이 사라졌다 — 렌더러 안의
+// DOM 엘리먼트만으로는 앱 창 밖으로는 못 나가므로, 별도의 작고 투명한 always-on-top 창을 만들어
+// 커서를 따라 이동시키는 방식으로 창 경계와 무관하게 보이게 한다. 클릭/입력은 항상 통과시켜(ignore
+// mouse events) 실제 드래그 판정(mousemove/mouseup)에 전혀 관여하지 않는다.
+let tabDragGhostWindow: BrowserWindow | null = null;
+// 창 크기를 탭 크기 그대로 잡으면 CSS box-shadow 가 창 경계에 잘려서 안 보인다 — 사방에 여백을
+// 두고 창을 그만큼 키워서, 그 안에서 그림자가 자연스럽게 번지도록 한다.
+const GHOST_PAD = 14;
+ipcMain.on('tab-drag:ghost-start', (_e, { x, y, width, height, label, bg, color, accent }: { x: number; y: number; width: number; height: number; label: string; bg?: string; color?: string; accent?: string }) => {
+  try { tabDragGhostWindow?.close(); } catch {}
+  tabDragGhostWindow = new BrowserWindow({
+    x: Math.round(x - GHOST_PAD), y: Math.round(y - GHOST_PAD),
+    width: Math.max(1, Math.round(width) + GHOST_PAD * 2), height: Math.max(1, Math.round(height) + GHOST_PAD * 2),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    resizable: false,
+    show: false,
+    webPreferences: { sandbox: true },
+  });
+  const win = tabDragGhostWindow;
+  try { win.setIgnoreMouseEvents(true, { forward: true }); } catch {}
+  const esc = (s: string) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;padding:0;background:transparent;overflow:hidden;}
+    @keyframes ghost-in{from{transform:scale(0.94) rotate(-1deg);opacity:0}to{transform:scale(1.04) rotate(-1deg);opacity:1}}
+    .wrap{box-sizing:border-box;width:100%;height:100%;padding:${GHOST_PAD}px;display:flex;align-items:stretch;}
+    .g{position:relative;flex:1;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 14px;
+      background:${bg || '#2a2a3e'};color:${color || '#fff'};
+      font:600 12.5px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:0.1px;
+      border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+      border:1px solid rgba(255,255,255,0.12);
+      box-shadow:0 10px 28px rgba(0,0,0,0.5),0 2px 6px rgba(0,0,0,0.35);
+      transform:scale(1.04) rotate(-1deg);
+      animation:ghost-in 0.12s ease-out;}
+    .g::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:8px 0 0 8px;
+      background:${accent || 'rgba(255,255,255,0.55)'};}
+    .g .t{overflow:hidden;text-overflow:ellipsis;padding-left:4px;}
+  </style></head><body><div class="wrap"><div class="g"><span class="t">${esc(label)}</span></div></div></body></html>`;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  win.once('ready-to-show', () => { try { win.showInactive(); } catch {} });
+});
+ipcMain.on('tab-drag:ghost-move', (_e, { x, y }: { x: number; y: number }) => {
+  try { if (tabDragGhostWindow && !tabDragGhostWindow.isDestroyed()) tabDragGhostWindow.setPosition(Math.round(x - GHOST_PAD), Math.round(y - GHOST_PAD)); } catch {}
+});
+ipcMain.on('tab-drag:ghost-end', () => {
+  try { tabDragGhostWindow?.close(); } catch {}
+  tabDragGhostWindow = null;
+});
+
 ipcMain.handle('ssh:auth-response', (_e, { panelId, responses }: { panelId: string; responses: string[] }) => {
   const bridge = getSSHBridge();
   bridge.handleAuthResponse(panelId, responses);

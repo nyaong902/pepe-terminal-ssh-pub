@@ -551,7 +551,6 @@ class SSHBridge extends EventEmitter {
     // 영구히 남는다 — 사용자가 겪은 "포커스/onData 는 정상인데 화면 반응이 전혀 없음" 증상의
     // 실제 원인으로 추정. SFTP 워커에는 있던 이 정리 로직이 터미널 워커에는 빠져있었다.
     worker.on('exit', (code: number) => {
-      xferLog(`terminal worker exit panelId=${panelId} code=${code}`);
       if (this.clients.get(panelId)?.conn === connProxy) {
         this.clients.delete(panelId);
         this.emit('message', { type: 'error', panelId, error: `터미널 워커가 예기치 않게 종료됐습니다 (code=${code})` });
@@ -1380,7 +1379,6 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
 
   // 외부에서 명시적으로 panel 의 dedicated SFTP 만 종료 (SSH 메인 연결은 유지) — 파일트리 unmount 등에서 호출
   public releaseDedicatedSftp(panelId: string) {
-    xferLog(`releaseDedicatedSftp panelId=${panelId} (세션 정보는 유지 — 터미널 연결 살아있음)`);
     try { this._cleanupDedicatedSftp(panelId, false); } catch {}
     try { const s = this.sftpCache.get(panelId); if (s) { s.end?.(); this.sftpCache.delete(panelId); } } catch {}
   }
