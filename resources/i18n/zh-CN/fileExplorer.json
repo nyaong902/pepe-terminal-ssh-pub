@@ -38,6 +38,7 @@
   "colSize": "大小",
   "colDate": "日期",
   "statusSummary": "{{total}} 项 | 已选 {{selected}}",
+  "deleteFailed": "删除失败",
   "dragCountLabel": "{{count}} 项",
   "deleteConfirm": "删除 {{count}} 项?\n{{names}}",
   "deleteConfirmRecursive": "删除此{{kind}}?\n\n{{path}}",

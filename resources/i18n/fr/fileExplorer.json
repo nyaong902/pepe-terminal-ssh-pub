@@ -38,6 +38,7 @@
   "colSize": "Taille",
   "colDate": "Date",
   "statusSummary": "{{total}} éléments | {{selected}} sélectionnés",
+  "deleteFailed": "Échec de la suppression",
   "dragCountLabel": "{{count}} éléments",
   "deleteConfirm": "Supprimer {{count}} éléments ?\n{{names}}",
   "deleteConfirmRecursive": "Supprimer ce {{kind}} ?\n\n{{path}}",

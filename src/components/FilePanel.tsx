@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { ContextMenu } from './ContextMenu';
 import { ChmodDialog } from './ChmodDialog';
+import { notifyError } from './Notify';
 
 // 파일 패널 간 공유 클립보드 (양쪽 패널에서 복사/붙여넣기 공유)
 type FileClipboard = {
@@ -616,18 +617,23 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         if (result?.deleteId) pendingDeleteIds.add(result.deleteId);
       }
       onSelectionChange(new Set());
-      // 모든 삭제 완료 후 목록 갱신
+      // 모든 삭제 완료 후 목록 갱신 — 실패한 항목은 모아뒀다가 한 번에 알림.
       if (pendingDeleteIds.size > 0) {
+        const failures: string[] = [];
         await new Promise<void>(resolve => {
           let remaining = pendingDeleteIds.size;
           const unsub = api.onFeDeleteDone?.((p: any) => {
             if (pendingDeleteIds.has(p.deleteId)) {
+              if (p.success === false) failures.push(String(p.error || p.deleteId));
               remaining--;
               if (remaining <= 0) { unsub?.(); resolve(); }
             }
           });
           if (!unsub) resolve();
         });
+        if (failures.length > 0) {
+          notifyError(t('deleteFailed'), failures.slice(0, 5).join('\n') + (failures.length > 5 ? `\n... 외 ${failures.length - 5}건` : ''));
+        }
       }
       loadDir(currentPath);
     } catch { loadDir(currentPath); }
@@ -1154,9 +1160,9 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           // 더 이상 채워지지 않으므로(보안상 제거) webUtils.getPathForFile 로 조회해야 한다.
           if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
             e.preventDefault();
-            const absPaths = Array.from(e.dataTransfer.files)
-              .map(f => api.getPathForFile?.(f))
-              .filter((p): p is string => !!p);
+            const rawFiles = Array.from(e.dataTransfer.files);
+            const absPaths = rawFiles.map(f => api.getPathForFile?.(f)).filter((p): p is string => !!p);
+            console.log('[fe] OS drop —', rawFiles.length, 'file(s), resolved', absPaths.length, 'path(s)', absPaths);
             if (absPaths.length > 0) onOsFilesDrop?.(absPaths);
           }
         }}

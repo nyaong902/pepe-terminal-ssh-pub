@@ -2419,9 +2419,17 @@ probe_curl || probe_wget || probe_python
 
   // 진행률 이벤트를 emit 하면서 삭제
   public async handleDeleteWithProgress(deleteId: string, mode: string, termId: string | undefined, filePath: string, workspaceId?: string): Promise<void> {
+    if (mode !== 'local' && termId) filePath = await this.resolveCcPath(termId, filePath);
     const rootName = mode === 'local'
       ? path.basename(filePath)
       : (filePath.split('/').pop() || filePath);
+    // worker-thread unlink/rmdir 호출을 개별 try/catch(빈 catch)로 감싸던 게 실제 실패(권한 없음 등)를
+    // 전부 삼켜버려 항상 success:true 로 보고되던 버그 — 하나라도 실패하면 아래에서 throw 해서
+    // 바깥 catch 로 흘려보내 sftp-delete-complete(success:false) + fe:delete-done(success:false) 가
+    // 정상적으로 나가게 한다.
+    let hadError = false;
+    let firstErrorMsg = '';
+    const noteError = (e: any) => { hadError = true; if (!firstErrorMsg) firstErrorMsg = String(e?.message || e); };
 
     // 즉시 start 이벤트 (totalCount=0 — 추후 업데이트)
     this.emit('message', { type: 'sftp-delete-start', panelId: 'transfer', data: JSON.stringify({
@@ -2461,7 +2469,7 @@ probe_curl || probe_wget || probe_python
 
           if (!isRootDir) {
             // 단일 파일 — unlink 1회
-            try { await this.workerOp(termId!, 'unlink', filePath); } catch {}
+            try { await this.workerOp(termId!, 'unlink', filePath); } catch (e) { noteError(e); }
             onItem(rootName);
           } else {
             // 3) tree-list 로 전체 목록 1번에 취득 (worker thread — 메인 이벤트루프 비점유)
@@ -2496,7 +2504,7 @@ probe_curl || probe_wget || probe_python
                 while (fileQueue.length > 0) {
                   const entry = fileQueue.shift();
                   if (!entry) break;
-                  try { await this.workerOp(termId!, 'unlink', joinPath(filePath, entry.rel)); } catch {}
+                  try { await this.workerOp(termId!, 'unlink', joinPath(filePath, entry.rel)); } catch (e) { noteError(e); }
                   onItem(entry.rel.split('/').pop() || entry.rel);
                 }
               }));
@@ -2504,12 +2512,12 @@ probe_curl || probe_wget || probe_python
 
             // 5) 디렉토리 순차 rmdir (깊은 것부터 — 비어있어야 삭제 가능)
             for (const entry of dirEntries) {
-              try { await this.workerOp(termId!, 'rmdir', joinPath(filePath, entry.rel)); } catch {}
+              try { await this.workerOp(termId!, 'rmdir', joinPath(filePath, entry.rel)); } catch (e) { noteError(e); }
               onItem(entry.rel.split('/').pop() || entry.rel);
             }
 
             // 6) 루트 디렉토리 rmdir
-            try { await this.workerOp(termId!, 'rmdir', filePath); } catch {}
+            try { await this.workerOp(termId!, 'rmdir', filePath); } catch (e) { noteError(e); }
             onItem(rootName);
           }
         } else {
@@ -2520,6 +2528,8 @@ probe_curl || probe_wget || probe_python
           await this.deleteRecursiveWithProgress(mode, termId, filePath, onItem);
         }
       }
+
+      if (hadError) throw new Error(firstErrorMsg || 'delete failed');
 
       this.emit('message', { type: 'sftp-delete-complete', panelId: 'transfer', data: JSON.stringify({
         deleteId, rootName, done, success: true, workspaceId,

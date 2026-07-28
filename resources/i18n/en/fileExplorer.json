@@ -41,6 +41,7 @@
   "colSize": "Size",
   "colDate": "Date",
   "statusSummary": "{{total}} items | {{selected}} selected",
+  "deleteFailed": "Delete failed",
   "dragCountLabel": "{{count}} items",
   "deleteConfirm": "Delete {{count}} items?\n{{names}}",
   "deleteConfirmRecursive": "Delete this {{kind}}?\n\n{{path}}",
