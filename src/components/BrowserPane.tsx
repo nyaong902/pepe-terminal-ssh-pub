@@ -202,6 +202,31 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     if (!raw) return;
     try { (window as any).api?.shellOpenExternal?.(raw); } catch {}
   }, []);
+  useEffect(() => {
+    const updateFocus = () => {
+      hostWindowFocusedRef.current = typeof document !== 'undefined'
+        ? document.visibilityState === 'visible' && document.hasFocus()
+        : true;
+    };
+    updateFocus();
+    window.addEventListener('focus', updateFocus);
+    window.addEventListener('blur', updateFocus);
+    document.addEventListener('visibilitychange', updateFocus);
+    return () => {
+      window.removeEventListener('focus', updateFocus);
+      window.removeEventListener('blur', updateFocus);
+      document.removeEventListener('visibilitychange', updateFocus);
+    };
+  }, []);
+  const consumeWindowOpenEvent = useCallback((url: string) => {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    const now = Date.now();
+    const last = lastWindowOpenRef.current;
+    if (last.url === raw && (now - last.at) < 1200) return false;
+    lastWindowOpenRef.current = { url: raw, at: now };
+    return true;
+  }, []);
   const shouldOpenExternally = useCallback((url: string) => {
     if (!externalizeLinks) return false;
     const raw = String(url || '').trim();
@@ -278,6 +303,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     }
   });
   const urlHistoryHideTimerRef = useRef<number | null>(null);
+  const lastWindowOpenRef = useRef<{ url: string; at: number }>({ url: '', at: 0 });
+  const hostWindowFocusedRef = useRef<boolean>(typeof document !== 'undefined' ? document.hasFocus() : true);
   const credSyncSeqRef = useRef(0);
   // 부모에게 상태 변경 보고 — 분리 시 직렬화.
   useEffect(() => {
@@ -1068,6 +1095,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     const maybeOpenExternally = async (url: string) => {
       const nextUrl = String(url || '').trim();
       if (!nextUrl) return false;
+      if (!hostWindowFocusedRef.current) return false;
       if (!allowExternalLinkRoutingRef.current) return false;
       if (!shouldOpenExternally(nextUrl)) return false;
       if (!(await hasRecentExternalGesture())) return false;
@@ -1081,6 +1109,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       try { e.preventDefault?.(); } catch {}
       const url = String(e?.url || '');
       if (!url) return;
+      if (!consumeWindowOpenEvent(url)) return;
       if (!shouldOpenExternally(url)) {
         openInNewTab(url);
         return;
@@ -1091,6 +1120,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const url = String(e?.url || '');
       if (!url) return;
       if (!shouldOpenExternally(url)) return;
+      if (!consumeWindowOpenEvent(url)) return;
       try { e.preventDefault?.(); } catch {}
       void maybeOpenExternally(url);
     };
@@ -1100,6 +1130,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       try { currentGuestId = wv.getWebContentsId?.(); } catch {}
       // guestId 매칭 — 다른 브라우저 워크스페이스 인스턴스와 충돌 방지.
       if (currentGuestId != null && p.guestId !== currentGuestId) return;
+      if (!consumeWindowOpenEvent(p.url)) return;
       if (!shouldOpenExternally(p.url)) return openInNewTab(p.url);
       void maybeOpenExternally(p.url);
     });
