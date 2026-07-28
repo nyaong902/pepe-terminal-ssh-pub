@@ -47,21 +47,9 @@ export type Session = {
   // 비어 있으면 primary 직접 연결. 각 홉의 password 가 비어 있으면 직전 홉의 ~/.ssh/ 키를 자동 재사용.
   // (이전 단일/2단 필드 jumpTargetHost·jump2TargetHost 는 이 배열로 대체됨.)
   jumps?: JumpHop[];
-  // DBMS (Altibase) 연결 정보 — 채우면 우클릭 메뉴에 "SQL Tool" 노출됨.
-  // 동일 SSH 연결의 exec 채널로 isql 을 실행해서 DB 쿼리.
-  dbms?: {
-    // 드라이버 종류 — 현재 altibase. 후속 단계에서 mysql/postgres/oracle/mssql/sqlite 추가 예정.
-    type: 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
-    driverId?: string;          // drivers.json 항목 id — 미설정이면 type 의 builtin 사용
-    database?: string;          // JDBC URL 의 {database} 슬롯 (DBMS 별 의미 다름)
-    useSshTunnel?: boolean;     // true 면 SSH 세션 위에 포트 포워딩 후 localhost:ephemeral 로 JDBC 접속
-    urlOverride?: string;       // 사용자가 직접 입력한 JDBC URL (있으면 template 무시)
-    props?: Record<string, string>; // 추가 JDBC 연결 속성
-    port: number;       // 기본 20300
-    user: string;
-    password: string;
-    host?: string;      // 기본 127.0.0.1 (SSH 연결한 서버 내부에서 isql 실행)
-  };
+  // dbms 필드는 더 이상 여기 없음 — SQL Tool DB 연결 프로필은 sqlSessionsStore.ts(sql-sessions.json)
+  // 로 완전히 독립됐다. 과거 데이터 마이그레이션(sqlSessionsStore.migrateFromSshSessions)에서만
+  // (s as any).dbms 로 과거 값을 읽어 옮기고 지운다.
 };
 
 export type Folder = {

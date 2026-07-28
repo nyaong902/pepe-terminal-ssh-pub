@@ -1245,6 +1245,23 @@ body.popout-options .session-editor h3:first-child {
   filter: grayscale(0);
 }
 
+/* 툴바 아이콘 버튼(내보내기/가져오기 등) — btn-pin과 같은 크기지만 grayscale 페이드 없이 항상 또렷하게. */
+.btn-icon-plain {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  opacity: 0.75;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.btn-icon-plain:hover {
+  opacity: 1;
+  background: var(--win-surface, #2a2a3e);
+}
+
 .session-toolbar {
   display: flex;
   justify-content: space-between;
@@ -5707,6 +5724,44 @@ body.popout-options .session-editor h3:first-child {
   opacity: 1;
   transform: rotate(0deg);
   color: #ffb347;
+}
+
+/* SQL Tool 워크스페이스 세션 사이드바 — pin/unpin (auto-hide). 색상은 SSH 세션관리와 동일하게
+   앱 전역 --win-* 변수를 쓴다(하드코딩 hex 를 쓰면 테마/다른 패널과 색이 어긋나 보인다). */
+.sql-tool-sidebar-wrap { position: relative; display: flex; flex-shrink: 0; }
+.sql-tool-sidebar {
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  background: var(--win-bg, #0d0f10); border-right: 1px solid var(--win-border, #333);
+  padding: 8px; box-sizing: border-box;
+  position: relative; min-width: 180px; max-width: 800px;
+}
+.sql-tool-sidebar.auto-hide {
+  position: absolute; left: 22px; top: 0; bottom: 0; z-index: 60;
+  transition: transform 0.2s ease-out;
+  box-shadow: 4px 0 16px rgba(0,0,0,0.5);
+}
+.sql-tool-sidebar.auto-hide.hidden {
+  transform: translateX(calc(-100% - 22px));
+  pointer-events: none;
+}
+.sql-tool-sidebar-trigger {
+  width: 22px; flex-shrink: 0;
+  background: var(--win-bg, #0d0f10); border-right: 1px solid var(--win-border, #333);
+  border-top-right-radius: 10px; border-bottom-right-radius: 10px;
+  display: flex; flex-direction: column;
+  margin-top: 16px; margin-bottom: 16px;
+  overflow: hidden; align-self: flex-start; height: auto;
+}
+.sql-tool-sidebar-trigger-top {
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 8px 0;
+  border-bottom: 1px solid var(--win-border, #333);
+  transition: background 0.15s;
+}
+.sql-tool-sidebar-trigger-top:hover { background: var(--win-surface, #1a1a2e); }
+.sql-tool-sidebar-trigger-text {
+  color: var(--win-text-dim, #888); font-size: 11px; user-select: none;
+  writing-mode: vertical-rl; text-orientation: mixed; letter-spacing: 2px;
 }
 .claude-chat-container {
   display: flex;

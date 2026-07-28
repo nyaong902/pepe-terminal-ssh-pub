@@ -41,12 +41,6 @@ type Session = {
   x11Display?: number;
   browserUrl?: string;
   jumps?: { host: string; user?: string; port?: number; password?: string }[];
-  dbms?: {
-    type: 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
-    port: number; user: string; password: string; host?: string;
-    driverId?: string; database?: string; useSshTunnel?: boolean; urlOverride?: string;
-    props?: Record<string, string>;
-  };
 };
 
 type Folder = {
@@ -61,7 +55,6 @@ type Props = {
   onConnect: (sessionId: string, sessionName: string, targetPanelId?: string | null, sessionTheme?: string, fontFamily?: string, fontSize?: number, scrollback?: number) => void;
   onMultiConnect?: (sessions: Session[], mode: 'minitab' | 'split-h' | 'split-v' | 'split-tile', opts?: { newWorkspace?: boolean; targetTabId?: string }) => void;
   onFileTransfer?: (sessionId: string, sessionName: string) => void;
-  onOpenSqlTool?: (sessionId: string, sessionName: string) => void;
   onDisconnect?: (targetPanelId?: string | null) => void;
   targetPanelId?: string | null;
   workspaceTabs?: { id: string; title: string }[];
@@ -69,7 +62,7 @@ type Props = {
   onSetTopPanel?: (panel: 'session' | 'filetree') => void;
 };
 
-export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, onOpenSqlTool, targetPanelId, workspaceTabs = [], activeTabId, onSetTopPanel }) => {
+export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, targetPanelId, workspaceTabs = [], activeTabId, onSetTopPanel }) => {
   const { t } = useTranslation('sessionList');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -261,21 +254,11 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
       add(session.auth?.type);
       add(session.auth?.password);
       add(session.auth?.keyPath);
-      add(session.dbms?.type);
-      add(session.dbms?.driverId);
-      add(session.dbms?.database);
-      add(session.dbms?.useSshTunnel);
-      add(session.dbms?.urlOverride);
-      add(session.dbms?.port);
-      add(session.dbms?.user);
-      add(session.dbms?.password);
-      add(session.dbms?.host);
       for (const rule of session.loginScript || []) {
         add(rule.expect);
         add(rule.send);
         add(rule.isRegex);
       }
-      for (const value of Object.values(session.dbms?.props || {})) add(value);
     }
     return parts.join(' ').toLowerCase();
   }, [folderPathById]);
@@ -1238,17 +1221,6 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               <MenuIcon>📁</MenuIcon>{t('ctxFileTransfer')}
             </div>
           )}
-          {contextMenu.type === 'session' && (() => {
-            const s = sessions.find(x => x.id === contextMenu.id);
-            return s?.dbms ? (
-              <div className="context-menu-item" onClick={() => {
-                onOpenSqlTool?.(s.id, s.name);
-                setContextMenu(null);
-              }}>
-                🗄️ SQL Tool
-              </div>
-            ) : null;
-          })()}
           <div className="context-menu-separator" />
           <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'up'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↑</MenuIcon>{t('ctxUp')}</div>
           <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'down'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↓</MenuIcon>{t('ctxDown')}</div>

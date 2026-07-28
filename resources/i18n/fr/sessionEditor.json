@@ -168,6 +168,10 @@
     "sshOpening": "Ouverture du tunnel SSH...",
     "sshFailed": "❌ Échec du tunnel SSH : {{error}} — connectez d'abord un terminal pour la même session",
     "sshTunnelOk": "Tunnel SSH OK ({{remoteHost}}:{{remotePort}} → local={{localPort}}) — test JDBC...",
-    "exception": "❌ Exception : {{error}}"
+    "exception": "❌ Exception : {{error}}",
+    "tunnelSectionTitle": "Connexion du tunnel SSH",
+    "tunnelSectionSub": "Laisser vide pour se connecter directement sans tunnel.",
+    "sqlSessionName": "Nom",
+    "tunnelEnable": "Utiliser un tunnel SSH"
   }
 }

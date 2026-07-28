@@ -27,7 +27,8 @@ import { SippWorkspace } from './components/SippWorkspace';
 import { OfficeLauncher } from './components/OfficeLauncher';
 import { MediaLauncher } from './components/MediaLauncher';
 import { TranslationEditor } from './components/TranslationEditor';
-import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { SqlToolTabShell } from './components/SqlToolTabShell';
 import { CustomWorkspaceDialog, CustomWorkspaceManager } from './components/CustomWorkspaceDialog';
 import { CustomWorkspaceView } from './components/CustomWorkspaceView';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -378,7 +379,7 @@ function App() {
   const isOptionsPopout = false; // popout 비활성 — localStorage 격리로 데이터 유실 위험
   const [showOptions, setShowOptions] = useState(false);
   const [showRemoteShare, setShowRemoteShare] = useState(false);
-  const [editSessionCtx, setEditSessionCtx] = useState<{ session: any; termId: string; isQuick?: boolean } | null>(null);
+  const [editSessionCtx, setEditSessionCtx] = useState<{ session: any; termId: string; isQuick?: boolean; initialCategory?: string } | null>(null);
   const [editSessionFolders, setEditSessionFolders] = useState<any[]>([]);
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
   const [optFontSize, setOptFontSize] = useState(() => Number(localStorage.getItem('terminalFontSize')) || 14);
@@ -1682,13 +1683,23 @@ function App() {
   });
   useEffect(() => { localStorage.setItem('showQuickConnect', showQuickConnect ? '1' : '0'); }, [showQuickConnect]);
 
-  // 도구 모음 바 위치 슬롯
+  // 도구 모음 바 위치 슬롯 — localStorage 는 인스턴스별 sessionData 분리 때문에 재시작 시 영속되지
+  // 않는다(캐시 충돌 방지용 PID+timestamp 분리, main.ts 22줄 부근 참고) — ui-prefs(config.json) 사용.
   type ToolbarSlot = 'top' | 'qc-left' | 'qc-right';
-  const [toolbarSlot, setToolbarSlot] = useState<ToolbarSlot>(() => {
-    try { const s = localStorage.getItem('toolbarSlot') as ToolbarSlot | null; if (s === 'top' || s === 'qc-left' || s === 'qc-right') return s; } catch {}
-    return 'qc-right';
-  });
-  useEffect(() => { try { localStorage.setItem('toolbarSlot', toolbarSlot); } catch {} }, [toolbarSlot]);
+  const [toolbarSlot, setToolbarSlotState] = useState<ToolbarSlot>('qc-right');
+  const toolbarSlotLoadedRef = useRef(false);
+  useEffect(() => {
+    (window as any).api?.getUIPrefs?.().then((prefs: any) => {
+      if (prefs?.toolbarSlot === 'top' || prefs?.toolbarSlot === 'qc-left' || prefs?.toolbarSlot === 'qc-right') {
+        setToolbarSlotState(prefs.toolbarSlot);
+      }
+      toolbarSlotLoadedRef.current = true;
+    }).catch(() => { toolbarSlotLoadedRef.current = true; });
+  }, []);
+  const setToolbarSlot = (next: ToolbarSlot) => {
+    setToolbarSlotState(next);
+    try { (window as any).api?.setUIPrefs?.({ toolbarSlot: next }); } catch {}
+  };
   const [toolbarDragHint, setToolbarDragHint] = useState<ToolbarSlot | null>(null);
   // (qcWidth 제거됨 — QC 바는 항상 자연 너비)
   useEffect(() => { try { localStorage.removeItem('qcWidth'); } catch {} }, []);
@@ -1805,11 +1816,18 @@ function App() {
   useEffect(() => {
     const handler = async (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (!detail?.sessionId && !detail?.quickSession) return;
+      if (!detail?.sessionId && !detail?.quickSession && !detail?.newSession) return;
       try {
         const data = await (window as any).api?.listSessions?.();
         const all = data?.sessions ?? data ?? [];
         const flds = data?.folders ?? [];
+        // SQL Tool "새 DB 연결 추가" 등 — SSH 세션 목록에 없는, 아직 저장 안 된 새 세션을
+        // 그대로 편집 대상으로 띄운다(look-up 없이 바로 사용).
+        if (detail.newSession) {
+          setEditSessionCtx({ session: detail.newSession, termId: detail.termId || '', initialCategory: detail.initialCategory });
+          setEditSessionFolders(flds);
+          return;
+        }
         if (detail.quickSession) {
           const q = detail.quickSession;
           setEditSessionCtx({
@@ -1830,7 +1848,7 @@ function App() {
         }
         const sess = all.find((x: any) => x.id === detail.sessionId);
         if (sess) {
-          setEditSessionCtx({ session: sess, termId: detail.termId });
+          setEditSessionCtx({ session: sess, termId: detail.termId, initialCategory: detail.initialCategory });
           setEditSessionFolders(flds);
         }
       } catch {}
@@ -2796,6 +2814,7 @@ function App() {
     { id: 'cmd-browser', label: '브라우저 워크스페이스', icon: '🌐', keywords: ['browser', 'web'], run: () => addBrowserTab() },
     { id: 'cmd-compare', label: '파일 비교 워크스페이스', icon: '🔍', keywords: ['compare', 'diff'], run: () => addCompareTab() },
     { id: 'cmd-fileTransfer', label: '파일전송 워크스페이스', icon: '📁', keywords: ['file transfer', 'sftp', 'upload', 'download'], run: () => { void openFileTransferTab(tApp('tabs.fileTransfer')); } },
+    { id: 'cmd-sqlTool', label: 'SQL Tool', icon: '🗄️', keywords: ['sql', 'db', 'database', 'jdbc'], run: () => openSqlToolPicker() },
     { id: 'cmd-bcastXfer', label: '일괄전송', icon: '📤', keywords: ['broadcast', 'bulk transfer', '일괄 전송', '파일'], run: () => { setBcastXferFiles([]); setBcastXferPath(''); setBcastXferLog([]); setShowBcastFileXfer(true); } },
     { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
@@ -2841,17 +2860,32 @@ function App() {
     const removedTabs = tabsRef.current.filter(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
     removedTabs.forEach(tab => closeTab(tab.id));
   }, []);
-  const openSqlToolTab = (sessionId: string, sessionName: string) => {
-    // 동일 sessionId 의 SQL Tool 탭이 이미 있으면 그 탭으로 전환
-    const existing = tabs.find(t => t.type === 'sqlTool' && t.sqlTool?.sessionId === sessionId);
+  // 도구모음 "SQL Tool" 버튼 — 특정 세션 없이 SQL Tool 탭을 연다. sqlTool.sessionId 가 비어있으면
+  // SqlSessionPicker(DBMS 설정된 세션 목록)를 대신 렌더링한다(아래 JSX 참고).
+  const openSqlToolPicker = () => {
+    const existing = tabs.find(t => t.type === 'sqlTool' && !t.sqlTool?.sessionId);
     if (existing) { setActiveTabId(existing.id); return; }
     const id = `tab-sqltool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
     const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
     setTabs(prev => {
       const color = pickWorkspaceColor(prev, prev.length);
-      return [...prev, { id, title: `🗄️ ${sessionName}`, layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId, sessionName }, color }];
+      return [...prev, { id, title: '🗄️ SQL Tool', layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId: '', sessionName: '' }, color }];
     });
     setActiveTabId(id);
+  };
+  // SqlToolTabShell 사이드바에서 연결(세션)을 고르거나 바꿨을 때 — 이 SQL Tool 탭 자체를 그
+  // 세션으로 전환한다(연결 전 picker 상태였든, 다른 세션에 이미 연결돼 있었든 동일하게 동작).
+  // 이미 같은 세션의 SQL Tool 탭이 따로 열려있으면 그쪽으로 전환하고, 지금 탭은 닫는다.
+  const connectSqlToolPickerTab = (sqlTabId: TabId, sessionId: string, sessionName: string) => {
+    const existing = tabs.find(t => t.type === 'sqlTool' && t.sqlTool?.sessionId === sessionId && t.id !== sqlTabId);
+    if (existing) {
+      setTabs(prev => prev.filter(t => t.id !== sqlTabId));
+      setActiveTabId(existing.id);
+      return;
+    }
+    setTabs(prev => prev.map(t => t.id === sqlTabId
+      ? { ...t, title: `🗄️ ${sessionName}`, sqlTool: { sessionId, sessionName } }
+      : t));
   };
 
   // 단일 termId 의 모든 백엔드 리소스 해제 — close 경로 어디서든 일관되게 호출
@@ -4979,7 +5013,6 @@ function App() {
           }
         }}
         onDisconnect={panelId => handleDisconnectSession(panelId)}
-        onOpenSqlTool={(sessionId, sessionName) => openSqlToolTab(sessionId, sessionName)}
         targetPanelId={selectedPanelId}
         onFileTransfer={async (sessionId, sessionName) => {
           // 이미 열린 파일 전송 워크스페이스가 있으면 재사용(거기에 새 연결 추가) — 없으면 새로 생성.
@@ -5155,6 +5188,7 @@ function App() {
                 onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
               >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
+              <button className="tool-btn" title="SQL Tool" onClick={openSqlToolPicker}>🗄️</button>
           <button
             className="tool-btn"
             title={tApp('toolbar.resetSplitTooltip')}
@@ -5764,8 +5798,12 @@ function App() {
           }
           return (
             <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden' }}>
-              <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
-                <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
+              <ErrorBoundary label={t.sqlTool!.sessionId ? `SQL Tool — ${t.sqlTool!.sessionName}` : 'SQL Tool'}>
+                <SqlToolTabShell
+                  sessionId={t.sqlTool!.sessionId}
+                  sessionName={t.sqlTool!.sessionName}
+                  onSessionChange={(sessionId, sessionName) => connectSqlToolPickerTab(t.id, sessionId, sessionName)}
+                />
               </ErrorBoundary>
             </div>
           );
@@ -6406,6 +6444,7 @@ function App() {
         <SessionEditor
           session={editSessionCtx.session}
           folders={editSessionFolders}
+          initialCategory={editSessionCtx.initialCategory}
           onSave={async (s: any) => {
             if (editSessionCtx.isQuick) {
               try { await (window as any).api?.saveSession?.(s); } catch {}
@@ -6421,6 +6460,8 @@ function App() {
             applySessionToTerm(s, editSessionCtx.termId);
             // 편집 컨텍스트 갱신 (창 유지)
             setEditSessionCtx({ session: s, termId: editSessionCtx.termId });
+            // SessionList 사이드바 외에도 SqlToolTabShell 등 다른 곳의 세션 목록을 갱신.
+            try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
             // X11 forwarding 변경 시 안내 (수동 재접속 권유)
             const x11Changed = !!prev && (!!prev.x11Forward !== !!s.x11Forward || (prev.x11Display ?? 0) !== (s.x11Display ?? 0));
             if (x11Changed) {
@@ -6453,6 +6494,7 @@ function App() {
               return;
             }
             try { await (window as any).api?.saveSession?.(s); } catch {}
+            try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
             const editedTid = editSessionCtx.termId;
             setEditSessionCtx(null);
             // 새 탭으로 연결 (panelId=null → 새 패널/탭 생성)

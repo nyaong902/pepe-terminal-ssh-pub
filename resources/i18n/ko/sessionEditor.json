@@ -151,7 +151,11 @@
     "sshOpening": "SSH 터널 여는 중...",
     "sshFailed": "❌ SSH 터널 실패: {{error}} — 먼저 같은 세션 터미널 연결 필요",
     "sshTunnelOk": "SSH 터널 OK ({{remoteHost}}:{{remotePort}} → local={{localPort}}) — JDBC 테스트 중...",
-    "exception": "❌ 예외: {{error}}"
+    "exception": "❌ 예외: {{error}}",
+    "tunnelSectionTitle": "SSH 터널 접속 정보",
+    "tunnelSectionSub": "터널 없이 직접 접속하려면 비워두세요.",
+    "sqlSessionName": "이름",
+    "tunnelEnable": "SSH 터널 사용"
   },
   "actions": {
     "save": "저장",

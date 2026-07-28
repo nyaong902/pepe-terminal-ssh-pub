@@ -104,19 +104,33 @@ function formatType(typeName: string | null | undefined, size: number, digits: n
   return t;
 }
 
+// SSH 터널이 필요한 dbms 는 매 (재)연결마다 새로 열어야 한다 — 한 번 연 로컬 포워딩을
+// host/port 로 굳혀서 재사용하면, 그 포워딩이 죽은 뒤(SSH 세션 재접속 등) keepAlive 가
+// 재연결을 시도할 때 죽은 로컬 포트로, 혹은(더 나쁘게는) 터널을 안 거친 원격측 raw
+// host/port 로 그대로 접속을 시도해 "Invalid ... URL"류 에러가 난다. 그래서 실제 연결
+// 직전마다 이 훅으로 새로 포워딩을 열어 host/port 를 얻는다.
+export type TunnelOpener = () => Promise<{ host: string; port: number; forwardId: string; dedConnId?: string } | { error: string }>;
+
 export class JdbcBackend {
   readonly type: Dialect;
   readonly connectionId: string;
   private _connected = false;
   private _info: ConnectInfo = {};
+  // 터널을 통해 연결 중일 때만 채워짐 — buildUrl() 에서 dbms.host/port 대신 이걸 우선 사용.
+  private _tunnelHost?: string;
+  private _tunnelPort?: number;
+  // 현재 연결이 물려있는 SSH 로컬 포워딩 — disconnect 시 정리용 (기존 (b as any).__forwardId 관례 유지).
+  __forwardId = '';
+  __dedConnId = '';
 
   constructor(
     public readonly sessionId: string,
     public readonly dbms: DbmsCfgLike,
     public readonly driverDef: any,
+    private readonly tunnelOpener?: TunnelOpener,
   ) {
     this.type = ((driverDef?.dialect || dbms?.type || 'altibase') as Dialect);
-    // 안정적 id — 같은 sessionId 면 어느 창에서 인스턴스를 새로 만들어도 sidecar 의
+    // 안정적 id — 같은 sessionId 면 어느 창에서 인스턴스를 새로 만들어도 사이드카의
     // 동일 connection 을 adopt 할 수 있어야 함 (탭 분리/복원 시 재연결 회피).
     this.connectionId = `sql-${sessionId}`;
   }
@@ -143,9 +157,11 @@ export class JdbcBackend {
   buildUrl(): string {
     if (this.dbms?.urlOverride) return this.dbms.urlOverride;
     const tpl: string = this.driverDef?.urlTemplate || '';
+    const host = this._tunnelHost ?? this.dbms?.host ?? '127.0.0.1';
+    const port = this._tunnelPort ?? this.dbms?.port ?? this.driverDef?.defaultPort ?? 0;
     let url = tpl
-      .replace('{host}', this.dbms?.host || '127.0.0.1')
-      .replace('{port}', String(this.dbms?.port || this.driverDef?.defaultPort || 0))
+      .replace('{host}', host)
+      .replace('{port}', String(port))
       .replace('{database}', this.dbms?.database || '');
     // database 가 비어있어 끝에 빈 슬래시만 남는 경우(예: jdbc:Altibase://h:p/) 그 슬래시 제거
     url = url.replace(/\/+$/, '');
@@ -155,6 +171,15 @@ export class JdbcBackend {
   async ensureConnected(): Promise<{ ok: boolean; error?: string }> {
     if (this._connected) return { ok: true };
     if (await this.tryAdopt()) return { ok: true };
+    // 터널이 필요한 세션이면 실제 접속 시도 직전에 항상 새로 연다 — 이전 포워딩이 죽어있을 수 있어서.
+    if (this.tunnelOpener) {
+      const t = await this.tunnelOpener();
+      if ('error' in t) return { ok: false, error: t.error };
+      this._tunnelHost = t.host;
+      this._tunnelPort = t.port;
+      this.__forwardId = t.forwardId;
+      this.__dedConnId = t.dedConnId || '';
+    }
     const api: any = (window as any).api || {};
     const r = await api.jdbcConnect?.({
       connectionId: this.connectionId,

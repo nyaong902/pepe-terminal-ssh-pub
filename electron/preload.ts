@@ -206,8 +206,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('ssh:open-local-forward', args),
   sshCloseLocalForward: (args: { forwardId: string }) =>
     ipcRenderer.invoke('ssh:close-local-forward', args),
-  // 활성 터미널 없이 세션의 점프 체인으로 백그라운드 SSH 연결 후 DB 포트 포워딩 (SQL Tool)
-  sshOpenDedicatedForward: (args: { sessionId: string; remoteHost: string; remotePort: number }) =>
+  // 활성 터미널 없이 세션의 점프 체인으로(또는 SQL Tool 독립 세션의 자체 sshConn 으로)
+  // 백그라운드 SSH 연결 후 DB 포트 포워딩
+  sshOpenDedicatedForward: (args: { sessionId?: string; remoteHost: string; remotePort: number; sshConn?: { host: string; port?: number; username: string; auth?: any } }) =>
     ipcRenderer.invoke('ssh:open-dedicated-forward', args),
   sshCloseDedicatedForward: (args: { forwardId?: string; connId?: string }) =>
     ipcRenderer.invoke('ssh:close-dedicated-forward', args),
@@ -338,6 +339,16 @@ contextBridge.exposeInMainWorld('api', {
   // SQL Tool 세션 상태 영속화 (localStorage 대체)
   sqlToolGetState: (sessionId: string) => ipcRenderer.invoke('sql-tool:get-state', sessionId),
   sqlToolSetState: (sessionId: string, partial: any) => ipcRenderer.invoke('sql-tool:set-state', { sessionId, partial }),
+  // SQL Tool 독립 DB 연결 프로필 (SSH 세션과 분리)
+  sqlSessionsList: () => ipcRenderer.invoke('sql-sessions:list'),
+  sqlSessionsSave: (session: any) => ipcRenderer.invoke('sql-sessions:save', session),
+  sqlSessionsDelete: (id: string) => ipcRenderer.invoke('sql-sessions:delete', id),
+  sqlSessionsSaveFolder: (folder: any) => ipcRenderer.invoke('sql-sessions:save-folder', folder),
+  sqlSessionsDeleteFolder: (id: string) => ipcRenderer.invoke('sql-sessions:delete-folder', id),
+  sqlSessionsMoveToFolder: (sessionId: string, folderId: string | null) => ipcRenderer.invoke('sql-sessions:move-to-folder', sessionId, folderId),
+  sqlSessionsReorder: (id: string, type: 'session' | 'folder', direction: 'up' | 'down' | 'top' | 'bottom') => ipcRenderer.invoke('sql-sessions:reorder', { id, type, direction }),
+  sqlSessionsExport: () => ipcRenderer.invoke('sql-sessions:export'),
+  sqlSessionsImport: () => ipcRenderer.invoke('sql-sessions:import'),
   feConnectedSessions: () => ipcRenderer.invoke('fe:connected-sessions'),
 
   // SFTP

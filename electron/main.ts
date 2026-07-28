@@ -39,6 +39,7 @@ import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
+import { loadSqlSessionsData, saveSqlSessionsData, SqlSession, SqlFolder, SqlSessionsData } from './sqlSessionsStore';
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { loadClockWidgetState, saveClockWidgetState, ClockWidgetState } from './clockWidgetStore';
@@ -5983,6 +5984,230 @@ ipcMain.handle('jdbc:meta-function-columns', async (_e, args: { connectionId: st
 
 // SQL Tool 세션 상태 영속화 (history / favorites / editorTabs).
 // renderer 는 localStorage 대신 이 IPC 쌍을 통해 main 의 JSON 파일과 통신.
+// SQL Tool 독립 DB 연결 프로필 목록 — SSH 세션과 분리된 자체 저장소(sql-sessions.json).
+ipcMain.handle('sql-sessions:list', () => loadSqlSessionsData());
+ipcMain.handle('sql-sessions:save', (_e, sess: SqlSession) => {
+  try {
+    const data = loadSqlSessionsData();
+    const idx = data.sessions.findIndex(s => s.id === sess.id);
+    if (idx >= 0) data.sessions[idx] = sess; else data.sessions.push(sess);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:delete', (_e, id: string) => {
+  try {
+    const data = loadSqlSessionsData();
+    data.sessions = data.sessions.filter(s => s.id !== id);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:save-folder', (_e, folder: SqlFolder) => {
+  try {
+    const data = loadSqlSessionsData();
+    const idx = data.folders.findIndex(f => f.id === folder.id);
+    if (idx >= 0) data.folders[idx] = folder; else data.folders.push(folder);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:delete-folder', (_e, id: string) => {
+  try {
+    const data = loadSqlSessionsData();
+    const deleted = data.folders.find(f => f.id === id);
+    const parentId = deleted?.parentId;
+    data.folders = data.folders.filter(f => f.id !== id);
+    data.folders.forEach(f => { if (f.parentId === id) f.parentId = parentId; });
+    data.sessions.forEach(s => { if (s.folderId === id) s.folderId = parentId; });
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:move-to-folder', (_e, sessionId: string, folderId: string | null) => {
+  try {
+    const data = loadSqlSessionsData();
+    const sess = data.sessions.find(s => s.id === sessionId);
+    if (sess) sess.folderId = folderId ?? undefined;
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+
+// SQL Tool 세션/폴더 순서 이동 — sessions:reorder 와 동일한 규칙(같은 레벨 내 swap, 폴더 만나면 그
+// 안으로 진입/이탈)을 childOrder(parentId('__root__' 포함) → 자식 id 목록)에 적용.
+ipcMain.handle('sql-sessions:reorder', (_e, { id, type, direction }: { id: string; type: 'session' | 'folder'; direction: 'up' | 'down' | 'top' | 'bottom' }) => {
+  try {
+    const data = loadSqlSessionsData();
+    if (!data.childOrder) data.childOrder = {};
+
+    const getChildOrder = (parentId?: string): string[] => {
+      const key = parentId || '__root__';
+      if (!data.childOrder![key]) {
+        const fIds = data.folders.filter(f => (f.parentId ?? undefined) === parentId).map(f => f.id);
+        const sIds = data.sessions.filter(s => (s.folderId ?? undefined) === parentId).map(s => s.id);
+        data.childOrder![key] = [...fIds, ...sIds];
+      }
+      const allIds = new Set([
+        ...data.folders.filter(f => (f.parentId ?? undefined) === parentId).map(f => f.id),
+        ...data.sessions.filter(s => (s.folderId ?? undefined) === parentId).map(s => s.id),
+      ]);
+      const order = data.childOrder![key].filter(x => allIds.has(x));
+      for (const aid of allIds) { if (!order.includes(aid)) order.push(aid); }
+      data.childOrder![key] = order;
+      return order;
+    };
+    const setChildOrder = (parentId: string | undefined, order: string[]) => { data.childOrder![parentId || '__root__'] = order; };
+    const removeFromChildOrder = (parentId: string | undefined, itemId: string) => {
+      const order = getChildOrder(parentId);
+      const idx = order.indexOf(itemId);
+      if (idx >= 0) order.splice(idx, 1);
+      setChildOrder(parentId, order);
+    };
+    const addToChildOrder = (parentId: string | undefined, itemId: string, position: 'first' | 'last' | { before: string } | { after: string }) => {
+      const order = getChildOrder(parentId);
+      const existIdx = order.indexOf(itemId);
+      if (existIdx >= 0) order.splice(existIdx, 1);
+      if (position === 'first') order.unshift(itemId);
+      else if (position === 'last') order.push(itemId);
+      else if ('before' in position) { const ti = order.indexOf(position.before); order.splice(ti >= 0 ? ti : 0, 0, itemId); }
+      else { const ti = order.indexOf(position.after); order.splice(ti >= 0 ? ti + 1 : order.length, 0, itemId); }
+      setChildOrder(parentId, order);
+    };
+
+    let parentId: string | undefined;
+    if (type === 'session') {
+      const sess = data.sessions.find(s => s.id === id);
+      if (!sess) return data;
+      parentId = sess.folderId;
+    } else {
+      const folder = data.folders.find(f => f.id === id);
+      if (!folder) return data;
+      parentId = folder.parentId;
+    }
+
+    const order = getChildOrder(parentId);
+    const idx = order.indexOf(id);
+    if (idx < 0) return data;
+
+    if (direction === 'top') {
+      order.splice(idx, 1); order.unshift(id); setChildOrder(parentId, order);
+    } else if (direction === 'bottom') {
+      order.splice(idx, 1); order.push(id); setChildOrder(parentId, order);
+    } else if (direction === 'up') {
+      if (idx > 0) {
+        const prevId = order[idx - 1];
+        const prevIsFolder = data.folders.some(f => f.id === prevId);
+        if (prevIsFolder) {
+          removeFromChildOrder(parentId, id);
+          if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = prevId;
+          else data.folders.find(f => f.id === id)!.parentId = prevId;
+          addToChildOrder(prevId, id, 'last');
+        } else {
+          [order[idx], order[idx - 1]] = [order[idx - 1], order[idx]];
+          setChildOrder(parentId, order);
+        }
+      } else if (parentId) {
+        removeFromChildOrder(parentId, id);
+        const grandParentId = data.folders.find(f => f.id === parentId)?.parentId;
+        if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = grandParentId;
+        else data.folders.find(f => f.id === id)!.parentId = grandParentId;
+        addToChildOrder(grandParentId, id, { before: parentId });
+      }
+    } else { // down
+      if (idx < order.length - 1) {
+        const nextId = order[idx + 1];
+        const nextIsFolder = data.folders.some(f => f.id === nextId);
+        if (nextIsFolder) {
+          removeFromChildOrder(parentId, id);
+          if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = nextId;
+          else data.folders.find(f => f.id === id)!.parentId = nextId;
+          addToChildOrder(nextId, id, 'first');
+        } else {
+          [order[idx], order[idx + 1]] = [order[idx + 1], order[idx]];
+          setChildOrder(parentId, order);
+        }
+      } else if (parentId) {
+        removeFromChildOrder(parentId, id);
+        const grandParentId = data.folders.find(f => f.id === parentId)?.parentId;
+        if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = grandParentId;
+        else data.folders.find(f => f.id === id)!.parentId = grandParentId;
+        addToChildOrder(grandParentId, id, { after: parentId });
+      }
+    }
+
+    saveSqlSessionsData(data);
+    return data;
+  } catch (err: any) {
+    return { error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle('sql-sessions:export', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export SQL Tool Sessions',
+    defaultPath: 'sql-sessions-export.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  try {
+    const data = loadSqlSessionsData();
+    fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf8');
+    return result.filePath;
+  } catch { return null; }
+});
+
+ipcMain.handle('sql-sessions:import', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import SQL Tool Sessions',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    const imported: SqlSessionsData = Array.isArray(raw)
+      ? { sessions: raw, folders: [] }
+      : { sessions: raw.sessions ?? [], folders: raw.folders ?? [] };
+    const data = loadSqlSessionsData();
+    // 폴더 병합 — 이름+parentId 중복이면 기존 것 재사용, 아니면 새 id 로 추가.
+    const folderIdMap = new Map<string, string>();
+    for (const f of imported.folders) {
+      const existing = data.folders.find(x => x.name === f.name && (x.parentId ?? undefined) === (f.parentId ? folderIdMap.get(f.parentId) : undefined));
+      if (existing) { folderIdMap.set(f.id, existing.id); continue; }
+      const newId = `sqlfolder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      folderIdMap.set(f.id, newId);
+      data.folders.push({ id: newId, name: f.name, parentId: f.parentId ? folderIdMap.get(f.parentId) : undefined });
+    }
+    let addedCount = 0;
+    let duplicateCount = 0;
+    for (const s of imported.sessions) {
+      const newFolderId = s.folderId ? folderIdMap.get(s.folderId) : undefined;
+      const dup = data.sessions.some(x => x.name === s.name && x.dbms?.host === s.dbms?.host && x.dbms?.port === s.dbms?.port);
+      if (dup) { duplicateCount++; continue; }
+      data.sessions.push({ ...s, id: `sql-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, folderId: newFolderId });
+      addedCount++;
+    }
+    saveSqlSessionsData(data);
+    return { data, addedCount, duplicateCount, totalParsed: imported.sessions.length };
+  } catch (err) {
+    console.error('SQL sessions import error:', err);
+    return null;
+  }
+});
+
 ipcMain.handle('sql-tool:get-state', async (_e, sessionId: string) => {
   if (!sessionId) return {};
   return getSqlToolState(sessionId);
@@ -7082,16 +7307,24 @@ ipcMain.handle('ssh:close-local-forward', (_e, args: { forwardId: string }) => {
 });
 // SQL Tool 등 — 활성 터미널 없이도 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 맺고
 // 그 위로 DB 포트를 로컬 포워딩. (점프된 세션에서 터미널을 안 띄워도 SQL 연결되도록)
-ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId: string; remoteHost: string; remotePort: number }) => {
+ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId?: string; remoteHost: string; remotePort: number; sshConn?: { host: string; port?: number; username: string; auth?: any } }) => {
   try {
     const bridge: any = getSSHBridge();
-    const session = sessionsData.sessions.find(s => s.id === args.sessionId);
-    if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
-    const needsPw = !session.auth || (session.auth.type === 'password' && !session.auth.password);
-    if (needsPw) return { success: false, error: '이 세션은 저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. 세션에 자격증명을 저장하거나 먼저 해당 세션으로 터미널을 연결하세요.' };
-    const connId = `sqlfwd-${args.sessionId}-${Date.now().toString(36)}`;
+    // SQL Tool 독립 세션처럼 sessions.json 에 없는 자체 SSH 접속 정보(sshConn)를 직접 줄 수도 있고,
+    // (레거시 경로) sessionId 로 기존 SSH 세션의 접속 정보를 재사용할 수도 있다.
+    let host: string, port: number, username: string, auth: any, jumps: any;
+    if (args.sshConn) {
+      host = args.sshConn.host; port = args.sshConn.port || 22; username = args.sshConn.username; auth = args.sshConn.auth;
+    } else {
+      const session = sessionsData.sessions.find(s => s.id === args.sessionId);
+      if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
+      host = session.host; port = session.port || 22; username = session.username; auth = session.auth; jumps = (session as any).jumps;
+    }
+    const needsPw = !auth || (auth.type === 'password' && !auth.password);
+    if (needsPw) return { success: false, error: '저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. SSH 터널 설정에 자격증명을 저장하세요.' };
+    const connId = `sqlfwd-${args.sessionId || 'standalone'}-${Date.now().toString(36)}`;
     try {
-      await bridge.handleSFTPConnect(connId, session.host, session.port || 22, session.username, session.auth, undefined, (session as any).jumps);
+      await bridge.handleSFTPConnect(connId, host, port, username, auth, undefined, jumps);
     } catch (e: any) {
       try { bridge.handleSFTPDisconnect?.(connId); } catch {}
       return { success: false, error: `백그라운드 SSH 연결 실패: ${e?.message || e}` };
