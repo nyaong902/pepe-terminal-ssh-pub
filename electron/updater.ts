@@ -1,6 +1,6 @@
 // electron/updater.ts
 // electron-updater 기반 자동 업데이트.
-// 배포 채널: GitHub Releases (public repo nyaong902/pepe-terminal-ssh)
+// 배포 채널: GitHub Releases (public repo nyaong902/pepe-terminal-ssh-pub)
 // - 시작 시 1회 자동 확인 + 메뉴의 "업데이트 확인" 수동 트리거
 // - autoDownload=false 로 두고 사용자가 모달에서 동의해야 다운로드
 // - 다운로드 완료 후 사용자가 "재시작하여 설치" 누르면 quitAndInstall

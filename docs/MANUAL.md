@@ -43,7 +43,7 @@
 
 ### 설치
 
-[GitHub Releases](https://github.com/HyungdukSeo/pepe-terminal-ssh/releases) 에서 최신 Windows 설치 파일을 내려받습니다:
+[GitHub Releases](https://github.com/nyaong902/pepe-terminal-ssh-pub/releases) 에서 최신 Windows 설치 파일을 내려받습니다:
 
 - **`PePe Terminal(SSH) Setup X.Y.Z.exe`** — NSIS 설치 파일 (일반적 설치)
 - **`PePe Terminal(SSH) X.Y.Z.exe`** — 포터블 실행 파일 (설치 없이 바로 실행)
@@ -1050,7 +1050,7 @@ Node/OpenSSL 빌드에 해당 암호 알고리즘 바인딩 없음. v2.0.2+ 에�
 
 ## 부록 C. 피드백 / 기여
 
-- 이슈: [GitHub Issues](https://github.com/HyungdukSeo/pepe-terminal-ssh/issues)
+- 이슈: [GitHub Issues](https://github.com/nyaong902/pepe-terminal-ssh-pub/issues)
 - Pull Request 환영.
 
 ---
