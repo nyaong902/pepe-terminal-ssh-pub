@@ -1150,10 +1150,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
             } catch {}
             return;
           }
-          // Windows 탐색기 등에서 실제 OS 파일을 끌어다 놓은 경우 — Electron 의 File 은 .path 로 절대경로 노출.
+          // Windows 탐색기 등에서 실제 OS 파일을 끌어다 놓은 경우 — File.path 는 최신 Electron 에서
+          // 더 이상 채워지지 않으므로(보안상 제거) webUtils.getPathForFile 로 조회해야 한다.
           if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
             e.preventDefault();
-            const absPaths = Array.from(e.dataTransfer.files).map(f => (f as any).path).filter(Boolean);
+            const absPaths = Array.from(e.dataTransfer.files)
+              .map(f => api.getPathForFile?.(f))
+              .filter((p): p is string => !!p);
             if (absPaths.length > 0) onOsFilesDrop?.(absPaths);
           }
         }}
