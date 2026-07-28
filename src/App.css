@@ -7719,8 +7719,12 @@ mark.claude-search-hit.current {
 .messenger-bubble.out {
   align-self: flex-end;
   background: linear-gradient(135deg, rgba(41, 119, 201, 0.86), rgba(32, 156, 119, 0.82));
+  text-align: right;
 }
 .messenger-bubble.in { align-self: flex-start; }
+.messenger-bubble.out > div:not(.messenger-worklog-share-card):not(.messenger-file-card) {
+  text-align: right;
+}
 .messenger-bubble-footer {
   display: flex;
   align-items: center;
