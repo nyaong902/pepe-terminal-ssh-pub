@@ -7318,6 +7318,7 @@ function App() {
               onAgentChange={setAiAgent}
               worklogFocusTodo={worklogFocusTodo}
               messengerMode={messengerMode}
+              onMessengerModeChange={setMessengerMode}
             />
             </div>
           </>
@@ -7881,9 +7882,23 @@ function App() {
                   setBcastXferInProgress(true);
                   setBcastXferLog([tApp('bcastXfer.startLog', { targets: targets.length, files: bcastXferFiles.length })]);
                   const override = bcastXferPath.trim();
+                  const resolveTargetBasePath = async (tid: string): Promise<string> => {
+                    if (override) return override;
+                    const tracked = getCurrentPwdForTerm(tid);
+                    if (tracked && tracked !== '/') return tracked;
+                    try {
+                      const r: any = await (window as any).api?.sshGetShellCwd?.({ termId: tid });
+                      if (r?.ok && r.pwd && r.pwd !== '/') return r.pwd;
+                    } catch {}
+                    return tracked || '/';
+                  };
                   // 이 일괄전송 1회 전체에 같은 workspaceId 부여 → 충돌 "전체 적용" 결정이 모든 파일·세션에 재사용됨.
                   // (이게 없으면 매 feTransfer 가 새 transferId 라 "전체 적용" 이 기억 안 되고 매번 다시 물음)
                   const bcastWid = `bcast-xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  const basePathByTarget = new Map<string, string>();
+                  await Promise.all(targets.map(async tid => {
+                    basePathByTarget.set(tid, await resolveTargetBasePath(tid));
+                  }));
                   const jobs: Array<{
                     tid: string;
                     basePath: string;
@@ -7895,7 +7910,7 @@ function App() {
                     skipMsg?: string;
                   }> = [];
                   for (const tid of targets) {
-                    const basePath = override || getCurrentPwdForTerm(tid) || '/';
+                    const basePath = basePathByTarget.get(tid) || override || getCurrentPwdForTerm(tid) || '/';
                     const info = getTermSessionInfo(tid);
                     const label = info?.sessionName || tid.slice(-6);
                     for (const f of bcastXferFiles) {
@@ -7929,6 +7944,7 @@ function App() {
                       return runNext();
                     }
                     try {
+                      setBcastXferLog(prev => [...prev, `… ${job.label}: ${job.basePath}`]);
                       const r: any = await new Promise(resolve => {
                         (window as any).api?.feTransfer?.(
                           job.src,

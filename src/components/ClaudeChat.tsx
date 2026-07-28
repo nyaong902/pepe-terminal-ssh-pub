@@ -8,6 +8,7 @@ import { MessengerWorkspace } from './MessengerWorkspace';
 import { PlainAppWorkspace } from './PlainAppWorkspace';
 import { WorkLogWorkspace } from './WorkLogWorkspace';
 import { BrowserPane } from './BrowserPane';
+import { ContextMenu, MenuItem } from './ContextMenu';
 import { COMPANY_MESSENGER_LOGIN_URL } from '../utils/companyMessenger';
 import { adjustClaudeFontSize } from '../utils/claudeFont';
 import { useWorkLogAutoRecorder } from '../hooks/useWorkLogAutoRecorder';
@@ -1194,11 +1195,12 @@ type Props = {
   // 메신저 탭 모드 — 'mini'(기본, 자체 메신저) 또는 'company'(사내 웹 메신저를 임베드해 대체).
   messengerMode?: 'mini' | 'company';
   onOpenPlainApp?: () => void;
+  onMessengerModeChange?: (mode: 'mini' | 'company') => void;
 };
 
 let sessionCounter = 0;
 
-export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo, messengerMode = 'mini' }) => {
+export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo, messengerMode = 'mini', onMessengerModeChange }) => {
   const activeView = view;
   // 채팅창 내에서 독립적으로 전환 가능한 에이전트 (전역 설정과 분리)
   const [currentAgent, setCurrentAgentState] = useState<AgentType>(aiAgent);
@@ -1279,6 +1281,7 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   const [agentTooltip, setAgentTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [plainAppState, setPlainAppState] = useState<any>(null);
+  const [messengerCtxMenu, setMessengerCtxMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     const off = (window as any).api?.onPlainAppEvent?.((event: any) => {
       if (!event) return;
@@ -4594,16 +4597,44 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
         <button
           className={`claude-chat-view-tab ${activeView === 'messenger' ? 'active' : ''}`}
           onClick={() => onViewChange?.('messenger')}
+          onContextMenu={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMessengerCtxMenu({ x: e.clientX, y: e.clientY });
+          }}
         >💬 {tt('messenger')}</button>
         <button
           className={`claude-chat-view-tab ${activeView === 'worklog' ? 'active' : ''}`}
           onClick={() => onViewChange?.('worklog')}
         >🗓 {tt('workLog')}</button>
-        <button
-          className={`claude-chat-view-tab ${activeView === 'plainApp' ? 'active' : ''}`}
-          onClick={() => onViewChange?.('plainApp')}
-        >📱 pepe-connect</button>
+        {/* pepe-connect 탭은 현재 숨김 처리 */}
       </div>
+      {messengerCtxMenu && (
+        <ContextMenu
+          x={messengerCtxMenu.x}
+          y={messengerCtxMenu.y}
+          onClose={() => setMessengerCtxMenu(null)}
+          items={[
+            { header: true, label: '메신저 선택' },
+            {
+              icon: '💬',
+              label: '미니',
+              onClick: () => {
+                onMessengerModeChange?.('mini');
+                setMessengerCtxMenu(null);
+              },
+            },
+            {
+              icon: '🏢',
+              label: '사내',
+              onClick: () => {
+                onMessengerModeChange?.('company');
+                setMessengerCtxMenu(null);
+              },
+            },
+          ] satisfies MenuItem[]}
+        />
+      )}
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>

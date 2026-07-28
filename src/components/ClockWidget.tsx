@@ -79,6 +79,13 @@ function pointToMinutes(clientX: number, clientY: number, rect: DOMRect): number
   return Math.round(minutes);
 }
 
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function formatCountdown(ms: number): string {
   // ceil 을 쓰면 설정 직후(예: "30분" 확정 순간부터 몇 ms 가 자연히 지나있어 endTime-now 가
   // 1800000ms 보다 살짝 작아짐) 30:00 이 아니라 30:01 로 한 틱 높게 보이는 문제가 있었다.
@@ -247,6 +254,13 @@ export default function ClockWidget() {
   const hourAngle = (hours + minutes / 60) * 30;
   const minuteAngle = (minutes + seconds / 60) * 6;
 
+  // 시침이 3시(90도)~9시(270도) 사이(시계판 아래쪽 절반)를 향할 때는 기본 위치(중앙 아래)에
+  // 날짜/시간을 표시하면 시침과 겹치므로, 그 구간에서는 중앙 위쪽으로 올려서 표시한다.
+  const hourHandInLowerHalf = hourAngle >= 90 && hourAngle <= 270;
+  const dateTimeYs = hourHandInLowerHalf
+    ? { dateY: CENTER - RADIUS * 0.48, timeY: CENTER - RADIUS * 0.32 }
+    : { dateY: CENTER + RADIUS * 0.32, timeY: CENTER + RADIUS * 0.48 };
+
   // 몬데인 SBB 사진 비율 — 분침은 시 눈금(RADIUS*0.8) 바로 아래까지 거의 닿을 정도로 길고,
   // 시침도 워치페이스 시 눈금 쪽에 가깝게 늘렸다(그래도 분침보다는 확연히 짧게 유지).
   const hourHandPath = handRectPath(hourAngle, RADIUS * 0.68, RADIUS * 0.12, 9);
@@ -300,7 +314,7 @@ export default function ClockWidget() {
       <circle cx={CENTER} cy={CENTER} r={5} fill={inkColor} />
       {remainingMs > 0 ? (
         <text
-          x={CENTER} y={CENTER + RADIUS * 0.45}
+          x={CENTER} y={hourHandInLowerHalf ? CENTER - RADIUS * 0.4 : CENTER + RADIUS * 0.45}
           textAnchor="middle"
           fontSize={15}
           fontWeight={700}
@@ -311,19 +325,33 @@ export default function ClockWidget() {
           style={{ pointerEvents: 'none' }}
         >{formatCountdown(remainingMs)}</text>
       ) : (
-        // 타이머가 동작하지 않을 때는 같은 자리에 현재 시각(HH:MM:SS)을 표시 — 잉크 색 글씨 +
+        // 타이머가 동작하지 않을 때는 날짜(위) + 현재 시각(아래) 두 줄을 표시 — 잉크 색 글씨 +
         // 바탕색 테두리로, 타이머 표시(빨간 글씨)와 구분되면서도 위젯이 비어 보이지 않게 한다.
-        <text
-          x={CENTER} y={CENTER + RADIUS * 0.45}
-          textAnchor="middle"
-          fontSize={15}
-          fontWeight={700}
-          fill={inkColor}
-          stroke={faceColor}
-          strokeWidth={3}
-          paintOrder="stroke"
-          style={{ pointerEvents: 'none' }}
-        >{`${String(now.getHours()).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`}</text>
+        // 시침이 3시~9시 사이(아래쪽 절반)에 있으면 기본 위치(중앙 아래)와 겹치므로 위쪽으로 올린다.
+        <>
+          <text
+            x={CENTER} y={dateTimeYs.dateY}
+            textAnchor="middle"
+            fontSize={11}
+            fontWeight={600}
+            fill={inkColor}
+            stroke={faceColor}
+            strokeWidth={2.5}
+            paintOrder="stroke"
+            style={{ pointerEvents: 'none' }}
+          >{formatDate(now)}</text>
+          <text
+            x={CENTER} y={dateTimeYs.timeY}
+            textAnchor="middle"
+            fontSize={15}
+            fontWeight={700}
+            fill={inkColor}
+            stroke={faceColor}
+            strokeWidth={3}
+            paintOrder="stroke"
+            style={{ pointerEvents: 'none' }}
+          >{`${String(now.getHours()).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`}</text>
+        </>
       )}
     </svg>
   );
