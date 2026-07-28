@@ -2752,6 +2752,28 @@ probe_curl || probe_wget || probe_python
     }
   }
 
+  // 로컬 파일 패널의 'shell:Desktop' 같은 가상 aggregator 경로(내 PC/네트워크/실제 데스크톱 파일을
+  // 한 화면에 묶어 보여주는 뷰) 는 실제 파일시스템 경로가 아님 — 여기로 드롭해서 전송하면 fs 계열
+  // API 가 이 문자열을 그대로 상대경로로 취급해 앱 cwd 밑에 'shell:Desktop\\...' 를 만들려다 실패함.
+  // 실제 특수 폴더 경로로 변환.
+  private resolveLocalShellPath(p: string): string {
+    if (!p || !p.startsWith('shell:')) return p;
+    // 호출부(FileExplorer 의 handleFileDrop 등)가 이미 파일명까지 붙여서 넘기므로
+    // ('shell:Desktop\\AMPC.ini') 정확히 일치가 아니라 접두사 매칭 + 나머지 유지가 필요.
+    const map: Record<string, string> = {
+      'shell:Desktop': 'desktop', 'shell:Downloads': 'downloads',
+      'shell:Personal': 'documents', 'shell:My Documents': 'documents',
+      'shell:My Pictures': 'pictures', 'shell:My Music': 'music', 'shell:My Video': 'videos',
+    };
+    for (const root of Object.keys(map)) {
+      if (p === root || p.startsWith(root + '/') || p.startsWith(root + '\\')) {
+        const rest = p.slice(root.length);
+        try { return require('electron').app.getPath(map[root]) + rest; } catch { return p; }
+      }
+    }
+    return p; // shell:MyComputerFolder / shell:NetworkPlacesFolder 등은 애초에 쓰기 대상이 될 수 없음
+  }
+
   async handleTransfer(
     src: { mode: string; termId?: string; path: string },
     dst: { mode: string; termId?: string; path: string },
@@ -2767,6 +2789,8 @@ probe_curl || probe_wget || probe_python
     // 변환된 경로 위에 이어붙이므로 자식들도 자동으로 올바른 경로가 된다.
     if (src.mode !== 'local' && src.termId) src = { ...src, path: await this.resolveCcPath(src.termId, src.path) };
     if (dst.mode !== 'local' && dst.termId) dst = { ...dst, path: await this.resolveCcPath(dst.termId, dst.path) };
+    if (src.mode === 'local') src = { ...src, path: this.resolveLocalShellPath(src.path) };
+    if (dst.mode === 'local') dst = { ...dst, path: this.resolveLocalShellPath(dst.path) };
     // 최상위 호출이면 ctx 자동 생성 + transfer-start 이벤트 즉시 송출
     const isRoot = !ctx;
     if (isRoot) {

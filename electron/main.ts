@@ -5519,6 +5519,17 @@ ipcMain.handle('shell:show-item', (_e, { fullPath }: { fullPath: string }) => {
   catch (err: any) { return { success: false, error: String(err) }; }
 });
 
+ipcMain.handle('shell:open-external', (_e, { url }: { url: string }) => {
+  try {
+    const raw = String(url || '').trim();
+    if (!raw) return { success: false, error: 'empty url' };
+    shell.openExternal(raw).catch(() => {});
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err) };
+  }
+});
+
 // 폴더 직접 열기
 ipcMain.handle('shell:open-path', async (_e, { dirPath }: { dirPath: string }) => {
   try { const err = await shell.openPath(dirPath); return { success: !err, error: err || undefined }; }

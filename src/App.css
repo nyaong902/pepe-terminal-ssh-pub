@@ -5394,7 +5394,7 @@ body.popout-options .session-editor h3:first-child {
   z-index: 1300;
   display: flex;
   flex-direction: column;
-  min-width: 280px;
+  min-width: 220px;
   max-width: 1200px;
   font-family: var(--claude-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
   font-size: var(--claude-font-size, 13px);
@@ -7579,17 +7579,47 @@ mark.claude-search-hit.current {
 }
 .messenger-sticker-preview {
   display: block;
-  max-width: 220px;
-  max-height: 220px;
-  border-radius: 10px;
-  margin-bottom: 2px;
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 12px;
+  margin-bottom: 0;
   cursor: pointer;
   object-fit: contain;
+  background: #fff;
+  padding: 8px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08), 0 6px 18px rgba(0, 0, 0, 0.16);
 }
 .messenger-file-card.sticker {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+}
+.messenger-file-card.sticker.messenger-sticker-only {
+  background: transparent;
+  border: none;
+  padding: 0;
+  gap: 4px;
+  width: auto;
+  align-self: flex-start;
+  margin: 0;
+  align-items: flex-start;
+  text-align: left;
+}
+.messenger-bubble.sticker-message {
+  background: transparent;
+  border: none;
+  padding: 2px 2px 6px;
+  max-width: none;
+}
+.messenger-bubble.sticker-message .messenger-bubble-footer time {
+  color: rgba(231, 245, 255, 0.72);
+}
+.messenger-sticker-meta {
+  display: none;
+}
+.messenger-sticker-preview {
+  margin-left: 0;
+  margin-right: 0;
 }
 .messenger-attachments {
   border: 1px solid rgba(166, 200, 230, 0.16);
@@ -7702,6 +7732,31 @@ mark.claude-search-hit.current {
   color: rgba(231, 245, 255, 0.68);
   font-size: 10px;
 }
+.messenger-bubble.sticker-message {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 2px 2px 4px;
+  max-width: none;
+}
+.messenger-bubble.sticker-message.out {
+  align-self: flex-end;
+}
+.messenger-bubble.sticker-message.in {
+  align-self: flex-start;
+}
+.messenger-bubble.sticker-message .messenger-bubble-footer {
+  margin-top: 4px;
+  width: 100%;
+  justify-content: flex-end;
+}
+.messenger-bubble.sticker-message .messenger-bubble-footer time {
+  color: rgba(231, 245, 255, 0.72);
+  font-size: 11px;
+  display: block;
+  width: 100%;
+  text-align: right;
+}
 .messenger-recall-btn {
   border: none;
   background: rgba(0, 0, 0, 0.22);
@@ -7732,10 +7787,36 @@ mark.claude-search-hit.current {
 .messenger-bubble.emoji-x1 > div:first-child { font-size: 48px; line-height: 1.15; }
 .messenger-bubble.emoji-x2 > div:first-child { font-size: 36px; line-height: 1.15; }
 .messenger-bubble.emoji-x3 > div:first-child { font-size: 28px; line-height: 1.15; }
+.messenger-bubble.emoji-x1 > div:first-child {
+  display: inline-block;
+  width: fit-content;
+}
+.messenger-bubble.emoji-x1 {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: none;
+  padding-bottom: 18px;
+}
 .messenger-bubble.emoji-x1 time,
 .messenger-bubble.emoji-x2 time,
 .messenger-bubble.emoji-x3 time {
   color: var(--win-text-dim, #86a0b6);
+}
+.messenger-bubble.emoji-x1 .messenger-bubble-footer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  margin-top: 0;
+  width: auto;
+  justify-content: flex-end;
+}
+.messenger-bubble.emoji-x1 .messenger-bubble-footer time {
+  width: auto;
+  text-align: right;
+  white-space: nowrap;
 }
 .messenger-worklog-share-card {
   display: flex;

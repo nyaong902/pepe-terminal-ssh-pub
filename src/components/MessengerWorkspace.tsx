@@ -920,7 +920,7 @@ export const MessengerWorkspace: React.FC<{
                 ? t('worklogShareRejected')
                 : '';
             return (
-            <div key={m.id} className={`messenger-bubble ${m.direction} ${emojiSizeClass}`}>
+            <div key={m.id} className={`messenger-bubble ${m.direction} ${emojiSizeClass}${m.kind === 'sticker' ? ' sticker-message' : ''}`}>
               {m.recalled ? (
                 <div className="messenger-recalled">{m.direction === 'out' ? t('messageRecalledSelf', { defaultValue: '메시지를 삭제했습니다.' }) : t('messageRecalledPeer', { defaultValue: '상대방이 메시지를 회수했습니다.' })}</div>
               ) : m.kind === 'worklog-share' ? (
@@ -951,13 +951,13 @@ export const MessengerWorkspace: React.FC<{
                   </div>
                 </div>
               ) : m.kind === 'file' || m.kind === 'sticker' ? (
-                <div className={`messenger-file-card ${m.kind === 'sticker' ? 'sticker' : ''}`}>
+                <div className={`messenger-file-card ${m.kind === 'sticker' ? 'sticker messenger-sticker-only' : ''}`}>
                   {isImageFile(m.fileName) && m.filePath ? (
                     <img
                       className={m.kind === 'sticker' ? 'messenger-sticker-preview' : 'messenger-image-preview'}
                       src={fileUrl(m.filePath)}
                       alt={m.fileName}
-                      onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}
+                      onClick={() => m.kind === 'file' ? (window as any).api?.shellShowItem?.(m.filePath) : undefined}
                     />
                   ) : null}
                   {m.kind === 'file' && (
@@ -980,12 +980,9 @@ export const MessengerWorkspace: React.FC<{
                       )}
                     </>
                   )}
-                  {m.kind === 'sticker' && m.filePath && (
-                    isSavedElsewhere(m, state.downloadsDir)
-                      ? <button className="messenger-file-action" onClick={() => (window as any).api?.shellShowItem?.(m.filePath)}>{t('openFolder')}</button>
-                      : <button className="messenger-file-action" onClick={() => saveFileAs(m)}>{t('saveFileAs')}</button>
+                  {m.kind === 'sticker' && (
+                    <div className="messenger-sticker-meta">{m.fileName}</div>
                   )}
-                  {saveFileError?.id === m.id && m.kind === 'sticker' && <div className="messenger-file-save-error">{saveFileError.text}</div>}
                 </div>
               ) : (
                 <div>{m.text}</div>

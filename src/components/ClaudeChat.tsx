@@ -4638,17 +4638,18 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>
-        {messengerMode === 'company' ? (
-          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} embedded chromeless />
-        ) : (
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'company' ? 'flex' : 'none' }}>
+          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} chromeless externalizeLinks autoFitZoom autoFitBaseWidth={960} autoFitMinZoom={0.35} autoFitMaxZoom={1} />
+        </div>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'mini' ? 'flex' : 'none' }}>
           <MessengerWorkspace
-            visible={visible && activeView === 'messenger'}
+            visible={visible && activeView === 'messenger' && messengerMode === 'mini'}
             connectedSessions={connectedSessions.map(s => ({
               panelId: s.termId,
               sessionName: s.label,
             }))}
           />
-        )}
+        </div>
       </div>
       {/* 작업일지도 동일하게 항상 마운트 + CSS 로만 숨김 — 탭 전환 시 날짜/입력 상태 보존. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'worklog' ? 'flex' : 'none' }}>

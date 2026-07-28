@@ -1177,6 +1177,8 @@ function App() {
   const [claudeChatWidth, setClaudeChatWidth] = useState<number>(360);
   const [claudeChatPinned, setClaudeChatPinned] = useState<boolean>(false);
   const [claudeChatVisible, setClaudeChatVisible] = useState<boolean>(false);
+  const appRootRef = useRef<HTMLDivElement | null>(null);
+  const claudeChatSidebarRef = useRef<HTMLDivElement | null>(null);
   const showClaudeChatLoadedRef = useRef(false);
   const claudeChatPinnedLoadedRef = useRef(false);
   const claudeChatHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1318,15 +1320,34 @@ function App() {
       try { notifyError(tMsg('replyFail'), String(res?.error || 'unknown')); } catch {}
     }
   };
+  const CLAUDE_CHAT_MIN_WIDTH = 220;
+  const CLAUDE_CHAT_MAX_WIDTH = 1200;
   // 사이드바 너비 드래그 중인지 — 드래그 중엔 매 픽셀 refit 을 건너뛰어 버벅임 방지 (종료 시 1회만 refit)
   const chatResizingRef = useRef(false);
+  const skipClaudeChatWidthEffectRef = useRef(false);
+  const applyClaudeChatLiveWidth = useCallback((nextWidth: number) => {
+    const width = Math.max(CLAUDE_CHAT_MIN_WIDTH, Math.min(CLAUDE_CHAT_MAX_WIDTH, nextWidth));
+    const sidebarEl = claudeChatSidebarRef.current;
+    const rootEl = appRootRef.current;
+    if (sidebarEl) {
+      sidebarEl.style.width = `${width}px`;
+      sidebarEl.style.transition = 'none';
+    }
+    if (rootEl) {
+      rootEl.style.setProperty('--claude-chat-width', `${width}px`);
+    }
+  }, []);
   // 너비/표시 변경 시에도 터미널 리핏 — 드래그 중이면 skip
   useEffect(() => {
     if (chatResizingRef.current) return;
-    [50, 200].forEach(ms => setTimeout(() => {
+    if (skipClaudeChatWidthEffectRef.current) {
+      skipClaudeChatWidthEffectRef.current = false;
+      return;
+    }
+    window.requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
       refitAllTerms();
-    }, ms));
+    });
   }, [claudeChatWidth, showClaudeChat]);
   const [claudeFileContext, setClaudeFileContext] = useState<{ fileName: string; remotePath: string; content: string }[] | null>(null);
   const [aiAgent, setAiAgent] = useState<'claude' | 'gemini' | 'codex' | 'custom' | 'antigravity'>('claude');
@@ -4754,6 +4775,7 @@ function App() {
 
   return (
     <div
+      ref={appRootRef}
       className={`app-root${showBroadcast ? ' has-broadcast' : ''}${showQuickConnect ? ' has-quickconnect' : ''}${(showQuickConnect || (showToolbar && toolbarSlot !== 'top')) ? ' has-topbar' : ''}${(showToolbar && toolbarSlot === 'top') ? ' has-toptoolbar' : ''}${fullscreenTermId ? ' term-fullscreen' : ''}${showClaudeChat && claudeChatPinned ? ' has-claude-pinned' : ''}${showClaudeChat && !claudeChatPinned ? ' has-claude-autohide' : ''}${showClaudeChat && !claudeChatPinned && claudeChatVisible ? ' has-claude-visible' : ''}${topPanel ? ' top-panel-' + topPanel : ''}`}
       onMouseMove={e => {
         // 세션/파일트리 모두 unpinned 상태에서 마우스 위치에 따라 topPanel 전환
@@ -7035,30 +7057,36 @@ function App() {
         }
 
         const onEnterTriggerHover = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatPinned) return;
           if (claudeChatHideTimer.current) { clearTimeout(claudeChatHideTimer.current); claudeChatHideTimer.current = null; }
           if (claudeChatHoverShowTimer.current) clearTimeout(claudeChatHoverShowTimer.current);
           claudeChatHoverShowTimer.current = setTimeout(() => setClaudeChatVisible(true), 2500);
         };
         const onLeaveTriggerHover = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatHoverShowTimer.current) { clearTimeout(claudeChatHoverShowTimer.current); claudeChatHoverShowTimer.current = null; }
         };
         const onEnterSidebar = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatPinned) return;
           if (claudeChatHideTimer.current) { clearTimeout(claudeChatHideTimer.current); claudeChatHideTimer.current = null; }
         };
         const onLeaveSidebar = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatPinned) return;
           if (claudeChatHideTimer.current) clearTimeout(claudeChatHideTimer.current);
           claudeChatHideTimer.current = setTimeout(() => setClaudeChatVisible(false), 500);
         };
         const onClickTrigger = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatPinned) return;
           if (claudeChatHideTimer.current) { clearTimeout(claudeChatHideTimer.current); claudeChatHideTimer.current = null; }
           if (claudeChatHoverShowTimer.current) { clearTimeout(claudeChatHoverShowTimer.current); claudeChatHoverShowTimer.current = null; }
           setClaudeChatVisible(v => !v);
         };
         const onLeaveTrigger = () => {
+          if (chatResizingRef.current) return;
           if (claudeChatPinned) return;
           if (claudeChatHideTimer.current) clearTimeout(claudeChatHideTimer.current);
           claudeChatHideTimer.current = setTimeout(() => setClaudeChatVisible(false), 500);
@@ -7231,6 +7259,7 @@ function App() {
               );
             })()}
             <div
+              ref={claudeChatSidebarRef}
               className={`claude-chat-sidebar ${!claudeChatPinned ? 'auto-hide' : ''} ${!claudeChatPinned && !claudeChatVisible ? 'hidden' : ''}`}
               style={{ width: `${claudeChatWidth}px`, right: claudeChatPinned ? '0px' : '20px', display: showClaudeChat ? undefined : 'none' }}
               onMouseEnter={onEnterSidebar}
@@ -7244,36 +7273,45 @@ function App() {
                 const startX = e.clientX;
                 const startWidth = claudeChatWidth;
                 chatResizingRef.current = true;
-                let rafId = 0;
+                if (claudeChatHideTimer.current) { clearTimeout(claudeChatHideTimer.current); claudeChatHideTimer.current = null; }
+                if (claudeChatHoverShowTimer.current) { clearTimeout(claudeChatHoverShowTimer.current); claudeChatHoverShowTimer.current = null; }
                 let pendingW = startWidth;
+                applyClaudeChatLiveWidth(startWidth);
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;cursor:col-resize;background:transparent;';
+                document.body.appendChild(overlay);
                 const onMove = (ev: MouseEvent) => {
                   const dx = startX - ev.clientX;
-                  pendingW = Math.max(280, Math.min(1200, startWidth + dx));
-                  // rAF 스로틀 — 프레임당 1회만 상태 갱신 (드래그 중 refit 은 effect 에서 skip)
-                  if (rafId) return;
-                  rafId = requestAnimationFrame(() => {
-                    rafId = 0;
-                    setClaudeChatWidth(pendingW);
-                  });
+                  pendingW = Math.max(CLAUDE_CHAT_MIN_WIDTH, Math.min(CLAUDE_CHAT_MAX_WIDTH, startWidth + dx));
+                  applyClaudeChatLiveWidth(pendingW);
                 };
                 const onUp = () => {
-                  window.removeEventListener('mousemove', onMove);
-                  window.removeEventListener('mouseup', onUp);
-                  if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+                  overlay.removeEventListener('mousemove', onMove);
+                  overlay.removeEventListener('mouseup', onUp);
+                  overlay.removeEventListener('mouseleave', onUp);
+                  window.removeEventListener('blur', onUp);
+                  overlay.remove();
                   chatResizingRef.current = false;
-                  // 최종 너비 확정 + prefs 저장 + refit 1회
+                  skipClaudeChatWidthEffectRef.current = true;
+                  // 최종 너비 확정 + prefs 저장 + 즉시 refit
                   setClaudeChatWidth(pendingW);
+                  applyClaudeChatLiveWidth(pendingW);
+                  document.body.style.cursor = '';
+                  document.body.style.userSelect = '';
                   try { (window as any).api?.setUIPrefs?.({ claudeChatWidth: pendingW }); } catch {}
-                  [0, 60, 180].forEach(ms => setTimeout(() => {
-                    window.dispatchEvent(new Event('resize'));
-                    refitAllTerms();
-                  }, ms));
+                  window.dispatchEvent(new Event('resize'));
+                  refitAllTerms();
                 };
-                window.addEventListener('mousemove', onMove);
-                window.addEventListener('mouseup', onUp);
+                overlay.addEventListener('mousemove', onMove);
+                overlay.addEventListener('mouseup', onUp);
+                overlay.addEventListener('mouseleave', onUp);
+                window.addEventListener('blur', onUp, { once: true });
               }}
               onDoubleClick={() => {
                 setClaudeChatWidth(360);
+                applyClaudeChatLiveWidth(360);
                 try { (window as any).api?.setUIPrefs?.({ claudeChatWidth: 360 }); } catch {}
               }}
             />

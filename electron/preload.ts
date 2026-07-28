@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('clock-widget:timer-done', listener);
     return () => ipcRenderer.removeListener('clock-widget:timer-done', listener);
   },
+  shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', { url }),
   // 윈도우 테마 — 저장 + 모든 창(메인/팝아웃/분리)에 변경 브로드캐스트
   setWindowTheme: (id: string) => ipcRenderer.invoke('window-theme:set', id),
   onWindowTheme: (cb: (id: string) => void) => {

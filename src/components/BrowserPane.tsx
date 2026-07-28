@@ -20,6 +20,13 @@ type Props = {
   // 탭 바 + 주소창/줌/DevTools/프록시 툴바를 아예 렌더하지 않음 — 사내 메신저처럼 고정된 단일
   // 사이트를 임베드할 때, 브라우저 크롬 UI 없이 webview 만 꽉 채워 보여주고 싶을 때 사용.
   chromeless?: boolean;
+  // 링크 클릭 시 현재 webview 안에서 새 페이지로 빠져나가지 않고 외부 브라우저로 연다.
+  externalizeLinks?: boolean;
+  // 화면 폭이 좁을 때 페이지 자체를 축소해서 내부 가로 스크롤이 생기지 않도록 맞춘다.
+  autoFitZoom?: boolean;
+  autoFitBaseWidth?: number;
+  autoFitMinZoom?: number;
+  autoFitMaxZoom?: number;
 };
 
 type ActiveSshTarget = {
@@ -40,7 +47,7 @@ type StoredSession = {
   hasJumps?: boolean;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, partitionKey, embedded = false, chromeless = false }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, partitionKey, embedded = false, chromeless = false, externalizeLinks = false, autoFitZoom = false, autoFitBaseWidth = 960, autoFitMinZoom = 0.35, autoFitMaxZoom = 1 }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
   const webviewWrapRef = useRef<HTMLDivElement | null>(null);
@@ -56,6 +63,11 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const tabsRef = useRef<BrowserTab[]>([]);
   const activeTargetPanelIdRef = useRef<string>('');
   const zoomRef = useRef<number>(1);
+  const autoFitMeasureSeqRef = useRef(0);
+  const autoFitRetryTimersRef = useRef<number[]>([]);
+  const resizeSettledTimerRef = useRef<number | null>(null);
+  const lastAutoFitViewportWidthRef = useRef<number>(0);
+  const externalLinkGestureWindowMs = 1500;
   // 실제로 webview 에 적용된(setZoomFactor 를 마지막으로 호출한) 값 — 같은 값이어도 매
   // did-navigate/dom-ready/did-stop-loading 마다 setZoomFactor 를 반복 호출하고 있었는데,
   // Electron 의 setZoomFactor 는 호출될 때마다 게스트의 CSS vh/vw 뷰포트 재계산이 실제 픽셀
@@ -68,6 +80,86 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     if (appliedZoomFactorRef.current === z) return;
     try { wv.setZoomFactor?.(z); appliedZoomFactorRef.current = z; } catch {}
   }, []);
+  const applyAutoFitZoomIfNeeded = useCallback((viewportWidth: number, contentWidth?: number) => {
+    if (!autoFitZoom) return;
+    if (!viewportWidth || viewportWidth < 10) return;
+    const base = Math.max(320, autoFitBaseWidth || 960);
+    const measuredContentWidth = Math.max(0, Number(contentWidth || 0));
+    // 고정폭/반응형 혼합 페이지는 scrollWidth 가 실제 필요 폭보다 과하게 크게 잡히는 경우가 있다.
+    // 너무 큰 값이 zoom 재상승을 막지 않도록, base 대비 과도하게 큰 폭은 기준 폭으로 되돌린다.
+    const effectiveContentWidth =
+      measuredContentWidth > 0 && measuredContentWidth <= base * 1.35
+        ? measuredContentWidth
+        : base;
+    const fitWidth = Math.max(base, effectiveContentWidth);
+    const maxZoom = Math.min(1, Math.max(autoFitMinZoom, autoFitMaxZoom || 1));
+    const nextZoom = Math.max(autoFitMinZoom, Math.min(maxZoom, +(viewportWidth / fitWidth).toFixed(2)));
+    const currentZoom = zoomRef.current;
+    const delta = nextZoom - currentZoom;
+    if (delta > 0) {
+      if (delta < 0.01) return;
+    } else if (Math.abs(delta) < 0.02) {
+      return;
+    }
+    applyZoom(nextZoom);
+  }, [autoFitZoom, autoFitBaseWidth, autoFitMinZoom, autoFitMaxZoom]);
+  const measureAndApplyAutoFitZoom = useCallback((viewportWidth: number) => {
+    if (!autoFitZoom) return;
+    const wv: any = webviewRef.current;
+    if (!wv || !webviewDomReadyRef.current) {
+      applyAutoFitZoomIfNeeded(viewportWidth);
+      return;
+    }
+    const seq = ++autoFitMeasureSeqRef.current;
+    window.setTimeout(() => {
+      Promise.resolve(wv.executeJavaScript?.(`(() => {
+        try {
+          const doc = document.documentElement;
+          const body = document.body;
+          const widths = [
+            window.innerWidth || 0,
+            doc?.scrollWidth || 0,
+            doc?.offsetWidth || 0,
+            doc?.clientWidth || 0,
+            body?.scrollWidth || 0,
+            body?.offsetWidth || 0,
+            body?.clientWidth || 0,
+          ].map(v => Number(v) || 0);
+          return Math.max(...widths);
+        } catch (e) {
+          return 0;
+        }
+      })()`, true))
+        .then((raw: any) => {
+          if (seq !== autoFitMeasureSeqRef.current) return;
+          const contentWidth = Number(raw || 0);
+          applyAutoFitZoomIfNeeded(viewportWidth, contentWidth);
+        })
+        .catch(() => {
+          if (seq === autoFitMeasureSeqRef.current) applyAutoFitZoomIfNeeded(viewportWidth);
+        });
+    }, 0);
+  }, [autoFitZoom, applyAutoFitZoomIfNeeded]);
+  const clearAutoFitRetryTimers = useCallback(() => {
+    for (const id of autoFitRetryTimersRef.current) {
+      try { window.clearTimeout(id); } catch {}
+    }
+    autoFitRetryTimersRef.current = [];
+  }, []);
+  const clearResizeSettledTimer = useCallback(() => {
+    if (resizeSettledTimerRef.current != null) {
+      try { window.clearTimeout(resizeSettledTimerRef.current); } catch {}
+      resizeSettledTimerRef.current = null;
+    }
+  }, []);
+  const scheduleAutoFitZoomRecheck = useCallback((viewportWidth: number) => {
+    if (!autoFitZoom) return;
+    clearAutoFitRetryTimers();
+    const delays = [0, 180, 600, 1400];
+    autoFitRetryTimersRef.current = delays.map(delay => window.setTimeout(() => {
+      measureAndApplyAutoFitZoom(viewportWidth);
+    }, delay));
+  }, [autoFitZoom, clearAutoFitRetryTimers, measureAndApplyAutoFitZoom]);
   const onTitleChangeRef = useRef<Props['onTitleChange']>(onTitleChange);
   const urlHistoryKey = 'pepe-browser-url-history';
   const partitionName = useMemo(
@@ -77,6 +169,13 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   // 복원된 URL 이 있으면 그걸로 시작.
   const startUrl = (initialState?.editUrl && initialState.editUrl.trim()) ? initialState.editUrl : initialUrl;
   const initialSrcRef = useRef(startUrl);
+  const initialOrigin = useMemo(() => {
+    try {
+      return new URL(startUrl).origin;
+    } catch {
+      return '';
+    }
+  }, [startUrl]);
   // ── 내부 탭 관리 — 링크가 새 창으로 열릴 때 새 탭으로 처리. ──
   type BrowserTab = { id: string; url: string; title: string; targetSessionId: string; targetPanelId: string };
   const newTabId = () => `t${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -98,6 +197,56 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     setTabs(prev => [...prev, t]);
     setActiveTabId(t.id);
   };
+  const openInExternalBrowser = useCallback((url: string) => {
+    const raw = String(url || '').trim();
+    if (!raw) return;
+    try { (window as any).api?.shellOpenExternal?.(raw); } catch {}
+  }, []);
+  const shouldOpenExternally = useCallback((url: string) => {
+    if (!externalizeLinks) return false;
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    if (/^(javascript:|data:|file:)/i.test(raw)) return false;
+    if (/^about:blank$/i.test(raw)) return false;
+    try {
+      const parsed = new URL(raw, initialSrcRef.current || startUrl);
+      if (!/^https?:$/i.test(parsed.protocol) && !/^mailto:$/i.test(parsed.protocol) && !/^tel:$/i.test(parsed.protocol)) return false;
+      if (!initialOrigin) return true;
+      if (/^https?:$/i.test(parsed.protocol)) return parsed.origin !== initialOrigin;
+      return true;
+    } catch {
+      return true;
+    }
+  }, [externalizeLinks, initialOrigin, startUrl]);
+  const hasRecentExternalGesture = useCallback(async (): Promise<boolean> => {
+    const wv: any = webviewRef.current;
+    if (!wv) return false;
+    try {
+      const seenAt = await Promise.resolve(wv.executeJavaScript?.('window.__pepeLastExternalGestureAt || 0', true));
+      const ts = Number(seenAt || 0);
+      return !!ts && (Date.now() - ts) <= externalLinkGestureWindowMs;
+    } catch {
+      return false;
+    }
+  }, [externalLinkGestureWindowMs]);
+  const injectExternalGestureTracker = useCallback(() => {
+    const wv: any = webviewRef.current;
+    if (!wv) return;
+    try {
+      void wv.executeJavaScript?.(`
+        (() => {
+          try {
+            if (window.__pepeExternalGestureTrackerInjected) return;
+            window.__pepeExternalGestureTrackerInjected = true;
+            const mark = () => { try { window.__pepeLastExternalGestureAt = Date.now(); } catch {} };
+            ['pointerdown', 'mousedown', 'click', 'touchstart', 'keydown'].forEach(evt => {
+              document.addEventListener(evt, mark, { capture: true, passive: true });
+            });
+          } catch {}
+        })();
+      `, true);
+    } catch {}
+  }, []);
   const closeTab = (id: string) => {
     setTabs(prev => {
       if (prev.length <= 1) return prev; // 최소 1개 유지
@@ -115,6 +264,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const [canFwd, setCanFwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [zoom, setZoom] = useState(initialState?.zoom ?? 1.0);
+  const allowExternalLinkRoutingRef = useRef(false);
   const [sshTargets, setSshTargets] = useState<ActiveSshTarget[]>([]);
   const [storedSessions, setStoredSessions] = useState<StoredSession[]>([]);
   const [showUrlHistory, setShowUrlHistory] = useState(false);
@@ -186,6 +336,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       const wrapRect = wrap.getBoundingClientRect();
       const nextHeight = Math.max(1, Math.floor(wrapRect.height || 0));
       const nextWidth = Math.max(1, Math.floor(wrapRect.width || 0));
+      measureAndApplyAutoFitZoom(nextWidth);
       lastExpectedHeightRef.current = nextHeight;
       const sizeChanged = lastAppliedWebviewHeightRef.current !== nextHeight;
       const shouldNudge = sizeChanged || /mount|dom-ready|did-stop-loading|active-tab-changed/.test(tag);
@@ -225,7 +376,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     } catch (err: any) {
       emitDebugLog('[cw-debug][browser-webview-size-error]', { tag, error: String(err?.message || err || '') });
     }
-  }, [emitDebugLog]);
+  }, [emitDebugLog, autoFitZoom, autoFitBaseWidth, autoFitMinZoom, autoFitMaxZoom, measureAndApplyAutoFitZoom]);
 
   // 일반 브라우저 탭(전체 탭 하나를 차지, 리사이즈가 드묾)에서 쓰던 기존 로직 — 그대로 보존.
   const syncWebviewHeightDefault = useCallback((tag: string) => {
@@ -433,6 +584,35 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     }
   }, [emitDebugLog]);
 
+  const syncBrowserLayoutAfterResize = useCallback((tag: string) => {
+    syncWebviewHeight(tag);
+    const wv: any = webviewRef.current;
+    const wrapWidth = Math.max(1, Math.floor(webviewWrapRef.current?.getBoundingClientRect?.().width || webviewWrapRef.current?.clientWidth || 0));
+    const rootRect = browserPaneRef.current?.getBoundingClientRect?.();
+    const wrect = wv?.getBoundingClientRect?.();
+    emitDebugLog('[cw-debug][browser-size]', tag, {
+      pane: rootRect ? { clientWidth: browserPaneRef.current?.clientWidth, clientHeight: browserPaneRef.current?.clientHeight, rectW: Math.round(rootRect.width), rectH: Math.round(rootRect.height) } : null,
+      webview: wrect ? { width: Math.round(wrect.width), height: Math.round(wrect.height) } : null,
+    });
+    if (autoFitZoom) {
+      scheduleAutoFitZoomRecheck(wrapWidth);
+    }
+    window.setTimeout(() => verifyAndRecoverViewport(tag), 250);
+  }, [autoFitZoom, emitDebugLog, scheduleAutoFitZoomRecheck, syncWebviewHeight, verifyAndRecoverViewport]);
+  const scheduleBrowserLayoutAfterResize = useCallback((tag: string) => {
+    const wrapWidth = Math.max(1, Math.floor(webviewWrapRef.current?.getBoundingClientRect?.().width || webviewWrapRef.current?.clientWidth || 0));
+    const prevWidth = lastAutoFitViewportWidthRef.current || 0;
+    lastAutoFitViewportWidthRef.current = wrapWidth;
+    if (autoFitZoom && wrapWidth > prevWidth + 8) {
+      window.requestAnimationFrame(() => measureAndApplyAutoFitZoom(wrapWidth));
+    }
+    clearResizeSettledTimer();
+    resizeSettledTimerRef.current = window.setTimeout(() => {
+      resizeSettledTimerRef.current = null;
+      syncBrowserLayoutAfterResize(`${tag}-settled`);
+    }, 160);
+  }, [clearResizeSettledTimer, syncBrowserLayoutAfterResize]);
+
   useEffect(() => {
     emitDebugLog('[cw-debug][browser-state]', {
       activeTabId,
@@ -446,31 +626,21 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   useEffect(() => {
     const el = browserPaneRef.current;
     if (!el) return;
-    const logSize = (tag: string) => {
-      syncWebviewHeight(tag);
-      const wv: any = webviewRef.current;
-      const rect = el.getBoundingClientRect();
-      const wrect = wv?.getBoundingClientRect?.();
-      emitDebugLog('[cw-debug][browser-size]', tag, {
-        pane: { clientWidth: el.clientWidth, clientHeight: el.clientHeight, rectW: Math.round(rect.width), rectH: Math.round(rect.height) },
-        webview: wrect ? { width: Math.round(wrect.width), height: Math.round(wrect.height) } : null,
-      });
-      // 탭 전환/윈도우 리사이즈로 호스트 박스는 커졌는데 게스트 내부 뷰포트가 이전 크기에
-      // 눌러붙는 경우가 있어, 리사이즈 후 실측 검증도 태운다(페이지 재로딩 없이도 잡아냄).
-      // verifyAndRecoverViewport 자체가 최대 2회/800ms 쿨다운으로 제한돼 있어 자주 호출돼도 안전.
-      window.setTimeout(() => verifyAndRecoverViewport(tag), 250);
-    };
-    logSize('mount');
-    const ro = new ResizeObserver(() => logSize('resize'));
+    syncBrowserLayoutAfterResize('mount');
+    const ro = new ResizeObserver(() => scheduleBrowserLayoutAfterResize('resize'));
     ro.observe(el);
     if (embedded) {
       // embedded 는 wrap 이 flex 로 실제 가용 영역을 채우므로 직접 관찰 — 그리드/분할 리사이즈에 확실히 추종.
       const wrapEl = webviewWrapRef.current;
       if (wrapEl && wrapEl !== el) ro.observe(wrapEl);
     }
-    const timer = window.setTimeout(() => logSize('delayed-200ms'), 200);
-    return () => { ro.disconnect(); window.clearTimeout(timer); };
-  }, [syncWebviewHeight, verifyAndRecoverViewport]);
+    const timer = window.setTimeout(() => syncBrowserLayoutAfterResize('delayed-200ms'), 200);
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+      clearResizeSettledTimer();
+    };
+  }, [syncBrowserLayoutAfterResize, scheduleBrowserLayoutAfterResize, clearResizeSettledTimer, embedded]);
 
   // 언마운트(탭 닫힘) 시 활성 프록시/전용 백그라운드 SSH 연결 정리 — 누수 방지.
   const proxyStateRef = useRef(proxyState);
@@ -868,23 +1038,41 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       applyZoomFactorIfChanged(wv);
       try { setCanBack(wv.canGoBack()); setCanFwd(wv.canGoForward()); } catch {}
     };
-    const onStart = () => {
+  const onStart = () => {
       setLoading(true);
       // 새 네비게이션이 시작되면 Electron 이 게스트의 zoom factor 를 리셋하는 경우가 있어
       // (기존 주석에도 명시돼 있던 이유) "이번 네비게이션에서 한 번은 실제로 재적용해야 함"
       // 표시로 무효화한다 — dom-ready/onNav/onStop 는 같은 네비게이션 사이클 안에서 서로
       // 중복 호출만 걸러내고, 매 네비게이션마다 최소 한 번은 확실히 재적용되게 한다.
       appliedZoomFactorRef.current = -1;
+      clearAutoFitRetryTimers();
     };
     const onStop = () => {
       setLoading(false);
       onNav();
       syncWebviewHeight('did-stop-loading');
       verifyAndRecoverViewport('did-stop-loading');
+      if (externalizeLinks) {
+        allowExternalLinkRoutingRef.current = true;
+      }
+      if (autoFitZoom) {
+        const wrapRect = webviewWrapRef.current?.getBoundingClientRect();
+        const nextWidth = Math.max(1, Math.floor(wrapRect?.width || 0));
+        scheduleAutoFitZoomRecheck(nextWidth);
+      }
     };
     const onTitle = (e: any) => {
       onTitleChangeRef.current?.(e.title || '');
       setTabTitle(activeTabIdRef.current, e.title || '');
+    };
+    const maybeOpenExternally = async (url: string) => {
+      const nextUrl = String(url || '').trim();
+      if (!nextUrl) return false;
+      if (!allowExternalLinkRoutingRef.current) return false;
+      if (!shouldOpenExternally(nextUrl)) return false;
+      if (!(await hasRecentExternalGesture())) return false;
+      openInExternalBrowser(nextUrl);
+      return true;
     };
     // 링크 클릭이 새 창을 요청하면 새 탭으로 열기.
     // Electron 25+ 에서 <webview> 의 new-window preventDefault 가 무시되므로
@@ -892,7 +1080,19 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     const onNewWindow = (e: any) => {
       try { e.preventDefault?.(); } catch {}
       const url = String(e?.url || '');
-      if (url) openInNewTab(url);
+      if (!url) return;
+      if (!shouldOpenExternally(url)) {
+        openInNewTab(url);
+        return;
+      }
+      void maybeOpenExternally(url);
+    };
+    const onWillNavigate = (e: any) => {
+      const url = String(e?.url || '');
+      if (!url) return;
+      if (!shouldOpenExternally(url)) return;
+      try { e.preventDefault?.(); } catch {}
+      void maybeOpenExternally(url);
     };
     const offBrowserNewWindow = (window as any).api?.onBrowserWebviewNewWindow?.((p: { guestId: number; url: string }) => {
       if (!p?.url) return;
@@ -900,7 +1100,8 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       try { currentGuestId = wv.getWebContentsId?.(); } catch {}
       // guestId 매칭 — 다른 브라우저 워크스페이스 인스턴스와 충돌 방지.
       if (currentGuestId != null && p.guestId !== currentGuestId) return;
-      openInNewTab(p.url);
+      if (!shouldOpenExternally(p.url)) return openInNewTab(p.url);
+      void maybeOpenExternally(p.url);
     });
     const onFail = (e: any) => {
       if (e?.isMainFrame === false) return;
@@ -920,7 +1121,11 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     wv.addEventListener('did-stop-loading', onStop);
     wv.addEventListener('page-title-updated', onTitle);
     wv.addEventListener('did-fail-load', onFail);
+    wv.addEventListener('dom-ready', injectExternalGestureTracker);
+    wv.addEventListener('did-navigate', injectExternalGestureTracker);
+    wv.addEventListener('will-navigate', onWillNavigate);
     wv.addEventListener('new-window', onNewWindow);
+    injectExternalGestureTracker();
     return () => {
       wv.__pepeListenersBound = false;
       try {
@@ -930,6 +1135,9 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         wv.removeEventListener('did-stop-loading', onStop);
         wv.removeEventListener('page-title-updated', onTitle);
         wv.removeEventListener('did-fail-load', onFail);
+        wv.removeEventListener('dom-ready', injectExternalGestureTracker);
+        wv.removeEventListener('did-navigate', injectExternalGestureTracker);
+        wv.removeEventListener('will-navigate', onWillNavigate);
         wv.removeEventListener('new-window', onNewWindow);
       } catch {}
       try { offBrowserNewWindow?.(); } catch {}
@@ -937,7 +1145,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         try { delete wv.__pepeLifecycleHandlers; } catch {}
       }
     };
-  }, [emitDebugLog, syncWebviewHeight, verifyAndRecoverViewport]);
+  }, [emitDebugLog, syncWebviewHeight, verifyAndRecoverViewport, autoFitZoom, scheduleAutoFitZoomRecheck, clearAutoFitRetryTimers]);
 
   const resolveBrowserUrl = (target: string) => {
     let t = target.trim();
@@ -963,6 +1171,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         background: #fff !important;
         color-scheme: light !important;
         min-height: 100vh !important;
+        overflow-x: hidden !important;
       }
       body {
         -webkit-text-fill-color: initial !important;
@@ -975,8 +1184,10 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           try { document.documentElement.style.colorScheme = 'light'; } catch {}
           try { document.documentElement.style.background = '#fff'; } catch {}
           try { document.documentElement.style.minHeight = '100vh'; } catch {}
+          try { document.documentElement.style.overflowX = 'hidden'; } catch {}
           try { document.body && (document.body.style.background = '#fff'); } catch {}
           try { document.body && (document.body.style.minHeight = '100vh'); } catch {}
+          try { document.body && (document.body.style.overflowX = 'hidden'); } catch {}
         })();
       `, true);
     } catch {}
