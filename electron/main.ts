@@ -1218,8 +1218,20 @@ app.whenReady().then(() => {
       const remotePath = String(requestUrl.searchParams.get('path') || '').trim();
       if (!termId || !remotePath) return new Response('Bad Request', { status: 400 });
       const tmpPath = path.join(os.tmpdir(), `pepe-drag-${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(remotePath)}`);
+      const bridge = getSSHBridge();
+      const transferId = `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const rootName = path.basename(remotePath);
+      // handleSFTPDownload 자체는 sftp-transfer-start 를 쏘지 않는다(그건 handleTransfer 루트 호출에서만
+      // 함) — 그래서 "전송" 탭(TransferLog.tsx)이 transferId 로 행을 찾지 못해 진행률이 안 보였다.
+      // 여기서 직접 한 번 쏴서 행을 만들고, 같은 transferId 를 ctx 로 넘겨 progress/complete 가 매칭되게 한다.
+      bridge.emit('message', { type: 'sftp-transfer-start', panelId: 'transfer', data: JSON.stringify({
+        transferId, rootName, rel: '', isDir: false, totalSize: 0,
+        srcPath: remotePath, dstPath: tmpPath,
+        srcMode: 'remote', dstMode: 'local', direction: 'download', workspaceId: '',
+      }) });
+      const ctx = { transferId, rootName, rel: '', workspaceId: '' };
       try {
-        await getSSHBridge().handleSFTPDownload(termId, remotePath, tmpPath);
+        await bridge.handleSFTPDownload(termId, remotePath, tmpPath, ctx);
         const data = await fs.promises.readFile(tmpPath);
         const mime = PEPE_MIME_TYPES[path.extname(remotePath).toLowerCase()] || 'application/octet-stream';
         return new Response(data, { status: 200, headers: { 'content-type': mime } });
