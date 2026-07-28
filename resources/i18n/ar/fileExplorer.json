@@ -38,6 +38,7 @@
   "colSize": "الحجم",
   "colDate": "التاريخ",
   "statusSummary": "{{total}} عنصر | {{selected}} محدد",
+  "dragCountLabel": "{{count}} عنصر",
   "deleteConfirm": "هل تريد حذف {{count}} عنصر؟\n{{names}}",
   "deleteConfirmRecursive": "هل تريد حذف هذا الـ{{kind}}؟\n\n{{path}}",
   "kindFolder": "مجلد (متضمن المحتويات)",

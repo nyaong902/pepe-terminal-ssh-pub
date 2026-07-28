@@ -41,6 +41,7 @@
   "colSize": "크기",
   "colDate": "날짜",
   "statusSummary": "{{total}}개 항목 | {{selected}}개 선택",
+  "dragCountLabel": "{{count}}개 항목",
   "deleteConfirm": "{{count}}개 항목을 삭제하시겠습니까?\n{{names}}",
   "deleteConfirmRecursive": "{{kind}}을(를) 삭제하시겠습니까?\n\n{{path}}",
   "kindFolder": "폴더(재귀)",

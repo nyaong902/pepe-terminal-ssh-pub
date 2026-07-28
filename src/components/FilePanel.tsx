@@ -168,6 +168,18 @@ function getFileIcon(name: string, isDir: boolean, shellPath?: string): string {
   return '📁';
 }
 
+// 드래그 시 브라우저 기본 동작(드래그한 DOM 요소 전체를 스냅샷으로 사용 — 파일 목록 행이 컬럼까지
+// 통째로 끌려다니는 것처럼 보임)을 대체할 작은 라벨 뱃지. setDragImage 는 호출 시점에 실제 렌더된
+// 요소를 스냅샷 뜨므로, 화면 밖에 잠깐 붙였다가 다음 tick 에 제거한다.
+function setNameDragImage(e: React.DragEvent, label: string) {
+  const el = document.createElement('div');
+  el.textContent = label;
+  el.style.cssText = 'position:fixed; top:-1000px; left:-1000px; padding:4px 10px; background:#2b6b9b; color:#fff; font-size:12px; font-family:inherit; border-radius:4px; white-space:nowrap; pointer-events:none; box-shadow:0 2px 6px rgba(0,0,0,0.4);';
+  document.body.appendChild(el);
+  e.dataTransfer.setDragImage(el, 12, 14);
+  setTimeout(() => el.remove(), 0);
+}
+
 export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
   const { t } = useTranslation('fileExplorer');
   const [bootReady, setBootReady] = useState(false);
@@ -1152,6 +1164,8 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
                 panelId, files: filesToDrag, srcMode: source.mode, srcTermId: source.termId, srcPath: currentPath,
               }));
               e.dataTransfer.effectAllowed = 'copy';
+              const label = filesToDrag.length > 1 ? t('dragCountLabel', { count: filesToDrag.length }) : `${file.isDir ? '📁' : '📄'} ${file.name}`;
+              setNameDragImage(e, label);
             }}
           >
             <span className="fe-col-name" style={{ width: colWidths.name }}>
@@ -1244,6 +1258,9 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
               panelId, files: selectedNames, srcMode: source.mode, srcTermId: source.termId, srcPath: currentPath,
             }));
             e.dataTransfer.effectAllowed = 'copy';
+            const first = files.find(f => selectedNames[0] === f.name);
+            const label = selectedNames.length > 1 ? t('dragCountLabel', { count: selectedNames.length }) : `${first?.isDir ? '📁' : '📄'} ${selectedNames[0] ?? ''}`;
+            setNameDragImage(e, label);
           }}
         />
       </div>
