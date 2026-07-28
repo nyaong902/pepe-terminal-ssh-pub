@@ -7,7 +7,6 @@ import {
   searchInTerm,
   searchNextInTerm,
   searchPrevInTerm,
-  clearSearchInTerm,
   getAllTermIds,
   highlightAllMatches,
   clearHighlights,
@@ -185,8 +184,12 @@ export const SearchBar: React.FC<Props> = ({ tabs, activeTab, selectedPanelId, o
   };
 
   const clearAll = () => {
+    // clearSearchInTerm 은 decoration 만 지우고, highlightAllMatches 가 걸어둔
+    // onWriteParsed 재하이라이트 구독(highlightRefreshSubs)은 그대로 남겨둔다 — 그래서 검색을
+    // 닫은 뒤에도 터미널에 새 출력이 들어오면 지웠던 하이라이트가 다시 칠해지는 것처럼 보였다.
+    // clearHighlights 는 그 구독까지 해제하므로 이걸 써야 한다.
     for (const termId of getAllTermIds()) {
-      clearSearchInTerm(termId);
+      clearHighlights(termId);
     }
   };
 
