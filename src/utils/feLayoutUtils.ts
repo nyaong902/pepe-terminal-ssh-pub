@@ -160,6 +160,29 @@ export function isLiveBackendConnId(termId: string): boolean {
   return liveBackendConnIds.has(termId);
 }
 
+/** 창 분리로 다른 창이 그대로 이어받는 SFTP connId — 원본 FileExplorer 가 언마운트될 때 끊지 말아야 한다.
+ *
+ * 왜 전역 플래그(`__preserveFileExplorerConns`) 대신 이게 필요한가: 그 플래그는
+ * `detachTabToNewWindow` 가 true 로 켜고 `finally` 의 `setTimeout(…, 0)` 으로 끄는데, React 18 은
+ * 상태 업데이트(=언마운트) 를 스케줄러 태스크로 미룰 수 있어서 **플래그가 꺼진 뒤에 cleanup 이
+ * 실행되는 레이스**가 있었다. 그러면 새 창이 이어받아 쓰려던 연결을 원본 창이 끊어버려서, 새 창은
+ * `[fe-seed]` 에 그 connId 이 없다고 보고 lazy-remote 로 강등 → 전부 재연결한다(사용자 재현:
+ * 병합 직후엔 목록에 있던 `fe-lazy-…` 가 분리 직후엔 사라져 있었고, 스스로 끊겼을 때 남는
+ * `closed — clearing record` 로그는 없었다 = 명시적 disconnect 였다는 뜻).
+ *
+ * 타이밍에 의존하지 않도록 "이 id 는 보존" 을 명시적으로 등록하고, cleanup 에서 한 번 소비하면
+ * 목록에서 지운다(소비형이라 오래 남아 다른 정리를 막지 않는다). */
+const preservedFeConnIds = new Set<string>();
+export function preserveFeConnIds(ids: string[]) {
+  for (const id of ids) if (id) preservedFeConnIds.add(id);
+}
+/** 보존 대상이면 true 를 돌려주고 목록에서 제거(1회성). */
+export function consumePreservedFeConnId(id: string): boolean {
+  if (!preservedFeConnIds.has(id)) return false;
+  preservedFeConnIds.delete(id);
+  return true;
+}
+
 /** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null.
  * remote(실제 연결) 소스는 termId(연결 세션의 임시 id)가 새 실행/재마운트에서는 보통 이미 무효하므로
  * 그대로 되살리지 않고 lazy-remote(세션 참조만 유지, 선택 시 자동 재연결)로 강등해서 복원한다 —

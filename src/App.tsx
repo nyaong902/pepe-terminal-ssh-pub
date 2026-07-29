@@ -11,7 +11,7 @@ import { SearchBar } from './components/SearchBar';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ContextMenu } from './components/ContextMenu';
 import { FileExplorer } from './components/FileExplorer';
-import { setLiveBackendConnIds } from './utils/feLayoutUtils';
+import { setLiveBackendConnIds, preserveFeConnIds } from './utils/feLayoutUtils';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
 import { playReminderChime } from './utils/reminderChime';
@@ -3407,6 +3407,17 @@ function App() {
         console.error('[detachTabToNewWindow] serializeTab 실패 — 탭 type:', tab.type, err);
         return;
       }
+      // 이 탭이 들고 있던 SFTP 연결은 새 창이 그대로 이어받는다 — connId 단위로 "보존" 등록.
+      // 위의 __preserveFileExplorerConns 플래그만으로는 부족했다: finally 의 setTimeout 이 플래그를
+      // 끄는 시점과 React 18 이 언마운트를 커밋하는 시점 사이에 레이스가 있어서, 원본 창의 cleanup 이
+      // 플래그가 꺼진 뒤 실행되며 새 창이 쓰려던 연결을 끊어버렸다(→ 새 창에서 전부 재연결).
+      try {
+        const feConns: string[] = (payload as any)?.tab?.fileExplorerState?.lazyConns || [];
+        if (feConns.length) {
+          preserveFeConnIds(feConns);
+          console.log('[fe-detach] preserve conns', JSON.stringify(feConns));
+        }
+      } catch {}
       const res = await (window as any).api?.dropTab?.(payload, point, { sourceTabCount: tabsRef.current.length });
       if (res === undefined || res?.blocked) return; // IPC 실패 또는 (새 창인데 탭이 하나뿐이라) 거부됨
       removeTabAfterMove(tabId, tab.layout);

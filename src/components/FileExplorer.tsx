@@ -11,6 +11,7 @@ import {
   makeFeTab, createInitialFeLayout, splitFeNode, removeFeLeafNode, updateFeLeafPanel,
   countFeLeaves, findFirstFeLeafId, collectFeLeaves, findFeTabByTermId, mapAllFeTabs,
   setFeContainerSizes, serializeFeLayout, reviveFeLayout, isLiveBackendConnId,
+  consumePreservedFeConnId,
 } from '../utils/feLayoutUtils';
 import { makeId } from '../utils/layoutUtils';
 
@@ -250,6 +251,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return () => {
       if ((window as any).__preserveFileExplorerConns) return;
       for (const cid of lazyConnsRef.current) {
+        // 분리로 다른 창이 그대로 이어받는 연결은 끊지 않는다. 전역 플래그만으로는 React 18 이
+        // 언마운트를 스케줄러 태스크로 미룰 때 플래그가 먼저 꺼져버리는 레이스가 있어서(그러면
+        // 새 창이 쓰려던 연결을 여기서 끊어 전부 재연결됐다) connId 단위로 명시 등록된 목록도 본다.
+        if (consumePreservedFeConnId(cid)) continue;
         try { api?.feSftpDisconnect?.(cid); } catch {}
       }
     };

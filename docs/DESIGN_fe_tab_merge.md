@@ -315,13 +315,40 @@ MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관
   `loading` 은 그대로 켜두되 목록은 유지 → 캐시가 있으면 로딩 표시가 가려지고(`files.length > 0`),
   캐시가 없을 때만 "로딩 중"이 보인다(그때는 그게 맞는 피드백).
 
-진단 로그로 확인된 부수적 사실 (버그 수정 #10 은 정상 동작):
+## 버그 수정 #12 — 분리 시 원본 창이 새 창이 쓸 연결을 끊어버리던 레이스 (2026-07-30)
+
+버그 수정 #11 로 화면상 재로딩은 사라졌지만, 애초에 **왜 매번 재연결이 필요했는지**를 진단 로그로
+끝까지 추적해 근본 원인을 찾았다. 한 세션 안의 로그가 결정적이었다:
+
+- 병합 직후: `[fe-seed] [… , "fe-lazy-…df6s5w"]` → 백엔드에 정상 등록됨
+- 분리 직후: `[fe-seed] ["term-…","term-…","term-…"]` → **fe-lazy 만 사라짐**, 터미널은 생존
+- `[fe-revive:src] … "live": false` → 그래서 강등 → 재연결
+- 그런데 연결이 스스로 끊길 때 남는 `closed — clearing record` 로그는 **없었다** (같은 콘솔에
+  `[sftp-connect]` 로그가 찍히므로 있었다면 보였을 것) → 서버측 종료/keepalive 실패가 아니라
+  **누군가 명시적으로 `feSftpDisconnect` 를 호출**했다는 뜻.
+
+범인은 `FileExplorer` 언마운트 cleanup 이었다. 이 cleanup 은 전역 플래그
+`window.__preserveFileExplorerConns` 로 "분리 중이니 끊지 말라"를 판단하는데, `detachTabToNewWindow`
+는 그 플래그를 `finally` 의 `setTimeout(…, 0)` 으로 끈다. React 18 은 상태 업데이트(=언마운트)를
+스케줄러 태스크로 미룰 수 있어서 **플래그가 꺼진 뒤에 cleanup 이 실행되는 레이스**가 존재했다 —
+그러면 원본 창이 새 창이 이어받아 쓰려던 연결을 끊어버리고, 새 창은 그 connId 가 죽었다고 보고
+전부 재연결한다. 터미널 연결은 `lazyConns` 에 없으므로 영향이 없어서 "fe-lazy 만 사라지는" 증상이
+나왔다.
+
+- [feLayoutUtils.ts](../src/utils/feLayoutUtils.ts) — 타이밍에 의존하지 않는 connId 단위 보존 목록
+  추가: `preserveFeConnIds(ids)` / `consumePreservedFeConnId(id)`. 소비형(한 번 확인하면 목록에서
+  제거)이라 오래 남아 다른 정리를 막지 않는다.
+- [App.tsx](../src/App.tsx) `detachTabToNewWindow` — `serializeTab` 직후 그 탭의
+  `fileExplorerState.lazyConns` 를 보존 목록에 등록(`[fe-detach] preserve conns` 로그).
+- [FileExplorer.tsx](../src/components/FileExplorer.tsx) 언마운트 cleanup — 전역 플래그와 함께 이
+  목록도 확인해서, 보존 대상이면 `feSftpDisconnect` 를 건너뛴다.
+- 기존 전역 플래그는 그대로 둔다(SqlTool 등 다른 용도 + 이중 안전장치).
+- `npx tsc --noEmit -p .` + `npx vite build` 통과.
+
+부수적으로 확인된 사실 (버그 수정 #10 은 정상 동작):
 - 터미널 세션을 재사용하는 소스(`term-…`)는 `live: true, keep: true` 로 **강등 없이 유지**된다.
-- 반면 병합이 만든 SFTP 전용 연결(`fe-lazy-…`)은 분리 시점에 이미 백엔드 생존 목록
-  (`[fe-seed]`)에서 사라져 있어 강등 → 재연결된다. **이 연결이 왜 미리 끊기는지는 아직 미해결** —
-  `__preserveFileExplorerConns` 는 정상 동작하고 명시적 disconnect 호출부도 해당 없음. 다음 조사
-  대상은 keepalive 실패/서버측 종료(`primary end/close closed — clearing record` 로그 확인).
-  다만 캐시가 유지되면 재연결은 백그라운드에서 조용히 끝나므로 사용자에게 보이지는 않는다.
+- 앱 재시작 직후엔 `[fe-seed]` 가 비어 있는 게 정상이며(연결이 아직 없음), 그때는 강등 → 재연결이
+  맞는 동작이다. 이때도 #11 덕분에 캐시된 목록은 그대로 보인다.
 
 ## 버그 수정 #10 — 창 분리/복원마다 전부 재연결 + 파일목록 재로딩 (2026-07-29)
 
