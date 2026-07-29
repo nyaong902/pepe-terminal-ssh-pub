@@ -2996,7 +2996,11 @@ function App() {
     // 강등하지 않아 창 분리/복원 때 불필요한 재연결 + 파일목록 재로딩이 사라진다.
     // 이 호출은 아래 setTabs(→ FileExplorer 마운트) 보다 먼저 끝나야 의미가 있다 — 호출부 두 곳
     // (분리창 init, onAdoptTab) 모두 seedReattach 를 await 하고 나서 setTabs 를 한다.
-    try { setLiveBackendConnIds((await (window as any).api?.feConnectedSessions?.()) || []); } catch {}
+    try {
+      const liveIds: string[] = (await (window as any).api?.feConnectedSessions?.()) || [];
+      setLiveBackendConnIds(liveIds);
+      console.log('[fe-seed] live backend conns', JSON.stringify(liveIds));
+    } catch (e) { console.warn('[fe-seed] feConnectedSessions 실패', e); }
     try {
       for (const s of collectAllSessions(tab.layout)) {
         if (!s.termId) continue;

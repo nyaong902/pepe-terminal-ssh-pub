@@ -79,7 +79,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             });
           }
         }
-        console.log('[fe-revive]', { tabId, tabs: rows });
+        console.log('[fe-revive]', tabId, JSON.stringify(rows));
       } catch {}
     }
   }

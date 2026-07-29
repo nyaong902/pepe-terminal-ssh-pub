@@ -174,6 +174,17 @@ export function reviveFeLayout(saved: any, localLabel: string, isLiveTermId?: (t
     const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
     const tabs: FeTab[] = rawTabs.map((t: any) => {
       let source: PanelSource = t?.source || { mode: 'local', label: localLabel };
+      if (source.mode === 'remote') {
+        // 진단 — 강등(=재연결+목록 재로딩) 여부와 그 근거를 원본 termId 와 함께 남긴다.
+        // 강등 후에는 termId 가 지워지므로 반드시 이 시점에 찍어야 한다.
+        console.log('[fe-revive:src]', JSON.stringify({
+          label: source.label, termId: source.termId,
+          live: source.termId ? !!isLiveTermId?.(source.termId) : false,
+          keep: !!(source.termId && isLiveTermId?.(source.termId)),
+          sessionId: source.sessionId, manualConn: !!source.manualConn,
+          entries: Array.isArray(t?.entries) ? t.entries.length : 0, path: t?.path,
+        }));
+      }
       if (source.mode === 'remote' && !(source.termId && isLiveTermId?.(source.termId))) {
         if (source.sessionId) {
           source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label, viewRoot: source.viewRoot };
