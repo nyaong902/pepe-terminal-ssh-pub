@@ -44,6 +44,11 @@ const BUNDLES = [
   { name: 'office-editor', srcDir: path.join(projectRoot, 'resources', 'office-editor') },
   { name: 'rhwp-studio', srcDir: path.join(projectRoot, 'resources', 'rhwp-studio') },
   { name: 'flowchart-editor', srcDir: path.join(projectRoot, 'resources', 'flowchart-editor') },
+  // JRE(JDBC 사이드카용) — 체크박스 없이 항상 설치되지만 Temurin 배포본이 300개+ 개별 파일이라
+  // (bin/lib/conf/legal 등) X11 서버와 같은 이유로 NSIS 기본 File-by-file 복사가 느리다.
+  // x11-server 와 동일한 zip+tar 패턴 적용 — package.json 의 win.extraResources 도 loose 폴더
+  // 대신 이 zip 하나만 가리키도록 바꿨고, build/installer.nsh 에 압축 해제 블록을 추가했다.
+  { name: 'jre-win-x64', srcDir: path.join(projectRoot, 'resources', 'jre', 'win-x64') },
   // X11 서버(VcXsrv) — 체크박스 없이 항상 설치되지만, 파일 수(~5천 개)가 가장 많아 NSIS 의
   // 기본 File-by-file 복사가 유독 느리다(체감상 install "파일 복사" 단계 대부분을 차지).
   // build/installer.nsh 에 이미 x11-server.zip → tar 압축 해제 로직이 있었는데(예전엔 이

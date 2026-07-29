@@ -342,6 +342,29 @@ FunctionEnd
     ${EndIf}
   lbl_no_x11:
 
+  ; JRE(JDBC 사이드카용) 번들 압축 해제 — Temurin 배포본이 300개+ 개별 파일이라 X11 서버와
+  ; 같은 이유로 loose 폴더 그대로 두면 NSIS File-by-file 복사가 느리다. 동일한 zip+tar 패턴.
+  IfFileExists "$INSTDIR\resources\jre-win-x64.zip" 0 lbl_no_jre
+    DetailPrint "▶ JRE(JDBC 사이드카) 번들 설치 중..."
+    CreateDirectory "$INSTDIR\resources\jre"
+    nsExec::ExecToLog 'cmd /c tar -xf "$INSTDIR\resources\jre-win-x64.zip" -C "$INSTDIR\resources\jre"'
+    Pop $0
+    ${If} $0 == 0
+      DetailPrint "  ✓ JRE 설치 완료 (tar.exe)"
+      Delete "$INSTDIR\resources\jre-win-x64.zip"
+    ${Else}
+      DetailPrint "  ⚠ tar.exe 실패 (code=$0) — PowerShell 폴백"
+      nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path \"$INSTDIR\resources\jre-win-x64.zip\" -DestinationPath \"$INSTDIR\resources\jre\" -Force"'
+      Pop $0
+      ${If} $0 == 0
+        DetailPrint "  ✓ JRE 설치 완료 (PowerShell)"
+        Delete "$INSTDIR\resources\jre-win-x64.zip"
+      ${Else}
+        DetailPrint "  ✕ JRE 압축 해제 실패 — SQL Tool 기능이 동작하지 않을 수 있음"
+      ${EndIf}
+    ${EndIf}
+  lbl_no_jre:
+
   ; ─────────────────────────────────────────
   ; 메신저(LAN 자동 탐색) 방화벽 규칙 등록
   ;  - 탐색은 UDP 브로드캐스트(39455)+유니캐스트 hello, 메시지는 TCP(임의 포트)
@@ -415,6 +438,10 @@ FunctionEnd
   ${endif}
   ${if} ${FileExists} "$INSTDIR\resources\flowchart-editor\*"
     nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\flowchart-editor"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\jre\*"
+    DetailPrint "JRE 폴더 삭제 중 (한 번에 처리)..."
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\jre"'
   ${endif}
 !macroend
 

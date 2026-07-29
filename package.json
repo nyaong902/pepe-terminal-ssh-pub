@@ -164,11 +164,8 @@
       },
       "extraResources": [
         {
-          "from": "resources/jre/win-x64",
-          "to": "jre",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/jre-win-x64.zip",
+          "to": "jre-win-x64.zip"
         },
         {
           "from": "resources/optional-bundles/openvpn-win.zip",
