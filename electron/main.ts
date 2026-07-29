@@ -7165,8 +7165,54 @@ ipcMain.handle('clock-widget:close', () => {
   }
   try { mainWindow?.webContents.send('clock-widget:visibility', false); } catch {}
 });
+// 드롭 지점의 진짜 최상단(z-order) 창 HWND — user32 WindowFromPoint + GetAncestor(GA_ROOT).
+// bounds 겹침만으로 도킹 대상을 정하면, 창2가 다른(PePe 아닌) 앱 창에 완전히 가려져 있어도
+// 화면좌표만 그 사각형 안에 들어가면 도킹돼버리는 문제가 있어 실제 최상단 창을 확인한다.
+async function getRootWindowHwndAtPoint(x: number, y: number): Promise<bigint | null> {
+  if (process.platform !== 'win32') return null;
+  const psScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class PepeDropHitTest {
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+}
+"@ -ErrorAction SilentlyContinue
+$pt = New-Object PepeDropHitTest+POINT
+$pt.X = ${Math.round(x)}
+$pt.Y = ${Math.round(y)}
+$h = [PepeDropHitTest]::WindowFromPoint($pt)
+$root = [PepeDropHitTest]::GetAncestor($h, 2)
+[Console]::Out.Write([Int64]$root)
+`;
+  // execFile(비동기) 사용 — execFileSync 는 PowerShell 프로세스가 뜨는 동안(수백ms) 메인 프로세스
+  // 이벤트 루프 전체를 막아 다른 창/SSH IPC 까지 같이 멈추게 한다(다른 곳에서 이미 겪은 문제라
+  // SFTP 도 worker thread 로 뺀 전례가 있음 — 여기서도 같은 원칙 적용).
+  const tmpPs = path.join(os.tmpdir(), `pepe-drop-hittest-${Date.now()}.ps1`);
+  try {
+    fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
+    const { execFile } = require('child_process');
+    const out: string = await new Promise((resolve, reject) => {
+      execFile('powershell', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
+      ], { windowsHide: true, timeout: 1500, encoding: 'utf-8' },
+      (err: any, stdout: string) => { if (err) reject(err); else resolve(stdout); });
+    });
+    try { fs.unlinkSync(tmpPs); } catch {}
+    const trimmed = (out || '').trim();
+    if (!trimmed) return null;
+    return BigInt(trimmed);
+  } catch { try { fs.unlinkSync(tmpPs); } catch {} return null; }
+}
+function hwndBufferToBigInt(buf: Buffer): bigint {
+  if (buf.length >= 8) return buf.readBigUInt64LE();
+  if (buf.length >= 4) return BigInt(buf.readUInt32LE());
+  return BigInt(0);
+}
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
-ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
+ipcMain.handle('window:drop-tab', async (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
   try {
     const sourceWin = winOf(e);
     // 최소화/숨김 창은 화면에 안 보여도 getBounds() 가 restored 좌표를 돌려주므로
@@ -7182,6 +7228,17 @@ ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payl
         if (w === sourceWin) continue;
         const b = w.getBounds();
         if (point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + b.height) { target = w; break; }
+      }
+      // bounds 상 후보를 찾았어도, 그 지점에 실제로 다른(비 PePe) 창이 최상단으로 덮고 있으면
+      // 도킹하지 않는다 — 실패/타임아웃 시엔 기존 동작(도킹) 유지 (native 체크는 best-effort).
+      if (target) {
+        try {
+          const rootHwnd = await getRootWindowHwndAtPoint(point.x, point.y);
+          if (rootHwnd != null) {
+            const targetHwnd = hwndBufferToBigInt(target.getNativeWindowHandle());
+            if (rootHwnd !== targetHwnd) target = null;
+          }
+        } catch {}
       }
     }
     if (target) {
