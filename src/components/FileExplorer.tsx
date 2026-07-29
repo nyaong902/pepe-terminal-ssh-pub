@@ -63,6 +63,25 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     // 실제 생존 목록(isLiveBackendConnId)도 함께 본다.
     const isLive = (tid: string) => isTermConnected(tid) || isLiveBackendConnId(tid);
     initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isLive) || createInitialFeLayout(localLabel);
+    // 진단 — 창 분리/복원 시 "왜 재로딩이 보이는가"를 가리기 위한 로그. 두 가지 원인을 구분한다:
+    //  · mode==='lazy-remote' → 연결이 죽었다고 판단해 강등됨(실제 재연결 발생, live 값 확인)
+    //  · entries===0 → 연결은 살았지만 캐시된 목록이 없어 빈 목록에서 새로 로딩
+    if (initialState?.layout) {
+      try {
+        const rows: any[] = [];
+        for (const leaf of collectFeLeaves(initialLayoutRef.current)) {
+          for (const tb of leaf.panel.tabs) {
+            rows.push({
+              label: tb.source.label, mode: tb.source.mode, termId: tb.source.termId,
+              term: tb.source.termId ? isTermConnected(tb.source.termId) : null,
+              backend: tb.source.termId ? isLiveBackendConnId(tb.source.termId) : null,
+              entries: tb.entries?.length ?? 0, path: tb.path,
+            });
+          }
+        }
+        console.log('[fe-revive]', { tabId, tabs: rows });
+      } catch {}
+    }
   }
   const [layout, setLayout] = useState<FeLayoutNode>(() => initialLayoutRef.current!);
   const [selectedLeafId, setSelectedLeafId] = useState<string>(() => {
