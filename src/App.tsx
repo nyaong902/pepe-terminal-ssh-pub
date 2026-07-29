@@ -2997,9 +2997,7 @@ function App() {
     // 이 호출은 아래 setTabs(→ FileExplorer 마운트) 보다 먼저 끝나야 의미가 있다 — 호출부 두 곳
     // (분리창 init, onAdoptTab) 모두 seedReattach 를 await 하고 나서 setTabs 를 한다.
     try {
-      const liveIds: string[] = (await (window as any).api?.feConnectedSessions?.()) || [];
-      setLiveBackendConnIds(liveIds);
-      console.log('[fe-seed] live backend conns', JSON.stringify(liveIds));
+      setLiveBackendConnIds((await (window as any).api?.feConnectedSessions?.()) || []);
     } catch (e) { console.warn('[fe-seed] feConnectedSessions 실패', e); }
     try {
       for (const s of collectAllSessions(tab.layout)) {
@@ -3413,10 +3411,7 @@ function App() {
       // 플래그가 꺼진 뒤 실행되며 새 창이 쓰려던 연결을 끊어버렸다(→ 새 창에서 전부 재연결).
       try {
         const feConns: string[] = (payload as any)?.tab?.fileExplorerState?.lazyConns || [];
-        if (feConns.length) {
-          preserveFeConnIds(feConns);
-          console.log('[fe-detach] preserve conns', JSON.stringify(feConns));
-        }
+        if (feConns.length) preserveFeConnIds(feConns);
       } catch {}
       const res = await (window as any).api?.dropTab?.(payload, point, { sourceTabCount: tabsRef.current.length });
       if (res === undefined || res?.blocked) return; // IPC 실패 또는 (새 창인데 탭이 하나뿐이라) 거부됨

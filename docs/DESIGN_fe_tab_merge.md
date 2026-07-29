@@ -345,6 +345,15 @@ MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관
 - 기존 전역 플래그는 그대로 둔다(SqlTool 등 다른 용도 + 이중 안전장치).
 - `npx tsc --noEmit -p .` + `npx vite build` 통과.
 
+**사용자 재검증 완료 (2026-07-30)** — 분리 후 로그가 `fe-lazy-…zqqvra` 에 대해 `live: true,
+keep: true` 를 보고하고 `[fe-seed]` 목록에도 그대로 남아 있으며, revive 결과가 `mode: "remote"`.
+그 뒤로 `[sftp-connect] start` 가 한 줄도 없다 = **재연결이 전혀 발생하지 않음**. 해결 확인.
+
+추적용으로 넣었던 상세 로그(`[fe-revive:src]` 소스별 덤프, `[fe-revive]` 전체 덤프,
+`[fe-seed]` connId 목록, `[fe-detach] preserve conns`)는 원인 확정 후 제거했다 — FileExplorer
+마운트마다 찍혀 상시로는 과했다. 대신 `[fe-revive] 재연결 필요한 소스 N 개` 한 줄만 남겼다(정상
+분리/복원이면 아예 안 찍히고, 찍히면 살아있어야 할 연결이 끊긴 것이므로 조사 시작점이 된다).
+
 부수적으로 확인된 사실 (버그 수정 #10 은 정상 동작):
 - 터미널 세션을 재사용하는 소스(`term-…`)는 `live: true, keep: true` 로 **강등 없이 유지**된다.
 - 앱 재시작 직후엔 `[fe-seed]` 가 비어 있는 게 정상이며(연결이 아직 없음), 그때는 강등 → 재연결이
