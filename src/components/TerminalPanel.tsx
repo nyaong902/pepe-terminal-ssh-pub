@@ -365,9 +365,14 @@ const visibleTermIds: Set<string> = new Set();
 // 손실 시 addon 을 버리고 xterm 기본 DOM 렌더러로 잠깐 폴백해두고, 창이 다시 포커스를 받거나
 // 이 탭이 다시 보일 때만(visible && focused 상태에서만 새 GPU 컨텍스트 생성 가능) 재부착한다.
 const termWebglPendingRecovery: Set<string> = new Set();
-// 개발용 진단 스위치 — GPU 프로세스(모든 렌더러 공유) 의 WebGL 커맨드 처리가 병목인지 확인하기
-// 위해 임시로 WebGL 자체를 아예 끄고 xterm 기본 DOM 렌더러로 비교 테스트할 때 사용.
-let webglDisabledForTesting = false;
+// 기본값 true(WebGL 비활성) — xterm-addon-webgl 0.16.0(레거시 xterm 5.3 계열, @xterm/* 로 개명되기
+// 전 마지막 배포판)에서 background-color-erase 렌더링이 깨져 SGR 배경색을 지워야 할 영역에
+// 엉뚱하게 칠해진 채로 남는 버그를 확인했다(예: ClearCase vdiff 출력에서 초록 배경이 화면 전체에
+// 번짐 — 다른 터미널 클라이언트에선 재현 안 됨, DOM 렌더러로 전환하면 사라짐). @xterm/xterm 6.x +
+// @xterm/addon-webgl 0.19.x 로 옮기면 고쳐졌을 수 있으나 core 메이저 버전업이라 별도 마이그레이션
+// 작업으로 미루고, 우선 안전한 DOM 렌더러를 기본으로 쓴다. 콘솔에서
+// window.__pepeSetWebglDisabled(false) 로 다시 켜서 비교 테스트 가능.
+let webglDisabledForTesting = true;
 export function setWebglDisabledForTesting(disabled: boolean) { webglDisabledForTesting = disabled; }
 function attachWebglAddon(termId: string) {
   if (webglDisabledForTesting) return;
