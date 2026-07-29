@@ -299,6 +299,31 @@ MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관
   { flex-shrink: 0 }`, 우측 고정 버튼들엔 `flex-shrink: 0`.
 - `npx tsc --noEmit -p .` + `npx vite build` 통과.
 
+## 버그 수정 #10 — 창 분리/복원마다 전부 재연결 + 파일목록 재로딩 (2026-07-29)
+
+사용자 재현: "창분리 / 복원할 때마다 파일전송목록이 재로딩이 되버려."
+
+`reviveFeLayout` 은 `isLiveTermId(termId)` 로 "지금도 살아있는 연결"이면 `remote` 를 그대로 유지하고,
+아니면 `lazy-remote` 로 강등해 재연결하게 되어 있다(의도는 애초에 문서화돼 있었다 — 코드 주석:
+"안 그러면 살아있는 연결인데도 매번 재연결 + 파일목록 재로딩이 발생한다"). 문제는 FileExplorer 가
+그 자리에 `isTermConnected`(TerminalPanel) 를 넘긴다는 것 — 파일전송이 직접 맺는 **SFTP 전용 연결
+(`fe-lazy-…` / `sftp-…`)은 인터랙티브 터미널이 아니라서 항상 false** 다. 그래서 창 분리 시
+`__preserveFileExplorerConns` 로 연결을 살려뒀는데도 전부 강등 → 재연결 → 목록 재로딩이 됐다.
+
+- [feLayoutUtils.ts](../src/utils/feLayoutUtils.ts) — 모듈 레벨 생존 연결 레지스트리 추가
+  (`setLiveBackendConnIds` / `isLiveBackendConnId`). main 이 authoritative 이므로 누적이 아니라 대체.
+- [App.tsx](../src/App.tsx) `seedReattach` — 기존 IPC `fe:connected-sessions`
+  (= `SSHBridge.getConnectedPanelIds()`, 이미 존재했지만 렌더러에서 미사용이었다) 로 백엔드의 실제
+  생존 목록을 받아 레지스트리에 심는다. 호출부 두 곳(분리창 init, `onAdoptTab`)이 모두
+  `await seedReattach(...)` 후에 `setTabs(...)` 를 하므로 FileExplorer 마운트보다 먼저 채워진다.
+- [FileExplorer.tsx](../src/components/FileExplorer.tsx) — `reviveFeLayout` 에 넘기는 판정을
+  `isTermConnected(tid) || isLiveBackendConnId(tid)` 로 확장.
+- 앱 재시작 시엔 `seedReattach` 가 안 돌아 레지스트리가 비어 있으므로 기존처럼 정상 강등 →
+  재연결된다(백엔드 연결도 실제로 죽어있으니 그게 맞는 동작).
+- 살아남은 `remote` 소스는 `viewRoot` 등 필드가 그대로 유지되고, 캐시된 목록(`entries` →
+  `initialFiles`)이 즉시 그려지므로 사용자에겐 재로딩이 보이지 않는다(백그라운드 새로고침 1회만).
+- `npx tsc --noEmit -p .` + `npx vite build` 통과.
+
 ## 버그 수정 #8 — 다른 세션의 경로가 엉뚱한 탭에 꽂히던 문제 (2026-07-29)
 
 사용자 재현: 병합 후 ClearCase 개발서버(dev@192.168.191.11) 탭에 `/root: Error: Permission denied`.

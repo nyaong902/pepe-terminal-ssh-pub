@@ -10,7 +10,7 @@ import {
   type FeTab, type FePanel, type FeLayoutNode,
   makeFeTab, createInitialFeLayout, splitFeNode, removeFeLeafNode, updateFeLeafPanel,
   countFeLeaves, findFirstFeLeafId, collectFeLeaves, findFeTabByTermId, mapAllFeTabs,
-  setFeContainerSizes, serializeFeLayout, reviveFeLayout,
+  setFeContainerSizes, serializeFeLayout, reviveFeLayout, isLiveBackendConnId,
 } from '../utils/feLayoutUtils';
 import { makeId } from '../utils/layoutUtils';
 
@@ -57,7 +57,12 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 최초 1회 계산 값을 layout/selectedLeafId 두 state 가 같이 참조해야 하므로 ref 에 담아 공유.
   const initialLayoutRef = useRef<FeLayoutNode | null>(null);
   if (!initialLayoutRef.current) {
-    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isTermConnected) || createInitialFeLayout(localLabel);
+    // "살아있는 연결" 판정에 isTermConnected 만 쓰면 안 된다 — 파일전송이 직접 맺는 SFTP 전용
+    // 연결(fe-lazy-…/sftp-…)은 인터랙티브 터미널이 아니라 항상 false 로 나와서, 창을 분리/복원할
+    // 때마다 살아있는 연결까지 강등돼 전부 재연결 + 파일목록 재로딩이 됐다. 백엔드가 알려준
+    // 실제 생존 목록(isLiveBackendConnId)도 함께 본다.
+    const isLive = (tid: string) => isTermConnected(tid) || isLiveBackendConnId(tid);
+    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isLive) || createInitialFeLayout(localLabel);
   }
   const [layout, setLayout] = useState<FeLayoutNode>(() => initialLayoutRef.current!);
   const [selectedLeafId, setSelectedLeafId] = useState<string>(() => {

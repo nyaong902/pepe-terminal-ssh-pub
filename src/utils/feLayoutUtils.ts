@@ -139,6 +139,27 @@ export function serializeFeLayout(node: FeLayoutNode): any {
   return { id: node.id, type: node.type, sizes: node.sizes, children: node.children.map(serializeFeLayout) };
 }
 
+/** 백엔드(main)에 아직 살아있는 연결 id 집합 — 창 분리/재부착 직전에 App.tsx 의 seedReattach 가
+ * `fe:connected-sessions`(SSHBridge.clients 키 목록) 로 채운다.
+ *
+ * 왜 필요한가: reviveFeLayout 은 termId 가 "지금도 살아있는지"를 isLiveTermId 로 판단하는데,
+ * FileExplorer 는 그 자리에 TerminalPanel 의 isTermConnected 를 넘긴다. 그런데 파일전송이 직접 맺는
+ * SFTP 전용 연결(`fe-lazy-…`, `sftp-…`)은 인터랙티브 터미널이 아니라서 isTermConnected 가 항상
+ * false 다 — 그래서 창을 분리/복원할 때마다 살아있는 연결까지 lazy-remote 로 강등돼 전부 재연결 +
+ * 파일목록 재로딩이 발생했다(사용자 재현). 이 집합을 같이 참고해서 살아있는 연결은 그대로 둔다.
+ *
+ * 앱을 재시작한 경우엔 seedReattach 가 안 돌아 이 집합이 비어 있으므로, 기존처럼 정상적으로
+ * 강등 → 재연결된다(백엔드 연결도 실제로 죽어있으니 그게 맞다). */
+const liveBackendConnIds = new Set<string>();
+/** 백엔드에서 조회한 살아있는 연결 목록으로 교체 — main 이 authoritative 이므로 누적이 아니라 대체. */
+export function setLiveBackendConnIds(ids: string[]) {
+  liveBackendConnIds.clear();
+  for (const id of ids) if (id) liveBackendConnIds.add(id);
+}
+export function isLiveBackendConnId(termId: string): boolean {
+  return liveBackendConnIds.has(termId);
+}
+
 /** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null.
  * remote(실제 연결) 소스는 termId(연결 세션의 임시 id)가 새 실행/재마운트에서는 보통 이미 무효하므로
  * 그대로 되살리지 않고 lazy-remote(세션 참조만 유지, 선택 시 자동 재연결)로 강등해서 복원한다 —

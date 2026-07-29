@@ -11,6 +11,7 @@ import { SearchBar } from './components/SearchBar';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ContextMenu } from './components/ContextMenu';
 import { FileExplorer } from './components/FileExplorer';
+import { setLiveBackendConnIds } from './utils/feLayoutUtils';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
 import { playReminderChime } from './utils/reminderChime';
@@ -2989,6 +2990,13 @@ function App() {
     let connected: string[] = [];
     try { connected = (await (window as any).api?.getConnectedPanels?.()) || []; } catch {}
     const connSet = new Set(connected);
+    // 파일전송이 직접 맺은 SFTP 전용 연결(fe-lazy-…/sftp-…)은 인터랙티브 터미널이 아니라서
+    // getConnectedPanels/isTermConnected 로는 안 잡힌다. 백엔드(SSHBridge.clients)의 실제 생존
+    // 목록을 따로 받아 feLayoutUtils 에 심어두면, reviveFeLayout 이 살아있는 연결을 lazy-remote 로
+    // 강등하지 않아 창 분리/복원 때 불필요한 재연결 + 파일목록 재로딩이 사라진다.
+    // 이 호출은 아래 setTabs(→ FileExplorer 마운트) 보다 먼저 끝나야 의미가 있다 — 호출부 두 곳
+    // (분리창 init, onAdoptTab) 모두 seedReattach 를 await 하고 나서 setTabs 를 한다.
+    try { setLiveBackendConnIds((await (window as any).api?.feConnectedSessions?.()) || []); } catch {}
     try {
       for (const s of collectAllSessions(tab.layout)) {
         if (!s.termId) continue;
