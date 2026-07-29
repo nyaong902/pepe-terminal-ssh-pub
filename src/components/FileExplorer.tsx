@@ -87,6 +87,42 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 패널 탭 스트립(.fe-panel-tabs-scroll)이 넘칠 때만 ‹ › 스크롤 버튼을 노출한다 — 워크스페이스
+  // 탭바(TabBar.tsx)와 같은 UX. leaf 마다 스트립이 하나씩이라 leafId 로 키를 잡는다.
+  const feTabScrollEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  const feTabsRO = useRef<ResizeObserver | null>(null);
+  const [feTabsOverflow, setFeTabsOverflow] = useState<Record<string, boolean>>({});
+  const measureFeTabsOverflow = React.useCallback(() => {
+    setFeTabsOverflow(prev => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const [id, el] of feTabScrollEls.current) {
+        next[id] = el.scrollWidth > el.clientWidth + 1;
+        if (prev[id] !== next[id]) changed = true;
+      }
+      // 사라진 leaf 의 키가 남아있어도 changed 로 잡아 정리
+      if (!changed && Object.keys(prev).length !== Object.keys(next).length) changed = true;
+      return changed ? next : prev;
+    });
+  }, []);
+  const setFeTabScrollRef = (leafId: string) => (el: HTMLDivElement | null) => {
+    const map = feTabScrollEls.current;
+    const prev = map.get(leafId);
+    if (prev === el) return;
+    if (prev) { try { feTabsRO.current?.unobserve(prev); } catch {} }
+    if (el) { map.set(leafId, el); try { feTabsRO.current?.observe(el); } catch {} }
+    else map.delete(leafId);
+  };
+  useEffect(() => {
+    const ro = new ResizeObserver(() => measureFeTabsOverflow());
+    feTabsRO.current = ro;
+    for (const el of feTabScrollEls.current.values()) { try { ro.observe(el); } catch {} }
+    window.addEventListener('resize', measureFeTabsOverflow);
+    return () => { ro.disconnect(); feTabsRO.current = null; window.removeEventListener('resize', measureFeTabsOverflow); };
+  }, [measureFeTabsOverflow]);
+  // 탭 추가/삭제/라벨변경은 컨테이너 크기를 안 바꿔서 ResizeObserver 가 안 뜬다 — 레이아웃이
+  // 바뀔 때마다 직접 다시 잰다.
+  useEffect(() => { measureFeTabsOverflow(); }, [layout, measureFeTabsOverflow]);
   // initialState 로 시작했으면(분리 창에서 복원) 자동 원격 연결 effect 비활성 — 복원 상태 우선.
   const autoConnectDoneRef = React.useRef<boolean>(!!suppressAutoSelect || !!initialState?.layout);
   const [showSftpConnect, setShowSftpConnect] = useState<string | null>(null); // leafId
@@ -929,8 +965,19 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const tabs = panel.tabs;
     const active = panel.activeIdx;
     const totalLeaves = countFeLeaves(layout);
+    const scrollFeTabs = (dx: number) => {
+      feTabScrollEls.current.get(leafId)?.scrollBy({ left: dx, behavior: 'smooth' });
+    };
+    // 탭 목록만 스크롤 영역에 넣고, +/분할/닫기 버튼은 밖에 고정 — 예전엔 버튼들도 스크롤
+    // 컨테이너 안에 있어서 탭이 많아지면 같이 밀려 사라졌다.
+    // onWheel: 스크롤바를 숨겼으므로(App.css 참고) 세로 휠을 가로 스크롤로 변환 — 메인 탭바와 동일.
     return (
       <div className="fe-panel-tabs">
+        <div
+          className="fe-panel-tabs-scroll"
+          ref={setFeTabScrollRef(leafId)}
+          onWheel={e => { e.currentTarget.scrollLeft += e.deltaY > 0 ? 60 : -60; }}
+        >
         {tabs.map((tab, idx) => {
           const isDragging = tabDrag?.fromLeafId === leafId && tabDrag.from === idx;
           const isDropTarget = tabDrag && tabDrag.overLeafId === leafId && tabDrag.over === idx
@@ -997,6 +1044,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             setTabDrag(null);
           }}
         />
+        </div>
+        {feTabsOverflow[leafId] && (
+          <div className="fe-panel-tab-scroll-group">
+            <button className="fe-panel-tab-scroll-btn" onClick={() => scrollFeTabs(-150)} title={t('scrollPrev', { defaultValue: '이전' })}>‹</button>
+            <button className="fe-panel-tab-scroll-btn" onClick={() => scrollFeTabs(150)} title={t('scrollNext', { defaultValue: '다음' })}>›</button>
+          </div>
+        )}
         <button
           className="fe-panel-tab-add"
           onClick={() => addPanelTab(leafId)}

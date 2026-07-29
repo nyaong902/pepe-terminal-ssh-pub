@@ -278,3 +278,34 @@ MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관
 스크롤바를 강제로 렌더시키고 있었다. [App.css](../src/App.css)에서 `.tab-bar-scroll` 의
 `::-webkit-scrollbar-button`/`-track`/`-thumb`/`-corner` 까지 모두 `display: none` 으로 눌러
 해결(탭바는 휠/드래그로만 스크롤).
+
+**후속 (2026-07-29)** — 같은 원인이 파일전송 패널 **내부** 탭 스트립(`.fe-panel-tabs`)에도 있었다.
+`::-webkit-scrollbar { height: 4px }` 로 얇게 지정해뒀지만 전역 버튼 규칙이 16px 화살표 버튼을
+붙여 굵은 바가 됐다. 사용자 요청("워크스페이스 탭바처럼 되면 좋을 듯")대로 스크롤바를 없애고
+워크스페이스 탭바와 동일한 `‹ ›` 스크롤 버튼 방식으로 교체했다:
+
+- DOM 재구성 ([FileExplorer.tsx](../src/components/FileExplorer.tsx) `renderPanelTabs`) — 기존엔
+  `+`/분할/닫기 버튼까지 전부 스크롤 컨테이너(`.fe-panel-tabs`) 안에 있어서 **탭이 많아지면 그
+  버튼들도 같이 밀려 사라졌다**. 이제 탭 목록만 새 내부 컨테이너 `.fe-panel-tabs-scroll` 에서
+  스크롤하고, 버튼들은 바깥 `.fe-panel-tabs` 에 고정으로 남는다.
+- 넘칠 때만 `‹ ›` 버튼 노출 — leaf 마다 스트립이 하나씩이므로 `leafId` 로 키를 잡아
+  `feTabScrollEls`(ref Map) + `feTabsOverflow`(state) 로 관리. 공용 `ResizeObserver` 하나로
+  컨테이너 크기 변화를 감지하고, 탭 추가/삭제/라벨변경은 컨테이너 크기를 안 바꿔서 옵저버가
+  안 뜨므로 `layout` 변경 시에도 다시 측정한다.
+- 세로 휠 → 가로 스크롤 `onWheel` 핸들러도 함께 추가(메인 탭바와 동일).
+- [App.css](../src/App.css) — `.fe-panel-tabs-scroll`(스크롤바 전 파트 `display:none`),
+  `.fe-panel-tab-scroll-group`/`.fe-panel-tab-scroll-btn`(18px 소형, 메인 탭바 `.tab-scroll-btn`
+  스타일 축소판) 추가. 탭이 줄지 않고 넘치도록 `.fe-panel-tabs-scroll > .fe-panel-tab
+  { flex-shrink: 0 }`, 우측 고정 버튼들엔 `flex-shrink: 0`.
+- `npx tsc --noEmit -p .` + `npx vite build` 통과.
+
+## 후속 수정 — "탭바 아무곳" 판정이 좁았던 문제 (2026-07-29)
+
+사용자 재현: "워크스페이스 있는 탭바 아무곳에 놔도 잘 안 합쳐져."
+
+같은 창 드래그(TabBar.tsx `onUp`)에서 병합 조건을 `el?.closest('.tab-bar')` 로 판정했는데,
+`.tab-bar` 는 **탭 아이템들만 감싸는 좁은 박스**다 — 탭 오른쪽의 넓은 빈 공간은 형제 요소인
+`.titlebar-drag-area` 라서 거기 놓으면 병합이 안 걸렸다("아무곳에 놔도 된다"는 의도와 불일치).
+[TabBar.tsx](../src/components/TabBar.tsx) 의 판정을 App.tsx `onAdoptTab` 과 같은 셀렉터 목록
+(`.tab-bar-row, .tab-bar, .titlebar-drag-area, .titlebar, .menu-bar`) + y좌표 40px 폴백으로
+교체. 크로스윈도우 경로는 이미 같은 방식(`onChrome`)이라 수정 불필요.

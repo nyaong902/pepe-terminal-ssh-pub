@@ -3424,18 +3424,68 @@ body.popout-options .session-editor h3:first-child {
   min-width: 0;
   position: relative;
 }
+/* 바깥 컨테이너는 스크롤하지 않는다 — 탭 목록만 안쪽(.fe-panel-tabs-scroll)에서 스크롤하고
+   +/분할/닫기/‹› 버튼은 여기 고정으로 남는다(예전엔 버튼들도 같이 밀려 사라졌다). */
 .fe-panel-tabs {
   display: flex;
   align-items: stretch;
   background: rgba(255,255,255,0.03);
   border-bottom: 1px solid rgba(255,255,255,0.08);
   min-height: 26px;
-  overflow-x: auto;
-  scrollbar-width: thin;
   flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
 }
-.fe-panel-tabs::-webkit-scrollbar { height: 4px; }
-.fe-panel-tabs::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+/* 메인 탭바(.tab-bar-scroll)와 같은 이유로 스크롤바를 완전히 숨긴다 — 전역
+   `::-webkit-scrollbar-button { display: block }`(index.css) 때문에 4px 로 지정해도 16px 화살표
+   버튼이 붙어 굵고 지저분한 가로 바가 생겼다. 대신 넘칠 때 ‹ › 버튼이 뜨고, 세로 휠도
+   FileExplorer 의 onWheel 이 가로 스크롤로 바꿔준다. */
+.fe-panel-tabs-scroll {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.fe-panel-tabs-scroll::-webkit-scrollbar,
+.fe-panel-tabs-scroll::-webkit-scrollbar-button,
+.fe-panel-tabs-scroll::-webkit-scrollbar-track,
+.fe-panel-tabs-scroll::-webkit-scrollbar-thumb,
+.fe-panel-tabs-scroll::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
+/* 탭이 줄어들지 않고 넘쳐야 스크롤이 성립한다 (.tab-bar .tab-item 과 동일) */
+.fe-panel-tabs-scroll > .fe-panel-tab { flex-shrink: 0; }
+/* 우측 고정 버튼들은 절대 눌리지 않게 */
+.fe-panel-tabs > .fe-panel-tab-add,
+.fe-panel-tabs > .fe-panel-split-btn,
+.fe-panel-tabs > .fe-panel-close-btn,
+.fe-panel-tab-scroll-group { flex-shrink: 0; }
+.fe-panel-tab-scroll-group {
+  display: flex;
+  align-self: center;
+  border: 1px solid var(--win-border, #333);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 3px;
+}
+.fe-panel-tab-scroll-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fe-panel-tab-scroll-btn + .fe-panel-tab-scroll-btn { border-left: 1px solid var(--win-border, #333); }
+.fe-panel-tab-scroll-btn:hover { background: var(--win-accent, #2b6b9b); color: var(--win-text, #fff); }
 .fe-panel-tab {
   display: inline-flex;
   align-items: center;

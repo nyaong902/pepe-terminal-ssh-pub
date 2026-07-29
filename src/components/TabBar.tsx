@@ -157,7 +157,12 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             // 놓든 이 창의 파일전송 탭과 병합한다 — 창마다 파일전송 탭은 하나만 유지되는
             // 것을 전제로 정밀한 드롭 위치 요구를 없앰(정확히 얹어야만 합쳐지던 게 가끔
             // 안 먹힌다는 사용자 피드백).
-            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && el?.closest('.tab-bar'))
+            // 주의: `.tab-bar` 는 탭 아이템들만 감싸는 좁은 박스라 그 오른쪽 빈 공간은
+            // `.titlebar-drag-area`(형제 요소)다 — 거기 놓으면 병합이 안 걸렸다. App.tsx 의
+            // onAdoptTab 히트테스트와 같은 셀렉터 목록 + y좌표(탭바 높이 40px) 폴백을 쓴다.
+            const onChrome = !!el?.closest('.tab-bar-row, .tab-bar, .titlebar-drag-area, .titlebar, .menu-bar')
+              || clientY < 40;
+            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && onChrome)
               ? tabs.find(x => x.type === 'fileExplorer' && x.id !== st.tabId)
               : null;
             if (mergeTargetFe && onMergeFileExplorerTabs) {
