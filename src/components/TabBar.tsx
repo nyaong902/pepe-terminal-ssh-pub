@@ -152,14 +152,18 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
             const overItem = el?.closest('.tab-item') as HTMLElement | null;
             const overId = overItem?.getAttribute('data-tab-id') || null;
-            if (overId && overId !== st.tabId) {
-              const fromTab = tabs.find(x => x.id === st.tabId);
-              const toTab = tabs.find(x => x.id === overId);
-              if (fromTab?.type === 'fileExplorer' && toTab?.type === 'fileExplorer' && onMergeFileExplorerTabs) {
-                onMergeFileExplorerTabs(st.tabId, overId);
-              } else {
-                onReorderTabs?.(st.tabId, overId);
-              }
+            const fromTab = tabs.find(x => x.id === st.tabId);
+            // 파일전송 탭은 굳이 다른 파일전송 탭 위에 정확히 얹지 않아도, 탭바 위 어디에
+            // 놓든 이 창의 파일전송 탭과 병합한다 — 창마다 파일전송 탭은 하나만 유지되는
+            // 것을 전제로 정밀한 드롭 위치 요구를 없앰(정확히 얹어야만 합쳐지던 게 가끔
+            // 안 먹힌다는 사용자 피드백).
+            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && el?.closest('.tab-bar'))
+              ? tabs.find(x => x.type === 'fileExplorer' && x.id !== st.tabId)
+              : null;
+            if (mergeTargetFe && onMergeFileExplorerTabs) {
+              onMergeFileExplorerTabs(st.tabId, mergeTargetFe.id);
+            } else if (overId && overId !== st.tabId) {
+              onReorderTabs?.(st.tabId, overId);
             }
           }
         } catch {}

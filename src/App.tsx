@@ -3114,12 +3114,16 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
-            // 드롭 지점이 정확히 기존 탭 아이템(탭바의 특정 탭) 위인지 — 파일전송 탭을 다른
-            // 파일전송 탭 위에 정확히 얹었을 때만 병합, 그 외(탭바 빈 공간 등)는 새 탭으로 폴백.
+            // 파일전송 탭은 굳이 다른 파일전송 탭 위에 정확히 얹지 않아도, 탭바 위 어디에
+            // 놓든 이 창의 파일전송 탭과 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을
+            // 전제로 정밀한 드롭 위치 요구를 없앰(정확히 얹어야만 합쳐지던 게 가끔 안 먹힌다는
+            // 사용자 피드백). 특정 탭 위에 놓였으면 그 탭을 우선하고, 아니면 이 창의 첫 파일전송
+            // 탭을 대상으로 한다.
             const overTabItem = el?.closest('.tab-item') as HTMLElement | null;
             const overTabId = overTabItem?.getAttribute('data-tab-id') || null;
-            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer' && overTabId) {
-              const targetTab = tabsRef.current.find(t => t.id === overTabId);
+            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer' && onChrome) {
+              const targetTab = (overTabId && tabsRef.current.find(t => t.id === overTabId && t.type === 'fileExplorer'))
+                || tabsRef.current.find(t => t.type === 'fileExplorer');
               if (targetTab && targetTab.type === 'fileExplorer') {
                 console.log('[adopt-tab] fileExplorer→merge', { targetTab: targetTab.id });
                 // 뷰 루트 조회(extractMergeableFeSources 내부)가 원본 termId 가 아직 살아있는

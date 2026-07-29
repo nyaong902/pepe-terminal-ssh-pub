@@ -1922,7 +1922,21 @@ probe_curl || probe_wget || probe_python
     return new Promise((resolve, reject) => {
       const rec = this.clients.get(panelId);
       if (!rec?.conn) return reject(new Error('연결되지 않음'));
+      // 안전장치 — 창 분리/재병합을 반복하면 this.clients 에 레코드는 남아있는데(정리 이벤트가
+      // 안 타서) 실제로는 죽은 소켓인 Client 가 생기는 경우가 있다. 그 경우 conn.sftp() 콜백이
+      // 영원히 안 불려서 이 Promise 가 무한 대기하고, 결국 렌더러에서 Electron 의
+      // "reply was never sent" 라는 알아보기 힘든 에러로만 드러난다(실사용 중 재현). 타임아웃으로
+      // 명확한 에러를 던져 최소한 사용자가 재시도/재연결할 수 있게 한다.
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('SFTP 서브시스템 응답 없음 — 연결이 끊어졌을 수 있습니다. 재연결해 주세요.'));
+      }, 15000);
       rec.conn.sftp((err: any, sftp: any) => {
+        if (settled) return; // 타임아웃 이후 뒤늦게 도착한 콜백은 무시
+        settled = true;
+        clearTimeout(timer);
         if (err) return reject(err);
         this.sftpCache.set(panelId, sftp);
         // worker 경로의 제네릭 RPC 프록시는 'on' 도 콜백형 메서드로 오인해 forward 해버리므로
@@ -2272,51 +2286,85 @@ probe_curl || probe_wget || probe_python
     });
   }
 
+  // ssh2 sftp.readdir 한 번 — 타임아웃 안전장치 포함.
+  // 안전장치가 필요한 이유 두 가지:
+  //  1) 창 분리/재병합을 반복하면 this.clients 에 레코드는 남아있는데 실제로는 죽은 소켓인 경우가
+  //     생기고, 그 상태의 readdir 은 콜백이 영영 안 불린다.
+  //  2) ClearCase dynamic view 경로(/view/<tag>/...)는 그 뷰가 더 이상 mount 되어 있지 않으면
+  //     MVFS lookup 이 실패가 아니라 그냥 블록된다.
+  // 둘 다 렌더러에는 Electron 의 "reply was never sent" 로만 드러나서 원인 파악이 불가능했다.
+  private _sftpReaddirOnce(sftp: any, dir: string, timeoutMs: number): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`SFTP 목록 조회 응답 없음 (${dir})`));
+      }, timeoutMs);
+      sftp.readdir(dir, (err: any, list: any[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) return reject(err);
+        resolve(list || []);
+      });
+    });
+  }
+
   async handleSFTPListDir(panelId: string, remotePath: string): Promise<any[]> {
     const sftp = await this.getSftp(panelId);
-    remotePath = await this.resolveCcPath(panelId, remotePath);
-    return new Promise((resolve, reject) => {
-      sftp.readdir(remotePath, (err: any, list: any[]) => {
-        if (err) return reject(err);
-        resolve(list.map((item: any) => {
-          const attrs = item.attrs;
-          // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
-          // 이미 boolean 값으로 치환돼 있음(sshTerminalWorker.cjs 의 sanitizeForClone 참고) — 두
-          // 형태(메서드 or 값) 모두 처리.
-          const isDir = typeof attrs.isDirectory === 'function' ? attrs.isDirectory() : !!attrs.isDirectory;
-          const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : !!attrs.isSymbolicLink;
-          // POSIX mode → drwxr-xr-x 형식 문자열
-          const m = attrs.mode || 0;
-          const typeChar = isLink ? 'l' : isDir ? 'd' : '-';
-          const rwx = (bits: number) => {
-            return (bits & 4 ? 'r' : '-') + (bits & 2 ? 'w' : '-') + (bits & 1 ? 'x' : '-');
-          };
-          const perm = typeChar
-            + rwx((m >> 6) & 7)
-            + rwx((m >> 3) & 7)
-            + rwx(m & 7);
-          // longname 에서 owner/group 추출 (예: "drwxr-xr-x  3 root root 4096 May 11 10:24 RPMS")
-          let owner = '';
-          let group = '';
-          if (item.longname && typeof item.longname === 'string') {
-            const parts = item.longname.trim().split(/\s+/);
-            if (parts.length >= 4) {
-              owner = parts[2];
-              group = parts[3];
-            }
-          }
-          return {
-            name: item.filename,
-            isDir,
-            size: attrs.size,
-            mtime: attrs.mtime,
-            mode: perm,        // drwxr-xr-x 형식
-            owner: owner || (attrs.uid != null ? String(attrs.uid) : ''),
-            group: group || (attrs.gid != null ? String(attrs.gid) : ''),
-            isLink,
-          };
-        }));
-      });
+    const rawPath = remotePath;
+    const ccPath = await this.resolveCcPath(panelId, rawPath);
+    let list: any[];
+    try {
+      // ClearCase 로 변환된 경로는 뷰가 죽어있으면 블록되므로 짧게 끊고 폴백한다.
+      list = await this._sftpReaddirOnce(sftp, ccPath, ccPath !== rawPath ? 8000 : 15000);
+    } catch (err) {
+      // 변환된 뷰 경로가 안 먹히면 — 캐시된 뷰 루트가 stale(그 뷰가 더 이상 mount 안 됨)일 수
+      // 있다. 캐시를 버려서 다음 호출이 다시 탐지하게 하고, 원래 /vobs 경로로 한 번 재시도한다
+      // (뷰 안에서 SFTP 가 열린 경우엔 변환 없이도 접근되므로 이쪽이 성공할 수 있다).
+      if (ccPath === rawPath) throw err;
+      console.log(`[clearcase-${panelId.slice(-6)}] listdir via view root failed (${ccPath}) — retrying raw ${rawPath}`);
+      this.ccViewRoots.delete(panelId);
+      list = await this._sftpReaddirOnce(sftp, rawPath, 15000);
+    }
+    return list.map((item: any) => {
+      const attrs = item.attrs;
+      // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
+      // 이미 boolean 값으로 치환돼 있음(sshTerminalWorker.cjs 의 sanitizeForClone 참고) — 두
+      // 형태(메서드 or 값) 모두 처리.
+      const isDir = typeof attrs.isDirectory === 'function' ? attrs.isDirectory() : !!attrs.isDirectory;
+      const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : !!attrs.isSymbolicLink;
+      // POSIX mode → drwxr-xr-x 형식 문자열
+      const m = attrs.mode || 0;
+      const typeChar = isLink ? 'l' : isDir ? 'd' : '-';
+      const rwx = (bits: number) => {
+        return (bits & 4 ? 'r' : '-') + (bits & 2 ? 'w' : '-') + (bits & 1 ? 'x' : '-');
+      };
+      const perm = typeChar
+        + rwx((m >> 6) & 7)
+        + rwx((m >> 3) & 7)
+        + rwx(m & 7);
+      // longname 에서 owner/group 추출 (예: "drwxr-xr-x  3 root root 4096 May 11 10:24 RPMS")
+      let owner = '';
+      let group = '';
+      if (item.longname && typeof item.longname === 'string') {
+        const parts = item.longname.trim().split(/\s+/);
+        if (parts.length >= 4) {
+          owner = parts[2];
+          group = parts[3];
+        }
+      }
+      return {
+        name: item.filename,
+        isDir,
+        size: attrs.size,
+        mtime: attrs.mtime,
+        mode: perm,        // drwxr-xr-x 형식
+        owner: owner || (attrs.uid != null ? String(attrs.uid) : ''),
+        group: group || (attrs.gid != null ? String(attrs.gid) : ''),
+        isLink,
+      };
     });
   }
 
@@ -3544,6 +3592,10 @@ probe_curl || probe_wget || probe_python
   }
 
   handleSFTPDisconnect(connId: string) {
+    // ccViewRoots 는 clients 레코드가 이미 정리됐어도(cleanupOnClose 가 먼저 탄 경우) 남으므로
+    // early return 앞에서 지운다 — 안 지우면 죽은 connId 의 뷰 루트가 계속 쌓인다.
+    this.ccViewRoots.delete(connId);
+    this.activeShellPids.delete(connId);
     const rec = this.clients.get(connId);
     if (!rec) return;
     try { rec.conn.end(); } catch {}

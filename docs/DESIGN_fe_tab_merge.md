@@ -103,6 +103,7 @@ FileExplorer 인스턴스)에서 재구성할 방법이 없다. 그래서 병합
 - `electron/sshBridge.ts` — `getCcViewRoot` public 전환, `setCcViewRoot` 추가 (버그 수정 #2)
 - `electron/main.ts` — IPC `fe:get-view-root`/`fe:set-view-root` 핸들러 추가 (버그 수정 #2)
 - `electron/preload.ts` — `feGetViewRoot`/`feSetViewRoot` 브리지 추가 (버그 수정 #2)
+- `electron/sshBridge.ts` — `getSftp`/`handleSFTPListDir` 타임아웃 안전장치 추가 (버그 수정 #6)
 
 ## 검증 상태
 
@@ -207,3 +208,73 @@ FileExplorer 인스턴스)에서 재구성할 방법이 없다. 그래서 병합
   - `handleCredSubmit`(비밀번호 미저장 세션의 자격증명 재입력 경로)은 `viewRoot` 이관 대상에서
     아직 빠져있음 — 발생 빈도가 낮아 이번 범위 밖으로 남김, 필요시 추가.
   - `npx tsc --noEmit -p .` 재확인 통과.
+- **버그 수정 #6 (2026-07-29, 사용자 재현 — "분리 → 원래 창 복귀 → 재분리를 반복하면 병합이 잘
+  안 되고 'Error invoking remote method fe:list-dir: reply was never sent'가 뜸")**: 분리/병합을
+  여러 번 오가면 `this.clients`(sshBridge.ts)에 레코드는 남아있지만 실제로는 죽은 소켓인
+  `Client`가 생기는 경우가 있는 것으로 보인다 — 이 상태에서 `conn.sftp(cb)`/`sftp.readdir(cb)`
+  콜백이 영영 안 불려서 `getSftp`/`handleSFTPListDir`의 Promise가 무한 대기하고, 렌더러에는
+  원인을 알 수 없는 Electron 자체 에러("reply was never sent")로만 드러난다.
+  [sshBridge.ts](../electron/sshBridge.ts)의 `getSftp`와 `handleSFTPListDir`에 15초 타임아웃
+  안전장치를 추가 — 콜백이 안 오면 "연결이 끊어졌을 수 있습니다. 재연결해 주세요" 같은 명확한
+  에러로 정리(reject)해서 무한 대기 대신 최소한 재시도 가능한 상태로 만든다. "가끔 병합이 잘
+  안 된다"는 증상도 이 무한 대기와 같은 원인일 가능성이 있어 함께 완화될 것으로 예상 — 다만
+  드롭 지점 히트테스트(`elementFromPoint` + `.tab-item` 판정) 자체의 정밀도 이슈일 가능성도
+  있어 완전히 배제하지는 않음. 근본 원인(왜 `this.clients`에 죽은 레코드가 남는지)은 아직 못
+  찾음 — 재현 시 추가 조사 필요.
+  `npx tsc --noEmit -p .` 재확인 통과.
+
+## UX 변경 (2026-07-29) — 정밀 드롭 요구 제거
+
+사용자 피드백: "정확히 그 파일전송 탭 위에 올려야 합쳐지는 게 가끔 안 먹힌다. 어차피 창마다
+파일전송 탭은 하나씩만 가져가는 걸로 하고, 탭바 위에만 올려놓으면 합쳐지게 해달라."
+
+기존엔 드래그한 파일전송 탭을 **다른 파일전송 탭 아이템 위에 정확히(`.tab-item` 히트) 올려야만**
+병합이 트리거됐다. 이제는 "각 창은 파일전송 탭을 최대 1개만 유지한다"는 전제로, **탭바 위 어디든**
+놓으면 그 창의 (유일한) 파일전송 탭과 병합되도록 완화했다. 특정 탭 위에 정확히 놓였으면 그 탭을
+우선 대상으로 삼고, 아니면 그 창에서 찾은 첫 파일전송 탭을 대상으로 한다(창에 파일전송 탭이
+아예 없으면 기존처럼 새 탭 생성으로 폴백).
+
+- [App.tsx](../src/App.tsx) `onAdoptTab`(크로스윈도우) — `overTabId` 존재를 요구하던 조건을
+  `onChrome`(탭바 영역 전체)으로 완화. 대상 탭은 `overTabId`가 fileExplorer면 그걸, 아니면
+  `tabsRef.current`에서 찾은 첫 fileExplorer 탭.
+- [TabBar.tsx](../src/components/TabBar.tsx) 같은 창 드래그(`onUp`) — `overId`가 다른
+  fileExplorer 탭인지 확인하던 조건을, 드롭 지점이 `.tab-bar` 안이기만 하면(정확한 탭 아이템
+  불문) 이 창의 다른 fileExplorer 탭을 찾아 병합하도록 변경.
+- "각 창당 파일전송 탭 1개"는 아직 강제(다른 경로로 2번째 파일전송 탭을 여는 것 자체를 막는
+  로직)는 아님 — 드래그 병합의 드롭 판정만 완화한 것. 한 창에 파일전송 탭이 2개 이상 있는
+  상태에서 탭바 빈 공간에 드롭하면 "첫 번째로 찾은" 탭이 대상이 된다.
+- `npx tsc --noEmit -p .` 재확인 통과.
+
+## 버그 수정 #7 — stale ClearCase 뷰 루트로 인한 무한 블록 (2026-07-29)
+
+사용자 재현: "창2에서 합쳐진 후 → 다시 창1로 파일전송 탭 전체를 옮기고 → 파일전송 탭 전체를 닫고
+→ 다시 파일전송을 창3으로 분리하면" `/vobs/REL/SSW_SKBC4_70A: Error: SFTP 목록 조회 응답 없음`.
+
+버그 수정 #6의 타임아웃이 실제 블록을 잡아낸 케이스. 원인은 **stale 뷰 루트**로 판단된다:
+버그 수정 #5에서 `viewRoot`를 `PanelSource`에 실어 연결마다 이어가게 만들었는데, 이 값은
+레이아웃과 함께 직렬화되므로 탭을 닫았다 다시 열어도 살아남는다. 그런데 ClearCase dynamic view는
+`/view/<tag>/...` 경로가 **그 뷰가 여전히 mount 되어 있을 때만** 유효하고, mount 가 풀린 뒤에는
+MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관받은 뷰 루트가 한 번 stale 해지면 그
+패널은 영구히 멈춘 것처럼 보였다.
+
+- [sshBridge.ts](../electron/sshBridge.ts) `handleSFTPListDir` — readdir 를 `_sftpReaddirOnce`
+  헬퍼로 분리하고 self-healing 폴백을 추가: 뷰 루트로 변환된 경로는 **짧게(8초)** 끊고, 실패하면
+  ① 캐시된 `ccViewRoots` 항목을 버려 다음 호출이 다시 탐지하게 하고 ② 변환 전 원래 `/vobs/...`
+  경로로 한 번 재시도한다(뷰 안에서 SFTP 가 열린 경우엔 변환 없이도 접근되므로 이쪽이 성공할 수
+  있음). 변환이 없는 일반 경로는 기존대로 15초.
+- `handleSFTPDisconnect` — `ccViewRoots`/`activeShellPids` 정리를 early return **앞으로** 이동.
+  기존엔 `clients` 레코드가 이미 `cleanupOnClose` 로 지워진 경우 early return 에 걸려 죽은
+  connId 의 뷰 루트가 계속 쌓였다.
+- `npx tsc --noEmit -p .` 재확인 통과. 실 ClearCase 서버 + 다중 창 드래그가 필요해 자동 검증
+  불가 — 사용자 재검증 필요.
+
+## UI 수정 — 창이 좁아질 때 탭바에 가로 스크롤바 노출 (2026-07-29)
+
+사용자 재현: 창 폭을 줄여 탭이 넘치면 탭바 아래에 굵은 가로 스크롤바가 생김.
+
+`.tab-bar-scroll` 은 이미 `scrollbar-width: none` + `::-webkit-scrollbar { display: none }` 로
+스크롤바를 숨기고 있었는데, [index.css](../src/index.css)의 전역
+`::-webkit-scrollbar-button { display: block; ... }` 규칙이 그대로 살아있어서 버튼 박스가
+스크롤바를 강제로 렌더시키고 있었다. [App.css](../src/App.css)에서 `.tab-bar-scroll` 의
+`::-webkit-scrollbar-button`/`-track`/`-thumb`/`-corner` 까지 모두 `display: none` 으로 눌러
+해결(탭바는 휠/드래그로만 스크롤).

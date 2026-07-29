@@ -898,7 +898,15 @@ body.popout-options .session-editor h3:first-child {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
+/* 탭바는 스크롤바를 절대 노출하지 않는다(휠/드래그로만 스크롤). ::-webkit-scrollbar 만 숨기면
+   부족하다 — index.css 의 전역 `::-webkit-scrollbar-button { display: block }` 이 그대로 살아있어서
+   창이 좁아져 탭이 넘칠 때 버튼 박스가 스크롤바를 강제로 렌더시킨다(탭바 아래에 굵은 가로
+   스크롤바가 생기던 원인). 하위 파트까지 전부 none 으로 눌러준다. */
 .tab-bar-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.tab-bar-scroll::-webkit-scrollbar-button,
+.tab-bar-scroll::-webkit-scrollbar-track,
+.tab-bar-scroll::-webkit-scrollbar-thumb,
+.tab-bar-scroll::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
 .tab-bar .tab-item { flex-shrink: 0; }
 .tab-scroll-group {
   display: flex;
