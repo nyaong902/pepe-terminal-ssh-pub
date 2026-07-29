@@ -14,6 +14,7 @@ import {
   type CustomWorkspaceKind,
   type CustomWorkspaceTemplate,
 } from '../utils/customWorkspaces';
+import { emitDebugLog } from '../utils/debugLog';
 import {
   appendSessionsToPanel,
   countLeaves,
@@ -111,14 +112,6 @@ function TerminalSlot({
   onSessionChange?: (session: { id: string; sessionId: string; name: string; host?: string; username?: string; theme?: string; fontFamily?: string; fontSize?: number; pwd?: string }) => void;
 }) {
   const debugIdRef = React.useRef(`cw-term-${workspaceId}:${slotId}`);
-  const emitDebugLog = (...parts: any[]) => {
-    const line = parts.map(p => {
-      if (typeof p === 'string') return p;
-      try { return JSON.stringify(p); } catch { return String(p); }
-    }).join(' ');
-    try { (window as any).api?.debugLog?.(line); } catch {}
-    try { console.log(line); } catch {}
-  };
   const [layout, setLayout] = useState<LayoutNode>(() => {
     if (state?.layout) return state.layout;
     const initial = createInitialLayout(`${workspaceId}-${slotId}`);
@@ -723,14 +716,6 @@ export const CustomWorkspaceView: React.FC<{
   const [slotState, setSlotState] = useState<SlotState>(() => state || {});
   const [localTemplate, setLocalTemplate] = useState<CustomWorkspaceTemplate>(template);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(template.slots[0]?.id || null);
-  const emitDebugLog = (...parts: any[]) => {
-    const line = parts.map(p => {
-      if (typeof p === 'string') return p;
-      try { return JSON.stringify(p); } catch { return String(p); }
-    }).join(' ');
-    try { (window as any).api?.debugLog?.(line); } catch {}
-    try { console.log(line); } catch {}
-  };
 
   useEffect(() => { setLocalTemplate(template); }, [template]);
   useEffect(() => { if (template.slots.some(slot => slot.id === activeSlotId)) return; setActiveSlotId(template.slots[0]?.id || null); }, [template, activeSlotId]);

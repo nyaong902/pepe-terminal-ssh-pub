@@ -3,6 +3,7 @@
 // 뒤로/앞으로/새로고침/URL 입력 바와 SSH SOCKS 프록시 선택을 제공.
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { emitDebugLog, isDebugLogEnabled } from '../utils/debugLog';
 
 type Props = {
   initialUrl: string;
@@ -324,15 +325,6 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   const proxySeqRef = useRef(0);
   const lastAutoLoadedRef = useRef<string>('');
   const liveTargets = connectedSessions.length > 0 ? connectedSessions : sshTargets;
-  const emitDebugLog = useCallback((...parts: any[]) => {
-    const line = parts.map(p => {
-      if (typeof p === 'string') return p;
-      try { return JSON.stringify(p); } catch { return String(p); }
-    }).join(' ');
-    try { (window as any).api?.debugLog?.(line); } catch {}
-    try { console.log(line); } catch {}
-  }, []);
-
   useEffect(() => {
     activeTabIdRef.current = activeTabId;
     tabsRef.current = tabs;
@@ -1616,9 +1608,10 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         } catch {}
         return;
       }
-      // 자동 로그인 버튼 탐색/클릭 디버그 — 개발자도구 콘솔(F12)에서 확인 가능.
+      // 자동 로그인 버튼 탐색/클릭 디버그 — 기본 꺼짐, window.__pepeSetDebugLogEnabled(true) 로 켜면
+      // 개발자도구 콘솔(F12)에서 확인 가능.
       if (m.startsWith('__PEPE_AUTOSUBMIT_DEBUG__:')) {
-        console.log('[auto-submit]', m.slice('__PEPE_AUTOSUBMIT_DEBUG__:'.length));
+        if (isDebugLogEnabled()) console.log('[auto-submit]', m.slice('__PEPE_AUTOSUBMIT_DEBUG__:'.length));
         return;
       }
     };

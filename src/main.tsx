@@ -15,6 +15,7 @@ import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
 import { initScrollbarHoverTracking } from './utils/scrollbarHover'
+import { setDebugLogEnabled } from './utils/debugLog'
 
 // Windows 터미널 스타일 스크롤바(마우스가 스크롤바 픽셀 영역에 있을 때만 확장) 추적 시작 —
 // 이 파일은 host/tab/panel/popout 등 모든 렌더러 진입점에서 로드되므로 한 번만 등록해도 전체
@@ -24,6 +25,9 @@ initScrollbarHoverTracking();
 // 개발용 진단 스위치 — 이 프로세스(호스트/탭/패널 어느 쪽이든) 안에서 앞으로 마운트되는 xterm 의
 // WebGL 렌더러를 끄고 DOM 렌더러로 비교 테스트할 때 devtools 콘솔에서 호출.
 (window as any).__pepeSetWebglDisabled = setWebglDisabledForTesting;
+// 브라우저/커스텀 워크스페이스 [cw-debug]/[auto-submit] 진단 로그 — 기본 꺼짐, 필요할 때만
+// devtools 콘솔에서 window.__pepeSetDebugLogEnabled(true) 로 켠다.
+(window as any).__pepeSetDebugLogEnabled = setDebugLogEnabled;
 
 // xterm.js(레거시 xterm 5.3 계열) 자체 내부의 알려진 disposal race — Viewport.syncScrollArea() 가
 // requestAnimationFrame 으로 예약해둔 내부 리프레시 콜백이, 그 사이 터미널이 dispose() 된 뒤에
