@@ -364,10 +364,15 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (!dir) return;
     // lazy-remote 는 아직 실제 연결 전(FileExplorer 가 백그라운드에서 재연결 중) 상태 — 이대로
     // feListDir 를 호출하면 termId 가 없어 "연결 ID가 없습니다" 에러가 잠깐 떴다가 실제 연결이
-    // 끝나면 목록이 정상 로딩되는 것처럼 보인다(병합 등에서 관찰된 깜빡임). 연결 중에는 로딩
-    // 상태만 유지하고 호출 자체를 건너뛴다 — 연결 완료 후 source 가 바뀌면 다시 loadDir 가
-    // 트리거돼 정상적으로 목록을 불러온다.
-    if (source.mode === 'lazy-remote') { setLoading(true); setError(''); setFiles([]); return; }
+    // 끝나면 목록이 정상 로딩되는 것처럼 보인다(병합 등에서 관찰된 깜빡임). 연결 중에는 호출만
+    // 건너뛴다 — 연결 완료 후 source 가 바뀌면 다시 loadDir 가 트리거돼 정상적으로 불러온다.
+    // 주의: 여기서 setFiles([]) 를 하면 안 된다. 창 분리로 재연결이 필요해진 탭은 캐시된 목록
+    // (initialFiles=tab.entries)을 이미 그려둔 상태인데, 비우면 "로딩 중"이 노출되면서 창을
+    // 분리할 때마다 목록이 재로딩되는 것처럼 보인다(사용자 재현). 캐시는 그대로 두고 백그라운드
+    // 재연결이 끝나면 조용히 갱신되게 한다.
+    // loading 은 켜두되 files 는 유지 — 캐시가 있으면 로딩 표시가 가려지고(files.length > 0),
+    // 캐시가 없을 때만 "로딩 중"이 보인다(그때는 그게 맞는 피드백).
+    if (source.mode === 'lazy-remote') { setLoading(true); setError(''); return; }
     setLoading(true);
     setError('');
     try {
