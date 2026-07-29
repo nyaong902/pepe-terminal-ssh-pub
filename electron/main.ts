@@ -5672,6 +5672,15 @@ ipcMain.handle('fe:sftp-disconnect', (_e, { connId }: any) => {
   bridge.handleSFTPDisconnect(connId);
 });
 
+// 파일전송 탭 병합 시 원본(구) 연결의 ClearCase 뷰 루트를 읽어 새 연결에 이관하기 위함.
+// 새로 여는 SFTP 전용 연결은 인터랙티브 셸이 없어 뷰 루트를 스스로 알아낼 방법이 없다.
+ipcMain.handle('fe:get-view-root', async (_e, { termId }: { termId: string }) => {
+  try { return await getSSHBridge().getCcViewRoot(termId); } catch { return ''; }
+});
+ipcMain.handle('fe:set-view-root', (_e, { termId, root }: { termId: string; root: string }) => {
+  try { getSSHBridge().setCcViewRoot(termId, root); } catch {}
+});
+
 // 파일트리/Compare 등에서 사용한 dedicated SFTP 만 종료. 터미널 SSH 연결은 유지.
 ipcMain.handle('fe:release-sftp', (_e, { panelId }: { panelId: string }) => {
   const bridge = getSSHBridge();

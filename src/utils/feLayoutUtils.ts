@@ -153,8 +153,13 @@ export function reviveFeLayout(saved: any, localLabel: string, isLiveTermId?: (t
     const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
     const tabs: FeTab[] = rawTabs.map((t: any) => {
       let source: PanelSource = t?.source || { mode: 'local', label: localLabel };
-      if (source.mode === 'remote' && source.sessionId && !(source.termId && isLiveTermId?.(source.termId))) {
-        source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label };
+      if (source.mode === 'remote' && !(source.termId && isLiveTermId?.(source.termId))) {
+        if (source.sessionId) {
+          source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label, viewRoot: source.viewRoot };
+        } else if (source.manualConn) {
+          // 세션 저장이 안 된 즉석 SFTP 연결 — manualConn 자격증명으로 lazy 재연결 대상이 된다.
+          source = { mode: 'lazy-remote', manualConn: source.manualConn, label: source.label, viewRoot: source.viewRoot };
+        }
       }
       return {
         id: String(t?.id || makeId('fetab')),

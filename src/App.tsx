@@ -3114,6 +3114,28 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
+            // 드롭 지점이 정확히 기존 탭 아이템(탭바의 특정 탭) 위인지 — 파일전송 탭을 다른
+            // 파일전송 탭 위에 정확히 얹었을 때만 병합, 그 외(탭바 빈 공간 등)는 새 탭으로 폴백.
+            const overTabItem = el?.closest('.tab-item') as HTMLElement | null;
+            const overTabId = overTabItem?.getAttribute('data-tab-id') || null;
+            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer' && overTabId) {
+              const targetTab = tabsRef.current.find(t => t.id === overTabId);
+              if (targetTab && targetTab.type === 'fileExplorer') {
+                console.log('[adopt-tab] fileExplorer→merge', { targetTab: targetTab.id });
+                // 뷰 루트 조회(extractMergeableFeSources 내부)가 원본 termId 가 아직 살아있는
+                // 동안 끝나야 하므로, 아래 disconnect 전에 반드시 await.
+                await dispatchFeMerge(targetTab.id, payload.tab.fileExplorerState);
+                // 병합에서는 새 연결로 다시 여는 것이라 원본 탭(원본 창에서 detach 시 보존해온)의
+                // 옛 SFTP 연결은 더 이상 쓰이지 않는다 — 정리 안 하면 백엔드에 유령 연결로 남는다.
+                try {
+                  for (const cid of (payload.tab.fileExplorerState?.lazyConns || [])) {
+                    (window as any).api?.feSftpDisconnect?.(cid);
+                  }
+                } catch {}
+                setActiveTabId(targetTab.id);
+                return;
+              }
+            }
             // 탭바 위 드롭 — 단일 세션(kind='session')만 활성 탭의 첫 leaf 에 미니탭으로 병합.
             // 워크스페이스 전체(kind='workspace')는 탭바에 드롭해도 병합하지 않고 새 탭으로 복원(폴백)돼야 함.
             if (onChrome && payload.kind === 'session' && allSess.length > 0 && curTabId) {
@@ -3193,6 +3215,80 @@ function App() {
       }
     } catch {}
     return styles;
+  };
+
+  // 파일전송 탭(다른 탭 위로 드래그해 병합)의 저장/직렬화된 레이아웃에서 재연결 가능한 원격
+  // 소스만 추출 — 세션ID 로 저장된 세션이거나, 즉석 SFTP 연결(manualConn 자격증명 보존)인 것만
+  // 대상. 그 외(로컬 탭, 혹은 이 기능 이전에 저장돼 manualConn 이 없는 구버전 즉석 연결)는
+  // 재연결할 자격증명이 없으므로 조용히 제외한다(기존에 알려진 한계 — 사용자에게 문서화됨).
+  const extractMergeableFeSources = async (feState: any): Promise<{ items: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string }[]; droppedCount: number }> => {
+    try {
+      const layout = feState?.layout;
+      if (!layout) return { items: [], droppedCount: 0 };
+      const items: { sessionId?: string; manualConn?: any; label?: string; path?: string; termId?: string; viewRoot?: string }[] = [];
+      const seen = new Set<string>();
+      let droppedCount = 0;
+      const walk = (node: any) => {
+        if (!node) return;
+        if (node.type === 'leaf') {
+          for (const t of node.panel?.tabs || []) {
+            const src = t?.source;
+            if (!src || src.mode === 'local') continue;
+            if (src.sessionId) {
+              const key = `s:${src.sessionId}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              items.push({ sessionId: src.sessionId, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot });
+            } else if (src.manualConn) {
+              const key = `m:${src.manualConn.host}:${src.manualConn.port}:${src.manualConn.username}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              items.push({ manualConn: src.manualConn, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot });
+            } else {
+              // 자격증명을 복원할 방법이 없는 원격 소스(이 기능 이전에 저장된 즉석 SFTP 연결 등)
+              droppedCount++;
+            }
+          }
+          return;
+        }
+        for (const c of node.children || []) walk(c);
+      };
+      walk(layout);
+      // ClearCase dynamic view(/vobs) 뷰 루트 확보 — source 에 이미 실려있으면(이전 병합/재연결에서
+      // 이관받은 값) 그걸 그대로 쓴다(원본 연결이 이미 끊겼어도 안전). 없으면(터미널 세션 재사용
+      // 등 첫 hop) 원본(구) termId 가 아직 살아있는 지금(disconnect 전) 백엔드에서 조회해 온다.
+      // 인터랙티브 셸이 없는 SFTP 전용 재연결은 이 값을 스스로 알아낼 방법이 없다.
+      const withViewRoot = await Promise.all(items.map(async ({ termId, viewRoot, ...rest }) => {
+        if (!viewRoot && termId) { try { viewRoot = await (window as any).api?.feGetViewRoot?.(termId) || ''; } catch {} }
+        return viewRoot ? { ...rest, viewRoot } : rest;
+      }));
+      return { items: withViewRoot, droppedCount };
+    } catch { return { items: [], droppedCount: 0 }; }
+  };
+
+  // 병합으로 새로 연결하는 항목 dispatch + 재연결 불가능해 유실된 항목이 있으면 사용자에게 알림.
+  const dispatchFeMerge = async (feTabId: string, feState: any) => {
+    const { items, droppedCount } = await extractMergeableFeSources(feState);
+    if (items.length > 0) {
+      window.dispatchEvent(new CustomEvent('fe-merge-remote-sources', { detail: { feTabId, items } }));
+    }
+    if (droppedCount > 0) {
+      notifyError(
+        tApp('fileTransfer.mergeLostTitle', { defaultValue: '일부 연결을 병합하지 못했습니다' }),
+        tApp('fileTransfer.mergeLostDetail', { count: droppedCount, defaultValue: `자격증명을 알 수 없는 연결 ${droppedCount}개가 병합에서 제외됐습니다.` }),
+      );
+    }
+  };
+
+  // 같은 창 안에서 파일전송 탭을 다른 파일전송 탭 위로 끌어다 놓았을 때 — 새 탭을 만들지 않고
+  // 원본 탭에 열려있던 원격 연결들을 대상 탭에 새로 연결해 이어 열고, 원본 탭은 닫는다.
+  const mergeFileExplorerTabs = async (fromId: TabId, toId: TabId) => {
+    const fromTab = tabsRef.current.find(t => t.id === fromId);
+    if (!fromTab || fromTab.type !== 'fileExplorer') return;
+    const liveState = fileExplorerStateRef.current.get(fromId) || fromTab.fileExplorerState;
+    await dispatchFeMerge(toId, liveState);
+    setActiveTabId(toId);
+    closeTab(fromId);
   };
 
   // FileExplorer 탭 분리 시 — 같은 창의 다른 탭들로부터 계산되는 sessions 가 새 창에서 비어버리는
@@ -3949,7 +4045,7 @@ function App() {
           const displayHost = jumps.length ? jumps[jumps.length - 1].host : sess.host;
           const result = await (window as any).api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, sess.auth, undefined, jumps.length ? jumps : undefined);
           if (result?.success) {
-            window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost } }));
+            window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, sessionId: sess.id } }));
           } else {
             const msg = result?.error || tApp('common.unknownError');
             console.error('[fe-sftp-connect dblclick] failed:', msg);
@@ -5043,7 +5139,7 @@ function App() {
             const displayHost = jumps.length ? jumps[jumps.length - 1].host : sess.host;
             const result = await (window as any).api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, sess.auth, undefined, jumps.length ? jumps : undefined);
             if (result?.success) {
-              window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, feTabId } }));
+              window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, feTabId, sessionId: sess.id } }));
             } else {
               const msg = result?.error || tApp('common.unknownError');
               console.error('[fe-sftp-connect] failed:', msg);
@@ -5091,6 +5187,7 @@ function App() {
               return next;
             });
           }}
+          onMergeFileExplorerTabs={mergeFileExplorerTabs}
           onDetachTab={detachTabToNewWindow}
           onSetTabColor={(id, color) => setTabs(prev => prev.map(t => t.id === id ? { ...t, color } : t))}
           splitRightTabId={splitRightTabId}

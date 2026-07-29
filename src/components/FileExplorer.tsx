@@ -172,16 +172,26 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return () => { cancelled = true; };
   }, [sessions.length, bootReady]);
 
+  // 항상 최신 lazyConns 를 들고 있는 ref — 아래 언마운트 cleanup 이 "진짜 언마운트" 때만
+  // 최신 목록으로 정리하도록 함(다음 주석 참고).
+  const lazyConnsRef = useRef<string[]>(lazyConns);
+  useEffect(() => { lazyConnsRef.current = lazyConns; }, [lazyConns]);
   // 언마운트 시 lazy 연결 정리 — 다만 "새 창 분리" 케이스에서는 보존(window.__preserveFileExplorerConns).
+  // 버그 수정: deps 에 lazyConns 를 직접 넣으면, 연결을 하나 더 추가할 때마다(배열 참조 변경)
+  // "새 effect 적용 전 이전 effect의 cleanup"이 실행되어 그 순간의 lazyConns(추가 전 목록)를
+  // 통째로 disconnect 해버린다 — 즉 두 번째 파일전송 연결을 열 때마다 첫 번째 연결이 끊기는
+  // 버그였다(병합으로 연속 연결할 때 실사용 중 재현: 두 번째 서버를 합치자 첫 번째 서버가
+  // "연결되지 않음" 에러로 끊김). deps 를 [bootReady] 로 고정해 이 effect가 실제 언마운트
+  // 때만 cleanup 을 실행하도록 하고, 정리 시점엔 ref 로 항상 최신 lazyConns 를 읽는다.
   useEffect(() => {
     if (!bootReady) return;
     return () => {
       if ((window as any).__preserveFileExplorerConns) return;
-      for (const cid of lazyConns) {
+      for (const cid of lazyConnsRef.current) {
         try { api?.feSftpDisconnect?.(cid); } catch {}
       }
     };
-  }, [lazyConns, bootReady]);
+  }, [bootReady]);
   // 상태 변경 시 부모(App.tsx)에 보고 — 분리 시 사용. selected 는 Set → Array 로 직렬화.
   useEffect(() => {
     if (!bootReady) return;
@@ -232,7 +242,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   useEffect(() => {
     if (!bootReady) return;
     const handler = async (e: Event) => {
-      const { connId, sessionName, host, feTabId } = (e as CustomEvent).detail;
+      const { connId, sessionName, host, feTabId, sessionId } = (e as CustomEvent).detail;
       // 특정 파일 전송 탭을 대상으로 한 이벤트면 그 탭의 인스턴스만 처리 (중복 추가 방지)
       if (feTabId && tabId && feTabId !== tabId) return;
       // 이미 추가된 연결이면 무시
@@ -240,7 +250,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       const sameNameCount = sources.filter(s => s.label?.includes(sessionName)).length;
       const num = sameNameCount + 1;
       const label = `🌐 ${sessionName} #${num} (${host})`;
-      const newSrc: PanelSource = { mode: 'remote', termId: connId, label };
+      // sessionId 를 안 넣으면 창 분리/파일전송 탭 병합 시 이 연결을 재구성할 방법이 없어 유실된다.
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sessionId || undefined, label };
       // 소스 드롭다운 목록에도 추가
       setSources(prev => {
         if (prev.find(s => s.termId === connId)) return prev;
@@ -298,10 +309,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       if (info.feTabId && tabId && info.feTabId !== tabId) return;
       const connId = `sftp-${Date.now()}`;
       try {
-        const result = await api.feSftpConnect?.(connId, info.host, Number(info.port) || 22, info.username, { type: 'password', password: info.auth?.password ?? '' });
+        const manualConn = { host: info.host, port: Number(info.port) || 22, username: info.username, password: info.auth?.password ?? '' };
+        const result = await api.feSftpConnect?.(connId, info.host, manualConn.port, info.username, { type: 'password', password: manualConn.password });
         if (!result?.success) { notifyError(t('connectFail', { err: result?.error || t('unknownError') })); return; }
         if (findFeTabByTermId(layoutRef.current, connId)) return;
-        const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${info.username}@${info.host}` };
+        const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${info.username}@${info.host}`, manualConn };
         setSources(prev => {
           if (prev.find(s => s.termId === connId)) return prev;
           const idx = prev.findIndex(s => (s.mode as any) === 'sftp-connect');
@@ -356,7 +368,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     if (initDone && sessions.length > 0 && !autoConnectDoneRef.current) {
       autoConnectDoneRef.current = true;
       const first = (initialTermId ? sessions.find(s => s.termId === initialTermId) : null) || sessions[0];
-      const newSrc: PanelSource = { mode: 'remote', termId: first.termId, label: `🌐 ${first.sessionName}` };
+      // sessionId 를 빠뜨리면(터미널 인스턴스 termId만 있으면) 창 분리/파일전송 탭 병합 시 이
+      // 소스를 재연결할 방법이 없어 그대로 유실된다 — 저장된 세션이면 반드시 같이 넣는다.
+      const newSrc: PanelSource = { mode: 'remote', termId: first.termId, sessionId: first.sessionId || undefined, label: `🌐 ${first.sessionName}` };
       const leaves = collectFeLeaves(layoutRef.current);
       let targetLeafId: string;
       if (leaves.length === 1) {
@@ -414,7 +428,31 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // lazy-remote 소스를 실제 연결된 remote 소스로 변환. 실패 시 null 반환.
   // 연결 실패(인증 오류 등) → 자격증명 입력 다이얼로그 표시.
   const realizeLazyRemote = async (src: PanelSource, leafId: string): Promise<PanelSource | null> => {
-    if (src.mode !== 'lazy-remote' || !src.sessionId) return null;
+    if (src.mode !== 'lazy-remote') return null;
+    // 세션 저장이 안 된 즉석 SFTP 연결(manualConn 만 있고 sessionId 없음) — 자격증명이 이미
+    // 있으므로 자격증명 다이얼로그 없이 바로 연결한다.
+    if (!src.sessionId && src.manualConn) {
+      const { host, port, username, password } = src.manualConn;
+      const connId = `sftp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        const r: any = await api?.feSftpConnect?.(connId, host, port || 22, username, { type: 'password', password: password || '' });
+        if (!r?.success) { notifyError(t('connectFail', { err: r?.error || t('unknownError') })); return null; }
+      } catch (err: any) { notifyError(t('connectFail', { err })); return null; }
+      setLazyConns(prev => [...prev, connId]);
+      // ClearCase 뷰 루트가 src 에 실려 있으면(이전 병합/재연결에서 이관받은 값) 새 termId 에도
+      // 심어서 계속 이어간다 — 인터랙티브 셸이 없는 이 연결은 스스로 알아낼 방법이 없다.
+      if (src.viewRoot) { try { await api?.feSetViewRoot?.(connId, src.viewRoot); } catch {} }
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${username}@${host}`, manualConn: src.manualConn, viewRoot: src.viewRoot };
+      setSources(prev => {
+        if (prev.find(s => s.termId === connId)) return prev;
+        const idx = prev.findIndex(s => (s.mode as any) === 'sftp-connect');
+        const arr = [...prev];
+        if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
+        return arr;
+      });
+      return newSrc;
+    }
+    if (!src.sessionId) return null;
     const sess = allSessionsList.find(s => s.id === src.sessionId);
     if (!sess) { notifyError(t('remoteSessionMissing')); return null; }
     const connId = `fe-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -443,9 +481,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       return null;
     }
     setLazyConns(prev => [...prev, connId]);
+    if (src.viewRoot) { try { await api?.feSetViewRoot?.(connId, src.viewRoot); } catch {} }
     const folder = sessionFolderMap[sess.id];
     const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
-    const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sess.id, label };
+    const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sess.id, label, viewRoot: src.viewRoot };
     // 소스 리스트 업데이트 — lazy 항목 제거하고 연결된 항목 추가
     setSources(prev => {
       const filtered = prev.filter(s => !(s.mode === 'lazy-remote' && s.sessionId === sess.id));
@@ -531,7 +570,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       for (const leaf of leaves) {
         for (let i = 0; i < leaf.panel.tabs.length; i++) {
           const tab = leaf.panel.tabs[i];
-          if (tab.source.mode !== 'lazy-remote' || !tab.source.sessionId) continue;
+          if (tab.source.mode !== 'lazy-remote' || (!tab.source.sessionId && !tab.source.manualConn)) continue;
           const savedPath = tab.path;
           const real = await realizeLazyRemote(tab.source, leaf.id);
           if (!real) continue; // 세션이 삭제됐거나 자격증명이 없어 다이얼로그로 넘어간 경우
@@ -557,7 +596,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     try {
       const result = await api.feSftpConnect?.(connId, sftpHost, sftpPort, sftpUser, { type: 'password', password: sftpPass });
       if (!result?.success) { notifyError(t('connectFail', { error: result?.error || t('unknownError') })); setSftpConnecting(false); return; }
-      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${sftpUser}@${sftpHost}` };
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${sftpUser}@${sftpHost}`, manualConn: { host: sftpHost, port: sftpPort, username: sftpUser, password: sftpPass } };
       setSources(prev => [...prev, newSrc]);
       setLeafSource(targetLeafId, newSrc);
       try { const home = await api.feHomeDir('remote', connId); setLeafPath(targetLeafId, home || '/'); } catch { setLeafPath(targetLeafId, '/'); }
@@ -566,6 +605,62 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     setShowSftpConnect(null);
     setSftpHost(''); setSftpPort(22); setSftpUser(''); setSftpPass('');
   };
+
+  // 다른 (창의) 파일 전송 탭을 이 탭 위로 끌어다 놓아 병합할 때 — 그 탭에 열려있던 세션ID 기반
+  // 원격 소스와 즉석 SFTP(manualConn) 소스를 이 인스턴스에 새로 열어 재연결한다. termId 는 서로
+  // 다른 프로세스/창의 것이라 그대로 옮길 수 없어 항상 새로 연결한다(기존 세션 그대로 이관 X).
+  const mergeInRemoteSource = async (item: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string }) => {
+    let src: PanelSource | null = null;
+    if (item.sessionId) src = { mode: 'lazy-remote', sessionId: item.sessionId, label: item.label || '', viewRoot: item.viewRoot };
+    else if (item.manualConn) src = { mode: 'lazy-remote', manualConn: item.manualConn, label: item.label || '', viewRoot: item.viewRoot };
+    if (!src) return;
+    const tab = makeFeTab(src, item.path || '');
+    const leaves = collectFeLeaves(layoutRef.current);
+    let leafId: string;
+    if (leaves.length === 1) {
+      leafId = makeId('fenode');
+      setLayout(prev => splitFeNode(prev, leaves[0].id, 'row', localLabel, false, leafId));
+      setLayout(prev => updateFeLeafPanel(prev, leafId, p => ({ ...p, tabs: [tab], activeIdx: 0 })));
+    } else {
+      leafId = (selectedLeafIdRef.current && leaves.some(l => l.id === selectedLeafIdRef.current))
+        ? selectedLeafIdRef.current : leaves[leaves.length - 1].id;
+      updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, tab], activeIdx: p.tabs.length }));
+    }
+    setSelectedLeafId(leafId);
+    const real = await realizeLazyRemote(src, leafId);
+    if (!real) return; // 연결 실패(자격증명 오류 등) — 탭은 lazy-remote 상태로 남아 사용자가 다시 시도 가능
+    // ClearCase 뷰 루트(src.viewRoot) 이관은 realizeLazyRemote 내부에서 처리됨(App.tsx의
+    // extractMergeableFeSources 가 원본 연결에서 미리 읽어와 item.viewRoot 로 실어 보낸 값).
+    // source 를 먼저 반영하면 FilePanel 이 termId 변경을 감지해 즉시 목록 로딩을 시도하는데,
+    // 이 시점엔 SFTP 서브시스템이 아직 준비 안 돼 실패/빈 목록으로 끝나버린다. 게다가 그 다음
+    // setLeafPath(item.path) 는 path 값이 이미 같아서(탭 생성 시 이미 넣어둠) no-op 라 재시도도
+    // 안 걸린다 — "병합하면 목록이 안 뜨는" 버그의 원인. 워밍업 확인 후 source+path 를 한 번에
+    // 반영해서 첫 로딩 자체가 준비된 상태에서 일어나게 한다.
+    for (let i = 0; i < 10; i++) {
+      try { const h = await api?.feHomeDir?.('remote', real.termId); if (h) break; } catch {}
+      await new Promise(r => setTimeout(r, 500));
+    }
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, source: real, path: item.path || t.path } : t) }));
+  };
+
+  useEffect(() => {
+    if (!bootReady) return;
+    const handler = async (e: Event) => {
+      const { feTabId, items } = (e as CustomEvent).detail || {};
+      if (feTabId && tabId && feTabId !== tabId) return;
+      if (!Array.isArray(items)) return;
+      for (const item of items) { await mergeInRemoteSource(item); }
+      // source/path 갱신만으로 FilePanel 의 자동 재로딩 effect 가 못 미더운 케이스(관찰됨)에 대한
+      // 안전망 — 파일 전송 완료 후에도 쓰는 것과 동일한 강제 새로고침 트리거.
+      setRefreshKey(k => k + 1);
+    };
+    window.addEventListener('fe-merge-remote-sources', handler);
+    return () => window.removeEventListener('fe-merge-remote-sources', handler);
+    // allSessionsList 를 deps 에 넣어야 한다 — 안 그러면 이 리스너가 bootReady 최초 true 시점의
+    // (아직 세션 목록 로딩 전이라 비어있는) allSessionsList 를 클로저로 영구히 물고 있어서,
+    // 나중에 목록이 채워진 뒤 병합 이벤트가 와도 realizeLazyRemote 가 "세션 정보를 찾을 수
+    // 없습니다"로 실패한다(사용자가 실제로 겪은 버그).
+  }, [bootReady, allSessionsList]);
 
   // feTransfer는 즉시 반환 + fe:transfer-done 이벤트로 완료 통보 → IPC 채널 해제로 progress 이벤트 실시간 수신
   const doTransfer = (src: any, dst: any, name: string): Promise<{ success: boolean; error?: string }> =>

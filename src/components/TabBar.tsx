@@ -48,6 +48,8 @@ type Props = {
   onCloseTab: (id: string) => void;
   onRenameTab?: (id: string, name: string) => void;
   onReorderTabs?: (fromId: string, toId: string) => void;
+  // 파일전송 탭을 다른 파일전송 탭 위로 정확히 드롭했을 때 — 순서 재정렬 대신 병합.
+  onMergeFileExplorerTabs?: (fromId: string, toId: string) => void;
   onDetachTab?: (id: string, screenX?: number, screenY?: number) => void;
   onSetTabColor?: (id: string, color: TabColor) => void;
   // 우측 분할 관련 — 활성 탭 옆에 다른 워크스페이스 탭 표시
@@ -64,7 +66,7 @@ type Props = {
   availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean };
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onMergeFileExplorerTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -150,7 +152,15 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
             const overItem = el?.closest('.tab-item') as HTMLElement | null;
             const overId = overItem?.getAttribute('data-tab-id') || null;
-            if (overId && overId !== st.tabId) onReorderTabs?.(st.tabId, overId);
+            if (overId && overId !== st.tabId) {
+              const fromTab = tabs.find(x => x.id === st.tabId);
+              const toTab = tabs.find(x => x.id === overId);
+              if (fromTab?.type === 'fileExplorer' && toTab?.type === 'fileExplorer' && onMergeFileExplorerTabs) {
+                onMergeFileExplorerTabs(st.tabId, overId);
+              } else {
+                onReorderTabs?.(st.tabId, overId);
+              }
+            }
           }
         } catch {}
         setDraggingId(null);

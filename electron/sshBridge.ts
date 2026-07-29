@@ -926,9 +926,16 @@ class SSHBridge extends EventEmitter {
   // panel → 현재 활성 셸 PID (cwd 폴링이 선택한 최신 셸 = setview 서브셸 등). CLEARCASE_ROOT 조회에 사용.
   private activeShellPids: Map<string, number> = new Map();
 
+  // 다른 panelId(주로 파일전송 탭 병합으로 새로 연결한 SFTP 전용 connId)에 뷰 루트를 미리
+  // 심어둔다 — 그 connId 는 인터랙티브 셸이 없어 getCcViewRoot 의 자동 탐지(promptTail/
+  // activeShellPids)가 절대 성공할 수 없으므로, 원본 세션에서 이미 알아낸 값을 그대로 이관.
+  public setCcViewRoot(panelId: string, root: string) {
+    if (root) this.ccViewRoots.set(panelId, root);
+  }
+
   // CLEARCASE_ROOT 환경변수 조회 — dynamic view 의 /vobs 경로를 실경로로 변환하기 위함.
   // setview 서브셸에만 CLEARCASE_ROOT=/view/<tag> 가 설정되므로 cwd 폴링이 선택한 활성 셸 PID 의 environ 을 읽음.
-  private async getCcViewRoot(panelId: string): Promise<string> {
+  public async getCcViewRoot(panelId: string): Promise<string> {
     if (this.ccViewRoots.has(panelId)) return this.ccViewRoots.get(panelId) || '';
     // 프롬프트 버퍼에서 뷰태그 즉석 추출 — _detectAndApplyPromptCwd 타이밍을 못 기다린 SFTP 호출 보강
     const tail = this.promptTail.get(panelId) || '';

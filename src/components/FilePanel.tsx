@@ -39,6 +39,14 @@ export type PanelSource = {
   mode: 'local' | 'remote' | 'lazy-remote';
   termId?: string;
   sessionId?: string; // lazy-remote 용 식별자
+  // 저장된 세션이 아닌 즉석 SFTP 연결(빠른연결 바 / "SFTP 연결" 다이얼로그)의 자격증명 — sessionId
+  // 가 없는 remote 소스를 창 분리·탭 병합 시 재연결하기 위해 보존한다(다른 저장 세션과 동일하게
+  // 평문 저장 — 이 앱의 sessions.json 저장 방식과 같은 신뢰 수준).
+  manualConn?: { host: string; port: number; username: string; password?: string };
+  // ClearCase dynamic view(/vobs) 연결의 뷰 루트(CLEARCASE_ROOT, 예: /view/ghj_view). 인터랙티브
+  // 셸이 없는 SFTP 전용 재연결(병합/창분리 재연결 등)은 이 값을 스스로 알아낼 방법이 없어서,
+  // 한 번 알아낸 값을 source 에 실어 재연결(realizeLazyRemote)마다 새 termId 에 이관한다.
+  viewRoot?: string;
   label: string;
 };
 
@@ -354,6 +362,12 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // "이미 들어와 있던 폴더가 사라진" edge case (외부에서 삭제됨/연결 끊김 등) → 모달만 띄우고 경로는 그대로 둠.
   const loadDir = useCallback(async (dir: string) => {
     if (!dir) return;
+    // lazy-remote 는 아직 실제 연결 전(FileExplorer 가 백그라운드에서 재연결 중) 상태 — 이대로
+    // feListDir 를 호출하면 termId 가 없어 "연결 ID가 없습니다" 에러가 잠깐 떴다가 실제 연결이
+    // 끝나면 목록이 정상 로딩되는 것처럼 보인다(병합 등에서 관찰된 깜빡임). 연결 중에는 로딩
+    // 상태만 유지하고 호출 자체를 건너뛴다 — 연결 완료 후 source 가 바뀌면 다시 loadDir 가
+    // 트리거돼 정상적으로 목록을 불러온다.
+    if (source.mode === 'lazy-remote') { setLoading(true); setError(''); setFiles([]); return; }
     setLoading(true);
     setError('');
     try {

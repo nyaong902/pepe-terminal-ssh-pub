@@ -91,7 +91,9 @@
     "connectFail": "文件传输连接失败",
     "connectFailDetail": "{{name}}\n\n{{msg}}",
     "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\n请查看 DevTools 控制台中的 [sftp-connect] 日志。",
-    "connectException": "文件传输连接异常"
+    "connectException": "文件传输连接异常",
+    "mergeLostTitle": "部分连接未能合并",
+    "mergeLostDetail": "{{count}} 个凭据未知的连接已从合并中排除。"
   },
   "sessionMenu": {
     "wipe": "清空会话",
