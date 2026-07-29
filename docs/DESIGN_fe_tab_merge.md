@@ -299,7 +299,57 @@ MVFS lookup 이 에러가 아니라 그냥 **블록**된다 — 그래서 이관
   { flex-shrink: 0 }`, 우측 고정 버튼들엔 `flex-shrink: 0`.
 - `npx tsc --noEmit -p .` + `npx vite build` 통과.
 
-## 후속 수정 — "탭바 아무곳" 판정이 좁았던 문제 (2026-07-29)
+## 버그 수정 #8 — 다른 세션의 경로가 엉뚱한 탭에 꽂히던 문제 (2026-07-29)
+
+사용자 재현: 병합 후 ClearCase 개발서버(dev@192.168.191.11) 탭에 `/root: Error: Permission denied`.
+사용자 확인: "저 /root 는 **다른 세션**의 파일전송인데 clearcase 개발서버쪽에 오류로 떴어."
+
+`setLeafPath(leafId, path)` / `setLeafSource(leafId, src)` 는 **그 leaf 의 활성 탭**(`p.activeIdx`)에
+쓴다. 병합 기능 때문에 이제 한 leaf 에 여러 세션 탭이 모이는데, 복원/재연결 코드가 이 헬퍼를
+쓰고 있어서 "지금 복원 중인 탭"이 아니라 "활성 탭"에 결과가 써졌다 — A세션 탭에 B세션의 저장
+경로(`/root`)가 꽂혀 Permission denied 가 났다.
+
+- [FileExplorer.tsx](../src/components/FileExplorer.tsx) 복원 재연결 effect
+  (`restoredReconnectDoneRef`) — `source` 는 인덱스로, `path` 는 `setLeafPath`(활성 탭)로 쓰던 걸
+  둘 다 `t.id === tab.id` 로 지정해 한 번에 쓰도록 수정. 겸사겸사 버그 수정 #1 과 같은 이유로
+  워밍업을 먼저 끝낸 뒤 `source`+`path` 를 함께 반영하게 순서도 정리.
+- `realizeLazyRemote(src, leafId, forTabId?)` — 자격증명 다이얼로그로 넘어갈 때 대상 탭 id 를
+  `credPrompt` 에 실어 보내도록 파라미터 추가. `handleCredSubmit` 은 `credTabId` 가 있으면 그 탭만
+  갱신한다(없으면 기존 활성 탭 동작 유지). 병합/복원 호출부 두 곳에서 `tab.id` 를 넘긴다.
+  — 이전 문서에서 "발생 빈도가 낮아 범위 밖"으로 남겨뒀던 항목인데, 병합으로 한 leaf 에 여러 탭이
+  모이는 게 일반화되면서 같은 종류의 사고가 날 수 있어 이번에 함께 처리.
+
+## 버그 수정 #9 — 병합할 게 없으면 탭이 그냥 사라지던 문제 (2026-07-29)
+
+`dispatchFeMerge` 가 항상 void 였고, 호출부는 결과와 무관하게 원본을 정리했다:
+크로스윈도우는 무조건 `return`(새 탭 복원 폴백을 건너뜀), 같은 창은 무조건 `closeTab(fromId)`.
+그래서 `extractMergeableFeSources` 가 재연결 가능한 원격 소스를 하나도 못 찾으면(로컬 패널만
+있거나 `fileExplorerState` 가 유실된 경우) **끌어온 탭이 어디에도 안 생기고 그냥 사라졌다** —
+"잘 안 합쳐진다"로 체감되던 원인 중 하나.
+
+- `dispatchFeMerge` 가 `Promise<boolean>`(dispatch 했는지) 을 반환.
+- 크로스윈도우(`onAdoptTab`) — `merged` 가 false 면 `return` 하지 않고 아래 일반 경로로 흘려보내
+  새 탭으로 복원.
+- 같은 창(`mergeFileExplorerTabs`) — `merged` 가 false 면 `closeTab` 하지 않고 원본 탭 유지.
+- 진단 로그 추가: `[fe-merge] dispatch { items, droppedCount, hasLayout }`,
+  `[tab-drop] hit-test { ... }`.
+
+## 후속 수정 — 드롭 위치 판정 완전 제거 (2026-07-29)
+
+사용자 재현: "파일전송탭과 **멀찌감치** 끌어다놓으면 잘 안 합쳐져. 아무곳에 놓아도 되어야 하는데."
+
+앞선 완화는 여전히 "탭바 영역인지"를 따졌는데(`.tab-bar-row` 등 셀렉터 + y좌표 40px), 탭에서 멀리
+떨어진 지점이나 사이드 레일 위 등에서는 판정이 빗나갔다. 창마다 파일전송 탭을 하나만 유지한다는
+전제이므로 **위치 판정을 아예 없앴다**:
+
+- [TabBar.tsx](../src/components/TabBar.tsx) 같은 창 — 드래그한 탭이 파일전송 탭이고 이 창에 다른
+  파일전송 탭이 있으면, 창 안 어디에 놓든 병합. 단 **다른 워크스페이스 탭 아이템 위에 정확히**
+  올린 경우엔 순서 재정렬 의도로 보고 양보(`wantsReorder`).
+- [App.tsx](../src/App.tsx) 크로스윈도우 — `onChrome` 조건 제거. 받는 창에 파일전송 탭이 있으면
+  드롭 위치 무관하게 병합(특정 탭 위에 올렸으면 그 탭 우선).
+- `npx tsc --noEmit -p .` + `npx vite build` 통과.
+
+## 이전 후속 수정 — "탭바 아무곳" 판정이 좁았던 문제 (2026-07-29)
 
 사용자 재현: "워크스페이스 있는 탭바 아무곳에 놔도 잘 안 합쳐져."
 

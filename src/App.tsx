@@ -3114,30 +3114,33 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
-            // 파일전송 탭은 굳이 다른 파일전송 탭 위에 정확히 얹지 않아도, 탭바 위 어디에
-            // 놓든 이 창의 파일전송 탭과 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을
-            // 전제로 정밀한 드롭 위치 요구를 없앰(정확히 얹어야만 합쳐지던 게 가끔 안 먹힌다는
-            // 사용자 피드백). 특정 탭 위에 놓였으면 그 탭을 우선하고, 아니면 이 창의 첫 파일전송
-            // 탭을 대상으로 한다.
+            // 파일전송 탭은 드롭 위치를 전혀 따지지 않고, 이 창에 파일전송 탭이 있으면 그것과
+            // 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을 전제로 한 사용자 요청
+            // ("아무곳에 놓아도 되어야 한다"). 특정 탭 위에 놓였으면 그 탭을 우선 대상으로 한다.
             const overTabItem = el?.closest('.tab-item') as HTMLElement | null;
             const overTabId = overTabItem?.getAttribute('data-tab-id') || null;
-            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer' && onChrome) {
+            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer') {
               const targetTab = (overTabId && tabsRef.current.find(t => t.id === overTabId && t.type === 'fileExplorer'))
                 || tabsRef.current.find(t => t.type === 'fileExplorer');
-              if (targetTab && targetTab.type === 'fileExplorer') {
-                console.log('[adopt-tab] fileExplorer→merge', { targetTab: targetTab.id });
+              if (targetTab) {
                 // 뷰 루트 조회(extractMergeableFeSources 내부)가 원본 termId 가 아직 살아있는
                 // 동안 끝나야 하므로, 아래 disconnect 전에 반드시 await.
-                await dispatchFeMerge(targetTab.id, payload.tab.fileExplorerState);
-                // 병합에서는 새 연결로 다시 여는 것이라 원본 탭(원본 창에서 detach 시 보존해온)의
-                // 옛 SFTP 연결은 더 이상 쓰이지 않는다 — 정리 안 하면 백엔드에 유령 연결로 남는다.
-                try {
-                  for (const cid of (payload.tab.fileExplorerState?.lazyConns || [])) {
-                    (window as any).api?.feSftpDisconnect?.(cid);
-                  }
-                } catch {}
-                setActiveTabId(targetTab.id);
-                return;
+                const merged = await dispatchFeMerge(targetTab.id, payload.tab.fileExplorerState);
+                console.log('[adopt-tab] fileExplorer→merge', { targetTab: targetTab.id, merged });
+                // 재연결 가능한 원격 소스가 하나도 없으면(로컬 패널만이거나 상태 유실) 병합을
+                // 포기하고 아래 일반 경로로 새 탭 복원 — 예전엔 여기서 무조건 return 해버려서
+                // 끌어온 탭이 아무 데도 안 생기고 그냥 사라졌다.
+                if (merged) {
+                  // 병합에서는 새 연결로 다시 여는 것이라 원본 탭(원본 창에서 detach 시 보존해온)의
+                  // 옛 SFTP 연결은 더 이상 쓰이지 않는다 — 정리 안 하면 백엔드에 유령 연결로 남는다.
+                  try {
+                    for (const cid of (payload.tab.fileExplorerState?.lazyConns || [])) {
+                      (window as any).api?.feSftpDisconnect?.(cid);
+                    }
+                  } catch {}
+                  setActiveTabId(targetTab.id);
+                  return;
+                }
               }
             }
             // 탭바 위 드롭 — 단일 세션(kind='session')만 활성 탭의 첫 leaf 에 미니탭으로 병합.
@@ -3271,8 +3274,11 @@ function App() {
   };
 
   // 병합으로 새로 연결하는 항목 dispatch + 재연결 불가능해 유실된 항목이 있으면 사용자에게 알림.
-  const dispatchFeMerge = async (feTabId: string, feState: any) => {
+  // 반환값 = 실제로 병합할 항목이 있어 dispatch 했는지. false 면 호출부가 원본 탭을 그대로
+  // 두거나 새 탭으로 복원하는 폴백을 해야 한다(안 그러면 탭이 그냥 사라진다).
+  const dispatchFeMerge = async (feTabId: string, feState: any): Promise<boolean> => {
     const { items, droppedCount } = await extractMergeableFeSources(feState);
+    console.log('[fe-merge] dispatch', { feTabId, items: items.length, droppedCount, hasLayout: !!feState?.layout });
     if (items.length > 0) {
       window.dispatchEvent(new CustomEvent('fe-merge-remote-sources', { detail: { feTabId, items } }));
     }
@@ -3282,15 +3288,19 @@ function App() {
         tApp('fileTransfer.mergeLostDetail', { count: droppedCount, defaultValue: `자격증명을 알 수 없는 연결 ${droppedCount}개가 병합에서 제외됐습니다.` }),
       );
     }
+    return items.length > 0;
   };
 
-  // 같은 창 안에서 파일전송 탭을 다른 파일전송 탭 위로 끌어다 놓았을 때 — 새 탭을 만들지 않고
-  // 원본 탭에 열려있던 원격 연결들을 대상 탭에 새로 연결해 이어 열고, 원본 탭은 닫는다.
+  // 같은 창 안에서 파일전송 탭을 (위치 무관) 놓았을 때 — 새 탭을 만들지 않고 원본 탭에 열려있던
+  // 원격 연결들을 대상 탭에 새로 연결해 이어 열고, 원본 탭은 닫는다.
   const mergeFileExplorerTabs = async (fromId: TabId, toId: TabId) => {
     const fromTab = tabsRef.current.find(t => t.id === fromId);
     if (!fromTab || fromTab.type !== 'fileExplorer') return;
     const liveState = fileExplorerStateRef.current.get(fromId) || fromTab.fileExplorerState;
-    await dispatchFeMerge(toId, liveState);
+    const merged = await dispatchFeMerge(toId, liveState);
+    // 옮길 원격 연결이 하나도 없으면 원본 탭을 닫지 않는다 — 닫으면 아무것도 안 옮겨진 채로
+    // 탭만 사라진다.
+    if (!merged) return;
     setActiveTabId(toId);
     closeTab(fromId);
   };

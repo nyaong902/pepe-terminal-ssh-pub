@@ -153,18 +153,21 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             const overItem = el?.closest('.tab-item') as HTMLElement | null;
             const overId = overItem?.getAttribute('data-tab-id') || null;
             const fromTab = tabs.find(x => x.id === st.tabId);
-            // 파일전송 탭은 굳이 다른 파일전송 탭 위에 정확히 얹지 않아도, 탭바 위 어디에
-            // 놓든 이 창의 파일전송 탭과 병합한다 — 창마다 파일전송 탭은 하나만 유지되는
-            // 것을 전제로 정밀한 드롭 위치 요구를 없앰(정확히 얹어야만 합쳐지던 게 가끔
-            // 안 먹힌다는 사용자 피드백).
-            // 주의: `.tab-bar` 는 탭 아이템들만 감싸는 좁은 박스라 그 오른쪽 빈 공간은
-            // `.titlebar-drag-area`(형제 요소)다 — 거기 놓으면 병합이 안 걸렸다. App.tsx 의
-            // onAdoptTab 히트테스트와 같은 셀렉터 목록 + y좌표(탭바 높이 40px) 폴백을 쓴다.
-            const onChrome = !!el?.closest('.tab-bar-row, .tab-bar, .titlebar-drag-area, .titlebar, .menu-bar')
-              || clientY < 40;
-            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && onChrome)
+            const overTab = overId ? tabs.find(x => x.id === overId) : null;
+            // 파일전송 탭은 드롭 위치를 전혀 따지지 않고, 창 안에 놓으면 이 창의 파일전송 탭과
+            // 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을 전제로 한 사용자 요청
+            // ("아무곳에 놓아도 되어야 한다"). 위치를 따지던 이전 구현은 `.tab-bar`(탭 아이템만
+            // 감싸는 좁은 박스) 밖의 빈 영역이나 탭에서 멀찌감치 떨어진 지점에서 병합이 안 걸렸다.
+            // 단, 다른 워크스페이스 탭 아이템 위에 정확히 올린 경우엔 순서 재정렬 의도로 보고 양보.
+            const wantsReorder = !!overTab && overTab.type !== 'fileExplorer';
+            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && !wantsReorder)
               ? tabs.find(x => x.type === 'fileExplorer' && x.id !== st.tabId)
               : null;
+            console.log('[tab-drop] hit-test', {
+              from: fromTab?.type, overId, overType: overTab?.type,
+              elClass: el?.className, clientX, clientY,
+              merge: mergeTargetFe?.id ?? null,
+            });
             if (mergeTargetFe && onMergeFileExplorerTabs) {
               onMergeFileExplorerTabs(st.tabId, mergeTargetFe.id);
             } else if (overId && overId !== st.tabId) {

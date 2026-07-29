@@ -143,7 +143,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // lazy 연결로 생성된 SFTP 임시 connId — FileExplorer unmount 시 정리
   const [lazyConns, setLazyConns] = useState<string[]>(Array.isArray(initialState?.lazyConns) ? initialState!.lazyConns! : []);
   // 자격증명 입력 프롬프트 — 비밀번호 미저장 세션 연결 실패 시 표시
-  const [credPrompt, setCredPrompt] = useState<{ sess: any; leafId: string; jumps: any[] } | null>(null);
+  // tabId — 자격증명 재입력 대상 탭. 병합으로 한 leaf 에 여러 세션 탭이 모일 수 있으므로, 완료 후
+  // "활성 탭"이 아니라 정확히 이 탭에만 결과를 써야 한다(안 그러면 다른 세션 탭이 덮어써진다).
+  const [credPrompt, setCredPrompt] = useState<{ sess: any; leafId: string; tabId?: string; jumps: any[] } | null>(null);
   const [credUser, setCredUser] = useState('');
   const [credPass, setCredPass] = useState('');
   const [credShowPass, setCredShowPass] = useState(false);
@@ -463,7 +465,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   // lazy-remote 소스를 실제 연결된 remote 소스로 변환. 실패 시 null 반환.
   // 연결 실패(인증 오류 등) → 자격증명 입력 다이얼로그 표시.
-  const realizeLazyRemote = async (src: PanelSource, leafId: string): Promise<PanelSource | null> => {
+  // forTabId — 자격증명 다이얼로그로 넘어가는 경우, 완료 후 결과를 써야 할 탭. 병합으로 한 leaf 에
+  // 여러 세션 탭이 모일 수 있어서 "활성 탭"에 쓰면 엉뚱한 세션 탭이 덮어써진다.
+  const realizeLazyRemote = async (src: PanelSource, leafId: string, forTabId?: string): Promise<PanelSource | null> => {
     if (src.mode !== 'lazy-remote') return null;
     // 세션 저장이 안 된 즉석 SFTP 연결(manualConn 만 있고 sessionId 없음) — 자격증명이 이미
     // 있으므로 자격증명 다이얼로그 없이 바로 연결한다.
@@ -497,7 +501,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const hasCredential = sess.auth?.type === 'key' || (sess.auth?.type === 'password' && sess.auth?.password);
     const openCred = () => {
       setTermFocusBlocked(true); // 렌더 전에 동기 차단 — useEffect 보다 먼저 실행됨
-      setCredPrompt({ sess, leafId, jumps });
+      setCredPrompt({ sess, leafId, tabId: forTabId, jumps });
       setCredUser(sess.username || '');
       setCredPass('');
       setCredShowPass(false);
@@ -536,7 +540,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 자격증명 다이얼로그 확인 — 입력된 id/비밀번호로 연결 재시도
   const handleCredSubmit = async () => {
     if (!credPrompt) return;
-    const { sess, leafId, jumps } = credPrompt;
+    const { sess, leafId, tabId: credTabId, jumps } = credPrompt;
     setCredConnecting(true);
     const newConnId = `fe-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -557,8 +561,15 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
         return arr;
       });
-      setLeafSource(leafId, newSrc);
-      setLeafPath(leafId, await getHomeWithRetry('remote', newSrc.termId));
+      const credHome = await getHomeWithRetry('remote', newSrc.termId);
+      // 대상 탭이 특정돼 있으면 그 탭만 갱신 — setLeafSource/setLeafPath 는 활성 탭에 쓰므로
+      // 한 leaf 에 여러 세션 탭이 있으면 엉뚱한 탭을 덮어쓴다.
+      if (credTabId) {
+        updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === credTabId ? { ...t, source: newSrc, path: credHome } : t) }));
+      } else {
+        setLeafSource(leafId, newSrc);
+        setLeafPath(leafId, credHome);
+      }
       setCredPrompt(null);
     } catch (err: any) {
       notifyError(t('connectFailNamed', { name: sess.name, err: err?.message || err }));
@@ -608,16 +619,23 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           const tab = leaf.panel.tabs[i];
           if (tab.source.mode !== 'lazy-remote' || (!tab.source.sessionId && !tab.source.manualConn)) continue;
           const savedPath = tab.path;
-          const real = await realizeLazyRemote(tab.source, leaf.id);
+          const real = await realizeLazyRemote(tab.source, leaf.id, tab.id);
           if (!real) continue; // 세션이 삭제됐거나 자격증명이 없어 다이얼로그로 넘어간 경우
-          updatePanel(leaf.id, p => ({ ...p, tabs: p.tabs.map((t, idx) => idx === i ? { ...t, source: real } : t) }));
+          // 버그 수정: 예전엔 source 를 먼저 반영한 뒤 savedPath 를 setLeafPath 로 적용했는데,
+          // setLeafPath 는 "그 leaf 의 **활성** 탭"에 쓴다(p.activeIdx) — 한 leaf 에 탭이 여러
+          // 개면(병합으로 여러 세션이 한 leaf 에 모인 경우) 복원 중인 탭이 아니라 활성 탭에
+          // 경로가 덮어써진다. 그래서 A세션 탭에 B세션의 저장 경로(/root 등)가 꽂혀
+          // "Permission denied"가 나던 문제가 있었다(사용자 재현: ClearCase 개발서버 탭에 다른
+          // 세션의 /root 가 뜸). 반드시 복원 중인 탭(tab.id)만 지정해서 갱신한다.
+          // 또한 source 를 먼저 반영하면 FilePanel 이 준비 안 된 연결로 즉시 목록을 읽으려
+          // 하므로(버그 수정 #1 과 동일한 레이스), 워밍업을 먼저 끝내고 source+path 를 한 번에 쓴다.
           if (savedPath) {
             for (let r = 0; r < 10; r++) {
               try { const h = await api?.feHomeDir?.('remote', real.termId); if (h) break; } catch {}
               await new Promise(res => setTimeout(res, 500));
             }
-            setLeafPath(leaf.id, savedPath);
           }
+          updatePanel(leaf.id, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, source: real, path: savedPath || t.path } : t) }));
         }
       }
     })();
@@ -663,7 +681,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, tab], activeIdx: p.tabs.length }));
     }
     setSelectedLeafId(leafId);
-    const real = await realizeLazyRemote(src, leafId);
+    const real = await realizeLazyRemote(src, leafId, tab.id);
     if (!real) return; // 연결 실패(자격증명 오류 등) — 탭은 lazy-remote 상태로 남아 사용자가 다시 시도 가능
     // ClearCase 뷰 루트(src.viewRoot) 이관은 realizeLazyRemote 내부에서 처리됨(App.tsx의
     // extractMergeableFeSources 가 원본 연결에서 미리 읽어와 item.viewRoot 로 실어 보낸 값).
