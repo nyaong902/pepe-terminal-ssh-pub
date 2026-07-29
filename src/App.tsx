@@ -1595,9 +1595,6 @@ function App() {
     const added = [...currentIds].filter(termId => !prevConnectedWebdavTermIdsRef.current.has(termId)).map(termId => current.get(termId)!);
     prevConnectedWebdavTermIdsRef.current = currentIds;
     if (added.length === 0) return;
-    console.log('[App][ClaudeWebDAV] connected session(s) added', {
-      added,
-    });
     window.dispatchEvent(new CustomEvent('claude-webdav-auto-restore', {
       detail: { sessions: added },
     }));
