@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { notifyConfirm } from './Notify';
 
 type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
 type WorklogSharePayload = {
@@ -735,7 +736,8 @@ export const MessengerWorkspace: React.FC<{
 
   const deletePeer = async (peerId: string) => {
     const peer = state.peers.find(p => p.id === peerId);
-    if (!confirm(t('deletePeerConfirm', { name: peer?.name || t('selectedUserFallback') }))) return;
+    const ok = await notifyConfirm(t('deleteTitle'), t('deletePeerConfirm', { name: peer?.name || t('selectedUserFallback') }));
+    if (!ok) return;
     // 테스트용 더미 사용자는 실제 등록된 피어가 아니라 렌더러 로컬 상태에만 있으므로,
     // main 프로세스 IPC 를 거치지 않고 바로 로컬에서 제거한다.
     const isDummy = peerId.startsWith('dummy-peer-');
@@ -761,7 +763,8 @@ export const MessengerWorkspace: React.FC<{
   };
 
   const clearAll = async () => {
-    if (!confirm(t('clearAllConfirm'))) return;
+    const ok = await notifyConfirm(t('deleteTitle'), t('clearAllConfirm'));
+    if (!ok) return;
     await (window as any).api?.messengerClearAll?.();
   };
   const scanAssignedRanges = async () => {

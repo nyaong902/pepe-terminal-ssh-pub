@@ -14,6 +14,7 @@
   "retainDays": "保留期限（天）",
   "clearAll": "清除所有会话",
   "clearAllConfirm": "删除所有即时通讯会话？",
+  "deleteTitle": "删除",
   "scanButton": "更新列表",
   "scanHintHidden": "隐身状态下无法发现用户和回复。",
   "scanHintNormal": "直接扫描分配给您网卡的 IPv4 的 B 类地址范围。",

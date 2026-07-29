@@ -14,6 +14,7 @@
   "retainDays": "저장 기간(일)",
   "clearAll": "대화내역 모두 초기화",
   "clearAllConfirm": "모든 메신저 대화내역을 삭제할까요?",
+  "deleteTitle": "삭제",
   "scanButton": "리스트 업데이트",
   "scanHintHidden": "숨김 상태에서는 사용자 검색과 응답을 하지 않습니다.",
   "scanHintNormal": "네트워크 카드에 할당된 IPv4의 B 클래스 대역을 직접 찾습니다.",

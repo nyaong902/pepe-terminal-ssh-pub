@@ -14,6 +14,7 @@
   "retainDays": "Retention period (days)",
   "clearAll": "Clear all conversations",
   "clearAllConfirm": "Delete all messenger conversations?",
+  "deleteTitle": "Delete",
   "scanButton": "Update list",
   "scanHintHidden": "User discovery and replies are disabled while hidden.",
   "scanHintNormal": "Directly scans the class-B range of the IPv4 assigned to your network card.",
