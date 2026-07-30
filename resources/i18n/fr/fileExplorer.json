@@ -179,5 +179,10 @@
   "conflictApplyAll": "Appliquer à tout (A)",
   "conflictNewName": "Nouveau nom :",
   "renameTitle": "Renommer",
-  "renameNewLabel": "Nouveau nom"
+  "renameNewLabel": "Nouveau nom",
+  "menu": {
+    "duplicateTab": "Dupliquer",
+    "newLocalTab": "Nouvel onglet local",
+    "closeOtherTabs": "Fermer les autres onglets"
+  }
 }

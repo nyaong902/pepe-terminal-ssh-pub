@@ -180,5 +180,10 @@
   "conflictApplyAll": "모두 적용(A)",
   "conflictNewName": "새 이름:",
   "renameTitle": "이름 바꾸기",
-  "renameNewLabel": "새 이름"
+  "renameNewLabel": "새 이름",
+  "menu": {
+    "duplicateTab": "복제",
+    "newLocalTab": "새 로컬 탭",
+    "closeOtherTabs": "다른 탭 모두 닫기"
+  }
 }

@@ -179,5 +179,10 @@
   "conflictApplyAll": "تطبيق على الكل (A)",
   "conflictNewName": "الاسم الجديد:",
   "renameTitle": "إعادة تسمية",
-  "renameNewLabel": "الاسم الجديد"
+  "renameNewLabel": "الاسم الجديد",
+  "menu": {
+    "duplicateTab": "تكرار",
+    "newLocalTab": "تبويب محلي جديد",
+    "closeOtherTabs": "إغلاق التبويبات الأخرى"
+  }
 }

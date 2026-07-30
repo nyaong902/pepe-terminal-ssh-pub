@@ -179,5 +179,10 @@
   "conflictApplyAll": "应用于全部 (A)",
   "conflictNewName": "新名称：",
   "renameTitle": "重命名",
-  "renameNewLabel": "新名称"
+  "renameNewLabel": "新名称",
+  "menu": {
+    "duplicateTab": "复制",
+    "newLocalTab": "新建本地标签页",
+    "closeOtherTabs": "关闭其他标签页"
+  }
 }

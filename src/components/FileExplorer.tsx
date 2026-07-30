@@ -5,6 +5,7 @@ import { FilePanel, PanelSource } from './FilePanel';
 import { TransferLog } from './TransferLog';
 import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
+import { ContextMenu } from './ContextMenu';
 import type { PanelSession } from '../utils/layoutUtils';
 import {
   type FeTab, type FePanel, type FeLayoutNode,
@@ -102,6 +103,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 패널 탭 우클릭 메뉴 — 대상 탭을 leafId+idx 로 특정한다(활성 탭이 아닐 수 있음).
+  const [tabCtx, setTabCtx] = useState<{ x: number; y: number; leafId: string; idx: number } | null>(null);
   // 패널 탭 스트립(.fe-panel-tabs-scroll)이 넘칠 때만 ‹ › 스크롤 버튼을 노출한다 — 워크스페이스
   // 탭바(TabBar.tsx)와 같은 UX. leaf 마다 스트립이 하나씩이라 leafId 로 키를 잡는다.
   const feTabScrollEls = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -823,6 +826,41 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, makeFeTab(cur.source, cur.path)], activeIdx: p.tabs.length }));
   };
 
+  // 특정 탭을 복제 — 우클릭 대상이 활성 탭이 아닐 수 있으므로 addPanelTab(활성 탭 기준)과 별도.
+  // 같은 source(=같은 SFTP 연결)를 공유한다. closeTabInLeaf 는 연결을 끊지 않으므로 복제본 중
+  // 하나를 닫아도 나머지가 살아있다. 복제한 탭은 원본 바로 뒤에 삽입한다.
+  const duplicatePanelTab = (leafId: string, idx: number) => {
+    const leaf = getLeaf(leafId);
+    const src = leaf?.panel.tabs[idx];
+    if (!src) return;
+    updatePanel(leafId, p => {
+      const tabs = [...p.tabs];
+      tabs.splice(idx + 1, 0, makeFeTab(src.source, src.path));
+      return { ...p, tabs, activeIdx: idx + 1 };
+    });
+  };
+
+  // 이 패널에 로컬 탭 하나 추가 — 새 탭은 path 가 빈 문자열이라 홈 디렉토리를 채워줘야 목록이 보인다.
+  const addLocalPanelTab = (leafId: string) => {
+    const leaf = getLeaf(leafId);
+    if (!leaf) return;
+    const tab = makeFeTab({ mode: 'local', label: localLabel }, '');
+    updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, tab], activeIdx: p.tabs.length }));
+    (async () => {
+      const home = await getHomeWithRetry('local');
+      updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, path: home } : t) }));
+    })();
+  };
+
+  // 우클릭한 탭만 남기고 이 패널의 나머지 탭을 모두 닫는다.
+  const closeOtherTabsInLeaf = (leafId: string, idx: number) => {
+    updatePanel(leafId, p => {
+      const keep = p.tabs[idx];
+      if (!keep) return p;
+      return { ...p, tabs: [keep], activeIdx: 0 };
+    });
+  };
+
   const closeTabInLeaf = (leafId: string, idx: number) => {
     const leaves = collectFeLeaves(layoutRef.current);
     // 트리 전체에 leaf 가 1개뿐이고 그 안에 탭도 1개뿐이면 — 전체가 빈 상태가 되므로 닫기 금지.
@@ -1029,6 +1067,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
               updatePanel(leafId, p => ({ ...p, activeIdx: idx }));
             }}
             onAuxClick={e => { if (e.button === 1) { e.preventDefault(); closeTabInLeaf(leafId, idx); } }}
+            onContextMenu={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              setTabCtx({ x: e.clientX, y: e.clientY, leafId, idx });
+            }}
             onDragStart={e => {
               setTabDrag({ fromLeafId: leafId, from: idx, overLeafId: leafId, over: idx });
               try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(idx)); } catch {}
@@ -1194,6 +1237,25 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       <div className="fe-transfers" style={{ height: transfersHeight }}>
         <TransferLog workspaceId={workspaceIdRef.current} />
       </div>
+      {tabCtx && (() => {
+        const leaf = getLeaf(tabCtx.leafId);
+        const tabCount = leaf?.panel.tabs.length ?? 0;
+        const onlyTabInOnlyLeaf = countFeLeaves(layout) === 1 && tabCount <= 1;
+        return (
+          <ContextMenu
+            x={tabCtx.x} y={tabCtx.y}
+            onClose={() => setTabCtx(null)}
+            items={[
+              { icon: '📋', label: t('menu.duplicateTab', { defaultValue: '복제' }), onClick: () => duplicatePanelTab(tabCtx.leafId, tabCtx.idx) },
+              { icon: '🖥️', label: t('menu.newLocalTab', { defaultValue: '새 로컬 탭' }), onClick: () => addLocalPanelTab(tabCtx.leafId) },
+              { separator: true },
+              // 트리에 leaf 도 탭도 하나뿐이면 전체가 빈 상태가 되므로 닫기 금지(closeTabInLeaf 와 동일 규칙).
+              { icon: '✕', label: t('tabClose'), disabled: onlyTabInOnlyLeaf, onClick: () => closeTabInLeaf(tabCtx.leafId, tabCtx.idx) },
+              { icon: '🗙', label: t('menu.closeOtherTabs', { defaultValue: '다른 탭 모두 닫기' }), disabled: tabCount <= 1, onClick: () => closeOtherTabsInLeaf(tabCtx.leafId, tabCtx.idx) },
+            ]}
+          />
+        );
+      })()}
       {credPrompt && (
         <div className="session-editor-backdrop" onClick={() => setCredPrompt(null)}>
           <div className="cred-modal" ref={credModalRef} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ outline: 'none' }}>

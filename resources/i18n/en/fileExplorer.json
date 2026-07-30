@@ -180,5 +180,10 @@
   "conflictApplyAll": "Apply to all (A)",
   "conflictNewName": "New name:",
   "renameTitle": "Rename",
-  "renameNewLabel": "New name"
+  "renameNewLabel": "New name",
+  "menu": {
+    "duplicateTab": "Duplicate",
+    "newLocalTab": "New local tab",
+    "closeOtherTabs": "Close other tabs"
+  }
 }
