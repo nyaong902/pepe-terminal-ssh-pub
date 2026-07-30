@@ -1732,9 +1732,18 @@ function messengerReadEmoticonPacksUncached(): MessengerEmoticonPack[] {
   return packs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
+// 폴더 생성은 프로세스당 한 번만. 이 함수는 messengerMessagesPath / messengerPeersPath /
+// messengerIdentityPath / messengerDownloadsDir 가 모두 거쳐가는 최하단이라, 호출마다 mkdirSync 를
+// 돌리면 메신저 관련 모든 경로 계산이 동기 디스크 작업이 된다 — 수정 후에도 CPU 프로파일에서
+// native mkdir 이 메인 프로세스 시간의 41.7% 를 차지한 원인이 바로 이 한 줄이었다.
+// (userData 하위 폴더라 세션 중에 사라지지 않는다. 실제 쓰기는 모두 try/catch 로 감싸여 있다.)
+let messengerDirEnsured = false;
 function messengerDir() {
   const dir = path.join(app.getPath('userData'), 'messenger');
-  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  if (!messengerDirEnsured) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    messengerDirEnsured = true;
+  }
   return dir;
 }
 function messengerMessagesPath() { return path.join(messengerDir(), 'messages.json'); }
@@ -5419,10 +5428,38 @@ try {
   }
 });
 
+// 드라이브/특수폴더 목록은 PowerShell(Shell.Application COM) 로 얻는다 — 한 번에 100~300ms 드는
+// 무거운 호출이다. FilePanel 이 마운트마다 이걸 부르는데(useEffect [] ), 파일전송 탭을 전환하면
+// 패널이 재마운트되므로 탭을 옮길 때마다 PowerShell 프로세스가 하나씩 떴다. 게다가 execFileSync
+// 라서 그 시간 동안 메인 프로세스 전체(= 모든 창 + SSH IPC)가 멈췄다 — CPU 프로파일에서 native
+// spawn 이 메인 프로세스 시간의 13~17% 를 차지한 원인.
+//  · 결과를 캐시해서 반복 호출은 프로세스를 띄우지 않는다(드라이브 구성은 자주 안 바뀐다).
+//  · 진행 중인 호출은 공유한다(여러 창이 동시에 마운트될 때 중복 실행 방지).
+//  · execFileSync → execFile(비동기) 로 바꿔 첫 호출도 메인 프로세스를 막지 않는다.
+const FE_DRIVES_CACHE_MS = 60_000;
+let feDrivesCache: { at: number; list: { path: string; label: string; depth?: number }[] } | null = null;
+let feDrivesInFlight: Promise<{ path: string; label: string; depth?: number }[]> | null = null;
 ipcMain.handle('fe:get-drives', async () => {
+  const cached = feDrivesCache;
+  if (cached && Date.now() - cached.at < FE_DRIVES_CACHE_MS) return cached.list;
+  if (feDrivesInFlight) return feDrivesInFlight;
+  feDrivesInFlight = (async () => await feGetDrivesUncached())();
+  try {
+    const list = await feDrivesInFlight;
+    feDrivesCache = { at: Date.now(), list };
+    return list;
+  } finally {
+    feDrivesInFlight = null;
+  }
+});
+async function feGetDrivesUncached(): Promise<{ path: string; label: string; depth?: number }[]> {
   if (process.platform === 'win32') {
     try {
-      const { execFileSync } = require('child_process');
+      const { execFile } = require('child_process');
+      const execFileAsync = (cmd: string, args: string[], opts: any): Promise<string> =>
+        new Promise((resolve, reject) => {
+          execFile(cmd, args, opts, (err: any, stdout: any) => err ? reject(err) : resolve(String(stdout)));
+        });
       // PowerShell 스크립트 — 임시 파일로 저장 후 실행 (UTF-8 인코딩 안정성 + NetHood 항목 UNC 해석)
       const psScript = `chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -5580,9 +5617,9 @@ $items | Sort-Object Order | ConvertTo-Json -Compress`;
       const tmpPs = path.join(os.tmpdir(), `pepe-drives-${Date.now()}.ps1`);
       try {
         fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
-        const out: string = execFileSync('powershell', [
+        const out: string = await execFileAsync('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
-        ], { windowsHide: true, timeout: 10000 }).toString('utf-8');
+        ], { windowsHide: true, timeout: 10000, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 });
         try { fs.unlinkSync(tmpPs); } catch {}
         const data = JSON.parse(out.trim() || '[]');
         const arr: any[] = Array.isArray(data) ? data : [data];
@@ -5607,7 +5644,7 @@ $items | Sort-Object Order | ConvertTo-Json -Compress`;
     }
   }
   return [{ path: '/', label: '/' }];
-});
+}
 
 ipcMain.handle('fe:get-home', () => {
   return require('os').homedir();
