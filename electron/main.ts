@@ -83,32 +83,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 (globalThis as any).__dirname = __dirname;
 
-// ── 진단: 자식 프로세스 생성 추적 ──────────────────────────────────────────
-// CPU 프로파일에서 메인 프로세스 시간의 17% 가 native `spawn` 으로 잡혔는데, 그 노드에는 JS
-// 호출 체인이 없어서(네이티브 프레임) 누가 부르는지 프로파일만으로는 특정할 수 없었다.
-// 기본은 꺼져 있고, DevTools(메인 프로세스) 나 아래 IPC 로 켜면 spawn/exec 계열 호출마다
-// 실행 파일명 + 호출 스택을 남긴다. 켜기: 렌더러에서 window.api.setSpawnTraceEnabled(true)
-let spawnTraceEnabled = false;
-try {
-  const cp = require('child_process');
-  const spawnCounts = new Map<string, number>();
-  for (const fn of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'] as const) {
-    const orig = (cp as any)[fn];
-    if (typeof orig !== 'function') continue;
-    (cp as any)[fn] = function (this: any, ...args: any[]) {
-      if (spawnTraceEnabled) {
-        const what = String(args[0] ?? '').slice(0, 120);
-        const key = `${fn}:${what}`;
-        spawnCounts.set(key, (spawnCounts.get(key) || 0) + 1);
-        const stack = (new Error().stack || '').split('\n').slice(2, 7).join('\n');
-        console.log(`[spawn-trace] ${key} (누적 ${spawnCounts.get(key)}회)\n${stack}`);
-      }
-      return orig.apply(this, args);
-    };
-  }
-} catch {}
-ipcMain.handle('diag:set-spawn-trace', (_e, on: boolean) => { spawnTraceEnabled = !!on; return { enabled: spawnTraceEnabled }; });
-
 // 멀티 인스턴스 캐시 충돌 방지 — 매 실행 unique sessionData 로 분리하던 코드.
 // 단점: Electron 의 safeStorage 가 sessionData 안에 키 파일(Local State 등) 두는 경우
 //        매 실행마다 키가 사라져서 자격증명 복호화 실패. 그래서 비활성화.

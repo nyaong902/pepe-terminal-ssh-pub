@@ -163,11 +163,6 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             const mergeTargetFe = (fromTab?.type === 'fileExplorer' && !wantsReorder)
               ? tabs.find(x => x.type === 'fileExplorer' && x.id !== st.tabId)
               : null;
-            console.log('[tab-drop] hit-test', {
-              from: fromTab?.type, overId, overType: overTab?.type,
-              elClass: el?.className, clientX, clientY,
-              merge: mergeTargetFe?.id ?? null,
-            });
             if (mergeTargetFe && onMergeFileExplorerTabs) {
               onMergeFileExplorerTabs(st.tabId, mergeTargetFe.id);
             } else if (overId && overId !== st.tabId) {

@@ -2371,16 +2371,13 @@ probe_curl || probe_wget || probe_python
   }
 
   private async _listDirWithRecovery(panelId: string, remotePath: string): Promise<any[]> {
-    // 진단 — /vobs(ClearCase) 조회는 결과 개수/실패를 남긴다. "목록이 안 보인다"가 0건 반환인지,
-    // 예외인지, 아예 호출조차 안 된 건지 화면만 봐서는 구분이 안 돼서.
-    const ccDiag = remotePath === '/vobs' || remotePath.startsWith('/vobs/');
     const rawPath = remotePath;
     // 실패하면 SFTP **채널**만 버리고 한 번 재시도한다(SSH 연결은 그대로 둔다 — 재연결은 동기
     // 키교환을 유발해 메인 프로세스를 멈추고, 그게 다른 패널의 스톨을 부르는 되먹임이 된다).
     let lastErr: any;
     for (let attempt = 0; attempt <= 1; attempt++) {
       try {
-        return await this._listDirAttempt(panelId, rawPath, ccDiag);
+        return await this._listDirAttempt(panelId, rawPath);
       } catch (err) {
         lastErr = err;
         if (attempt === 1) break;
@@ -2422,7 +2419,7 @@ probe_curl || probe_wget || probe_python
   // 계속 "응답 없음", 그 패널은 영구 복구 불가 → 파일전송을 다시 열어도 빈 목록).
   // 그래서 위 handleSFTPListDir 이 실패 시 캐시를 버리고 새 채널로 재시도한다.
 
-  private async _listDirAttempt(panelId: string, rawPath: string, ccDiag: boolean): Promise<any[]> {
+  private async _listDirAttempt(panelId: string, rawPath: string): Promise<any[]> {
     // 목록 조회는 **이미 맺어둔 공유 연결**의 SFTP 채널을 쓴다. 전용 SSH 연결(getDedicatedSftp)로
     // 돌려봤다가 되돌렸다 — 하지 말 것:
     //   전용 연결은 패널마다 새 SSH 핸드셰이크를 하고, 스톨 시 연결을 폐기하면 재시도가 또 핸드셰이크를
@@ -2434,7 +2431,6 @@ probe_curl || probe_wget || probe_python
     const reusedChannel = this.sftpCache.has(panelId);
     const sftp = await this.getSftp(panelId);
     const ccPath = await this.resolveCcPath(panelId, rawPath);
-    if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] req=${rawPath} resolved=${ccPath}${ccPath === rawPath ? ' (변환없음)' : ''}`);
     let list: any[];
     try {
       // 재사용 채널은 짧게(6초), 새로 연 채널은 넉넉히(30초).
@@ -2445,10 +2441,7 @@ probe_curl || probe_wget || probe_python
       // 디렉토리를 오판하지 않는다.
       list = await this._sftpReaddirOnce(sftp, ccPath, reusedChannel ? 6000 : 30000);
     } catch (err) {
-      if (ccPath === rawPath) {
-        if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] FAILED ${rawPath}: ${(err as any)?.message || err}`);
-        throw err;
-      }
+      if (ccPath === rawPath) throw err;
       // ★ 채널이 죽은 신호면 raw 로 폴백하지 않는다.
       // 이건 경로가 틀렸다는 뜻이 아니라 채널이 멈췄다는 뜻인데, 내 타임아웃은 서버에 이미 나간
       // 요청을 취소하지 못한다. 그 상태에서 같은 채널에 raw 요청을 또 얹으면 응답 없는 요청이 쌓여
@@ -2464,25 +2457,20 @@ probe_curl || probe_wget || probe_python
       let rawList: any[];
       try {
         rawList = await this._sftpReaddirOnce(sftp, rawPath, 15000);
-      } catch (err2) {
-        console.log(`[cc-listdir-${panelId.slice(-6)}] raw 도 실패 ${rawPath}: ${(err2 as any)?.message || err2}`);
+      } catch {
         throw err; // 변환 경로가 정답이었을 가능성이 크므로 원래 오류를 알린다
       }
       // raw 가 0건이면 "성공"으로 보지 않는다. ClearCase dynamic view 서버에서는 변환된
       // /view/<tag>/vobs/… 가 정답이고 raw /vobs/… 는 **에러 없이 빈 리스트**를 돌려준다.
       // 그걸 성공으로 받아 ccViewRootBad 에 기록하면, 일시적 실패 한 번이 이후 계속 빈 목록으로
       // 굳어버린다(사용자 재현: 12건이 정상이다가 한 번 실패한 뒤로 계속 0건).
-      if (rawList.length === 0) {
-        console.log(`[cc-listdir-${panelId.slice(-6)}] raw 는 0건 — 변환 경로가 정답으로 보임(일시 실패로 판단, 변환 유지)`);
-        throw err;
-      }
+      if (rawList.length === 0) throw err;
       // raw 가 실제 내용을 돌려줬다 = 이 서버는 변환이 필요 없는 구성 → 다음부터 변환 생략
       const badRoot = await this.getCcViewRoot(panelId);
       if (badRoot) this.ccViewRootBad.set(panelId, badRoot);
       this.ccViewRoots.delete(panelId);
       list = rawList;
     }
-    if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] OK ${rawPath} → ${list.length}건`);
     return list.map((item: any) => {
       const attrs = item.attrs;
       // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
