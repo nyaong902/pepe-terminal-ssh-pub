@@ -27,6 +27,7 @@ import { SswSoftphoneWorkspace, type SswSoftphoneView } from './components/SswSo
 import { SippWorkspace } from './components/SippWorkspace';
 import { OfficeLauncher } from './components/OfficeLauncher';
 import { MediaLauncher } from './components/MediaLauncher';
+import { CdrToolWorkspace } from './components/CdrToolWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
 import { serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
 import { SqlToolTabShell } from './components/SqlToolTabShell';
@@ -76,7 +77,7 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'customWorkspace';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'cdrTool' | 'customWorkspace';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
@@ -2723,6 +2724,7 @@ function App() {
   const addSippTab = () => addSpecialTab('sipp', '📶 SIPp');
   const addOfficeTab = () => addSpecialTab('office', '📄 오피스');
   const addMediaTab = () => addSpecialTab('media', '🎵 미디어');
+  const addCdrToolTab = () => addSpecialTab('cdrTool', '📡 CDR 도구');
   const addI18nEditorTab = () => addSpecialTab('i18nEditor', tApp('tabs.i18nEditor'));
   const openCustomWorkspaceTemplate = useCallback((templateId: string) => {
     const tpl = customWorkspaces.find(t => t.id === templateId);
@@ -2820,6 +2822,7 @@ function App() {
     ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
     ...(availableFeatures.sswPhone ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
     ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
+    { id: 'cmd-cdrTool', label: 'CDR 도구', icon: '📡', keywords: ['cdr', 'clog', 'call log', 'ssw', 'skb', 'q850'], run: () => addCdrToolTab() },
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
@@ -4028,7 +4031,7 @@ function App() {
     // 터미널이 아닌 워크스페이스(브라우저/파일비교/로그분석/VPN/다국어/SQL Tool)에서 더블클릭한 경우
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
-    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media'];
+    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media', 'cdrTool'];
     const isTermTabType = (t: TabType | undefined) => t === undefined || t === 'terminal';
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
       // 이미 우측 분할에 터미널 워크스페이스가 떠 있으면 — activeTab 을 전환하지 않고
@@ -4523,6 +4526,7 @@ function App() {
         ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
         ...(availableFeatures.sswPhone ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
+        { label: '📡 CDR 도구', action: addCdrToolTab },
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
@@ -5201,6 +5205,7 @@ function App() {
           onAddSippTab={addSippTab}
           onAddOfficeTab={addOfficeTab}
           onAddMediaTab={addMediaTab}
+          onAddCdrToolTab={addCdrToolTab}
           onAddI18nEditorTab={addI18nEditorTab}
           onAddCustomWorkspace={(templateId?: string) => {
             if (templateId) {
@@ -5801,7 +5806,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5812,7 +5817,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5885,6 +5890,16 @@ function App() {
             </ErrorBoundary>
           </div>
         ))}
+        {tabs.filter(t => t.type === 'cdrTool').map(t => (
+          <div key={t.id} style={tabSlotStyle(t)}>
+            <ErrorBoundary label="CdrTool">
+              <CdrToolWorkspace
+                instanceId={t.id}
+                sshSessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId).map(s => ({ termId: s.termId, label: s.sessionName }))}
+              />
+            </ErrorBoundary>
+          </div>
+        ))}
         {tabs.filter(t => t.type === 'i18nEditor').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.i18nEditor')}>
@@ -5910,7 +5925,7 @@ function App() {
                     setCustomWorkspaces(prev => prev.map(ws => ws.id === normalized.id ? normalized : ws));
                     setTabs(prev => prev.map(tab => tab.type === 'customWorkspace' && tab.customWorkspaceId === normalized.id ? { ...tab, title: normalized.name, customWorkspaceTemplate: normalized } : tab));
                   }}
-                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
+                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
                   connectedBrowserSessions={connectedBrowserSessions}
                   availableShells={availableShells}
                   onCloseTerm={releaseTermResources}
