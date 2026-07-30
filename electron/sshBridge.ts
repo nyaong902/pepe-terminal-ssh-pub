@@ -36,6 +36,17 @@ export function xferLog(msg: string) {
   try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[xfer] ${msg}`); } catch {}
 }
 
+// ClearCase 뷰 루트 탐지/폴백, SFTP 채널 폐기·재시도 같은 진단용 로그 — 특정 환경(ClearCase
+// dynamic view)의 버그를 잡을 때만 필요하고 평소엔 콘솔을 채울 이유가 없다. 렌더러의
+// src/utils/debugLog.ts 와 같은 방식으로 기본 꺼짐 + 필요할 때만 켠다.
+// 켜기: 렌더러 devtools 에서 window.api.setSftpDebugLog(true)
+let sftpDebugLogEnabled = false;
+export function setSftpDebugLog(enabled: boolean) { sftpDebugLogEnabled = !!enabled; }
+function sftpDebug(msg: string) {
+  if (!sftpDebugLogEnabled) return;
+  console.log(msg);
+}
+
 // sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
 // (구조적 복제 불가능한 함수라서) 같은 이름의 boolean 값으로 치환해 보낸 결과를, 이 아래 수십 곳의
 // 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
@@ -944,7 +955,7 @@ class SSHBridge extends EventEmitter {
     if (tm) {
       const root = `/view/${tm[1]}`;
       this.ccViewRoots.set(panelId, root);
-      console.log(`[clearcase-${panelId.slice(-6)}] view root from prompt(on-demand): ${root}`);
+      sftpDebug(`[clearcase-${panelId.slice(-6)}] view root from prompt(on-demand): ${root}`);
       return root;
     }
     const pid = this.activeShellPids.get(panelId) || this.shellPids.get(panelId);
@@ -957,7 +968,7 @@ class SSHBridge extends EventEmitter {
         // 빈 결과는 캐시하지 않음 — 뷰 설정 전 조회됐을 수 있어 다음에 재시도 (찾으면 그때 캐시)
         if (root) {
           this.ccViewRoots.set(panelId, root);
-          console.log(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
+          sftpDebug(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
           return root;
         }
       } catch {}
@@ -974,7 +985,7 @@ class SSHBridge extends EventEmitter {
         if (otherId === panelId || !otherRoot) continue;
         if (this.panelHost.get(otherId) !== host) continue;
         this.ccViewRoots.set(panelId, otherRoot);
-        console.log(`[clearcase-${panelId.slice(-6)}] view root inherited from ${otherId.slice(-6)} (${host}): ${otherRoot}`);
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] view root inherited from ${otherId.slice(-6)} (${host}): ${otherRoot}`);
         return otherRoot;
       }
     }
@@ -1099,7 +1110,7 @@ class SSHBridge extends EventEmitter {
       const newRoot = `/view/${lastViewTag}`;
       if (this.ccViewRoots.get(panelId) !== newRoot) {
         this.ccViewRoots.set(panelId, newRoot);
-        console.log(`[clearcase-${panelId.slice(-6)}] view root from prompt: ${newRoot}`);
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] view root from prompt: ${newRoot}`);
       }
     }
     let p = lastPath;
@@ -2382,7 +2393,7 @@ probe_curl || probe_wget || probe_python
         lastErr = err;
         if (attempt === 1) break;
         if (!this._invalidateListSftp(panelId)) break; // 버릴 채널이 없으면 재시도해도 같은 결과
-        console.log(`[sftp-${panelId.slice(-6)}] listdir 실패 — SFTP 채널 폐기 후 재시도: ${(err as any)?.message || err}`);
+        sftpDebug(`[sftp-${panelId.slice(-6)}] listdir 실패 — SFTP 채널 폐기 후 재시도: ${(err as any)?.message || err}`);
         await new Promise(r => setTimeout(r, 300));
       }
     }
@@ -2449,11 +2460,11 @@ probe_curl || probe_wget || probe_python
       // (사용자 재현: "파일목록이 너무 늦게 떠" — view 실패 → raw 15초 → 폐기 → 성공).
       // 채널을 버리고 같은 경로를 새 채널에서 즉시 다시 시도하도록 그대로 던진다.
       if (this._isChannelDead(err)) {
-        console.log(`[clearcase-${panelId.slice(-6)}] ${ccPath} 조회 실패가 채널 문제 — 경로 문제 아님(폐기 후 재시도): ${(err as any)?.message || err}`);
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] ${ccPath} 조회 실패가 채널 문제 — 경로 문제 아님(폐기 후 재시도): ${(err as any)?.message || err}`);
         throw err;
       }
       // 여기까지 왔으면 실제 오류(경로 없음 등) — 변환이 틀렸을 수 있으니 raw 로 한 번 확인한다.
-      console.log(`[clearcase-${panelId.slice(-6)}] listdir via view root failed (${ccPath}) — retrying raw ${rawPath}`);
+      sftpDebug(`[clearcase-${panelId.slice(-6)}] listdir via view root failed (${ccPath}) — retrying raw ${rawPath}`);
       let rawList: any[];
       try {
         rawList = await this._sftpReaddirOnce(sftp, rawPath, 15000);

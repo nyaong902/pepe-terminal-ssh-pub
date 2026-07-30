@@ -173,6 +173,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFiles: (multi?: boolean) => ipcRenderer.invoke('dialog:pick-files', { multi }),
   pickFolder: () => ipcRenderer.invoke('dialog:pick-folder'),
   feSftpDisconnect: (connId: string) => ipcRenderer.invoke('fe:sftp-disconnect', { connId }),
+  // ClearCase 뷰 루트/SFTP 채널 진단 로그 토글 (기본 꺼짐) — 필요할 때만 devtools 에서 켠다
+  setSftpDebugLog: (on: boolean) => ipcRenderer.invoke('fe:set-sftp-debug-log', on),
   feGetViewRoot: (termId: string) => ipcRenderer.invoke('fe:get-view-root', { termId }),
   feSetViewRoot: (termId: string, root: string) => ipcRenderer.invoke('fe:set-view-root', { termId, root }),
   feReleaseSftp: (panelId: string) => ipcRenderer.invoke('fe:release-sftp', { panelId }),

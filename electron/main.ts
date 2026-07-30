@@ -43,7 +43,7 @@ import { loadSqlSessionsData, saveSqlSessionsData, SqlSession, SqlFolder, SqlSes
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { loadClockWidgetState, saveClockWidgetState, ClockWidgetState } from './clockWidgetStore';
-import { xferLog } from './sshBridge';
+import { xferLog, setSftpDebugLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar, getAllSipSidecars, resolveBinary as resolveSipdBinary } from './sipSidecar';
 import { getCaptureManager, isCaptureAvailable, listInterfaces as listCaptureInterfaces } from './captureSidecar';
@@ -5783,6 +5783,8 @@ ipcMain.handle('fe:get-view-root', async (_e, { termId }: { termId: string }) =>
 ipcMain.handle('fe:set-view-root', (_e, { termId, root }: { termId: string; root: string }) => {
   try { getSSHBridge().setCcViewRoot(termId, root); } catch {}
 });
+// ClearCase 뷰 루트 탐지/SFTP 채널 재시도 진단 로그 on/off (기본 꺼짐) — sshBridge.ts 의 sftpDebug 참고
+ipcMain.handle('fe:set-sftp-debug-log', (_e, on: boolean) => { setSftpDebugLog(!!on); return { enabled: !!on }; });
 
 // 파일트리/Compare 등에서 사용한 dedicated SFTP 만 종료. 터미널 SSH 연결은 유지.
 ipcMain.handle('fe:release-sftp', (_e, { panelId }: { panelId: string }) => {
