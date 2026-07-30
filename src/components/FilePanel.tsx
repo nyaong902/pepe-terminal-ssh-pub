@@ -84,6 +84,9 @@ const api = (window as any).api || {};
 // 인스턴스 ref 에만 두면 탭을 왔다갔다 할 때마다 기록이 초기화돼 "이전 폴더" 화살표가
 // 비활성화된다(사용자 재현). 탭 id 로 모듈 레벨에 보관해 재마운트에도 유지한다.
 // 앱 재시작/창 분리로 완전히 새로 마운트될 때는 사라지는 게 맞는 임시 UI 상태다.
+// 드라이브/특수폴더 목록 캐시(창 단위) — 값이 거의 안 바뀌는데 조회가 무겁다(main 에서 PowerShell).
+let drivesModuleCache: { path: string; label: string; depth?: number }[] | null = null;
+
 const pathHistoryStore = new Map<string, { hist: string[]; idx: number; sourceKey: string }>();
 /** 탭이 닫힐 때 그 탭의 history 를 정리 (FileExplorer 가 호출).
  *  키는 `<탭id>::<source>` 형태라 그 탭의 모든 소스별 버킷을 함께 지운다. */
@@ -292,13 +295,17 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // 사용한다. 아래 iconCache/extIconCache 는 항상 빈 채로 남아 getFileIcon() 으로 흘러간다.
   const iconCache = useMemo(() => new Map<string, string>(), []);
   const extIconCache = useMemo(() => new Map<string, string>(), []);
-  // 드라이브 / 특수 폴더 목록 — source 모드와 무관하게 항상 로드해서 source 드롭다운에 항상 노출
+  // 드라이브 / 특수 폴더 목록 — source 모드와 무관하게 항상 로드해서 source 드롭다운에 항상 노출.
+  // 모듈 레벨 캐시를 먼저 쓴다: 이 effect 는 마운트마다 돌고, 탭을 전환하면 패널이 재마운트되므로
+  // (FileExplorer 의 key={tab.id}) 캐시가 없으면 탭을 옮길 때마다 IPC → PowerShell 실행이 된다.
   useEffect(() => {
+    if (drivesModuleCache) { setDrives(drivesModuleCache); return; }
     (async () => {
       try {
         const list: any = await api.feGetDrives?.();
         if (Array.isArray(list)) {
           const norm = list.map((x: any) => typeof x === 'string' ? { path: x, label: x } : x).filter((x: any) => x && x.path);
+          drivesModuleCache = norm;
           setDrives(norm);
         }
       } catch {}
@@ -371,6 +378,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   const onFilesLoadedRef = useRef(onFilesLoaded);
   useEffect(() => { onFilesLoadedRef.current = onFilesLoaded; }, [onFilesLoaded]);
 
+  // navigate() 가 이미 받아온 목록을 loadDir 가 재사용하도록 잠깐 물려둔다.
+  // 예전엔 폴더를 한 번 이동할 때마다 같은 경로를 **두 번** 조회했다 — navigate() 가 사전 검증으로
+  // feListDir 를 부르고, 그 뒤 onPathChange 로 currentPath 가 바뀌면 loadDir 가 또 부른다.
+  // ClearCase MVFS 처럼 느린 원격에서는 체감 대기가 그대로 두 배였고(로그에 같은 경로가 계속 쌍으로
+  // 찍힌 이유), SFTP 채널에 거는 부하도 두 배였다.
+  const prefetchRef = useRef<{ dir: string; files: FileInfo[]; at: number } | null>(null);
+
   // 디렉토리 오류 메시지 — ENOENT 류는 친화적 한글로 변환 후 모달로 노출, 그 외엔 인라인.
   const isPathNotFoundError = (err: string): boolean => {
     if (!err) return false;
@@ -391,6 +405,17 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     // loading 은 켜두되 files 는 유지 — 캐시가 있으면 로딩 표시가 가려지고(files.length > 0),
     // 캐시가 없을 때만 "로딩 중"이 보인다(그때는 그게 맞는 피드백).
     if (source.mode === 'lazy-remote') { setLoading(true); setError(''); return; }
+    // navigate() 가 직전에 같은 경로를 이미 조회했으면 그 결과를 쓴다(중복 조회 제거).
+    // 1회성으로 소비하므로 이후 새로고침(⟳)/refreshKey 는 정상적으로 서버를 다시 조회한다.
+    const pf = prefetchRef.current;
+    if (pf && pf.dir === dir && Date.now() - pf.at < 3000) {
+      prefetchRef.current = null;
+      setError('');
+      setFiles(pf.files);
+      try { onFilesLoadedRef.current?.(pf.files); } catch {}
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -506,6 +531,10 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       }
       // shortcut 해석 결과가 있으면 그 실제 경로로 currentPath 갱신 → "lnk:..." 같은 raw 표기 회피
       const finalPath = (result && typeof result.resolvedPath === 'string' && result.resolvedPath) ? result.resolvedPath : dir;
+      // 방금 받아온 목록을 loadDir 가 재사용하도록 넘겨 같은 경로 재조회를 막는다(prefetchRef 주석 참고).
+      if (!result?.error && Array.isArray(result?.files)) {
+        prefetchRef.current = { dir: finalPath, files: result.files, at: Date.now() };
+      }
       onPathChange(finalPath);
     } catch (e: any) {
       const errStr = String(e?.message || e);

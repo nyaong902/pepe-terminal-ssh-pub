@@ -259,6 +259,7 @@ class SSHBridge extends EventEmitter {
     if (this.clients.has(panelId)) return;
     // 세션 정보 저장 (전송 전용 SSH 연결 재생성용)
     this.sessionStore.set(panelId, session);
+    if (session?.host) this.panelHost.set(panelId, String(session.host));
     // 점프호스트/로그인스크립트가 없는 단순 연결(X11 은 지원)은 워커로 위임(암호화 해제를
     // 메인 프로세스 밖으로 빼서 heavy 세션 여러 개 동시 사용 시 메인 프로세스 병목 완화).
     // 복잡한 케이스(점프/로그인스크립트)는 기존 경로(아래) 그대로 — 기존 동작에 전혀 영향 없음.
@@ -947,21 +948,37 @@ class SSHBridge extends EventEmitter {
       return root;
     }
     const pid = this.activeShellPids.get(panelId) || this.shellPids.get(panelId);
-    if (!pid) return '';
-    try {
-      const out = await this.execCommand(panelId,
-        `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^CLEARCASE_ROOT='`, 5000);
-      const m = out.match(/^CLEARCASE_ROOT=(.+)$/m);
-      const root = m ? m[1].trim().replace(/\/+$/, '') : '';
-      // 빈 결과는 캐시하지 않음 — 뷰 설정 전 조회됐을 수 있어 다음에 재시도 (찾으면 그때 캐시)
-      if (root) {
-        this.ccViewRoots.set(panelId, root);
-        console.log(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
-      }
-      return root;
-    } catch {
-      return '';
+    if (pid) {
+      try {
+        const out = await this.execCommand(panelId,
+          `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^CLEARCASE_ROOT='`, 5000);
+        const m = out.match(/^CLEARCASE_ROOT=(.+)$/m);
+        const root = m ? m[1].trim().replace(/\/+$/, '') : '';
+        // 빈 결과는 캐시하지 않음 — 뷰 설정 전 조회됐을 수 있어 다음에 재시도 (찾으면 그때 캐시)
+        if (root) {
+          this.ccViewRoots.set(panelId, root);
+          console.log(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
+          return root;
+        }
+      } catch {}
     }
+    // 폴백 — 같은 호스트의 다른 패널이 이미 알아낸 뷰 루트를 물려받는다.
+    // SFTP 전용 연결(파일전송이 새로 맺는 sftp-fe-…/fe-lazy-…)은 인터랙티브 셸이 없어서 프롬프트도
+    // /proc 도 없다. 그래서 파일전송 워크스페이스를 닫고 다시 열면(=새 SFTP 연결) 뷰 루트를 전혀
+    // 알 수 없어 /vobs 접근이 실패했다(사용자 재현). 같은 서버에 붙어있는 터미널이 뷰태그를 이미
+    // 알고 있으면 그걸 쓴다. 뷰가 다를 수 있지만, 틀리면 handleSFTPListDir 폴백이 ccViewRootBad 에
+    // 기록하고 raw 경로로 넘어가므로 한 번의 실패로 자동 교정된다.
+    const host = this.panelHost.get(panelId);
+    if (host) {
+      for (const [otherId, otherRoot] of this.ccViewRoots) {
+        if (otherId === panelId || !otherRoot) continue;
+        if (this.panelHost.get(otherId) !== host) continue;
+        this.ccViewRoots.set(panelId, otherRoot);
+        console.log(`[clearcase-${panelId.slice(-6)}] view root inherited from ${otherId.slice(-6)} (${host}): ${otherRoot}`);
+        return otherRoot;
+      }
+    }
+    return '';
   }
 
   // /vobs/... 같은 뷰-상대 경로를 /view/<tag>/vobs/... 실경로로 변환 (SFTP 접근용).
@@ -972,9 +989,19 @@ class SSHBridge extends EventEmitter {
     if (!(p === '/vobs' || p.startsWith('/vobs/'))) return p;
     const root = await this.getCcViewRoot(panelId);
     if (!root) return p;
+    // 이 root 로 변환했더니 접근이 안 되는 게 이미 확인된 패널이면 변환하지 않는다.
+    // handleSFTPListDir 의 폴백은 실패 시 ccViewRoots 캐시를 지우는데, 프롬프트에서 뷰태그가 다시
+    // 즉시 탐지되므로 그냥 두면 **목록 조회마다** 실패할 걸 알면서 한 번 더 시도하게 된다
+    // (사용자 로그에서 `listdir via view root failed … retrying raw` 가 계속 반복됨).
+    // 뷰 안에서 SFTP 가 열린 세션은 변환 없이 /vobs 로 바로 접근되므로 이게 정상 경로다.
+    if (this.ccViewRootBad.get(panelId) === root) return p;
     if (p.startsWith(root)) return p;
     return root + p;
   }
+  // panel → "이 뷰 루트로 변환하면 접근 실패한다"고 확인된 값. root 가 달라지면 다시 시도한다.
+  private ccViewRootBad: Map<string, string> = new Map();
+  // panel/conn → 접속 호스트. 같은 호스트의 다른 패널에서 ClearCase 뷰 루트를 물려받을 때 쓴다.
+  private panelHost: Map<string, string> = new Map();
   // panel → 마지막으로 알려진 cwd (변경 감지용)
   private lastCwd: Map<string, string> = new Map();
 
@@ -1387,7 +1414,14 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   // 외부에서 명시적으로 panel 의 dedicated SFTP 만 종료 (SSH 메인 연결은 유지) — 파일트리 unmount 등에서 호출
   public releaseDedicatedSftp(panelId: string) {
     try { this._cleanupDedicatedSftp(panelId, false); } catch {}
-    try { const s = this.sftpCache.get(panelId); if (s) { s.end?.(); this.sftpCache.delete(panelId); } } catch {}
+    // 공유 SFTP 채널(sftpCache)은 여기서 닫지 않는다.
+    // 이 함수는 "전용(전송용) SFTP 연결만 정리하고 터미널 SSH 연결은 유지"가 목적인데, 예전엔
+    // sftpCache 채널까지 s.end() 로 닫았다. 그런데 그 채널은 **같은 termId 를 쓰는 다른 패널**(특히
+    // 파일전송 목록 조회)이 함께 쓰는 것이라, 파일 트리 사이드바가 언마운트되며 이 함수를 부르면
+    // (RemoteFileTree 의 cleanup) 파일전송의 진행 중인 조회가 ssh2 의 "No response from server" 로
+    // 깨졌다 — 실사용 로그에서 몇 번 성공 → 실패 → 재시도 성공이 주기적으로 반복된 원인.
+    // 공유 채널은 SSH 연결에 딸린 가벼운 채널이고, 연결이 끊기면 handleSFTPDisconnect/정리 경로가
+    // sftpCache 를 비운다. 죽은 채널이 남더라도 handleSFTPListDir 이 감지해 새로 연다.
   }
 
   handleResize(panelId: string, cols: number, rows: number) {
@@ -1430,6 +1464,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     this.shellPids.delete(panelId);
     this.lastCwd.delete(panelId);
     this.ccViewRoots.delete(panelId);
+    this.ccViewRootBad.delete(panelId);
+    this.panelHost.delete(panelId);
     this.activeShellPids.delete(panelId);
     this.promptTail.delete(panelId);
     this.promptCwdActive.delete(panelId);
@@ -2299,7 +2335,11 @@ probe_curl || probe_wget || probe_python
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`SFTP 목록 조회 응답 없음 (${dir})`));
+        // 타임아웃은 "경로가 틀렸다"는 신호가 아니다 — 이 채널이 멈췄다는 신호다. 호출부가 구분해서
+        // 처리하도록 표시한다(같은 채널에 다른 경로를 또 얹으면 좀비 요청이 쌓여 더 나빠진다).
+        const e: any = new Error(`SFTP 목록 조회 응답 없음 (${dir})`);
+        e.isSftpTimeout = true;
+        reject(e);
       }, timeoutMs);
       sftp.readdir(dir, (err: any, list: any[]) => {
         if (settled) return;
@@ -2311,23 +2351,138 @@ probe_curl || probe_wget || probe_python
     });
   }
 
+  // 같은 (연결, 경로) 에 대해 진행 중인 조회를 공유한다.
+  // 실사용 로그에서 짧은 구간에 같은 ClearCase 디렉토리(/vobs/REL/SSW_…)를 열 번 넘게 조회했다 —
+  // 패널 여러 개 + 창 분리로 인한 재마운트 + 새로고침이 겹치면서다. MVFS 디렉토리 조회는 원래
+  // 느린데 거기에 동시 요청이 쌓이면 SFTP 채널이 "No response from server" 로 멈췄다.
+  // 결과를 캐시하지는 않는다(오래된 목록을 보여주면 안 되므로) — 겹치는 동안만 하나로 합친다.
+  private listDirInFlight: Map<string, Promise<any[]>> = new Map();
+
   async handleSFTPListDir(panelId: string, remotePath: string): Promise<any[]> {
-    const sftp = await this.getSftp(panelId);
+    const key = `${panelId} ${remotePath}`;
+    const inflight = this.listDirInFlight.get(key);
+    // 각 호출자에게 사본을 준다 — 호출부(fe:list-dir 의 인코딩 재디코딩)가 항목을 제자리에서
+    // 수정하기 때문에 같은 배열을 공유하면 서로를 덮어쓴다.
+    if (inflight) return (await inflight).map(x => ({ ...x }));
+    const p = this._listDirWithRecovery(panelId, remotePath)
+      .finally(() => { this.listDirInFlight.delete(key); });
+    this.listDirInFlight.set(key, p);
+    return (await p).map(x => ({ ...x }));
+  }
+
+  private async _listDirWithRecovery(panelId: string, remotePath: string): Promise<any[]> {
+    // 진단 — /vobs(ClearCase) 조회는 결과 개수/실패를 남긴다. "목록이 안 보인다"가 0건 반환인지,
+    // 예외인지, 아예 호출조차 안 된 건지 화면만 봐서는 구분이 안 돼서.
+    const ccDiag = remotePath === '/vobs' || remotePath.startsWith('/vobs/');
     const rawPath = remotePath;
+    // 실패하면 SFTP **채널**만 버리고 한 번 재시도한다(SSH 연결은 그대로 둔다 — 재연결은 동기
+    // 키교환을 유발해 메인 프로세스를 멈추고, 그게 다른 패널의 스톨을 부르는 되먹임이 된다).
+    let lastErr: any;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        return await this._listDirAttempt(panelId, rawPath, ccDiag);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === 1) break;
+        if (!this._invalidateListSftp(panelId)) break; // 버릴 채널이 없으면 재시도해도 같은 결과
+        console.log(`[sftp-${panelId.slice(-6)}] listdir 실패 — SFTP 채널 폐기 후 재시도: ${(err as any)?.message || err}`);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    throw lastErr;
+  }
+
+  // 연결 단위 직렬화는 시도했다가 되돌렸다 — 하지 말 것.
+  // 의도는 느린 MVFS 디렉토리에 동시 readdir 이 쌓이는 걸 막는 것이었지만, 진행 중인 SFTP 요청은
+  // 취소할 수 없기 때문에 **멈춘 요청 하나가 그 뒤에 줄 선 모든 조회를 함께 막는다**(타임아웃 ×
+  // 재시도 횟수만큼). 실사용에서 목록이 아예 안 뜨는 상태가 됐다. 스톨 하나를 전면 정지로 바꾸는
+  // 나쁜 교환이므로, 동시 요청 억제는 "같은 경로" in-flight 합치기(handleSFTPListDir)까지만 한다.
+
+  // "이 채널은 죽었다"로 볼 수 있는 오류인지 — 경로 문제와 구분하기 위함.
+  // 내 타임아웃(isSftpTimeout)뿐 아니라 ssh2 가 직접 내는 무응답/연결끊김도 포함한다. 이걸 경로
+  // 오류로 오인하면 죽은 채널에 폴백 요청을 또 보내 타임아웃만큼 시간을 버린다.
+  private _isChannelDead(err: any): boolean {
+    if (err?.isSftpTimeout) return true;
+    const m = String(err?.message || err || '');
+    return /No response from server|Not connected|connection lost|channel is clos|Connection closed|ECONNRESET|EPIPE/i.test(m);
+  }
+
+  // 목록 조회에 쓰던 SFTP **채널**만 폐기 — 다음 조회가 같은 SSH 연결 위에 새 채널을 연다.
+  // SSH 연결 자체(전용 연결 포함)는 건드리지 않는다: 재연결은 동기 키교환(generateKeyPairSync)을
+  // 유발해 메인 프로세스를 멈추고, 그게 다른 패널의 SFTP 응답 지연 → 또 다른 스톨을 부른다.
+  // 멈춘 채널에 end() 도 보내지 않는다 — 응답 없는 채널에 channel-close 를 더 얹으면 그 연결의
+  // 프로토콜 상태를 더 흔들 수 있다. 참조만 버리고 ssh2/GC 에 맡긴다.
+  private _invalidateListSftp(panelId: string): boolean {
+    return this.sftpCache.delete(panelId);
+  }
+
+  // 조용히 멈춘 SFTP 채널 대응 배경: sftpCache 는 'close'/'end' 이벤트에서만 비워지는데, 채널이
+  // 이벤트 없이 무응답 상태가 되면 죽은 채널이 캐시에 영구히 남아 이후 **모든** 조회가 같은 채널에서
+  // 타임아웃된다(사용자 재현: 12건씩 정상 조회되다가 한 번 무응답이 된 뒤로는 변환 경로·raw 둘 다
+  // 계속 "응답 없음", 그 패널은 영구 복구 불가 → 파일전송을 다시 열어도 빈 목록).
+  // 그래서 위 handleSFTPListDir 이 실패 시 캐시를 버리고 새 채널로 재시도한다.
+
+  private async _listDirAttempt(panelId: string, rawPath: string, ccDiag: boolean): Promise<any[]> {
+    // 목록 조회는 **이미 맺어둔 공유 연결**의 SFTP 채널을 쓴다. 전용 SSH 연결(getDedicatedSftp)로
+    // 돌려봤다가 되돌렸다 — 하지 말 것:
+    //   전용 연결은 패널마다 새 SSH 핸드셰이크를 하고, 스톨 시 연결을 폐기하면 재시도가 또 핸드셰이크를
+    //   한다. ssh2 의 키 교환은 generateKeyPairSync('x25519') 로 **동기** 실행되어(kex.js) 그동안
+    //   메인 프로세스가 멈추고, 그러면 다른 패널의 SFTP 응답도 못 받아 "No response from server" 가
+    //   난다 → 스톨이 폐기·재연결을 부르고 그게 또 스톨을 부르는 되먹임이 생겼다.
+    //   실측: CPU 프로파일에서 generateKeyPairSync 가 메인 프로세스 시간의 40.7%(53초)를 차지.
+    // 이미 캐시돼 있던 채널인지 — 타임아웃 길이를 다르게 준다(바로 아래 설명).
+    const reusedChannel = this.sftpCache.has(panelId);
+    const sftp = await this.getSftp(panelId);
     const ccPath = await this.resolveCcPath(panelId, rawPath);
+    if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] req=${rawPath} resolved=${ccPath}${ccPath === rawPath ? ' (변환없음)' : ''}`);
     let list: any[];
     try {
-      // ClearCase 로 변환된 경로는 뷰가 죽어있으면 블록되므로 짧게 끊고 폴백한다.
-      list = await this._sftpReaddirOnce(sftp, ccPath, ccPath !== rawPath ? 8000 : 15000);
+      // 재사용 채널은 짧게(6초), 새로 연 채널은 넉넉히(30초).
+      // 실사용에서 "목록이 늦게 뜬다"의 정체는 **이미 죽어 있던 캐시 채널**을 쓰고 그 사실을
+      // 타임아웃(15초)이 지나서야 알아채는 것이었다 — 그 다음 새 채널 재시도는 즉시 성공했다.
+      // 정상 채널의 응답은 훨씬 빠르므로(로그상 연속 성공), 재사용 채널이 6초 안에 답을 못 하면
+      // 죽은 것으로 보고 빨리 버리는 편이 낫다. 반대로 새로 연 채널에는 넉넉히 줘서 느린 MVFS
+      // 디렉토리를 오판하지 않는다.
+      list = await this._sftpReaddirOnce(sftp, ccPath, reusedChannel ? 6000 : 30000);
     } catch (err) {
-      // 변환된 뷰 경로가 안 먹히면 — 캐시된 뷰 루트가 stale(그 뷰가 더 이상 mount 안 됨)일 수
-      // 있다. 캐시를 버려서 다음 호출이 다시 탐지하게 하고, 원래 /vobs 경로로 한 번 재시도한다
-      // (뷰 안에서 SFTP 가 열린 경우엔 변환 없이도 접근되므로 이쪽이 성공할 수 있다).
-      if (ccPath === rawPath) throw err;
+      if (ccPath === rawPath) {
+        if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] FAILED ${rawPath}: ${(err as any)?.message || err}`);
+        throw err;
+      }
+      // ★ 채널이 죽은 신호면 raw 로 폴백하지 않는다.
+      // 이건 경로가 틀렸다는 뜻이 아니라 채널이 멈췄다는 뜻인데, 내 타임아웃은 서버에 이미 나간
+      // 요청을 취소하지 못한다. 그 상태에서 같은 채널에 raw 요청을 또 얹으면 응답 없는 요청이 쌓여
+      // 더 나빠지고, 무엇보다 그 raw 요청이 15초 타임아웃을 그대로 소진해 목록이 늦게 뜬다
+      // (사용자 재현: "파일목록이 너무 늦게 떠" — view 실패 → raw 15초 → 폐기 → 성공).
+      // 채널을 버리고 같은 경로를 새 채널에서 즉시 다시 시도하도록 그대로 던진다.
+      if (this._isChannelDead(err)) {
+        console.log(`[clearcase-${panelId.slice(-6)}] ${ccPath} 조회 실패가 채널 문제 — 경로 문제 아님(폐기 후 재시도): ${(err as any)?.message || err}`);
+        throw err;
+      }
+      // 여기까지 왔으면 실제 오류(경로 없음 등) — 변환이 틀렸을 수 있으니 raw 로 한 번 확인한다.
       console.log(`[clearcase-${panelId.slice(-6)}] listdir via view root failed (${ccPath}) — retrying raw ${rawPath}`);
+      let rawList: any[];
+      try {
+        rawList = await this._sftpReaddirOnce(sftp, rawPath, 15000);
+      } catch (err2) {
+        console.log(`[cc-listdir-${panelId.slice(-6)}] raw 도 실패 ${rawPath}: ${(err2 as any)?.message || err2}`);
+        throw err; // 변환 경로가 정답이었을 가능성이 크므로 원래 오류를 알린다
+      }
+      // raw 가 0건이면 "성공"으로 보지 않는다. ClearCase dynamic view 서버에서는 변환된
+      // /view/<tag>/vobs/… 가 정답이고 raw /vobs/… 는 **에러 없이 빈 리스트**를 돌려준다.
+      // 그걸 성공으로 받아 ccViewRootBad 에 기록하면, 일시적 실패 한 번이 이후 계속 빈 목록으로
+      // 굳어버린다(사용자 재현: 12건이 정상이다가 한 번 실패한 뒤로 계속 0건).
+      if (rawList.length === 0) {
+        console.log(`[cc-listdir-${panelId.slice(-6)}] raw 는 0건 — 변환 경로가 정답으로 보임(일시 실패로 판단, 변환 유지)`);
+        throw err;
+      }
+      // raw 가 실제 내용을 돌려줬다 = 이 서버는 변환이 필요 없는 구성 → 다음부터 변환 생략
+      const badRoot = await this.getCcViewRoot(panelId);
+      if (badRoot) this.ccViewRootBad.set(panelId, badRoot);
       this.ccViewRoots.delete(panelId);
-      list = await this._sftpReaddirOnce(sftp, rawPath, 15000);
+      list = rawList;
     }
+    if (ccDiag) console.log(`[cc-listdir-${panelId.slice(-6)}] OK ${rawPath} → ${list.length}건`);
     return list.map((item: any) => {
       const attrs = item.attrs;
       // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
@@ -3442,6 +3597,8 @@ probe_curl || probe_wget || probe_python
       try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[sftp-connect] ${msg}`); } catch {}
     };
     log(`start host=${host} user=${username} jumps=${hops.length ? hops.map(h => h.host).join('→') : '(none)'}`);
+    // 같은 호스트의 다른 패널에서 ClearCase 뷰 루트를 물려받기 위한 기록(getCcViewRoot 폴백).
+    this.panelHost.set(connId, String(hops.length ? hops[hops.length - 1].host : host));
     return new Promise((resolve, reject) => {
       const primaryConn = new Client();
       primaryConn.on('error', (err: any) => {
@@ -3595,6 +3752,8 @@ probe_curl || probe_wget || probe_python
     // ccViewRoots 는 clients 레코드가 이미 정리됐어도(cleanupOnClose 가 먼저 탄 경우) 남으므로
     // early return 앞에서 지운다 — 안 지우면 죽은 connId 의 뷰 루트가 계속 쌓인다.
     this.ccViewRoots.delete(connId);
+    this.ccViewRootBad.delete(connId);
+    this.panelHost.delete(connId);
     this.activeShellPids.delete(connId);
     const rec = this.clients.get(connId);
     if (!rec) return;
