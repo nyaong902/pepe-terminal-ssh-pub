@@ -95,11 +95,20 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, source: s } : t) }));
   const setLeafPath = (leafId: string, path: string) =>
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, path } : t) }));
-  const setLeafSelected = (leafId: string, sel: Set<string>) =>
-    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, selected: sel } : t) }));
-  // 로드된 목록을 활성 탭에 캐싱 — 창 분리/재합침으로 재마운트될 때 initialFiles 로 즉시 표시하기 위함.
-  const setLeafEntries = (leafId: string, entries: any[]) =>
-    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, entries } : t) }));
+  // ── 탭 id 로 정확히 지정하는 setter 들 ───────────────────────────────────
+  // 위 setLeafSource/setLeafPath 는 "그 leaf 의 활성 탭"에 쓴다(p.activeIdx). 복제 등으로 한 leaf 에
+  // 탭이 여러 개일 때, FilePanel 의 비동기 콜백(navigate 는 feListDir 를 await 한 뒤 onPathChange 를
+  // 호출)이 진행되는 동안 사용자가 탭을 바꾸면 그 결과가 **엉뚱한 탭**에 써진다. 그러면 원래 탭의
+  // 경로가 다른 탭의 경로로 덮여, 그 경로에서 폴더를 클릭하면 존재하지 않는 경로가 되어 loadDir 이
+  // ENOENT 로 목록만 비우고(인라인 에러 없이) 완전 공백이 된다 — 사용자 재현 버그.
+  // 그래서 FilePanel 에 넘기는 콜백들은 렌더 시점의 탭 id 를 캡처해 그 탭만 갱신한다.
+  // (entries = 로드된 목록 캐시 — 재마운트 시 initialFiles 로 즉시 표시하기 위함)
+  const setTabPathById = (leafId: string, tabId: string, path: string) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, path } : t) }));
+  const setTabSelectedById = (leafId: string, tabId: string, sel: Set<string>) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, selected: sel } : t) }));
+  const setTabEntriesById = (leafId: string, tabId: string, entries: any[]) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, entries } : t) }));
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -1163,16 +1172,20 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return (
       <>
         {renderPanelTabs(leafId, panel)}
-        <FilePanel panelId={leafId} refreshKey={refreshKey}
+        {/* key={tab.id} — 탭마다 독립된 FilePanel 인스턴스를 쓴다. 예전엔 key 가 없어서 한 leaf 의
+            모든 탭이 인스턴스 하나를 공유했고, 그래서 목록/로딩·에러 상태/경로 history/정렬이
+            탭을 바꿔도 그대로 남아 서로 섞였다(복제 탭에서 특히 문제). 탭 전환 시 재마운트되지만
+            캐시된 목록(initialFiles=tab.entries)이 즉시 그려지므로 빈 화면은 보이지 않는다. */}
+        <FilePanel key={tab.id} panelId={leafId} refreshKey={refreshKey}
           source={tab.source} sources={sources} onSourceChange={src => handleSourceChangeForLeaf(leafId, src)}
-          selectedFiles={tab.selected} onSelectionChange={sel => setLeafSelected(leafId, sel)}
-          currentPath={tab.path} onPathChange={p => setLeafPath(leafId, p)}
+          selectedFiles={tab.selected} onSelectionChange={sel => setTabSelectedById(leafId, tab.id, sel)}
+          currentPath={tab.path} onPathChange={p => setTabPathById(leafId, tab.id, p)}
           onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop(leafId, files, srcMode, srcTermId, srcPath)}
           onOsFilesDrop={absPaths => handleOsFilesDrop(leafId, absPaths)}
           onDisconnect={() => handleDisconnect(tab.source)}
           workspaceId={workspaceIdRef.current}
           initialFiles={tab.entries}
-          onFilesLoaded={entries => setLeafEntries(leafId, entries)}
+          onFilesLoaded={entries => setTabEntriesById(leafId, tab.id, entries)}
         />
       </>
     );
