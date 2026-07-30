@@ -83,6 +83,32 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 (globalThis as any).__dirname = __dirname;
 
+// ── 진단: 자식 프로세스 생성 추적 ──────────────────────────────────────────
+// CPU 프로파일에서 메인 프로세스 시간의 17% 가 native `spawn` 으로 잡혔는데, 그 노드에는 JS
+// 호출 체인이 없어서(네이티브 프레임) 누가 부르는지 프로파일만으로는 특정할 수 없었다.
+// 기본은 꺼져 있고, DevTools(메인 프로세스) 나 아래 IPC 로 켜면 spawn/exec 계열 호출마다
+// 실행 파일명 + 호출 스택을 남긴다. 켜기: 렌더러에서 window.api.setSpawnTraceEnabled(true)
+let spawnTraceEnabled = false;
+try {
+  const cp = require('child_process');
+  const spawnCounts = new Map<string, number>();
+  for (const fn of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'] as const) {
+    const orig = (cp as any)[fn];
+    if (typeof orig !== 'function') continue;
+    (cp as any)[fn] = function (this: any, ...args: any[]) {
+      if (spawnTraceEnabled) {
+        const what = String(args[0] ?? '').slice(0, 120);
+        const key = `${fn}:${what}`;
+        spawnCounts.set(key, (spawnCounts.get(key) || 0) + 1);
+        const stack = (new Error().stack || '').split('\n').slice(2, 7).join('\n');
+        console.log(`[spawn-trace] ${key} (누적 ${spawnCounts.get(key)}회)\n${stack}`);
+      }
+      return orig.apply(this, args);
+    };
+  }
+} catch {}
+ipcMain.handle('diag:set-spawn-trace', (_e, on: boolean) => { spawnTraceEnabled = !!on; return { enabled: spawnTraceEnabled }; });
+
 // 멀티 인스턴스 캐시 충돌 방지 — 매 실행 unique sessionData 로 분리하던 코드.
 // 단점: Electron 의 safeStorage 가 sessionData 안에 키 파일(Local State 등) 두는 경우
 //        매 실행마다 키가 사라져서 자격증명 복호화 실패. 그래서 비활성화.
@@ -1661,7 +1687,20 @@ function messengerReadEmoticonAssets(dir: string): MessengerEmoticonAsset[] {
   }
 }
 
+// 이모티콘 팩 목록은 디스크를 훑는다(root 별 readdir + 팩마다 파일 열거). messengerState() 가
+// keepalive(3초)와 수신 패킷마다 호출되므로 그대로 두면 그 디스크 I/O 가 메인 프로세스에서 계속
+// 반복된다 — 짧은 TTL 캐시로 묶는다. 팩을 추가/삭제하면 몇 초 안에 반영된다.
+const MSG_EMOTICON_CACHE_MS = 10_000;
+let messengerEmoticonCache: { at: number; packs: MessengerEmoticonPack[] } | null = null;
+function messengerInvalidateEmoticonCache() { messengerEmoticonCache = null; }
 function messengerReadEmoticonPacks(): MessengerEmoticonPack[] {
+  const cached = messengerEmoticonCache;
+  if (cached && Date.now() - cached.at < MSG_EMOTICON_CACHE_MS) return cached.packs;
+  const result = messengerReadEmoticonPacksUncached();
+  messengerEmoticonCache = { at: Date.now(), packs: result };
+  return result;
+}
+function messengerReadEmoticonPacksUncached(): MessengerEmoticonPack[] {
   const packs: MessengerEmoticonPack[] = [];
   const seen = new Set<string>();
   for (const rootDir of messengerEmoticonRoots()) {
@@ -1701,8 +1740,18 @@ function messengerDir() {
 function messengerMessagesPath() { return path.join(messengerDir(), 'messages.json'); }
 function messengerIdentityPath() { return path.join(messengerDir(), 'identity.json'); }
 function messengerPeersPath() { return path.join(messengerDir(), 'peers.json'); }
+// 경로만 돌려준다 — 디스크는 건드리지 않는다.
+// 예전엔 호출마다 fs.mkdirSync(recursive) 를 돌렸는데, 이 함수는 messengerState() 안에서 불리고
+// messengerState() 는 keepalive 타이머(3초)와 **수신되는 hello 패킷마다** 호출된다. 그래서 메인
+// 프로세스가 동기 mkdir 로 계속 막혔다 — CPU 프로파일에서 이 함수 하나가 전체 샘플 시간의 39%
+// (24.1s/61.5s)를 차지했고, 메인이 막히면 모든 창과 SSH IPC 가 함께 버벅인다.
+// 실제로 폴더가 필요한 쓰기 경로는 messengerEnsureDownloadsDir() 를 쓴다.
 function messengerDownloadsDir() {
-  const dir = messengerPrefs.downloadDir || path.join(messengerDir(), 'downloads');
+  return messengerPrefs.downloadDir || path.join(messengerDir(), 'downloads');
+}
+// 파일을 실제로 저장하기 직전에만 폴더 생성을 보장한다(외부에서 삭제된 경우도 여기서 복구).
+function messengerEnsureDownloadsDir() {
+  const dir = messengerDownloadsDir();
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
@@ -1757,6 +1806,39 @@ function messengerLoadPeers() {
 }
 function messengerSavePeers() {
   try { fs.writeFileSync(messengerPeersPath(), JSON.stringify([...messengerPeers.values()].map(({ online, ...p }) => p), null, 2), 'utf8'); } catch {}
+}
+// LAN 의 peer 마다 3초 간격으로 hello 를 쏘기 때문에 수신 패킷은 꽤 잦다. 그때마다 위 동기
+// writeFileSync 를 돌리면 메인 프로세스가 계속 막힌다 — peer 목록은 lastSeen 만 갱신되는 게
+// 대부분이라 즉시 저장할 이유가 없어 뒤로 모아서 한 번 쓴다.
+let messengerSavePeersTimer: NodeJS.Timeout | null = null;
+function messengerSavePeersSoon() {
+  if (messengerSavePeersTimer) return;
+  messengerSavePeersTimer = setTimeout(() => {
+    messengerSavePeersTimer = null;
+    messengerSavePeers();
+  }, 3000);
+}
+// 같은 이유로 수신 패킷마다 전체 상태를 모든 창에 broadcast 하지 않는다(상태에는 메시지 전체가
+// 들어있고 창이 여러 개면 그만큼 직렬화된다). keepalive 타이머가 3초마다 어차피 보내주므로,
+// 패킷 유발 emit 은 합쳐서 최대 1초에 한 번만 내보낸다.
+let messengerPeersEmitTimer: NodeJS.Timeout | null = null;
+function messengerEmitPeersSoon() {
+  if (messengerPeersEmitTimer) return;
+  messengerPeersEmitTimer = setTimeout(() => {
+    messengerPeersEmitTimer = null;
+    messengerLastPeersSig = messengerPeersSignature();
+    messengerEmit({ type: 'peers', state: messengerState() });
+  }, 1000);
+}
+// peer 목록이 실제로 달라졌는지 싸게 비교하기 위한 서명 — id + 온라인여부 + 이름/주소.
+// keepalive 타이머가 "변화 없으면 안 보내기" 판정에 쓴다.
+let messengerLastPeersSig = '';
+function messengerPeersSignature() {
+  const now = Date.now();
+  return [...messengerPeers.values()]
+    .map(p => `${p.id}:${p.name}@${p.host}:${p.port}:${now - p.lastSeen < MSG_ONLINE_WINDOW_MS ? 1 : 0}`)
+    .sort()
+    .join('|');
 }
 function messengerLoadMessages() {
   try {
@@ -2061,7 +2143,7 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
   } else if (payload.type === 'file') {
     const fileName = path.basename(String(payload.fileName || 'received.bin')).replace(/[<>:"/\\|?*]/g, '_');
     const data = Buffer.from(String(payload.dataBase64 || ''), 'base64');
-    const savePath = path.join(messengerDownloadsDir(), `${Date.now()}-${fileName}`);
+    const savePath = path.join(messengerEnsureDownloadsDir(), `${Date.now()}-${fileName}`);
     fs.writeFileSync(savePath, data);
     const kind = payload.kind === 'sticker' ? 'sticker' : 'file';
     messengerRemember({ id: payload.messageId || `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind, fileName, filePath: savePath, size: data.length, ts: Number(payload.ts) || Date.now() });
@@ -2129,9 +2211,10 @@ async function messengerStartService(prefs?: MessengerPrefs) {
         const p = JSON.parse(msg.toString('utf8'));
         if (p?.app !== 'pepe-terminal-ssh' || p?.type !== 'hello' || p?.id === messengerId) return;
         messengerPeers.set(String(p.id), { id: String(p.id), name: String(p.name || 'PePe'), host: rinfo.address, port: Number(p.port) || 0, lastSeen: Date.now() });
-        messengerSavePeers();
+        // 동기 저장/전체 broadcast 를 패킷마다 하면 메인 프로세스가 막힌다 — 뒤로 모아서 처리.
+        messengerSavePeersSoon();
         if (!p.reply) messengerSendHelloTo(rinfo.address, true);
-        messengerEmit({ type: 'peers', state: messengerState() });
+        messengerEmitPeersSoon();
       } catch {}
     });
     await new Promise<void>((resolve, reject) => {
@@ -2145,7 +2228,14 @@ async function messengerStartService(prefs?: MessengerPrefs) {
   if (!messengerTimer) messengerTimer = setInterval(() => {
     messengerBroadcast();
     messengerKeepalive();
-    messengerEmit({ type: 'peers', state: messengerState() });
+    // 바뀐 게 없으면 보내지 않는다. messengerState() 는 메시지 전체를 담고 messengerEmit 은 그걸
+    // 창마다 IPC 직렬화하므로, 3초마다 무조건 보내면 창 수만큼 비용이 계속 나간다(프로파일에서
+    // 이 타이머가 메인 프로세스 시간의 최상위였다). peer 목록과 online 여부가 실제로 변할 때만 보낸다.
+    const sig = messengerPeersSignature();
+    if (sig !== messengerLastPeersSig) {
+      messengerLastPeersSig = sig;
+      messengerEmit({ type: 'peers', state: messengerState() });
+    }
   }, MSG_KEEPALIVE_MS);
   messengerBroadcast();
   messengerKeepalive();
@@ -2322,7 +2412,7 @@ ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, files }: { peer
       const fileName = item.name || path.basename(filePath);
       if (path.dirname(filePath) === attachTmpDir) {
         const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_');
-        const permPath = path.join(messengerDownloadsDir(), `${Date.now()}-${safeName}`);
+        const permPath = path.join(messengerEnsureDownloadsDir(), `${Date.now()}-${safeName}`);
         try { fs.renameSync(filePath, permPath); sendPath = permPath; }
         catch { try { fs.copyFileSync(filePath, permPath); fs.unlinkSync(filePath); sendPath = permPath; } catch {} }
       }
@@ -2357,6 +2447,8 @@ ipcMain.handle('messenger:open-emoticon-folder', async () => {
     const roots = messengerEmoticonRoots();
     const primary = roots[0] || path.join(app.getPath('userData'), 'messenger-emoticons');
     try { fs.mkdirSync(primary, { recursive: true }); } catch {}
+    // 사용자가 폴더를 열었다 = 곧 팩을 추가/삭제할 것 → 캐시를 버려 다음 조회가 디스크를 다시 읽게 한다.
+    messengerInvalidateEmoticonCache();
     await shell.openPath(primary);
     return { success: true, path: primary };
   } catch (err: any) {

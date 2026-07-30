@@ -173,6 +173,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFiles: (multi?: boolean) => ipcRenderer.invoke('dialog:pick-files', { multi }),
   pickFolder: () => ipcRenderer.invoke('dialog:pick-folder'),
   feSftpDisconnect: (connId: string) => ipcRenderer.invoke('fe:sftp-disconnect', { connId }),
+  // 진단 — 메인 프로세스의 자식 프로세스 생성 추적 on/off (spawn 원인 추적용)
+  setSpawnTraceEnabled: (on: boolean) => ipcRenderer.invoke('diag:set-spawn-trace', on),
   feGetViewRoot: (termId: string) => ipcRenderer.invoke('fe:get-view-root', { termId }),
   feSetViewRoot: (termId: string, root: string) => ipcRenderer.invoke('fe:set-view-root', { termId, root }),
   feReleaseSftp: (panelId: string) => ipcRenderer.invoke('fe:release-sftp', { panelId }),
