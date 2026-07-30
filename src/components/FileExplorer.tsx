@@ -1,7 +1,7 @@
 // src/components/FileExplorer.tsx
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FilePanel, PanelSource, clearPathHistory } from './FilePanel';
+import { FilePanel, PanelSource } from './FilePanel';
 import { TransferLog } from './TransferLog';
 import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
@@ -65,15 +65,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     // 실제 생존 목록(isLiveBackendConnId)도 함께 본다.
     const isLive = (tid: string) => isTermConnected(tid) || isLiveBackendConnId(tid);
     initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isLive) || createInitialFeLayout(localLabel);
-    // 재연결이 필요해진 소스가 있으면 그 개수만 남긴다 — 정상 분리/복원에서는 0 이어야 한다.
-    // (0 이 아니면 살아있어야 할 연결이 끊긴 것이므로 조사 시작점이 된다.)
-    if (initialState?.layout) {
-      try {
-        const demoted = collectFeLeaves(initialLayoutRef.current)
-          .flatMap(l => l.panel.tabs).filter(tb => tb.source.mode === 'lazy-remote').length;
-        if (demoted > 0) console.log('[fe-revive] 재연결 필요한 소스', demoted, '개 —', tabId);
-      } catch {}
-    }
   }
   const [layout, setLayout] = useState<FeLayoutNode>(() => initialLayoutRef.current!);
   const [selectedLeafId, setSelectedLeafId] = useState<string>(() => {
@@ -109,6 +100,12 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, selected: sel } : t) }));
   const setTabEntriesById = (leafId: string, tabId: string, entries: any[]) =>
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, entries } : t) }));
+  // 이전/다음 폴더 기록도 entries 와 같은 이유로 탭 데이터에 싣는다 — FilePanel.tsx 의
+  // initialPathHistory/onPathHistoryChange 주석 참고(창 분리 시 렌더러 프로세스에 안 묶이도록).
+  // hist 는 FilePanel 이 in-place 로 계속 변형하는 배열이라 사본으로 저장한다 — 참조를 그대로
+  // 넣으면 탭 데이터와 패널이 같은 배열을 공유해 저장 시점의 스냅샷이 아니게 된다.
+  const setTabPathHistoryById = (leafId: string, tabId: string, hist: string[], idx: number) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, pathHistory: [...hist], pathHistoryIdx: idx } : t) }));
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -694,12 +691,15 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 다른 (창의) 파일 전송 탭을 이 탭 위로 끌어다 놓아 병합할 때 — 그 탭에 열려있던 세션ID 기반
   // 원격 소스와 즉석 SFTP(manualConn) 소스를 이 인스턴스에 새로 열어 재연결한다. termId 는 서로
   // 다른 프로세스/창의 것이라 그대로 옮길 수 없어 항상 새로 연결한다(기존 세션 그대로 이관 X).
-  const mergeInRemoteSource = async (item: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string }) => {
+  const mergeInRemoteSource = async (item: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }) => {
     let src: PanelSource | null = null;
     if (item.sessionId) src = { mode: 'lazy-remote', sessionId: item.sessionId, label: item.label || '', viewRoot: item.viewRoot };
     else if (item.manualConn) src = { mode: 'lazy-remote', manualConn: item.manualConn, label: item.label || '', viewRoot: item.viewRoot };
     if (!src) return;
     const tab = makeFeTab(src, item.path || '');
+    // 이전/다음 폴더 기록도 이어받는다 — 안 그러면 병합으로 새로 생기는 탭은 항상 빈 기록으로
+    // 시작해 "이전 폴더" 화살표가 꺼진다(App.tsx 의 extractMergeableFeSources 가 실어 보낸 값).
+    if (item.pathHistory?.length) { tab.pathHistory = item.pathHistory; tab.pathHistoryIdx = item.pathHistoryIdx; }
     const leaves = collectFeLeaves(layoutRef.current);
     let leafId: string;
     if (leaves.length === 1) {
@@ -866,8 +866,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const leaf = getLeaf(leafId);
     const keepId = leaf?.panel.tabs[idx]?.id;
     if (!keepId) return;
-    // 닫히는 탭들의 경로 기록 정리
-    for (const t of leaf!.panel.tabs) if (t.id !== keepId) clearPathHistory(t.id);
     updatePanel(leafId, p => {
       const keep = p.tabs.find(t => t.id === keepId);
       if (!keep) return p;
@@ -881,9 +879,6 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     if (leaves.length === 1 && leaves[0].panel.tabs.length <= 1) return;
     const leaf = leaves.find(l => l.id === leafId);
     if (!leaf) return;
-    // 닫는 탭의 경로 기록(모듈 레벨 store)도 정리 — 안 지우면 계속 쌓인다.
-    const closing = leaf.panel.tabs[idx];
-    if (closing) clearPathHistory(closing.id);
     if (leaf.panel.tabs.length <= 1) {
       // 이 leaf 의 마지막 탭 — leaf 자체를 닫아 트리를 축약(동적 패널 전환)
       setLayout(prev => removeFeLeafNode(prev, leafId));
@@ -1184,10 +1179,12 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             모든 탭이 인스턴스 하나를 공유했고, 그래서 목록/로딩·에러 상태/경로 history/정렬이
             탭을 바꿔도 그대로 남아 서로 섞였다(복제 탭에서 특히 문제). 탭 전환 시 재마운트되지만
             캐시된 목록(initialFiles=tab.entries)이 즉시 그려지므로 빈 화면은 보이지 않는다. */}
-        <FilePanel key={tab.id} panelId={leafId} historyKey={tab.id} refreshKey={refreshKey}
+        <FilePanel key={tab.id} panelId={leafId} refreshKey={refreshKey}
           source={tab.source} sources={sources} onSourceChange={src => handleSourceChangeForLeaf(leafId, src)}
           selectedFiles={tab.selected} onSelectionChange={sel => setTabSelectedById(leafId, tab.id, sel)}
           currentPath={tab.path} onPathChange={p => setTabPathById(leafId, tab.id, p)}
+          initialPathHistory={tab.pathHistory} initialPathHistoryIdx={tab.pathHistoryIdx}
+          onPathHistoryChange={(hist, idx) => setTabPathHistoryById(leafId, tab.id, hist, idx)}
           onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop(leafId, files, srcMode, srcTermId, srcPath)}
           onOsFilesDrop={absPaths => handleOsFilesDrop(leafId, absPaths)}
           onDisconnect={() => handleDisconnect(tab.source)}

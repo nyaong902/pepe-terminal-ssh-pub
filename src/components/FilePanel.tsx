@@ -66,36 +66,29 @@ type Props = {
   onOsFilesDrop?: (absPaths: string[]) => void;
   onDisconnect?: () => void;
   panelId: string;
-  // 이전/다음 폴더 기록을 보관할 키 — 탭 단위로 유지되어야 하므로 보통 탭 id 를 넘긴다.
-  // 없으면 panelId 로 대체(단일 탭 사용처 호환).
-  historyKey?: string;
   refreshKey?: number;
   workspaceId?: string;
   // 창 분리/재합침으로 다시 마운트될 때 빈 목록 대신 즉시 그려줄 캐시된 목록(있으면).
   initialFiles?: FileInfo[];
   // loadDir 로 새 목록을 성공적으로 받아올 때마다 호출 — 부모가 캐시로 들고 있다가 다음 마운트 때 initialFiles 로 넘겨준다.
   onFilesLoaded?: (files: FileInfo[]) => void;
+  // 이전/다음 폴더 기록(경로 배열 + 현재 위치) — FeTab.pathHistory/pathHistoryIdx 와 대응.
+  // 렌더러 프로세스 내부 저장소가 아니라 탭 데이터 자체로 다뤄야 하는 이유: 창을 분리하면 새
+  // 렌더러 프로세스가 뜨는데, 예전엔 이 기록을 렌더러 모듈 레벨 Map 에 탭 id 로 보관해서 그 새
+  // 프로세스에는 기록이 없었다(분리하면 화살표가 사라짐). 그러다 원래 창으로 돌아오면 그 창의
+  // 프로세스는 계속 살아있던 것이라 Map 이 안 비워져 있어서 다시 나타났다(사용자 재현: 분리 시
+  // 사라짐 → 원래 창 복귀 시 재등장 — 저장 위치가 "이 프로세스"에 묶여 있었다는 신호).
+  // entries(파일 목록 캐시)와 같은 패턴으로 탭 데이터에 실어서 serializeFeLayout 을 타고 어느
+  // 창으로 옮겨져도 함께 다니게 한다.
+  initialPathHistory?: string[];
+  initialPathHistoryIdx?: number;
+  onPathHistoryChange?: (hist: string[], idx: number) => void;
 };
 
 const api = (window as any).api || {};
 
-// 탭별 경로 history(이전/다음 폴더) — FileExplorer 가 탭마다 독립 인스턴스를 쓰려고
-// key={tab.id} 를 주기 때문에, 탭을 전환하면 FilePanel 이 재마운트된다. 그래서 history 를
-// 인스턴스 ref 에만 두면 탭을 왔다갔다 할 때마다 기록이 초기화돼 "이전 폴더" 화살표가
-// 비활성화된다(사용자 재현). 탭 id 로 모듈 레벨에 보관해 재마운트에도 유지한다.
-// 앱 재시작/창 분리로 완전히 새로 마운트될 때는 사라지는 게 맞는 임시 UI 상태다.
 // 드라이브/특수폴더 목록 캐시(창 단위) — 값이 거의 안 바뀌는데 조회가 무겁다(main 에서 PowerShell).
 let drivesModuleCache: { path: string; label: string; depth?: number }[] | null = null;
-
-const pathHistoryStore = new Map<string, { hist: string[]; idx: number; sourceKey: string }>();
-/** 탭이 닫힐 때 그 탭의 history 를 정리 (FileExplorer 가 호출).
- *  키는 `<탭id>::<source>` 형태라 그 탭의 모든 소스별 버킷을 함께 지운다. */
-export function clearPathHistory(historyKey: string) {
-  const prefix = `${historyKey}::`;
-  for (const k of [...pathHistoryStore.keys()]) {
-    if (k === historyKey || k.startsWith(prefix)) pathHistoryStore.delete(k);
-  }
-}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -212,7 +205,7 @@ function setNameDragImage(e: React.DragEvent, label: string) {
   setTimeout(() => el.remove(), 0);
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, historyKey, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded, initialPathHistory, initialPathHistoryIdx, onPathHistoryChange }) => {
   const { t } = useTranslation('fileExplorer');
   const [bootReady, setBootReady] = useState(false);
   const [files, setFiles] = useState<FileInfo[]>(initialFiles || []);
@@ -455,54 +448,74 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
 
   const sep = source.mode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
 
-  // 경로 history (이전/다음 폴더) — source 별로 독립.
-  // 탭 전환 시 재마운트돼도 기록이 남도록 모듈 레벨 store 에서 복원한다(pathHistoryStore 주석 참고).
-  // 기록은 (탭 × source) 단위 버킷에 보관한다. 두 가지 "왔다갔다"를 모두 살리기 위함:
-  //  · 탭 전환 — key={tab.id} 때문에 FilePanel 이 재마운트되므로 인스턴스 ref 만으로는 사라진다
-  //  · 소스 드롭다운으로 세션 변경 — 같은 탭에서 서버 A→B→A 로 돌아왔을 때 A 의 기록을 되찾는다
-  // 어느 쪽이든 버킷 키가 달라지므로 서로 섞이지 않고, 돌아오면 그 조합의 기록이 복원된다.
-  const histKey = historyKey || panelId;
-  const sourceKey = `${source.mode}|${source.termId || ''}|${source.sessionId || ''}`;
-  const bucketKey = `${histKey}::${sourceKey}`;
-  const histSaved = pathHistoryStore.get(bucketKey);
-  const historyRef = useRef<string[]>(histSaved?.hist.length ? histSaved.hist : [currentPath]);
-  const historyIdxRef = useRef<number>(histSaved?.hist.length ? histSaved.idx : 0);
+  // 경로 history (이전/다음 폴더) — 초기값은 props(FeTab.pathHistory/pathHistoryIdx)에서
+  // 복원한다. 부모(FileExplorer)가 이 값을 탭 데이터에 저장해두므로, 탭이 다른 창으로 옮겨가도
+  // (분리) 그 탭의 직렬화된 상태와 함께 따라간다 — 렌더러 프로세스에 묶인 저장소가 아니다.
+  // "같은 세션"인지 판정하는 안정적인 식별자 — termId 는 넣지 않는다.
+  // termId 는 연결마다 새로 발급되는 임시 값이라, lazy-remote(연결 전) → remote(연결 후) 자동
+  // 재연결이나 병합으로 새 연결을 맺을 때마다 바뀐다. termId 를 식별자에 넣으면 그런 재연결이
+  // "사용자가 드롭다운에서 다른 세션을 골랐다"와 구분이 안 돼서, 아래 리셋 이펙트가 매번
+  // 도는 재연결마다 방금 이어받은 기록을 지워버렸다(사용자 재현: 병합 직후 기록이 다시 사라짐).
+  // sessionId/manualConn(호스트·계정)은 재연결해도 그대로이므로 이걸로 "같은 세션"을 판정한다.
+  const sourceIdentity = source.mode === 'local'
+    ? 'local'
+    : (source.sessionId || (source.manualConn ? `mc:${source.manualConn.host}:${source.manualConn.port}:${source.manualConn.username}` : `term:${source.termId || ''}`));
+  const historyRef = useRef<string[]>(initialPathHistory?.length ? [...initialPathHistory] : [currentPath]);
+  const historyIdxRef = useRef<number>(
+    initialPathHistory?.length
+      ? Math.min(Math.max(0, initialPathHistoryIdx ?? initialPathHistory.length - 1), initialPathHistory.length - 1)
+      : 0,
+  );
   const skipHistoryRef = useRef<boolean>(false);
+  // 다음 currentPath 변경이 "사용자 이동"인지 표시 — navigate() 가 세운다(위 push effect 참고).
+  const userNavRef = useRef<boolean>(false);
   const [, forceHistoryTick] = useState(0);
-  // 기록이 바뀔 때마다 store 에 반영 — 이 인스턴스가 언마운트돼도 다음 마운트가 이어받는다.
   const persistHistory = () => {
-    pathHistoryStore.set(bucketKey, { hist: historyRef.current, idx: historyIdxRef.current, sourceKey });
+    try { onPathHistoryChange?.(historyRef.current, historyIdxRef.current); } catch {}
   };
-  // 버킷이 바뀌면(=source 변경) 그 버킷의 기록으로 교체. 없으면 현재 경로로 새로 시작.
-  // 주의: effect 는 **마운트 때도 실행**된다. 탭 전환마다 재마운트되는 지금 구조에서 마운트 시에도
-  // 초기화하면, 방금 store 에서 복원한 기록을 그 자리에서 덮어써서 "이전 폴더" 화살표가 계속
-  // 비활성화된다(사용자 재현). 첫 실행은 복원값을 그대로 두고 저장만 한다.
-  const histMountedRef = useRef(false);
+  // 마운트 시 최초 상태를 한 번 부모에 알려둔다(새 탭이면 [currentPath] 를 그대로 보고).
+  useEffect(() => { persistHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // 세션 자체가 바뀌면(드롭다운으로 다른 세션 선택 등) 기록을 리셋한다. lazy-remote→remote 자동
+  // 재연결처럼 sourceIdentity 가 그대로인 경우는 여기서 안 걸린다(위 주석 참고).
+  //
+  // 반드시 "이전 값과 비교"로 판정해야 한다 — "마운트 후 첫 실행인지" 플래그로는 안 된다.
+  // React.StrictMode(main.tsx)는 dev 빌드에서 이펙트를 의도적으로 두 번 실행하는데(마운트 →
+  // 가상 언마운트 → 재마운트, ref 는 유지됨), 플래그 방식은 2회차에서 플래그가 이미 true 라
+  // 리셋 분기로 떨어져 방금 props 로 복원한 기록을 지워버렸다. 그래서 dev 에서만 "이전 폴더"
+  // 화살표가 꺼지고 프로덕션 빌드(build:dev)에서는 정상이었다 — StrictMode 가 잡아준 실제 결함이다.
+  // 이전 값과 비교하면 두 번 실행돼도 결과가 같다(멱등).
+  const prevIdentityRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!histMountedRef.current) {
-      histMountedRef.current = true;
-      persistHistory(); // 새 탭/새 소스면 현재 경로로 기록을 시작해둔다
-      return;
-    }
-    const saved = pathHistoryStore.get(bucketKey);
-    if (saved && saved.hist.length) {
-      historyRef.current = saved.hist;
-      historyIdxRef.current = saved.idx;
-    } else {
-      historyRef.current = [currentPath];
-      historyIdxRef.current = 0;
-    }
+    const prev = prevIdentityRef.current;
+    prevIdentityRef.current = sourceIdentity;
+    if (prev === null || prev === sourceIdentity) return; // 최초 실행 또는 실제로 안 바뀜 → 유지
+    historyRef.current = [currentPath];
+    historyIdxRef.current = 0;
     persistHistory();
     forceHistoryTick(t => t + 1);
-    // bucketKey 가 바뀐 경우만 (currentPath 는 아래 push effect 가 추적)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bucketKey]);
-  // currentPath 가 외부에서 바뀐 경우 (handleClick / enterDir 등) history 에 push
+  }, [sourceIdentity]);
+  // currentPath 가 바뀌면 history 를 갱신한다.
+  // 단 "사용자가 이동한 것"만 기록으로 쌓는다 — 부모(FileExplorer)가 프로그램적으로 지정하는
+  // 경로는 현재 위치만 갱신한다. 초기 연결/재연결/복원 과정에서 경로가 '' → '/'(홈 조회 폴백) →
+  // 실제 작업 경로 순으로 바뀌는데, 이 중간 단계를 이동으로 기록하면 사용자가 가본 적 없는 '/'
+  // 가 "이전 폴더"에 남는다(사용자 재현: 처음 들어간 곳이 /vobs/REL/SSW_SKBC4_70A 인데 이전
+  // 폴더에 / 가 들어있음). 사용자 이동은 전부 navigate() 를 거치므로 그 지점에서만 표시한다.
   useEffect(() => {
     if (skipHistoryRef.current) { skipHistoryRef.current = false; return; }
+    const wasUserNav = userNavRef.current;
+    userNavRef.current = false;
+    if (!currentPath) return; // 아직 경로가 정해지지 않은 초기 상태 — 기록하지 않는다
     const hist = historyRef.current;
     const idx = historyIdxRef.current;
     if (hist[idx] === currentPath) return; // 같은 경로면 skip
+    if (!wasUserNav) {
+      // 프로그램적 경로 지정 — 현재 위치만 바꾸고 기록은 늘리지 않는다
+      hist[idx] = currentPath;
+      persistHistory();
+      forceHistoryTick(t => t + 1);
+      return;
+    }
     // 현재 idx 이후 항목 잘라내고 새 경로 push
     hist.splice(idx + 1);
     hist.push(currentPath);
@@ -518,6 +531,9 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // .lnk 단축 (`lnk:...`) 은 main 이 resolvedPath 로 실제 target 을 반환 → 경로바에는 그 실제 경로 사용.
   const navigate = async (dir: string) => {
     if (!dir) return;
+    // 사용자 이동임을 표시 — 이것만 history 에 쌓인다(위 push effect 참고).
+    // 폴더 진입/상위로/경로 직접 입력/브레드크럼 모두 이 함수를 거친다.
+    userNavRef.current = true;
     if (typeof api.feListDir !== 'function') { onPathChange(dir); return; }
     try {
       const result: any = await api.feListDir(source.mode, dir, source.termId, encoding);
@@ -525,6 +541,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         const errStr = String(result.error);
         if (isPathNotFoundError(errStr)) {
           setErrorMessage(t('pathNotFound', { dir }));
+          userNavRef.current = false; // 이동이 취소됐으니 표시도 되돌린다(안 그러면 다음 변경을 오인)
           return; // 경로 미변경
         }
         // 다른 종류 에러는 일단 경로 이동 후 loadDir 가 inline 에러 표시
@@ -540,6 +557,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
       const errStr = String(e?.message || e);
       if (isPathNotFoundError(errStr)) {
         setErrorMessage(t('pathNotFound', { dir }));
+        userNavRef.current = false; // 위와 동일 — 이동이 취소됨
         return;
       }
       onPathChange(dir);

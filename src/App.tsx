@@ -3136,7 +3136,6 @@ function App() {
                 // 뷰 루트 조회(extractMergeableFeSources 내부)가 원본 termId 가 아직 살아있는
                 // 동안 끝나야 하므로, 아래 disconnect 전에 반드시 await.
                 const merged = await dispatchFeMerge(targetTab.id, payload.tab.fileExplorerState);
-                console.log('[adopt-tab] fileExplorer→merge', { targetTab: targetTab.id, merged });
                 // 재연결 가능한 원격 소스가 하나도 없으면(로컬 패널만이거나 상태 유실) 병합을
                 // 포기하고 아래 일반 경로로 새 탭 복원 — 예전엔 여기서 무조건 return 해버려서
                 // 끌어온 탭이 아무 데도 안 생기고 그냥 사라졌다.
@@ -3238,11 +3237,11 @@ function App() {
   // 소스만 추출 — 세션ID 로 저장된 세션이거나, 즉석 SFTP 연결(manualConn 자격증명 보존)인 것만
   // 대상. 그 외(로컬 탭, 혹은 이 기능 이전에 저장돼 manualConn 이 없는 구버전 즉석 연결)는
   // 재연결할 자격증명이 없으므로 조용히 제외한다(기존에 알려진 한계 — 사용자에게 문서화됨).
-  const extractMergeableFeSources = async (feState: any): Promise<{ items: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string }[]; droppedCount: number }> => {
+  const extractMergeableFeSources = async (feState: any): Promise<{ items: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }[]; droppedCount: number }> => {
     try {
       const layout = feState?.layout;
       if (!layout) return { items: [], droppedCount: 0 };
-      const items: { sessionId?: string; manualConn?: any; label?: string; path?: string; termId?: string; viewRoot?: string }[] = [];
+      const items: { sessionId?: string; manualConn?: any; label?: string; path?: string; termId?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }[] = [];
       const seen = new Set<string>();
       let droppedCount = 0;
       const walk = (node: any) => {
@@ -3251,16 +3250,21 @@ function App() {
           for (const t of node.panel?.tabs || []) {
             const src = t?.source;
             if (!src || src.mode === 'local') continue;
+            // 이전/다음 폴더 기록도 함께 넘긴다 — 안 넘기면 병합으로 새로 만들어지는 탭은 항상
+            // 빈 기록으로 시작해 "이전 폴더" 화살표가 꺼진다(사용자 재현: 분리했던 탭을 다시
+            // 병합하면 기록이 사라짐).
+            const hist = Array.isArray(t.pathHistory) ? t.pathHistory : undefined;
+            const histIdx = typeof t.pathHistoryIdx === 'number' ? t.pathHistoryIdx : undefined;
             if (src.sessionId) {
               const key = `s:${src.sessionId}`;
               if (seen.has(key)) continue;
               seen.add(key);
-              items.push({ sessionId: src.sessionId, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot });
+              items.push({ sessionId: src.sessionId, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot, pathHistory: hist, pathHistoryIdx: histIdx });
             } else if (src.manualConn) {
               const key = `m:${src.manualConn.host}:${src.manualConn.port}:${src.manualConn.username}`;
               if (seen.has(key)) continue;
               seen.add(key);
-              items.push({ manualConn: src.manualConn, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot });
+              items.push({ manualConn: src.manualConn, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot, pathHistory: hist, pathHistoryIdx: histIdx });
             } else {
               // 자격증명을 복원할 방법이 없는 원격 소스(이 기능 이전에 저장된 즉석 SFTP 연결 등)
               droppedCount++;
@@ -3288,7 +3292,6 @@ function App() {
   // 두거나 새 탭으로 복원하는 폴백을 해야 한다(안 그러면 탭이 그냥 사라진다).
   const dispatchFeMerge = async (feTabId: string, feState: any): Promise<boolean> => {
     const { items, droppedCount } = await extractMergeableFeSources(feState);
-    console.log('[fe-merge] dispatch', { feTabId, items: items.length, droppedCount, hasLayout: !!feState?.layout });
     if (items.length > 0) {
       window.dispatchEvent(new CustomEvent('fe-merge-remote-sources', { detail: { feTabId, items } }));
     }
