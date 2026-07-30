@@ -1,7 +1,7 @@
 // src/components/FileExplorer.tsx
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FilePanel, PanelSource } from './FilePanel';
+import { FilePanel, PanelSource, clearPathHistory } from './FilePanel';
 import { TransferLog } from './TransferLog';
 import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
@@ -863,8 +863,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   // 우클릭한 탭만 남기고 이 패널의 나머지 탭을 모두 닫는다.
   const closeOtherTabsInLeaf = (leafId: string, idx: number) => {
+    const leaf = getLeaf(leafId);
+    const keepId = leaf?.panel.tabs[idx]?.id;
+    if (!keepId) return;
+    // 닫히는 탭들의 경로 기록 정리
+    for (const t of leaf!.panel.tabs) if (t.id !== keepId) clearPathHistory(t.id);
     updatePanel(leafId, p => {
-      const keep = p.tabs[idx];
+      const keep = p.tabs.find(t => t.id === keepId);
       if (!keep) return p;
       return { ...p, tabs: [keep], activeIdx: 0 };
     });
@@ -876,6 +881,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     if (leaves.length === 1 && leaves[0].panel.tabs.length <= 1) return;
     const leaf = leaves.find(l => l.id === leafId);
     if (!leaf) return;
+    // 닫는 탭의 경로 기록(모듈 레벨 store)도 정리 — 안 지우면 계속 쌓인다.
+    const closing = leaf.panel.tabs[idx];
+    if (closing) clearPathHistory(closing.id);
     if (leaf.panel.tabs.length <= 1) {
       // 이 leaf 의 마지막 탭 — leaf 자체를 닫아 트리를 축약(동적 패널 전환)
       setLayout(prev => removeFeLeafNode(prev, leafId));
@@ -1176,7 +1184,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             모든 탭이 인스턴스 하나를 공유했고, 그래서 목록/로딩·에러 상태/경로 history/정렬이
             탭을 바꿔도 그대로 남아 서로 섞였다(복제 탭에서 특히 문제). 탭 전환 시 재마운트되지만
             캐시된 목록(initialFiles=tab.entries)이 즉시 그려지므로 빈 화면은 보이지 않는다. */}
-        <FilePanel key={tab.id} panelId={leafId} refreshKey={refreshKey}
+        <FilePanel key={tab.id} panelId={leafId} historyKey={tab.id} refreshKey={refreshKey}
           source={tab.source} sources={sources} onSourceChange={src => handleSourceChangeForLeaf(leafId, src)}
           selectedFiles={tab.selected} onSelectionChange={sel => setTabSelectedById(leafId, tab.id, sel)}
           currentPath={tab.path} onPathChange={p => setTabPathById(leafId, tab.id, p)}

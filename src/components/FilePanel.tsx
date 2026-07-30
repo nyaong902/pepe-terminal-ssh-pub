@@ -66,6 +66,9 @@ type Props = {
   onOsFilesDrop?: (absPaths: string[]) => void;
   onDisconnect?: () => void;
   panelId: string;
+  // 이전/다음 폴더 기록을 보관할 키 — 탭 단위로 유지되어야 하므로 보통 탭 id 를 넘긴다.
+  // 없으면 panelId 로 대체(단일 탭 사용처 호환).
+  historyKey?: string;
   refreshKey?: number;
   workspaceId?: string;
   // 창 분리/재합침으로 다시 마운트될 때 빈 목록 대신 즉시 그려줄 캐시된 목록(있으면).
@@ -75,6 +78,21 @@ type Props = {
 };
 
 const api = (window as any).api || {};
+
+// 탭별 경로 history(이전/다음 폴더) — FileExplorer 가 탭마다 독립 인스턴스를 쓰려고
+// key={tab.id} 를 주기 때문에, 탭을 전환하면 FilePanel 이 재마운트된다. 그래서 history 를
+// 인스턴스 ref 에만 두면 탭을 왔다갔다 할 때마다 기록이 초기화돼 "이전 폴더" 화살표가
+// 비활성화된다(사용자 재현). 탭 id 로 모듈 레벨에 보관해 재마운트에도 유지한다.
+// 앱 재시작/창 분리로 완전히 새로 마운트될 때는 사라지는 게 맞는 임시 UI 상태다.
+const pathHistoryStore = new Map<string, { hist: string[]; idx: number; sourceKey: string }>();
+/** 탭이 닫힐 때 그 탭의 history 를 정리 (FileExplorer 가 호출).
+ *  키는 `<탭id>::<source>` 형태라 그 탭의 모든 소스별 버킷을 함께 지운다. */
+export function clearPathHistory(historyKey: string) {
+  const prefix = `${historyKey}::`;
+  for (const k of [...pathHistoryStore.keys()]) {
+    if (k === historyKey || k.startsWith(prefix)) pathHistoryStore.delete(k);
+  }
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -191,7 +209,7 @@ function setNameDragImage(e: React.DragEvent, label: string) {
   setTimeout(() => el.remove(), 0);
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, historyKey, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
   const { t } = useTranslation('fileExplorer');
   const [bootReady, setBootReady] = useState(false);
   const [files, setFiles] = useState<FileInfo[]>(initialFiles || []);
@@ -412,19 +430,48 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
 
   const sep = source.mode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
 
-  // 경로 history (이전/다음 폴더) — source 별로 독립
-  const historyRef = useRef<string[]>([currentPath]);
-  const historyIdxRef = useRef<number>(0);
+  // 경로 history (이전/다음 폴더) — source 별로 독립.
+  // 탭 전환 시 재마운트돼도 기록이 남도록 모듈 레벨 store 에서 복원한다(pathHistoryStore 주석 참고).
+  // 기록은 (탭 × source) 단위 버킷에 보관한다. 두 가지 "왔다갔다"를 모두 살리기 위함:
+  //  · 탭 전환 — key={tab.id} 때문에 FilePanel 이 재마운트되므로 인스턴스 ref 만으로는 사라진다
+  //  · 소스 드롭다운으로 세션 변경 — 같은 탭에서 서버 A→B→A 로 돌아왔을 때 A 의 기록을 되찾는다
+  // 어느 쪽이든 버킷 키가 달라지므로 서로 섞이지 않고, 돌아오면 그 조합의 기록이 복원된다.
+  const histKey = historyKey || panelId;
+  const sourceKey = `${source.mode}|${source.termId || ''}|${source.sessionId || ''}`;
+  const bucketKey = `${histKey}::${sourceKey}`;
+  const histSaved = pathHistoryStore.get(bucketKey);
+  const historyRef = useRef<string[]>(histSaved?.hist.length ? histSaved.hist : [currentPath]);
+  const historyIdxRef = useRef<number>(histSaved?.hist.length ? histSaved.idx : 0);
   const skipHistoryRef = useRef<boolean>(false);
   const [, forceHistoryTick] = useState(0);
-  // source 변경 시 history 리셋
+  // 기록이 바뀔 때마다 store 에 반영 — 이 인스턴스가 언마운트돼도 다음 마운트가 이어받는다.
+  const persistHistory = () => {
+    pathHistoryStore.set(bucketKey, { hist: historyRef.current, idx: historyIdxRef.current, sourceKey });
+  };
+  // 버킷이 바뀌면(=source 변경) 그 버킷의 기록으로 교체. 없으면 현재 경로로 새로 시작.
+  // 주의: effect 는 **마운트 때도 실행**된다. 탭 전환마다 재마운트되는 지금 구조에서 마운트 시에도
+  // 초기화하면, 방금 store 에서 복원한 기록을 그 자리에서 덮어써서 "이전 폴더" 화살표가 계속
+  // 비활성화된다(사용자 재현). 첫 실행은 복원값을 그대로 두고 저장만 한다.
+  const histMountedRef = useRef(false);
   useEffect(() => {
-    historyRef.current = [currentPath];
-    historyIdxRef.current = 0;
+    if (!histMountedRef.current) {
+      histMountedRef.current = true;
+      persistHistory(); // 새 탭/새 소스면 현재 경로로 기록을 시작해둔다
+      return;
+    }
+    const saved = pathHistoryStore.get(bucketKey);
+    if (saved && saved.hist.length) {
+      historyRef.current = saved.hist;
+      historyIdxRef.current = saved.idx;
+    } else {
+      historyRef.current = [currentPath];
+      historyIdxRef.current = 0;
+    }
+    persistHistory();
     forceHistoryTick(t => t + 1);
-    // source.mode / termId / sessionId 가 바뀐 경우만 (currentPath 는 navigate 별 추적)
+    // bucketKey 가 바뀐 경우만 (currentPath 는 아래 push effect 가 추적)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source.mode, source.termId, source.sessionId]);
+  }, [bucketKey]);
   // currentPath 가 외부에서 바뀐 경우 (handleClick / enterDir 등) history 에 push
   useEffect(() => {
     if (skipHistoryRef.current) { skipHistoryRef.current = false; return; }
@@ -437,7 +484,9 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     // 너무 길어지면 최대 50 까지 유지
     if (hist.length > 50) hist.splice(0, hist.length - 50);
     historyIdxRef.current = hist.length - 1;
+    persistHistory();
     forceHistoryTick(t => t + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPath]);
 
   // navigate — 경로 이동 전 사전 검증. 못 찾으면 모달만 띄우고 경로는 그대로 둠 (currentPath 변경 X).
@@ -474,6 +523,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (!canGoBack) return;
     historyIdxRef.current--;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[historyIdxRef.current]);
     forceHistoryTick(t => t + 1);
   };
@@ -481,6 +531,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (!canGoForward) return;
     historyIdxRef.current++;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[historyIdxRef.current]);
     forceHistoryTick(t => t + 1);
   };
@@ -488,6 +539,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (idx < 0 || idx >= historyRef.current.length) return;
     historyIdxRef.current = idx;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[idx]);
     forceHistoryTick(t => t + 1);
   };
