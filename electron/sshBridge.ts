@@ -1576,6 +1576,10 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   public async openLocalForward(panelId: string, remoteHost: string, remotePort: number): Promise<{ forwardId: string; localPort: number }> {
     const rec = this.clients.get(panelId);
     if (!rec?.conn) throw new Error('SSH 연결 없음');
+    // 터미널 워커 스레드 연결(connProxy)은 forwardOut 을 지원하지 않는다 — 미리 걸러서
+    // "포워딩은 열렸는데 실제 트래픽이 올 때 forwardOut is not a function 로 메인 프로세스가
+    // 죽는" 사고를 막는다 (SQL Tool 이 host 매칭으로 엉뚱한 패널을 골랐을 때 실제로 겪은 버그).
+    if (typeof rec.conn.forwardOut !== 'function') throw new Error('이 연결은 포트 포워딩을 지원하지 않습니다');
     return new Promise((resolve, reject) => {
       const server = net.createServer((client: net.Socket) => {
         // eslint-disable-next-line no-console
@@ -1618,6 +1622,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   public async openSocksProxy(panelId: string): Promise<{ proxyId: string; localPort: number }> {
     const rec = this.clients.get(panelId);
     if (!rec?.conn) throw new Error('SSH 연결 없음');
+    if (typeof rec.conn.forwardOut !== 'function') throw new Error('이 연결은 포트 포워딩을 지원하지 않습니다');
 
     const makeFailureReply = (rep: number) => Buffer.from([0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
 

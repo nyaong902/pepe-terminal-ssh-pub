@@ -964,6 +964,15 @@ body.popout-options .session-editor h3:first-child {
   min-width: 0;
 }
 
+/* 브라우저 워크스페이스처럼 페이지 <title> 을 그대로 쓰는 탭은 길이 제한이 없어서, 탭 하나가
+   탭바 전체를 잡아먹지 않도록 여기서 잘라준다 (.tab-item 자체는 flex-shrink:0 이라 안 줄어듦). */
+.tab-title-text {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tab-shortcut-badge {
   display: inline-flex;
   align-items: center;
@@ -1476,6 +1485,7 @@ body.popout-options .session-editor h3:first-child {
   border-radius: 6px;
   padding: 4px 0;
   min-width: 140px;
+  max-width: 260px;
   z-index: 3000;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }

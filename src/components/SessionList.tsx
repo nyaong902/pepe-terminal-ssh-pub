@@ -9,6 +9,11 @@ const MenuIcon: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <span style={{ display: 'inline-block', width: 18, textAlign: 'center', marginRight: 6, fontSize: 13 }}>{children}</span>
 );
 
+// "대상 워크스페이스" select 의 옵션 텍스트 — 브라우저 워크스페이스는 로드된 페이지의
+// <title> 을 그대로 탭 제목으로 쓰므로 길이 제한이 없다. 이걸 그대로 넣으면 <select> 가
+// 그 폭에 맞춰 커져 컨텍스트 메뉴 전체가 늘어나므로 여기서 미리 잘라준다.
+const truncateWsTitle = (title: string): string => (title.length > 20 ? `${title.slice(0, 20)}…` : title);
+
 type LoginScriptRule = {
   expect: string;
   send: string;
@@ -1075,12 +1080,13 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                         value={multiTargetWs}
                         onChange={e => setMultiTargetWs(e.target.value)}
                         onClick={e => e.stopPropagation()}
-                        style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
+                        title={multiTargetWs === 'current' ? t('ctxCurrentWs') : multiTargetWs === 'new' ? t('ctxNewWs') : (workspaceTabs.find(tab => tab.id === multiTargetWs)?.title || '')}
+                        style={{ flex: 1, minWidth: 0, maxWidth: 160, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
                       >
                         <option value="current">{t('ctxCurrentWs')}</option>
                         <option value="new">{t('ctxNewWs')}</option>
                         {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
-                          <option key={tab.id} value={tab.id}>{tab.title}</option>
+                          <option key={tab.id} value={tab.id} title={tab.title}>{truncateWsTitle(tab.title)}</option>
                         ))}
                       </select>
                     </div>
@@ -1138,12 +1144,13 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                     value={multiTargetWs}
                     onChange={e => setMultiTargetWs(e.target.value)}
                     onClick={e => e.stopPropagation()}
-                    style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
+                    title={multiTargetWs === 'current' ? t('ctxCurrentWs') : multiTargetWs === 'new' ? t('ctxNewWs') : (workspaceTabs.find(tab => tab.id === multiTargetWs)?.title || '')}
+                    style={{ flex: 1, minWidth: 0, maxWidth: 160, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
                   >
                     <option value="current">{t('ctxCurrentWs')}</option>
                     <option value="new">{t('ctxNewWs')}</option>
                     {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
-                      <option key={tab.id} value={tab.id}>{tab.title}</option>
+                      <option key={tab.id} value={tab.id} title={tab.title}>{truncateWsTitle(tab.title)}</option>
                     ))}
                   </select>
                 </div>

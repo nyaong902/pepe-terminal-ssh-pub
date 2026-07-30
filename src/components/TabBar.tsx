@@ -247,8 +247,8 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
               autoFocus
               onClick={e => e.stopPropagation()}
             />
-          ) : (
-            <span>{(() => {
+          ) : (() => {
+            const label = (() => {
               if (tab.customTitle) return tab.title;
               switch (tab.type) {
                 case 'compare': return t('compareWorkspace');
@@ -260,8 +260,12 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
               const m = tab.title.match(/^Workspace (\d+)$/);
               if (m) return t('workspaceN', { n: m[1] });
               return tab.title;
-            })()}</span>
-          )}
+            })();
+            // 브라우저 워크스페이스는 로드된 페이지의 <title> 을 그대로 탭 제목으로 쓰므로 길이
+            // 제한이 없다 — .tab-item 이 flex-shrink:0(탭 자체는 안 줄고 넘치면 스크롤) 이라
+            // 이 span 을 안 잘라주면 탭 하나가 탭바 전체를 잡아먹는다. 전체 제목은 title 로 hover.
+            return <span className="tab-title-text" title={label}>{label}</span>;
+          })()}
           {tabs.length > 1 && (
             <button
               className="tab-close"

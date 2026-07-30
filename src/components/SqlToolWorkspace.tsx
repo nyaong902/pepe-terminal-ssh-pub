@@ -617,46 +617,28 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     if (!tunnelConn?.host?.trim()) return { error: tr('wsSshIpcMissing') };
     const remoteHost = dbmsRemoteHostForSession(session);
     const remotePort = session.dbms.port || def?.defaultPort || 0;
-    // 1차: 같은 호스트로 이미 연결된 활성 터미널이 있으면 그 위로 포워딩 재사용(있으면 이득, 없으면
-    // 바로 실패 → 2차로 넘어감). 독립 SQL 세션은 sessionId 가 실제 SSH 세션과 무관하므로 host 힌트만 사용.
-    let fwd: any = null;
-    if (typeof api.sshOpenLocalForward === 'function') {
+    // SQL Tool 세션은 자체 SSH 접속 정보(tunnelConn)를 갖고 실제 터미널 세션과 무관하게 동작한다
+    // (SqlSessionEditor 참고) — 항상 그 정보로 전용 백그라운드 SSH 연결을 맺고 그 위로 포워딩한다.
+    // 예전엔 같은 host 로 연결된 활성 터미널이 있으면 그 연결을 재사용하려 했지만, host 만으로
+    // 매칭해 사용자/자격증명이 다른 엉뚱한 터미널을 골라올 수 있었고, 그 터미널이 워커 스레드
+    // 연결(connProxy)이면 forwardOut 이 없어 "i.conn.forwardOut is not a function" 으로 메인
+    // 프로세스가 죽는 버그가 있었다 — 재사용 시도 자체를 제거.
+    let ded: any = null;
+    if (typeof api.sshOpenDedicatedForward === 'function') {
       try {
-        fwd = await api.sshOpenLocalForward({
-          sessionId,
-          remoteHost,
-          remotePort,
-          sshHost: tunnelConn.host,
-          sshPort: tunnelConn.port || 22,
+        ded = await api.sshOpenDedicatedForward({
+          remoteHost, remotePort,
+          sshConn: { host: tunnelConn.host, port: tunnelConn.port || 22, username: tunnelConn.username, auth: tunnelConn.auth },
         });
-      } catch { fwd = null; }
-      console.log('[SqlTool] sshOpenLocalForward result =', fwd);
+      } catch { ded = null; }
     }
-    let dedConnId = '';
-    // 2차: 독립 SSH 접속 정보로 전용 백그라운드 SSH 연결을 직접 맺고 그 위로 포워딩.
-    if (!fwd || fwd.success !== true || !fwd.localPort) {
-      const reuseErr = fwd?.error;
-      let ded: any = null;
-      if (typeof api.sshOpenDedicatedForward === 'function') {
-        try {
-          ded = await api.sshOpenDedicatedForward({
-            remoteHost, remotePort,
-            sshConn: { host: tunnelConn.host, port: tunnelConn.port || 22, username: tunnelConn.username, auth: tunnelConn.auth },
-          });
-        } catch { ded = null; }
-      }
-      console.log('[SqlTool] sshOpenDedicatedForward result =', ded);
-      if (ded?.success && ded.localPort) {
-        fwd = ded;
-        dedConnId = ded.connId || '';
-      } else {
-        const msg = ded?.error || reuseErr;
-        return { error: msg ? tr('wsSshOpenFailedErr', { error: msg }) : tr('wsSshOpenFailedNoResp') };
-      }
+    console.log('[SqlTool] sshOpenDedicatedForward result =', ded);
+    if (!ded?.success || !ded.localPort) {
+      return { error: ded?.error ? tr('wsSshOpenFailedErr', { error: ded.error }) : tr('wsSshOpenFailedNoResp') };
     }
-    console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: fwd.localPort, forwardId: fwd.forwardId, dedicated: !!dedConnId });
-    return { host: '127.0.0.1', port: fwd.localPort, forwardId: fwd.forwardId, dedConnId };
-  }, [session, sessionId, tr]);
+    console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: ded.localPort, forwardId: ded.forwardId });
+    return { host: '127.0.0.1', port: ded.localPort, forwardId: ded.forwardId, dedConnId: ded.connId || '' };
+  }, [session, tr]);
 
   // 연결 수립 — drivers.json 에서 driverId/dialect 로 정의를 찾아 JdbcBackend 생성
   const connect = useCallback(async () => {
