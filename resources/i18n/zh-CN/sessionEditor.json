@@ -168,6 +168,10 @@
     "sshOpening": "正在打开 SSH 隧道…",
     "sshFailed": "❌ SSH 隧道失败：{{error}} — 请先为同一会话连接终端",
     "sshTunnelOk": "SSH 隧道正常（{{remoteHost}}:{{remotePort}} → 本地={{localPort}}）— 正在测试 JDBC…",
-    "exception": "❌ 异常：{{error}}"
+    "exception": "❌ 异常：{{error}}",
+    "tunnelSectionTitle": "SSH 隧道连接",
+    "tunnelSectionSub": "留空则不通过隧道直接连接。",
+    "sqlSessionName": "名称",
+    "tunnelEnable": "使用 SSH 隧道"
   }
 }

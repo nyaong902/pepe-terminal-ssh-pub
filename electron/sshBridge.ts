@@ -36,6 +36,26 @@ export function xferLog(msg: string) {
   try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[xfer] ${msg}`); } catch {}
 }
 
+// ClearCase 뷰 루트 탐지/폴백, SFTP 채널 폐기·재시도 같은 진단용 로그 — 특정 환경(ClearCase
+// dynamic view)의 버그를 잡을 때만 필요하고 평소엔 콘솔을 채울 이유가 없다. 렌더러의
+// src/utils/debugLog.ts 와 같은 방식으로 기본 꺼짐 + 필요할 때만 켠다.
+// 켜기: 렌더러 devtools 에서 window.api.setSftpDebugLog(true)
+let sftpDebugLogEnabled = false;
+export function setSftpDebugLog(enabled: boolean) { sftpDebugLogEnabled = !!enabled; }
+function sftpDebug(msg: string) {
+  if (!sftpDebugLogEnabled) return;
+  console.log(msg);
+  // 메인 프로세스 콘솔은 패키지된 앱에서 볼 수 없다 — 렌더러 DevTools 로도 보낸다.
+  // (App.tsx 의 onDebugLog 구독이 '[main] ...' 로 찍어준다.) 이게 없어서 사용자가
+  // setSftpDebugLog(true) 를 켜도 DevTools 에 ClearCase 로그가 하나도 안 보였다.
+  try {
+    const { BrowserWindow } = require('electron');
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('debug:log', msg);
+    }
+  } catch {}
+}
+
 // sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
 // (구조적 복제 불가능한 함수라서) 같은 이름의 boolean 값으로 치환해 보낸 결과를, 이 아래 수십 곳의
 // 기존 SFTP 소비 코드가 그대로 `.isDirectory()` 처럼 함수로 호출해도 되게 다시 함수로 감싸준다 —
@@ -259,6 +279,7 @@ class SSHBridge extends EventEmitter {
     if (this.clients.has(panelId)) return;
     // 세션 정보 저장 (전송 전용 SSH 연결 재생성용)
     this.sessionStore.set(panelId, session);
+    if (session?.host) this.panelHost.set(panelId, String(session.host));
     // 점프호스트/로그인스크립트가 없는 단순 연결(X11 은 지원)은 워커로 위임(암호화 해제를
     // 메인 프로세스 밖으로 빼서 heavy 세션 여러 개 동시 사용 시 메인 프로세스 병목 완화).
     // 복잡한 케이스(점프/로그인스크립트)는 기존 경로(아래) 그대로 — 기존 동작에 전혀 영향 없음.
@@ -487,6 +508,12 @@ class SSHBridge extends EventEmitter {
           break;
         case 'data':
           this.emit('message', { type: 'data', panelId, data: msg.data });
+          // 프롬프트에서 cwd + ClearCase 뷰태그 파싱 — 비-워커 경로(handleConnect 의
+          // stream.on('data'))에는 있었는데 이 워커 경로에만 빠져 있었다. 그래서 로그인
+          // 스크립트가 없는 세션(=워커로 위임되는 조건)은 promptTail 이 끝까지 비어 있어
+          // 뷰 루트를 절대 못 찾았고, /vobs 파일트리가 열리지 않았다. 같은 세션에 로그인
+          // 스크립트를 넣으면 비-워커 경로를 타서 잘 되던 이유가 이것이다.
+          this._parsePromptCwd(panelId, String(msg.data ?? ''));
           break;
         case 'closed':
           this.clients.delete(panelId);
@@ -926,9 +953,16 @@ class SSHBridge extends EventEmitter {
   // panel → 현재 활성 셸 PID (cwd 폴링이 선택한 최신 셸 = setview 서브셸 등). CLEARCASE_ROOT 조회에 사용.
   private activeShellPids: Map<string, number> = new Map();
 
+  // 다른 panelId(주로 파일전송 탭 병합으로 새로 연결한 SFTP 전용 connId)에 뷰 루트를 미리
+  // 심어둔다 — 그 connId 는 인터랙티브 셸이 없어 getCcViewRoot 의 자동 탐지(promptTail/
+  // activeShellPids)가 절대 성공할 수 없으므로, 원본 세션에서 이미 알아낸 값을 그대로 이관.
+  public setCcViewRoot(panelId: string, root: string) {
+    if (root) this.ccViewRoots.set(panelId, root);
+  }
+
   // CLEARCASE_ROOT 환경변수 조회 — dynamic view 의 /vobs 경로를 실경로로 변환하기 위함.
   // setview 서브셸에만 CLEARCASE_ROOT=/view/<tag> 가 설정되므로 cwd 폴링이 선택한 활성 셸 PID 의 environ 을 읽음.
-  private async getCcViewRoot(panelId: string): Promise<string> {
+  public async getCcViewRoot(panelId: string): Promise<string> {
     if (this.ccViewRoots.has(panelId)) return this.ccViewRoots.get(panelId) || '';
     // 프롬프트 버퍼에서 뷰태그 즉석 추출 — _detectAndApplyPromptCwd 타이밍을 못 기다린 SFTP 호출 보강
     const tail = this.promptTail.get(panelId) || '';
@@ -936,25 +970,48 @@ class SSHBridge extends EventEmitter {
     if (tm) {
       const root = `/view/${tm[1]}`;
       this.ccViewRoots.set(panelId, root);
-      console.log(`[clearcase-${panelId.slice(-6)}] view root from prompt(on-demand): ${root}`);
+      sftpDebug(`[clearcase-${panelId.slice(-6)}] view root from prompt(on-demand): ${root}`);
       return root;
     }
     const pid = this.activeShellPids.get(panelId) || this.shellPids.get(panelId);
-    if (!pid) return '';
-    try {
-      const out = await this.execCommand(panelId,
-        `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^CLEARCASE_ROOT='`, 5000);
-      const m = out.match(/^CLEARCASE_ROOT=(.+)$/m);
-      const root = m ? m[1].trim().replace(/\/+$/, '') : '';
-      // 빈 결과는 캐시하지 않음 — 뷰 설정 전 조회됐을 수 있어 다음에 재시도 (찾으면 그때 캐시)
-      if (root) {
-        this.ccViewRoots.set(panelId, root);
-        console.log(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
-      }
-      return root;
-    } catch {
-      return '';
+    if (pid) {
+      try {
+        const out = await this.execCommand(panelId,
+          `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^CLEARCASE_ROOT='`, 5000);
+        const m = out.match(/^CLEARCASE_ROOT=(.+)$/m);
+        const root = m ? m[1].trim().replace(/\/+$/, '') : '';
+        // 빈 결과는 캐시하지 않음 — 뷰 설정 전 조회됐을 수 있어 다음에 재시도 (찾으면 그때 캐시)
+        if (root) {
+          this.ccViewRoots.set(panelId, root);
+          sftpDebug(`[clearcase-${panelId.slice(-6)}] view root: ${root} (fg pid ${pid})`);
+          return root;
+        }
+      } catch {}
     }
+    // 폴백 — 같은 호스트의 다른 패널이 이미 알아낸 뷰 루트를 물려받는다.
+    // SFTP 전용 연결(파일전송이 새로 맺는 sftp-fe-…/fe-lazy-…)은 인터랙티브 셸이 없어서 프롬프트도
+    // /proc 도 없다. 그래서 파일전송 워크스페이스를 닫고 다시 열면(=새 SFTP 연결) 뷰 루트를 전혀
+    // 알 수 없어 /vobs 접근이 실패했다(사용자 재현). 같은 서버에 붙어있는 터미널이 뷰태그를 이미
+    // 알고 있으면 그걸 쓴다. 뷰가 다를 수 있지만, 틀리면 handleSFTPListDir 폴백이 ccViewRootBad 에
+    // 기록하고 raw 경로로 넘어가므로 한 번의 실패로 자동 교정된다.
+    const host = this.panelHost.get(panelId);
+    if (host) {
+      for (const [otherId, otherRoot] of this.ccViewRoots) {
+        if (otherId === panelId || !otherRoot) continue;
+        if (this.panelHost.get(otherId) !== host) continue;
+        this.ccViewRoots.set(panelId, otherRoot);
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] view root inherited from ${otherId.slice(-6)} (${host}): ${otherRoot}`);
+        return otherRoot;
+      }
+    }
+    // 실패 경로도 반드시 남긴다 — 예전엔 성공했을 때만 로그를 찍어서, 정작 문제가 되는
+    // "끝까지 못 찾은" 경우에 아무 로그도 안 나왔다(사용자: "clearcase 로그는 없어").
+    // 어느 단계에서 왜 막혔는지 알 수 있도록 판단에 쓴 입력들을 함께 남긴다.
+    sftpDebug(`[clearcase-${panelId.slice(-6)}] view root NOT FOUND` +
+      ` (host=${host || '?'}, shellPid=${this.activeShellPids.get(panelId) || this.shellPids.get(panelId) || 'none'},` +
+      ` promptTail=${tail.length}B, prompt="${tail.replace(/\s+/g, ' ').slice(-70)}")` +
+      ` → /vobs 경로를 변환 없이 그대로 사용`);
+    return '';
   }
 
   // /vobs/... 같은 뷰-상대 경로를 /view/<tag>/vobs/... 실경로로 변환 (SFTP 접근용).
@@ -965,9 +1022,19 @@ class SSHBridge extends EventEmitter {
     if (!(p === '/vobs' || p.startsWith('/vobs/'))) return p;
     const root = await this.getCcViewRoot(panelId);
     if (!root) return p;
+    // 이 root 로 변환했더니 접근이 안 되는 게 이미 확인된 패널이면 변환하지 않는다.
+    // handleSFTPListDir 의 폴백은 실패 시 ccViewRoots 캐시를 지우는데, 프롬프트에서 뷰태그가 다시
+    // 즉시 탐지되므로 그냥 두면 **목록 조회마다** 실패할 걸 알면서 한 번 더 시도하게 된다
+    // (사용자 로그에서 `listdir via view root failed … retrying raw` 가 계속 반복됨).
+    // 뷰 안에서 SFTP 가 열린 세션은 변환 없이 /vobs 로 바로 접근되므로 이게 정상 경로다.
+    if (this.ccViewRootBad.get(panelId) === root) return p;
     if (p.startsWith(root)) return p;
     return root + p;
   }
+  // panel → "이 뷰 루트로 변환하면 접근 실패한다"고 확인된 값. root 가 달라지면 다시 시도한다.
+  private ccViewRootBad: Map<string, string> = new Map();
+  // panel/conn → 접속 호스트. 같은 호스트의 다른 패널에서 ClearCase 뷰 루트를 물려받을 때 쓴다.
+  private panelHost: Map<string, string> = new Map();
   // panel → 마지막으로 알려진 cwd (변경 감지용)
   private lastCwd: Map<string, string> = new Map();
 
@@ -1065,7 +1132,7 @@ class SSHBridge extends EventEmitter {
       const newRoot = `/view/${lastViewTag}`;
       if (this.ccViewRoots.get(panelId) !== newRoot) {
         this.ccViewRoots.set(panelId, newRoot);
-        console.log(`[clearcase-${panelId.slice(-6)}] view root from prompt: ${newRoot}`);
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] view root from prompt: ${newRoot}`);
       }
     }
     let p = lastPath;
@@ -1380,7 +1447,14 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   // 외부에서 명시적으로 panel 의 dedicated SFTP 만 종료 (SSH 메인 연결은 유지) — 파일트리 unmount 등에서 호출
   public releaseDedicatedSftp(panelId: string) {
     try { this._cleanupDedicatedSftp(panelId, false); } catch {}
-    try { const s = this.sftpCache.get(panelId); if (s) { s.end?.(); this.sftpCache.delete(panelId); } } catch {}
+    // 공유 SFTP 채널(sftpCache)은 여기서 닫지 않는다.
+    // 이 함수는 "전용(전송용) SFTP 연결만 정리하고 터미널 SSH 연결은 유지"가 목적인데, 예전엔
+    // sftpCache 채널까지 s.end() 로 닫았다. 그런데 그 채널은 **같은 termId 를 쓰는 다른 패널**(특히
+    // 파일전송 목록 조회)이 함께 쓰는 것이라, 파일 트리 사이드바가 언마운트되며 이 함수를 부르면
+    // (RemoteFileTree 의 cleanup) 파일전송의 진행 중인 조회가 ssh2 의 "No response from server" 로
+    // 깨졌다 — 실사용 로그에서 몇 번 성공 → 실패 → 재시도 성공이 주기적으로 반복된 원인.
+    // 공유 채널은 SSH 연결에 딸린 가벼운 채널이고, 연결이 끊기면 handleSFTPDisconnect/정리 경로가
+    // sftpCache 를 비운다. 죽은 채널이 남더라도 handleSFTPListDir 이 감지해 새로 연다.
   }
 
   handleResize(panelId: string, cols: number, rows: number) {
@@ -1423,6 +1497,8 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
     this.shellPids.delete(panelId);
     this.lastCwd.delete(panelId);
     this.ccViewRoots.delete(panelId);
+    this.ccViewRootBad.delete(panelId);
+    this.panelHost.delete(panelId);
     this.activeShellPids.delete(panelId);
     this.promptTail.delete(panelId);
     this.promptCwdActive.delete(panelId);
@@ -1522,6 +1598,10 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   public async openLocalForward(panelId: string, remoteHost: string, remotePort: number): Promise<{ forwardId: string; localPort: number }> {
     const rec = this.clients.get(panelId);
     if (!rec?.conn) throw new Error('SSH 연결 없음');
+    // 터미널 워커 스레드 연결(connProxy)은 forwardOut 을 지원하지 않는다 — 미리 걸러서
+    // "포워딩은 열렸는데 실제 트래픽이 올 때 forwardOut is not a function 로 메인 프로세스가
+    // 죽는" 사고를 막는다 (SQL Tool 이 host 매칭으로 엉뚱한 패널을 골랐을 때 실제로 겪은 버그).
+    if (typeof rec.conn.forwardOut !== 'function') throw new Error('이 연결은 포트 포워딩을 지원하지 않습니다');
     return new Promise((resolve, reject) => {
       const server = net.createServer((client: net.Socket) => {
         // eslint-disable-next-line no-console
@@ -1564,6 +1644,7 @@ printf '<<PEPE>>%s<<END>>' "$pid2"`;
   public async openSocksProxy(panelId: string): Promise<{ proxyId: string; localPort: number }> {
     const rec = this.clients.get(panelId);
     if (!rec?.conn) throw new Error('SSH 연결 없음');
+    if (typeof rec.conn.forwardOut !== 'function') throw new Error('이 연결은 포트 포워딩을 지원하지 않습니다');
 
     const makeFailureReply = (rep: number) => Buffer.from([0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
 
@@ -1915,7 +1996,21 @@ probe_curl || probe_wget || probe_python
     return new Promise((resolve, reject) => {
       const rec = this.clients.get(panelId);
       if (!rec?.conn) return reject(new Error('연결되지 않음'));
+      // 안전장치 — 창 분리/재병합을 반복하면 this.clients 에 레코드는 남아있는데(정리 이벤트가
+      // 안 타서) 실제로는 죽은 소켓인 Client 가 생기는 경우가 있다. 그 경우 conn.sftp() 콜백이
+      // 영원히 안 불려서 이 Promise 가 무한 대기하고, 결국 렌더러에서 Electron 의
+      // "reply was never sent" 라는 알아보기 힘든 에러로만 드러난다(실사용 중 재현). 타임아웃으로
+      // 명확한 에러를 던져 최소한 사용자가 재시도/재연결할 수 있게 한다.
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('SFTP 서브시스템 응답 없음 — 연결이 끊어졌을 수 있습니다. 재연결해 주세요.'));
+      }, 15000);
       rec.conn.sftp((err: any, sftp: any) => {
+        if (settled) return; // 타임아웃 이후 뒤늦게 도착한 콜백은 무시
+        settled = true;
+        clearTimeout(timer);
         if (err) return reject(err);
         this.sftpCache.set(panelId, sftp);
         // worker 경로의 제네릭 RPC 프록시는 'on' 도 콜백형 메서드로 오인해 forward 해버리므로
@@ -2265,51 +2360,197 @@ probe_curl || probe_wget || probe_python
     });
   }
 
-  async handleSFTPListDir(panelId: string, remotePath: string): Promise<any[]> {
-    const sftp = await this.getSftp(panelId);
-    remotePath = await this.resolveCcPath(panelId, remotePath);
+  // ssh2 sftp.readdir 한 번 — 타임아웃 안전장치 포함.
+  // 안전장치가 필요한 이유 두 가지:
+  //  1) 창 분리/재병합을 반복하면 this.clients 에 레코드는 남아있는데 실제로는 죽은 소켓인 경우가
+  //     생기고, 그 상태의 readdir 은 콜백이 영영 안 불린다.
+  //  2) ClearCase dynamic view 경로(/view/<tag>/...)는 그 뷰가 더 이상 mount 되어 있지 않으면
+  //     MVFS lookup 이 실패가 아니라 그냥 블록된다.
+  // 둘 다 렌더러에는 Electron 의 "reply was never sent" 로만 드러나서 원인 파악이 불가능했다.
+  private _sftpReaddirOnce(sftp: any, dir: string, timeoutMs: number): Promise<any[]> {
     return new Promise((resolve, reject) => {
-      sftp.readdir(remotePath, (err: any, list: any[]) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // 타임아웃은 "경로가 틀렸다"는 신호가 아니다 — 이 채널이 멈췄다는 신호다. 호출부가 구분해서
+        // 처리하도록 표시한다(같은 채널에 다른 경로를 또 얹으면 좀비 요청이 쌓여 더 나빠진다).
+        const e: any = new Error(`SFTP 목록 조회 응답 없음 (${dir})`);
+        e.isSftpTimeout = true;
+        reject(e);
+      }, timeoutMs);
+      sftp.readdir(dir, (err: any, list: any[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (err) return reject(err);
-        resolve(list.map((item: any) => {
-          const attrs = item.attrs;
-          // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
-          // 이미 boolean 값으로 치환돼 있음(sshTerminalWorker.cjs 의 sanitizeForClone 참고) — 두
-          // 형태(메서드 or 값) 모두 처리.
-          const isDir = typeof attrs.isDirectory === 'function' ? attrs.isDirectory() : !!attrs.isDirectory;
-          const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : !!attrs.isSymbolicLink;
-          // POSIX mode → drwxr-xr-x 형식 문자열
-          const m = attrs.mode || 0;
-          const typeChar = isLink ? 'l' : isDir ? 'd' : '-';
-          const rwx = (bits: number) => {
-            return (bits & 4 ? 'r' : '-') + (bits & 2 ? 'w' : '-') + (bits & 1 ? 'x' : '-');
-          };
-          const perm = typeChar
-            + rwx((m >> 6) & 7)
-            + rwx((m >> 3) & 7)
-            + rwx(m & 7);
-          // longname 에서 owner/group 추출 (예: "drwxr-xr-x  3 root root 4096 May 11 10:24 RPMS")
-          let owner = '';
-          let group = '';
-          if (item.longname && typeof item.longname === 'string') {
-            const parts = item.longname.trim().split(/\s+/);
-            if (parts.length >= 4) {
-              owner = parts[2];
-              group = parts[3];
-            }
-          }
-          return {
-            name: item.filename,
-            isDir,
-            size: attrs.size,
-            mtime: attrs.mtime,
-            mode: perm,        // drwxr-xr-x 형식
-            owner: owner || (attrs.uid != null ? String(attrs.uid) : ''),
-            group: group || (attrs.gid != null ? String(attrs.gid) : ''),
-            isLink,
-          };
-        }));
+        resolve(list || []);
       });
+    });
+  }
+
+  // 같은 (연결, 경로) 에 대해 진행 중인 조회를 공유한다.
+  // 실사용 로그에서 짧은 구간에 같은 ClearCase 디렉토리(/vobs/REL/SSW_…)를 열 번 넘게 조회했다 —
+  // 패널 여러 개 + 창 분리로 인한 재마운트 + 새로고침이 겹치면서다. MVFS 디렉토리 조회는 원래
+  // 느린데 거기에 동시 요청이 쌓이면 SFTP 채널이 "No response from server" 로 멈췄다.
+  // 결과를 캐시하지는 않는다(오래된 목록을 보여주면 안 되므로) — 겹치는 동안만 하나로 합친다.
+  private listDirInFlight: Map<string, Promise<any[]>> = new Map();
+
+  async handleSFTPListDir(panelId: string, remotePath: string): Promise<any[]> {
+    const key = `${panelId} ${remotePath}`;
+    const inflight = this.listDirInFlight.get(key);
+    // 각 호출자에게 사본을 준다 — 호출부(fe:list-dir 의 인코딩 재디코딩)가 항목을 제자리에서
+    // 수정하기 때문에 같은 배열을 공유하면 서로를 덮어쓴다.
+    if (inflight) return (await inflight).map(x => ({ ...x }));
+    const p = this._listDirWithRecovery(panelId, remotePath)
+      .finally(() => { this.listDirInFlight.delete(key); });
+    this.listDirInFlight.set(key, p);
+    return (await p).map(x => ({ ...x }));
+  }
+
+  private async _listDirWithRecovery(panelId: string, remotePath: string): Promise<any[]> {
+    const rawPath = remotePath;
+    // 실패하면 SFTP **채널**만 버리고 한 번 재시도한다(SSH 연결은 그대로 둔다 — 재연결은 동기
+    // 키교환을 유발해 메인 프로세스를 멈추고, 그게 다른 패널의 스톨을 부르는 되먹임이 된다).
+    let lastErr: any;
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      try {
+        return await this._listDirAttempt(panelId, rawPath);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === 1) break;
+        if (!this._invalidateListSftp(panelId)) break; // 버릴 채널이 없으면 재시도해도 같은 결과
+        sftpDebug(`[sftp-${panelId.slice(-6)}] listdir 실패 — SFTP 채널 폐기 후 재시도: ${(err as any)?.message || err}`);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    throw lastErr;
+  }
+
+  // 연결 단위 직렬화는 시도했다가 되돌렸다 — 하지 말 것.
+  // 의도는 느린 MVFS 디렉토리에 동시 readdir 이 쌓이는 걸 막는 것이었지만, 진행 중인 SFTP 요청은
+  // 취소할 수 없기 때문에 **멈춘 요청 하나가 그 뒤에 줄 선 모든 조회를 함께 막는다**(타임아웃 ×
+  // 재시도 횟수만큼). 실사용에서 목록이 아예 안 뜨는 상태가 됐다. 스톨 하나를 전면 정지로 바꾸는
+  // 나쁜 교환이므로, 동시 요청 억제는 "같은 경로" in-flight 합치기(handleSFTPListDir)까지만 한다.
+
+  // "이 채널은 죽었다"로 볼 수 있는 오류인지 — 경로 문제와 구분하기 위함.
+  // 내 타임아웃(isSftpTimeout)뿐 아니라 ssh2 가 직접 내는 무응답/연결끊김도 포함한다. 이걸 경로
+  // 오류로 오인하면 죽은 채널에 폴백 요청을 또 보내 타임아웃만큼 시간을 버린다.
+  private _isChannelDead(err: any): boolean {
+    if (err?.isSftpTimeout) return true;
+    const m = String(err?.message || err || '');
+    return /No response from server|Not connected|connection lost|channel is clos|Connection closed|ECONNRESET|EPIPE/i.test(m);
+  }
+
+  // 목록 조회에 쓰던 SFTP **채널**만 폐기 — 다음 조회가 같은 SSH 연결 위에 새 채널을 연다.
+  // SSH 연결 자체(전용 연결 포함)는 건드리지 않는다: 재연결은 동기 키교환(generateKeyPairSync)을
+  // 유발해 메인 프로세스를 멈추고, 그게 다른 패널의 SFTP 응답 지연 → 또 다른 스톨을 부른다.
+  // 멈춘 채널에 end() 도 보내지 않는다 — 응답 없는 채널에 channel-close 를 더 얹으면 그 연결의
+  // 프로토콜 상태를 더 흔들 수 있다. 참조만 버리고 ssh2/GC 에 맡긴다.
+  private _invalidateListSftp(panelId: string): boolean {
+    return this.sftpCache.delete(panelId);
+  }
+
+  // 조용히 멈춘 SFTP 채널 대응 배경: sftpCache 는 'close'/'end' 이벤트에서만 비워지는데, 채널이
+  // 이벤트 없이 무응답 상태가 되면 죽은 채널이 캐시에 영구히 남아 이후 **모든** 조회가 같은 채널에서
+  // 타임아웃된다(사용자 재현: 12건씩 정상 조회되다가 한 번 무응답이 된 뒤로는 변환 경로·raw 둘 다
+  // 계속 "응답 없음", 그 패널은 영구 복구 불가 → 파일전송을 다시 열어도 빈 목록).
+  // 그래서 위 handleSFTPListDir 이 실패 시 캐시를 버리고 새 채널로 재시도한다.
+
+  private async _listDirAttempt(panelId: string, rawPath: string): Promise<any[]> {
+    // 목록 조회는 **이미 맺어둔 공유 연결**의 SFTP 채널을 쓴다. 전용 SSH 연결(getDedicatedSftp)로
+    // 돌려봤다가 되돌렸다 — 하지 말 것:
+    //   전용 연결은 패널마다 새 SSH 핸드셰이크를 하고, 스톨 시 연결을 폐기하면 재시도가 또 핸드셰이크를
+    //   한다. ssh2 의 키 교환은 generateKeyPairSync('x25519') 로 **동기** 실행되어(kex.js) 그동안
+    //   메인 프로세스가 멈추고, 그러면 다른 패널의 SFTP 응답도 못 받아 "No response from server" 가
+    //   난다 → 스톨이 폐기·재연결을 부르고 그게 또 스톨을 부르는 되먹임이 생겼다.
+    //   실측: CPU 프로파일에서 generateKeyPairSync 가 메인 프로세스 시간의 40.7%(53초)를 차지.
+    // 이미 캐시돼 있던 채널인지 — 타임아웃 길이를 다르게 준다(바로 아래 설명).
+    const reusedChannel = this.sftpCache.has(panelId);
+    const sftp = await this.getSftp(panelId);
+    const ccPath = await this.resolveCcPath(panelId, rawPath);
+    let list: any[];
+    try {
+      // 재사용 채널은 짧게(6초), 새로 연 채널은 넉넉히(30초).
+      // 실사용에서 "목록이 늦게 뜬다"의 정체는 **이미 죽어 있던 캐시 채널**을 쓰고 그 사실을
+      // 타임아웃(15초)이 지나서야 알아채는 것이었다 — 그 다음 새 채널 재시도는 즉시 성공했다.
+      // 정상 채널의 응답은 훨씬 빠르므로(로그상 연속 성공), 재사용 채널이 6초 안에 답을 못 하면
+      // 죽은 것으로 보고 빨리 버리는 편이 낫다. 반대로 새로 연 채널에는 넉넉히 줘서 느린 MVFS
+      // 디렉토리를 오판하지 않는다.
+      list = await this._sftpReaddirOnce(sftp, ccPath, reusedChannel ? 6000 : 30000);
+    } catch (err) {
+      if (ccPath === rawPath) {
+        // 변환이 없었던 경우(뷰 루트 미탐지거나 애초에 /vobs 가 아닌 경로) — 폴백할 대상이 없다.
+        // 여기서 조용히 던지면 "파일트리가 안 열린다"의 실제 원인이 로그에 전혀 안 남으므로 기록한다.
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] listdir 실패 (변환 없음, path=${rawPath}): ${(err as any)?.message || err}`);
+        throw err;
+      }
+      // ★ 채널이 죽은 신호면 raw 로 폴백하지 않는다.
+      // 이건 경로가 틀렸다는 뜻이 아니라 채널이 멈췄다는 뜻인데, 내 타임아웃은 서버에 이미 나간
+      // 요청을 취소하지 못한다. 그 상태에서 같은 채널에 raw 요청을 또 얹으면 응답 없는 요청이 쌓여
+      // 더 나빠지고, 무엇보다 그 raw 요청이 15초 타임아웃을 그대로 소진해 목록이 늦게 뜬다
+      // (사용자 재현: "파일목록이 너무 늦게 떠" — view 실패 → raw 15초 → 폐기 → 성공).
+      // 채널을 버리고 같은 경로를 새 채널에서 즉시 다시 시도하도록 그대로 던진다.
+      if (this._isChannelDead(err)) {
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] ${ccPath} 조회 실패가 채널 문제 — 경로 문제 아님(폐기 후 재시도): ${(err as any)?.message || err}`);
+        throw err;
+      }
+      // 여기까지 왔으면 실제 오류(경로 없음 등) — 변환이 틀렸을 수 있으니 raw 로 한 번 확인한다.
+      sftpDebug(`[clearcase-${panelId.slice(-6)}] listdir via view root failed (${ccPath}) — retrying raw ${rawPath}`);
+      let rawList: any[];
+      try {
+        rawList = await this._sftpReaddirOnce(sftp, rawPath, 15000);
+      } catch {
+        throw err; // 변환 경로가 정답이었을 가능성이 크므로 원래 오류를 알린다
+      }
+      // raw 가 0건이면 "성공"으로 보지 않는다. ClearCase dynamic view 서버에서는 변환된
+      // /view/<tag>/vobs/… 가 정답이고 raw /vobs/… 는 **에러 없이 빈 리스트**를 돌려준다.
+      // 그걸 성공으로 받아 ccViewRootBad 에 기록하면, 일시적 실패 한 번이 이후 계속 빈 목록으로
+      // 굳어버린다(사용자 재현: 12건이 정상이다가 한 번 실패한 뒤로 계속 0건).
+      if (rawList.length === 0) throw err;
+      // raw 가 실제 내용을 돌려줬다 = 이 서버는 변환이 필요 없는 구성 → 다음부터 변환 생략
+      const badRoot = await this.getCcViewRoot(panelId);
+      if (badRoot) this.ccViewRootBad.set(panelId, badRoot);
+      this.ccViewRoots.delete(panelId);
+      list = rawList;
+    }
+    return list.map((item: any) => {
+      const attrs = item.attrs;
+      // worker 스레드 경로(X11 세션 등)로 온 결과는 attrs 가 구조적 복제를 거치며 메서드가
+      // 이미 boolean 값으로 치환돼 있음(sshTerminalWorker.cjs 의 sanitizeForClone 참고) — 두
+      // 형태(메서드 or 값) 모두 처리.
+      const isDir = typeof attrs.isDirectory === 'function' ? attrs.isDirectory() : !!attrs.isDirectory;
+      const isLink = typeof attrs.isSymbolicLink === 'function' ? attrs.isSymbolicLink() : !!attrs.isSymbolicLink;
+      // POSIX mode → drwxr-xr-x 형식 문자열
+      const m = attrs.mode || 0;
+      const typeChar = isLink ? 'l' : isDir ? 'd' : '-';
+      const rwx = (bits: number) => {
+        return (bits & 4 ? 'r' : '-') + (bits & 2 ? 'w' : '-') + (bits & 1 ? 'x' : '-');
+      };
+      const perm = typeChar
+        + rwx((m >> 6) & 7)
+        + rwx((m >> 3) & 7)
+        + rwx(m & 7);
+      // longname 에서 owner/group 추출 (예: "drwxr-xr-x  3 root root 4096 May 11 10:24 RPMS")
+      let owner = '';
+      let group = '';
+      if (item.longname && typeof item.longname === 'string') {
+        const parts = item.longname.trim().split(/\s+/);
+        if (parts.length >= 4) {
+          owner = parts[2];
+          group = parts[3];
+        }
+      }
+      return {
+        name: item.filename,
+        isDir,
+        size: attrs.size,
+        mtime: attrs.mtime,
+        mode: perm,        // drwxr-xr-x 형식
+        owner: owner || (attrs.uid != null ? String(attrs.uid) : ''),
+        group: group || (attrs.gid != null ? String(attrs.gid) : ''),
+        isLink,
+      };
     });
   }
 
@@ -2419,9 +2660,17 @@ probe_curl || probe_wget || probe_python
 
   // 진행률 이벤트를 emit 하면서 삭제
   public async handleDeleteWithProgress(deleteId: string, mode: string, termId: string | undefined, filePath: string, workspaceId?: string): Promise<void> {
+    if (mode !== 'local' && termId) filePath = await this.resolveCcPath(termId, filePath);
     const rootName = mode === 'local'
       ? path.basename(filePath)
       : (filePath.split('/').pop() || filePath);
+    // worker-thread unlink/rmdir 호출을 개별 try/catch(빈 catch)로 감싸던 게 실제 실패(권한 없음 등)를
+    // 전부 삼켜버려 항상 success:true 로 보고되던 버그 — 하나라도 실패하면 아래에서 throw 해서
+    // 바깥 catch 로 흘려보내 sftp-delete-complete(success:false) + fe:delete-done(success:false) 가
+    // 정상적으로 나가게 한다.
+    let hadError = false;
+    let firstErrorMsg = '';
+    const noteError = (e: any) => { hadError = true; if (!firstErrorMsg) firstErrorMsg = String(e?.message || e); };
 
     // 즉시 start 이벤트 (totalCount=0 — 추후 업데이트)
     this.emit('message', { type: 'sftp-delete-start', panelId: 'transfer', data: JSON.stringify({
@@ -2461,7 +2710,7 @@ probe_curl || probe_wget || probe_python
 
           if (!isRootDir) {
             // 단일 파일 — unlink 1회
-            try { await this.workerOp(termId!, 'unlink', filePath); } catch {}
+            try { await this.workerOp(termId!, 'unlink', filePath); } catch (e) { noteError(e); }
             onItem(rootName);
           } else {
             // 3) tree-list 로 전체 목록 1번에 취득 (worker thread — 메인 이벤트루프 비점유)
@@ -2496,7 +2745,7 @@ probe_curl || probe_wget || probe_python
                 while (fileQueue.length > 0) {
                   const entry = fileQueue.shift();
                   if (!entry) break;
-                  try { await this.workerOp(termId!, 'unlink', joinPath(filePath, entry.rel)); } catch {}
+                  try { await this.workerOp(termId!, 'unlink', joinPath(filePath, entry.rel)); } catch (e) { noteError(e); }
                   onItem(entry.rel.split('/').pop() || entry.rel);
                 }
               }));
@@ -2504,12 +2753,12 @@ probe_curl || probe_wget || probe_python
 
             // 5) 디렉토리 순차 rmdir (깊은 것부터 — 비어있어야 삭제 가능)
             for (const entry of dirEntries) {
-              try { await this.workerOp(termId!, 'rmdir', joinPath(filePath, entry.rel)); } catch {}
+              try { await this.workerOp(termId!, 'rmdir', joinPath(filePath, entry.rel)); } catch (e) { noteError(e); }
               onItem(entry.rel.split('/').pop() || entry.rel);
             }
 
             // 6) 루트 디렉토리 rmdir
-            try { await this.workerOp(termId!, 'rmdir', filePath); } catch {}
+            try { await this.workerOp(termId!, 'rmdir', filePath); } catch (e) { noteError(e); }
             onItem(rootName);
           }
         } else {
@@ -2520,6 +2769,8 @@ probe_curl || probe_wget || probe_python
           await this.deleteRecursiveWithProgress(mode, termId, filePath, onItem);
         }
       }
+
+      if (hadError) throw new Error(firstErrorMsg || 'delete failed');
 
       this.emit('message', { type: 'sftp-delete-complete', panelId: 'transfer', data: JSON.stringify({
         deleteId, rootName, done, success: true, workspaceId,
@@ -3377,6 +3628,8 @@ probe_curl || probe_wget || probe_python
       try { require('electron').BrowserWindow.getAllWindows()[0]?.webContents.send('debug:log', `[sftp-connect] ${msg}`); } catch {}
     };
     log(`start host=${host} user=${username} jumps=${hops.length ? hops.map(h => h.host).join('→') : '(none)'}`);
+    // 같은 호스트의 다른 패널에서 ClearCase 뷰 루트를 물려받기 위한 기록(getCcViewRoot 폴백).
+    this.panelHost.set(connId, String(hops.length ? hops[hops.length - 1].host : host));
     return new Promise((resolve, reject) => {
       const primaryConn = new Client();
       primaryConn.on('error', (err: any) => {
@@ -3527,6 +3780,12 @@ probe_curl || probe_wget || probe_python
   }
 
   handleSFTPDisconnect(connId: string) {
+    // ccViewRoots 는 clients 레코드가 이미 정리됐어도(cleanupOnClose 가 먼저 탄 경우) 남으므로
+    // early return 앞에서 지운다 — 안 지우면 죽은 connId 의 뷰 루트가 계속 쌓인다.
+    this.ccViewRoots.delete(connId);
+    this.ccViewRootBad.delete(connId);
+    this.panelHost.delete(connId);
+    this.activeShellPids.delete(connId);
     const rec = this.clients.get(connId);
     if (!rec) return;
     try { rec.conn.end(); } catch {}

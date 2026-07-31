@@ -41,10 +41,11 @@ import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
 import * as chatArchiveStore from './chatArchiveStore';
 import * as everythingService from './everythingService';
+import { loadSqlSessionsData, saveSqlSessionsData, SqlSession, SqlFolder, SqlSessionsData } from './sqlSessionsStore';
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { loadClockWidgetState, saveClockWidgetState, ClockWidgetState } from './clockWidgetStore';
-import { xferLog } from './sshBridge';
+import { xferLog, setSftpDebugLog } from './sshBridge';
 import { getSSHBridge } from './sshBridge';
 import { getSipSidecar, getAllSipSidecars, resolveBinary as resolveSipdBinary } from './sipSidecar';
 import { getCaptureManager, isCaptureAvailable, listInterfaces as listCaptureInterfaces } from './captureSidecar';
@@ -1198,7 +1199,7 @@ app.whenReady().then(() => {
   // 선택 해제될 수 있는 대용량 번들(build/installer.nsh 참고)이라 dist(app.asar) 밖의
   // resources/<name>(패키지) 또는 repo resources/<name>(dev) 에서 별도로 서빙한다 — asar 안에 있으면
   // 설치 후 부분 삭제가 불가능하기 때문.
-  const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor']);
+  const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor', 'calllog-cdr-tool']);
   protocol.handle(PEPE_PROTOCOL, async (request) => {
     const requestUrl = new URL(request.url);
     const { pathname } = requestUrl;
@@ -1216,10 +1217,40 @@ app.whenReady().then(() => {
         return new Response('Not Found', { status: 404 });
       }
     }
+    // 파일전송 패널에서 원격(SFTP) 파일을 Windows 탐색기로 직접 드래그해 놓을 때(DownloadURL 드래그)
+    // 쓰는 엔드포인트 — 실제로 OS 에 드롭될 때만 지연 호출되므로 사전 다운로드/동기 대기가 필요 없다.
+    if (topSeg === '__sftp-file') {
+      const termId = String(requestUrl.searchParams.get('termId') || '').trim();
+      const remotePath = String(requestUrl.searchParams.get('path') || '').trim();
+      if (!termId || !remotePath) return new Response('Bad Request', { status: 400 });
+      const tmpPath = path.join(os.tmpdir(), `pepe-drag-${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(remotePath)}`);
+      const bridge = getSSHBridge();
+      const transferId = `tx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const rootName = path.basename(remotePath);
+      // handleSFTPDownload 자체는 sftp-transfer-start 를 쏘지 않는다(그건 handleTransfer 루트 호출에서만
+      // 함) — 그래서 "전송" 탭(TransferLog.tsx)이 transferId 로 행을 찾지 못해 진행률이 안 보였다.
+      // 여기서 직접 한 번 쏴서 행을 만들고, 같은 transferId 를 ctx 로 넘겨 progress/complete 가 매칭되게 한다.
+      bridge.emit('message', { type: 'sftp-transfer-start', panelId: 'transfer', data: JSON.stringify({
+        transferId, rootName, rel: '', isDir: false, totalSize: 0,
+        srcPath: remotePath, dstPath: tmpPath,
+        srcMode: 'remote', dstMode: 'local', direction: 'download', workspaceId: '',
+      }) });
+      const ctx = { transferId, rootName, rel: '', workspaceId: '' };
+      try {
+        await bridge.handleSFTPDownload(termId, remotePath, tmpPath, ctx);
+        const data = await fs.promises.readFile(tmpPath);
+        const mime = PEPE_MIME_TYPES[path.extname(remotePath).toLowerCase()] || 'application/octet-stream';
+        return new Response(data, { status: 200, headers: { 'content-type': mime } });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      } finally {
+        fs.promises.unlink(tmpPath).catch(() => {});
+      }
+    }
     const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
     if (isExternal && app.isPackaged) {
       // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 요청이 올 때 풀어준다.
-      const marker: Record<string, string> = { 'office-editor': '_headers', 'rhwp-studio': 'favicon.ico', 'flowchart-editor': 'clear.html' };
+      const marker: Record<string, string> = { 'office-editor': '_headers', 'rhwp-studio': 'favicon.ico', 'flowchart-editor': 'clear.html', 'calllog-cdr-tool': 'index.html' };
       ensureBundleExtracted(topSeg as string, topSeg as string, marker[topSeg as string] || '');
     }
     const baseDir = isExternal
@@ -1636,7 +1667,20 @@ function messengerReadEmoticonAssets(dir: string): MessengerEmoticonAsset[] {
   }
 }
 
+// 이모티콘 팩 목록은 디스크를 훑는다(root 별 readdir + 팩마다 파일 열거). messengerState() 가
+// keepalive(3초)와 수신 패킷마다 호출되므로 그대로 두면 그 디스크 I/O 가 메인 프로세스에서 계속
+// 반복된다 — 짧은 TTL 캐시로 묶는다. 팩을 추가/삭제하면 몇 초 안에 반영된다.
+const MSG_EMOTICON_CACHE_MS = 10_000;
+let messengerEmoticonCache: { at: number; packs: MessengerEmoticonPack[] } | null = null;
+function messengerInvalidateEmoticonCache() { messengerEmoticonCache = null; }
 function messengerReadEmoticonPacks(): MessengerEmoticonPack[] {
+  const cached = messengerEmoticonCache;
+  if (cached && Date.now() - cached.at < MSG_EMOTICON_CACHE_MS) return cached.packs;
+  const result = messengerReadEmoticonPacksUncached();
+  messengerEmoticonCache = { at: Date.now(), packs: result };
+  return result;
+}
+function messengerReadEmoticonPacksUncached(): MessengerEmoticonPack[] {
   const packs: MessengerEmoticonPack[] = [];
   const seen = new Set<string>();
   for (const rootDir of messengerEmoticonRoots()) {
@@ -1668,16 +1712,35 @@ function messengerReadEmoticonPacks(): MessengerEmoticonPack[] {
   return packs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
+// 폴더 생성은 프로세스당 한 번만. 이 함수는 messengerMessagesPath / messengerPeersPath /
+// messengerIdentityPath / messengerDownloadsDir 가 모두 거쳐가는 최하단이라, 호출마다 mkdirSync 를
+// 돌리면 메신저 관련 모든 경로 계산이 동기 디스크 작업이 된다 — 수정 후에도 CPU 프로파일에서
+// native mkdir 이 메인 프로세스 시간의 41.7% 를 차지한 원인이 바로 이 한 줄이었다.
+// (userData 하위 폴더라 세션 중에 사라지지 않는다. 실제 쓰기는 모두 try/catch 로 감싸여 있다.)
+let messengerDirEnsured = false;
 function messengerDir() {
   const dir = path.join(app.getPath('userData'), 'messenger');
-  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  if (!messengerDirEnsured) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    messengerDirEnsured = true;
+  }
   return dir;
 }
 function messengerMessagesPath() { return path.join(messengerDir(), 'messages.json'); }
 function messengerIdentityPath() { return path.join(messengerDir(), 'identity.json'); }
 function messengerPeersPath() { return path.join(messengerDir(), 'peers.json'); }
+// 경로만 돌려준다 — 디스크는 건드리지 않는다.
+// 예전엔 호출마다 fs.mkdirSync(recursive) 를 돌렸는데, 이 함수는 messengerState() 안에서 불리고
+// messengerState() 는 keepalive 타이머(3초)와 **수신되는 hello 패킷마다** 호출된다. 그래서 메인
+// 프로세스가 동기 mkdir 로 계속 막혔다 — CPU 프로파일에서 이 함수 하나가 전체 샘플 시간의 39%
+// (24.1s/61.5s)를 차지했고, 메인이 막히면 모든 창과 SSH IPC 가 함께 버벅인다.
+// 실제로 폴더가 필요한 쓰기 경로는 messengerEnsureDownloadsDir() 를 쓴다.
 function messengerDownloadsDir() {
-  const dir = messengerPrefs.downloadDir || path.join(messengerDir(), 'downloads');
+  return messengerPrefs.downloadDir || path.join(messengerDir(), 'downloads');
+}
+// 파일을 실제로 저장하기 직전에만 폴더 생성을 보장한다(외부에서 삭제된 경우도 여기서 복구).
+function messengerEnsureDownloadsDir() {
+  const dir = messengerDownloadsDir();
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
   return dir;
 }
@@ -1732,6 +1795,39 @@ function messengerLoadPeers() {
 }
 function messengerSavePeers() {
   try { fs.writeFileSync(messengerPeersPath(), JSON.stringify([...messengerPeers.values()].map(({ online, ...p }) => p), null, 2), 'utf8'); } catch {}
+}
+// LAN 의 peer 마다 3초 간격으로 hello 를 쏘기 때문에 수신 패킷은 꽤 잦다. 그때마다 위 동기
+// writeFileSync 를 돌리면 메인 프로세스가 계속 막힌다 — peer 목록은 lastSeen 만 갱신되는 게
+// 대부분이라 즉시 저장할 이유가 없어 뒤로 모아서 한 번 쓴다.
+let messengerSavePeersTimer: NodeJS.Timeout | null = null;
+function messengerSavePeersSoon() {
+  if (messengerSavePeersTimer) return;
+  messengerSavePeersTimer = setTimeout(() => {
+    messengerSavePeersTimer = null;
+    messengerSavePeers();
+  }, 3000);
+}
+// 같은 이유로 수신 패킷마다 전체 상태를 모든 창에 broadcast 하지 않는다(상태에는 메시지 전체가
+// 들어있고 창이 여러 개면 그만큼 직렬화된다). keepalive 타이머가 3초마다 어차피 보내주므로,
+// 패킷 유발 emit 은 합쳐서 최대 1초에 한 번만 내보낸다.
+let messengerPeersEmitTimer: NodeJS.Timeout | null = null;
+function messengerEmitPeersSoon() {
+  if (messengerPeersEmitTimer) return;
+  messengerPeersEmitTimer = setTimeout(() => {
+    messengerPeersEmitTimer = null;
+    messengerLastPeersSig = messengerPeersSignature();
+    messengerEmit({ type: 'peers', state: messengerState() });
+  }, 1000);
+}
+// peer 목록이 실제로 달라졌는지 싸게 비교하기 위한 서명 — id + 온라인여부 + 이름/주소.
+// keepalive 타이머가 "변화 없으면 안 보내기" 판정에 쓴다.
+let messengerLastPeersSig = '';
+function messengerPeersSignature() {
+  const now = Date.now();
+  return [...messengerPeers.values()]
+    .map(p => `${p.id}:${p.name}@${p.host}:${p.port}:${now - p.lastSeen < MSG_ONLINE_WINDOW_MS ? 1 : 0}`)
+    .sort()
+    .join('|');
 }
 function messengerLoadMessages() {
   try {
@@ -2036,7 +2132,7 @@ function messengerHandleIncoming(payload: any, remoteHost: string) {
   } else if (payload.type === 'file') {
     const fileName = path.basename(String(payload.fileName || 'received.bin')).replace(/[<>:"/\\|?*]/g, '_');
     const data = Buffer.from(String(payload.dataBase64 || ''), 'base64');
-    const savePath = path.join(messengerDownloadsDir(), `${Date.now()}-${fileName}`);
+    const savePath = path.join(messengerEnsureDownloadsDir(), `${Date.now()}-${fileName}`);
     fs.writeFileSync(savePath, data);
     const kind = payload.kind === 'sticker' ? 'sticker' : 'file';
     messengerRemember({ id: payload.messageId || `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, peerId, direction: 'in', kind, fileName, filePath: savePath, size: data.length, ts: Number(payload.ts) || Date.now() });
@@ -2104,9 +2200,10 @@ async function messengerStartService(prefs?: MessengerPrefs) {
         const p = JSON.parse(msg.toString('utf8'));
         if (p?.app !== 'pepe-terminal-ssh' || p?.type !== 'hello' || p?.id === messengerId) return;
         messengerPeers.set(String(p.id), { id: String(p.id), name: String(p.name || 'PePe'), host: rinfo.address, port: Number(p.port) || 0, lastSeen: Date.now() });
-        messengerSavePeers();
+        // 동기 저장/전체 broadcast 를 패킷마다 하면 메인 프로세스가 막힌다 — 뒤로 모아서 처리.
+        messengerSavePeersSoon();
         if (!p.reply) messengerSendHelloTo(rinfo.address, true);
-        messengerEmit({ type: 'peers', state: messengerState() });
+        messengerEmitPeersSoon();
       } catch {}
     });
     await new Promise<void>((resolve, reject) => {
@@ -2120,7 +2217,14 @@ async function messengerStartService(prefs?: MessengerPrefs) {
   if (!messengerTimer) messengerTimer = setInterval(() => {
     messengerBroadcast();
     messengerKeepalive();
-    messengerEmit({ type: 'peers', state: messengerState() });
+    // 바뀐 게 없으면 보내지 않는다. messengerState() 는 메시지 전체를 담고 messengerEmit 은 그걸
+    // 창마다 IPC 직렬화하므로, 3초마다 무조건 보내면 창 수만큼 비용이 계속 나간다(프로파일에서
+    // 이 타이머가 메인 프로세스 시간의 최상위였다). peer 목록과 online 여부가 실제로 변할 때만 보낸다.
+    const sig = messengerPeersSignature();
+    if (sig !== messengerLastPeersSig) {
+      messengerLastPeersSig = sig;
+      messengerEmit({ type: 'peers', state: messengerState() });
+    }
   }, MSG_KEEPALIVE_MS);
   messengerBroadcast();
   messengerKeepalive();
@@ -2297,7 +2401,7 @@ ipcMain.handle('messenger:send-file-paths', async (_e, { peerId, files }: { peer
       const fileName = item.name || path.basename(filePath);
       if (path.dirname(filePath) === attachTmpDir) {
         const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_');
-        const permPath = path.join(messengerDownloadsDir(), `${Date.now()}-${safeName}`);
+        const permPath = path.join(messengerEnsureDownloadsDir(), `${Date.now()}-${safeName}`);
         try { fs.renameSync(filePath, permPath); sendPath = permPath; }
         catch { try { fs.copyFileSync(filePath, permPath); fs.unlinkSync(filePath); sendPath = permPath; } catch {} }
       }
@@ -2332,6 +2436,8 @@ ipcMain.handle('messenger:open-emoticon-folder', async () => {
     const roots = messengerEmoticonRoots();
     const primary = roots[0] || path.join(app.getPath('userData'), 'messenger-emoticons');
     try { fs.mkdirSync(primary, { recursive: true }); } catch {}
+    // 사용자가 폴더를 열었다 = 곧 팩을 추가/삭제할 것 → 캐시를 버려 다음 조회가 디스크를 다시 읽게 한다.
+    messengerInvalidateEmoticonCache();
     await shell.openPath(primary);
     return { success: true, path: primary };
   } catch (err: any) {
@@ -5305,10 +5411,38 @@ try {
   }
 });
 
+// 드라이브/특수폴더 목록은 PowerShell(Shell.Application COM) 로 얻는다 — 한 번에 100~300ms 드는
+// 무거운 호출이다. FilePanel 이 마운트마다 이걸 부르는데(useEffect [] ), 파일전송 탭을 전환하면
+// 패널이 재마운트되므로 탭을 옮길 때마다 PowerShell 프로세스가 하나씩 떴다. 게다가 execFileSync
+// 라서 그 시간 동안 메인 프로세스 전체(= 모든 창 + SSH IPC)가 멈췄다 — CPU 프로파일에서 native
+// spawn 이 메인 프로세스 시간의 13~17% 를 차지한 원인.
+//  · 결과를 캐시해서 반복 호출은 프로세스를 띄우지 않는다(드라이브 구성은 자주 안 바뀐다).
+//  · 진행 중인 호출은 공유한다(여러 창이 동시에 마운트될 때 중복 실행 방지).
+//  · execFileSync → execFile(비동기) 로 바꿔 첫 호출도 메인 프로세스를 막지 않는다.
+const FE_DRIVES_CACHE_MS = 60_000;
+let feDrivesCache: { at: number; list: { path: string; label: string; depth?: number }[] } | null = null;
+let feDrivesInFlight: Promise<{ path: string; label: string; depth?: number }[]> | null = null;
 ipcMain.handle('fe:get-drives', async () => {
+  const cached = feDrivesCache;
+  if (cached && Date.now() - cached.at < FE_DRIVES_CACHE_MS) return cached.list;
+  if (feDrivesInFlight) return feDrivesInFlight;
+  feDrivesInFlight = (async () => await feGetDrivesUncached())();
+  try {
+    const list = await feDrivesInFlight;
+    feDrivesCache = { at: Date.now(), list };
+    return list;
+  } finally {
+    feDrivesInFlight = null;
+  }
+});
+async function feGetDrivesUncached(): Promise<{ path: string; label: string; depth?: number }[]> {
   if (process.platform === 'win32') {
     try {
-      const { execFileSync } = require('child_process');
+      const { execFile } = require('child_process');
+      const execFileAsync = (cmd: string, args: string[], opts: any): Promise<string> =>
+        new Promise((resolve, reject) => {
+          execFile(cmd, args, opts, (err: any, stdout: any) => err ? reject(err) : resolve(String(stdout)));
+        });
       // PowerShell 스크립트 — 임시 파일로 저장 후 실행 (UTF-8 인코딩 안정성 + NetHood 항목 UNC 해석)
       const psScript = `chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -5466,9 +5600,9 @@ $items | Sort-Object Order | ConvertTo-Json -Compress`;
       const tmpPs = path.join(os.tmpdir(), `pepe-drives-${Date.now()}.ps1`);
       try {
         fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
-        const out: string = execFileSync('powershell', [
+        const out: string = await execFileAsync('powershell', [
           '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
-        ], { windowsHide: true, timeout: 10000 }).toString('utf-8');
+        ], { windowsHide: true, timeout: 10000, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 });
         try { fs.unlinkSync(tmpPs); } catch {}
         const data = JSON.parse(out.trim() || '[]');
         const arr: any[] = Array.isArray(data) ? data : [data];
@@ -5493,7 +5627,7 @@ $items | Sort-Object Order | ConvertTo-Json -Compress`;
     }
   }
   return [{ path: '/', label: '/' }];
-});
+}
 
 ipcMain.handle('fe:get-home', () => {
   return require('os').homedir();
@@ -5679,6 +5813,17 @@ ipcMain.handle('fe:sftp-disconnect', (_e, { connId }: any) => {
   const bridge = getSSHBridge();
   bridge.handleSFTPDisconnect(connId);
 });
+
+// 파일전송 탭 병합 시 원본(구) 연결의 ClearCase 뷰 루트를 읽어 새 연결에 이관하기 위함.
+// 새로 여는 SFTP 전용 연결은 인터랙티브 셸이 없어 뷰 루트를 스스로 알아낼 방법이 없다.
+ipcMain.handle('fe:get-view-root', async (_e, { termId }: { termId: string }) => {
+  try { return await getSSHBridge().getCcViewRoot(termId); } catch { return ''; }
+});
+ipcMain.handle('fe:set-view-root', (_e, { termId, root }: { termId: string; root: string }) => {
+  try { getSSHBridge().setCcViewRoot(termId, root); } catch {}
+});
+// ClearCase 뷰 루트 탐지/SFTP 채널 재시도 진단 로그 on/off (기본 꺼짐) — sshBridge.ts 의 sftpDebug 참고
+ipcMain.handle('fe:set-sftp-debug-log', (_e, on: boolean) => { setSftpDebugLog(!!on); return { enabled: !!on }; });
 
 // 파일트리/Compare 등에서 사용한 dedicated SFTP 만 종료. 터미널 SSH 연결은 유지.
 ipcMain.handle('fe:release-sftp', (_e, { panelId }: { panelId: string }) => {
@@ -6022,6 +6167,230 @@ ipcMain.handle('jdbc:meta-function-columns', async (_e, args: { connectionId: st
 
 // SQL Tool 세션 상태 영속화 (history / favorites / editorTabs).
 // renderer 는 localStorage 대신 이 IPC 쌍을 통해 main 의 JSON 파일과 통신.
+// SQL Tool 독립 DB 연결 프로필 목록 — SSH 세션과 분리된 자체 저장소(sql-sessions.json).
+ipcMain.handle('sql-sessions:list', () => loadSqlSessionsData());
+ipcMain.handle('sql-sessions:save', (_e, sess: SqlSession) => {
+  try {
+    const data = loadSqlSessionsData();
+    const idx = data.sessions.findIndex(s => s.id === sess.id);
+    if (idx >= 0) data.sessions[idx] = sess; else data.sessions.push(sess);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:delete', (_e, id: string) => {
+  try {
+    const data = loadSqlSessionsData();
+    data.sessions = data.sessions.filter(s => s.id !== id);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:save-folder', (_e, folder: SqlFolder) => {
+  try {
+    const data = loadSqlSessionsData();
+    const idx = data.folders.findIndex(f => f.id === folder.id);
+    if (idx >= 0) data.folders[idx] = folder; else data.folders.push(folder);
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:delete-folder', (_e, id: string) => {
+  try {
+    const data = loadSqlSessionsData();
+    const deleted = data.folders.find(f => f.id === id);
+    const parentId = deleted?.parentId;
+    data.folders = data.folders.filter(f => f.id !== id);
+    data.folders.forEach(f => { if (f.parentId === id) f.parentId = parentId; });
+    data.sessions.forEach(s => { if (s.folderId === id) s.folderId = parentId; });
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+ipcMain.handle('sql-sessions:move-to-folder', (_e, sessionId: string, folderId: string | null) => {
+  try {
+    const data = loadSqlSessionsData();
+    const sess = data.sessions.find(s => s.id === sessionId);
+    if (sess) sess.folderId = folderId ?? undefined;
+    saveSqlSessionsData(data);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+
+// SQL Tool 세션/폴더 순서 이동 — sessions:reorder 와 동일한 규칙(같은 레벨 내 swap, 폴더 만나면 그
+// 안으로 진입/이탈)을 childOrder(parentId('__root__' 포함) → 자식 id 목록)에 적용.
+ipcMain.handle('sql-sessions:reorder', (_e, { id, type, direction }: { id: string; type: 'session' | 'folder'; direction: 'up' | 'down' | 'top' | 'bottom' }) => {
+  try {
+    const data = loadSqlSessionsData();
+    if (!data.childOrder) data.childOrder = {};
+
+    const getChildOrder = (parentId?: string): string[] => {
+      const key = parentId || '__root__';
+      if (!data.childOrder![key]) {
+        const fIds = data.folders.filter(f => (f.parentId ?? undefined) === parentId).map(f => f.id);
+        const sIds = data.sessions.filter(s => (s.folderId ?? undefined) === parentId).map(s => s.id);
+        data.childOrder![key] = [...fIds, ...sIds];
+      }
+      const allIds = new Set([
+        ...data.folders.filter(f => (f.parentId ?? undefined) === parentId).map(f => f.id),
+        ...data.sessions.filter(s => (s.folderId ?? undefined) === parentId).map(s => s.id),
+      ]);
+      const order = data.childOrder![key].filter(x => allIds.has(x));
+      for (const aid of allIds) { if (!order.includes(aid)) order.push(aid); }
+      data.childOrder![key] = order;
+      return order;
+    };
+    const setChildOrder = (parentId: string | undefined, order: string[]) => { data.childOrder![parentId || '__root__'] = order; };
+    const removeFromChildOrder = (parentId: string | undefined, itemId: string) => {
+      const order = getChildOrder(parentId);
+      const idx = order.indexOf(itemId);
+      if (idx >= 0) order.splice(idx, 1);
+      setChildOrder(parentId, order);
+    };
+    const addToChildOrder = (parentId: string | undefined, itemId: string, position: 'first' | 'last' | { before: string } | { after: string }) => {
+      const order = getChildOrder(parentId);
+      const existIdx = order.indexOf(itemId);
+      if (existIdx >= 0) order.splice(existIdx, 1);
+      if (position === 'first') order.unshift(itemId);
+      else if (position === 'last') order.push(itemId);
+      else if ('before' in position) { const ti = order.indexOf(position.before); order.splice(ti >= 0 ? ti : 0, 0, itemId); }
+      else { const ti = order.indexOf(position.after); order.splice(ti >= 0 ? ti + 1 : order.length, 0, itemId); }
+      setChildOrder(parentId, order);
+    };
+
+    let parentId: string | undefined;
+    if (type === 'session') {
+      const sess = data.sessions.find(s => s.id === id);
+      if (!sess) return data;
+      parentId = sess.folderId;
+    } else {
+      const folder = data.folders.find(f => f.id === id);
+      if (!folder) return data;
+      parentId = folder.parentId;
+    }
+
+    const order = getChildOrder(parentId);
+    const idx = order.indexOf(id);
+    if (idx < 0) return data;
+
+    if (direction === 'top') {
+      order.splice(idx, 1); order.unshift(id); setChildOrder(parentId, order);
+    } else if (direction === 'bottom') {
+      order.splice(idx, 1); order.push(id); setChildOrder(parentId, order);
+    } else if (direction === 'up') {
+      if (idx > 0) {
+        const prevId = order[idx - 1];
+        const prevIsFolder = data.folders.some(f => f.id === prevId);
+        if (prevIsFolder) {
+          removeFromChildOrder(parentId, id);
+          if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = prevId;
+          else data.folders.find(f => f.id === id)!.parentId = prevId;
+          addToChildOrder(prevId, id, 'last');
+        } else {
+          [order[idx], order[idx - 1]] = [order[idx - 1], order[idx]];
+          setChildOrder(parentId, order);
+        }
+      } else if (parentId) {
+        removeFromChildOrder(parentId, id);
+        const grandParentId = data.folders.find(f => f.id === parentId)?.parentId;
+        if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = grandParentId;
+        else data.folders.find(f => f.id === id)!.parentId = grandParentId;
+        addToChildOrder(grandParentId, id, { before: parentId });
+      }
+    } else { // down
+      if (idx < order.length - 1) {
+        const nextId = order[idx + 1];
+        const nextIsFolder = data.folders.some(f => f.id === nextId);
+        if (nextIsFolder) {
+          removeFromChildOrder(parentId, id);
+          if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = nextId;
+          else data.folders.find(f => f.id === id)!.parentId = nextId;
+          addToChildOrder(nextId, id, 'first');
+        } else {
+          [order[idx], order[idx + 1]] = [order[idx + 1], order[idx]];
+          setChildOrder(parentId, order);
+        }
+      } else if (parentId) {
+        removeFromChildOrder(parentId, id);
+        const grandParentId = data.folders.find(f => f.id === parentId)?.parentId;
+        if (type === 'session') data.sessions.find(s => s.id === id)!.folderId = grandParentId;
+        else data.folders.find(f => f.id === id)!.parentId = grandParentId;
+        addToChildOrder(grandParentId, id, { after: parentId });
+      }
+    }
+
+    saveSqlSessionsData(data);
+    return data;
+  } catch (err: any) {
+    return { error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle('sql-sessions:export', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export SQL Tool Sessions',
+    defaultPath: 'sql-sessions-export.json',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  try {
+    const data = loadSqlSessionsData();
+    fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf8');
+    return result.filePath;
+  } catch { return null; }
+});
+
+ipcMain.handle('sql-sessions:import', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import SQL Tool Sessions',
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    const imported: SqlSessionsData = Array.isArray(raw)
+      ? { sessions: raw, folders: [] }
+      : { sessions: raw.sessions ?? [], folders: raw.folders ?? [] };
+    const data = loadSqlSessionsData();
+    // 폴더 병합 — 이름+parentId 중복이면 기존 것 재사용, 아니면 새 id 로 추가.
+    const folderIdMap = new Map<string, string>();
+    for (const f of imported.folders) {
+      const existing = data.folders.find(x => x.name === f.name && (x.parentId ?? undefined) === (f.parentId ? folderIdMap.get(f.parentId) : undefined));
+      if (existing) { folderIdMap.set(f.id, existing.id); continue; }
+      const newId = `sqlfolder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      folderIdMap.set(f.id, newId);
+      data.folders.push({ id: newId, name: f.name, parentId: f.parentId ? folderIdMap.get(f.parentId) : undefined });
+    }
+    let addedCount = 0;
+    let duplicateCount = 0;
+    for (const s of imported.sessions) {
+      const newFolderId = s.folderId ? folderIdMap.get(s.folderId) : undefined;
+      const dup = data.sessions.some(x => x.name === s.name && x.dbms?.host === s.dbms?.host && x.dbms?.port === s.dbms?.port);
+      if (dup) { duplicateCount++; continue; }
+      data.sessions.push({ ...s, id: `sql-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, folderId: newFolderId });
+      addedCount++;
+    }
+    saveSqlSessionsData(data);
+    return { data, addedCount, duplicateCount, totalParsed: imported.sessions.length };
+  } catch (err) {
+    console.error('SQL sessions import error:', err);
+    return null;
+  }
+});
+
 ipcMain.handle('sql-tool:get-state', async (_e, sessionId: string) => {
   if (!sessionId) return {};
   return getSqlToolState(sessionId);
@@ -6964,8 +7333,54 @@ ipcMain.handle('clock-widget:close', () => {
   }
   try { mainWindow?.webContents.send('clock-widget:visibility', false); } catch {}
 });
+// 드롭 지점의 진짜 최상단(z-order) 창 HWND — user32 WindowFromPoint + GetAncestor(GA_ROOT).
+// bounds 겹침만으로 도킹 대상을 정하면, 창2가 다른(PePe 아닌) 앱 창에 완전히 가려져 있어도
+// 화면좌표만 그 사각형 안에 들어가면 도킹돼버리는 문제가 있어 실제 최상단 창을 확인한다.
+async function getRootWindowHwndAtPoint(x: number, y: number): Promise<bigint | null> {
+  if (process.platform !== 'win32') return null;
+  const psScript = `
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class PepeDropHitTest {
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+}
+"@ -ErrorAction SilentlyContinue
+$pt = New-Object PepeDropHitTest+POINT
+$pt.X = ${Math.round(x)}
+$pt.Y = ${Math.round(y)}
+$h = [PepeDropHitTest]::WindowFromPoint($pt)
+$root = [PepeDropHitTest]::GetAncestor($h, 2)
+[Console]::Out.Write([Int64]$root)
+`;
+  // execFile(비동기) 사용 — execFileSync 는 PowerShell 프로세스가 뜨는 동안(수백ms) 메인 프로세스
+  // 이벤트 루프 전체를 막아 다른 창/SSH IPC 까지 같이 멈추게 한다(다른 곳에서 이미 겪은 문제라
+  // SFTP 도 worker thread 로 뺀 전례가 있음 — 여기서도 같은 원칙 적용).
+  const tmpPs = path.join(os.tmpdir(), `pepe-drop-hittest-${Date.now()}.ps1`);
+  try {
+    fs.writeFileSync(tmpPs, '﻿' + psScript, { encoding: 'utf8' });
+    const { execFile } = require('child_process');
+    const out: string = await new Promise((resolve, reject) => {
+      execFile('powershell', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpPs,
+      ], { windowsHide: true, timeout: 1500, encoding: 'utf-8' },
+      (err: any, stdout: string) => { if (err) reject(err); else resolve(stdout); });
+    });
+    try { fs.unlinkSync(tmpPs); } catch {}
+    const trimmed = (out || '').trim();
+    if (!trimmed) return null;
+    return BigInt(trimmed);
+  } catch { try { fs.unlinkSync(tmpPs); } catch {} return null; }
+}
+function hwndBufferToBigInt(buf: Buffer): bigint {
+  if (buf.length >= 8) return buf.readBigUInt64LE();
+  if (buf.length >= 4) return BigInt(buf.readUInt32LE());
+  return BigInt(0);
+}
 // 탭 드롭 — 드롭 지점(point, 화면좌표)이 다른 앱 창 위면 그 창으로 re-dock, 아니면 새 창 생성.
-ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
+ipcMain.handle('window:drop-tab', async (e, { payload, point, sourceTabCount }: { payload: any; point?: { x: number; y: number }; sourceTabCount?: number }) => {
   try {
     const sourceWin = winOf(e);
     // 최소화/숨김 창은 화면에 안 보여도 getBounds() 가 restored 좌표를 돌려주므로
@@ -6981,6 +7396,17 @@ ipcMain.handle('window:drop-tab', (e, { payload, point, sourceTabCount }: { payl
         if (w === sourceWin) continue;
         const b = w.getBounds();
         if (point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y && point.y <= b.y + b.height) { target = w; break; }
+      }
+      // bounds 상 후보를 찾았어도, 그 지점에 실제로 다른(비 PePe) 창이 최상단으로 덮고 있으면
+      // 도킹하지 않는다 — 실패/타임아웃 시엔 기존 동작(도킹) 유지 (native 체크는 best-effort).
+      if (target) {
+        try {
+          const rootHwnd = await getRootWindowHwndAtPoint(point.x, point.y);
+          if (rootHwnd != null) {
+            const targetHwnd = hwndBufferToBigInt(target.getNativeWindowHandle());
+            if (rootHwnd !== targetHwnd) target = null;
+          }
+        } catch {}
       }
     }
     if (target) {
@@ -7136,16 +7562,24 @@ ipcMain.handle('ssh:close-local-forward', (_e, args: { forwardId: string }) => {
 });
 // SQL Tool 등 — 활성 터미널 없이도 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 맺고
 // 그 위로 DB 포트를 로컬 포워딩. (점프된 세션에서 터미널을 안 띄워도 SQL 연결되도록)
-ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId: string; remoteHost: string; remotePort: number }) => {
+ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId?: string; remoteHost: string; remotePort: number; sshConn?: { host: string; port?: number; username: string; auth?: any } }) => {
   try {
     const bridge: any = getSSHBridge();
-    const session = sessionsData.sessions.find(s => s.id === args.sessionId);
-    if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
-    const needsPw = !session.auth || (session.auth.type === 'password' && !session.auth.password);
-    if (needsPw) return { success: false, error: '이 세션은 저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. 세션에 자격증명을 저장하거나 먼저 해당 세션으로 터미널을 연결하세요.' };
-    const connId = `sqlfwd-${args.sessionId}-${Date.now().toString(36)}`;
+    // SQL Tool 독립 세션처럼 sessions.json 에 없는 자체 SSH 접속 정보(sshConn)를 직접 줄 수도 있고,
+    // (레거시 경로) sessionId 로 기존 SSH 세션의 접속 정보를 재사용할 수도 있다.
+    let host: string, port: number, username: string, auth: any, jumps: any;
+    if (args.sshConn) {
+      host = args.sshConn.host; port = args.sshConn.port || 22; username = args.sshConn.username; auth = args.sshConn.auth;
+    } else {
+      const session = sessionsData.sessions.find(s => s.id === args.sessionId);
+      if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };
+      host = session.host; port = session.port || 22; username = session.username; auth = session.auth; jumps = (session as any).jumps;
+    }
+    const needsPw = !auth || (auth.type === 'password' && !auth.password);
+    if (needsPw) return { success: false, error: '저장된 비밀번호/키가 없어 백그라운드 SSH 연결을 만들 수 없습니다. SSH 터널 설정에 자격증명을 저장하세요.' };
+    const connId = `sqlfwd-${args.sessionId || 'standalone'}-${Date.now().toString(36)}`;
     try {
-      await bridge.handleSFTPConnect(connId, session.host, session.port || 22, session.username, session.auth, undefined, (session as any).jumps);
+      await bridge.handleSFTPConnect(connId, host, port, username, auth, undefined, jumps);
     } catch (e: any) {
       try { bridge.handleSFTPDisconnect?.(connId); } catch {}
       return { success: false, error: `백그라운드 SSH 연결 실패: ${e?.message || e}` };
@@ -7886,6 +8320,18 @@ function officeBundleAvailable(): boolean {
   } catch { return false; }
 }
 
+// SSW CDR 로그 분석 — 선택 설치 번들(resources/calllog-cdr-tool). 설치 시 체크 해제했으면
+// 폴더가 없다(zip 만 남거나 그것도 삭제됨) → 메뉴에서 아예 숨긴다.
+// 포터블 빌드는 NSIS 를 안 거치므로 zip 이 남아있을 수 있는데, 그 경우는 실제로 열 때
+// pepeapp 프로토콜 핸들러의 ensureBundleExtracted 가 풀어주므로 zip 존재도 "사용 가능"으로 본다.
+function cdrToolBundleAvailable(): boolean {
+  try {
+    const base = app.isPackaged ? process.resourcesPath : path.join(process.cwd(), 'resources');
+    if (fs.existsSync(path.join(base, 'calllog-cdr-tool', 'index.html'))) return true;
+    return app.isPackaged && fs.existsSync(path.join(base, 'calllog-cdr-tool.zip'));
+  } catch { return false; }
+}
+
 // 설치 시 선택 해제한 기능(build/installer.nsh 참고 — 각 사이드카/번들 폴더가 통째로 빠질 수
 // 있다)의 메뉴 항목을 렌더러에서 숨기기 위한 가용성 체크. 파일 존재 여부만 실시간으로 보고,
 // 설치 시점 값을 어딘가 저장해두지 않는다 — 나중에 사용자가 폴더를 수동으로 넣거나 빼도 항상
@@ -7915,6 +8361,7 @@ ipcMain.handle('features:get-available', () => ({
   sipp: !!resolveSippBinary(),
   office: officeBundleAvailable(),
   media: !!resolveGstreamerBinary(),
+  cdrTool: cdrToolBundleAvailable(),
 }));
 
 // ── OpenVPN ──

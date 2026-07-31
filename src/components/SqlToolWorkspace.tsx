@@ -62,19 +62,17 @@ export type DbmsCfg = {
   props?: Record<string, string>;
 };
 
+// SQL Tool 독립 DB 연결 프로필 — SSH 세션과 무관 (electron/sqlSessionsStore.ts 와 동일 모양).
 type Session = {
   id: string;
   name: string;
-  host: string;
-  port: number;
-  username: string;
-  auth?: any;
-  jumpTargetHost?: string;
-  jumpTargetUser?: string;
-  jumpTargetPort?: number;
-  jumpTargetPassword?: string;
-  jumps?: { host: string; user?: string; port?: number; password?: string }[];
-  dbms?: DbmsCfg;
+  dbms: DbmsCfg;
+  sshTunnel?: {
+    host: string;
+    port: number;
+    username: string;
+    auth?: any;
+  };
 };
 
 type HistoryEntry = {
@@ -235,8 +233,8 @@ const SQL_KEYWORDS = [
 // 그리드에 렌더할 최대 행 수 — div 로 셀 렌더하므로 1만행도 부담스럽지 않지만,
 // SELECT 결과 확인+간단 편집 용도이므로 2000 정도가 실용적 상한. 사이드카의 maxRows 도 이 값을 씀.
 const MAX_DISPLAY_ROWS = 2000;
-const hasJumpChain = (session?: Session | null) => !!session?.jumps?.some(j => (j.host || '').trim());
-const dbmsRemoteHostForSession = (session: Session) => hasJumpChain(session) ? '127.0.0.1' : (session.dbms?.host || '127.0.0.1');
+// 독립 SQL 세션은 SSH 점프 체인을 지원하지 않는다(단일 홉 sshTunnel 만) — 항상 dbms.host 사용.
+const dbmsRemoteHostForSession = (session: Session) => session.dbms?.host || '127.0.0.1';
 
 // (E-7/E-8: 레거시 isql 파서/드라이버 코드 제거됨 — JdbcBackend 가 사이드카 RPC 로 대체)
 export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAgent = 'claude' }) => {
@@ -509,11 +507,11 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   // JDBC 백엔드는 자체 connectionId 를 가지므로 SSH 재연결 로직은 더 이상 필요 없음.
   // (사이드카 프로세스가 죽으면 main 의 jdbcBridge 가 다음 호출 때 재spawn.)
 
-  // 세션 정보 로드
+  // 세션 정보 로드 — SSH 세션과 무관한 독립 SQL 세션 저장소.
   useEffect(() => {
     (async () => {
       try {
-        const data = await (window as any).api?.listSessions?.();
+        const data = await (window as any).api?.sqlSessionsList?.();
         const list: Session[] = data?.sessions || [];
         const s = list.find(x => x.id === sessionId);
         if (s) setSession(s);
@@ -608,6 +606,40 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     return () => clearTimeout(t);
   }, [history, favorites, editorTabs, sessionId, ipcLoaded]);
 
+  // SSH 터널이 필요한 dbms 의 로컬 포워딩을 연다. connect() 최초 연결뿐 아니라, keepAlive 재연결
+  // 등 JdbcBackend 내부에서 다시 필요할 때마다 호출되므로 — 이전에 연 포워딩이 죽어있어도(SSH 세션
+  // 재접속 등) 매번 새로 열어 항상 살아있는 host/port 를 돌려준다. session/sessionId 는 이 컴포넌트
+  // 안에서 tab 이 유지되는 한 안 바뀌므로 useCallback 으로 고정.
+  const openSshTunnel = useCallback(async (def: any): Promise<{ host: string; port: number; forwardId: string; dedConnId?: string } | { error: string }> => {
+    const api: any = (window as any).api || {};
+    if (!session?.dbms) return { error: tr('wsSessionNotFound') };
+    const tunnelConn = session.sshTunnel;
+    if (!tunnelConn?.host?.trim()) return { error: tr('wsSshIpcMissing') };
+    const remoteHost = dbmsRemoteHostForSession(session);
+    const remotePort = session.dbms.port || def?.defaultPort || 0;
+    // SQL Tool 세션은 자체 SSH 접속 정보(tunnelConn)를 갖고 실제 터미널 세션과 무관하게 동작한다
+    // (SqlSessionEditor 참고) — 항상 그 정보로 전용 백그라운드 SSH 연결을 맺고 그 위로 포워딩한다.
+    // 예전엔 같은 host 로 연결된 활성 터미널이 있으면 그 연결을 재사용하려 했지만, host 만으로
+    // 매칭해 사용자/자격증명이 다른 엉뚱한 터미널을 골라올 수 있었고, 그 터미널이 워커 스레드
+    // 연결(connProxy)이면 forwardOut 이 없어 "i.conn.forwardOut is not a function" 으로 메인
+    // 프로세스가 죽는 버그가 있었다 — 재사용 시도 자체를 제거.
+    let ded: any = null;
+    if (typeof api.sshOpenDedicatedForward === 'function') {
+      try {
+        ded = await api.sshOpenDedicatedForward({
+          remoteHost, remotePort,
+          sshConn: { host: tunnelConn.host, port: tunnelConn.port || 22, username: tunnelConn.username, auth: tunnelConn.auth },
+        });
+      } catch { ded = null; }
+    }
+    console.log('[SqlTool] sshOpenDedicatedForward result =', ded);
+    if (!ded?.success || !ded.localPort) {
+      return { error: ded?.error ? tr('wsSshOpenFailedErr', { error: ded.error }) : tr('wsSshOpenFailedNoResp') };
+    }
+    console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: ded.localPort, forwardId: ded.forwardId });
+    return { host: '127.0.0.1', port: ded.localPort, forwardId: ded.forwardId, dedConnId: ded.connId || '' };
+  }, [session, tr]);
+
   // 연결 수립 — drivers.json 에서 driverId/dialect 로 정의를 찾아 JdbcBackend 생성
   const connect = useCallback(async () => {
     if (!session?.dbms) return;
@@ -619,8 +651,11 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     setConnectError('');
     try {
       const api: any = (window as any).api || {};
+      const useSshTunnel = !!session.dbms?.useSshTunnel;
       // 1) 분리/복원으로 새로 마운트된 케이스 — sidecar 에 같은 connectionId 의 살아있는
-      // connection 이 있으면 SSH 터널/드라이버 로딩 다 건너뛰고 즉시 adopt.
+      // connection 이 있으면 SSH 터널/드라이버 로딩 다 건너뛰고 즉시 adopt. 터널 세션이면
+      // tunnelOpener 도 같이 물려둔다 — 이 adopt 가 나중에(sidecar 쪽 연결이 끊겨) 재연결이
+      // 필요해지면 raw dbms(원격측 host/port) 로 바로 붙으려다 실패하는 걸 막기 위해.
       try {
         if (api.jdbcIsConnected) {
           const probe = await api.jdbcIsConnected(`sql-${sessionId}`);
@@ -628,7 +663,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
             const drivers0: any[] = (await api.jdbcListDrivers?.()) || [];
             const def0 = resolveDriverFromList(drivers0, session.dbms);
             if (def0) {
-              const adopted = new JdbcBackend(sessionId, session.dbms, def0);
+              const adopted = new JdbcBackend(sessionId, session.dbms, def0, useSshTunnel ? () => openSshTunnel(def0) : undefined);
               const cr = await adopted.tryAdopt();
               if (cr) {
                 console.log('[SqlTool] adopted existing JDBC connection', adopted.connectionId);
@@ -650,70 +685,17 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
         setConnectError(tr('wsDriverJarMissing', { name: def.name }));
         return;
       }
-      // SSH 터널 사용 시 — 로컬 포트 포워딩 열고 host/port 교체.
-      let effectiveDbms: any = session.dbms;
-      let forwardId = '';
-      let dedConnId = '';
-      console.log('[SqlTool] connect() session.dbms =', session.dbms);
-      const forceSshTunnel = hasJumpChain(session);
-      const useSshTunnel = !!session.dbms?.useSshTunnel || forceSshTunnel;
-      if (useSshTunnel) {
-        if (typeof api.sshOpenLocalForward !== 'function') {
-          setConnectError(tr('wsSshIpcMissing'));
-          return;
-        }
-        const remoteHost = dbmsRemoteHostForSession(session);
-        const remotePort = session.dbms.port || def.defaultPort || 0;
-        // 1차: 이미 연결된 활성 터미널(점프 포함) 위로 포워딩 재사용
-        let fwd: any = null;
-        try {
-          fwd = await api.sshOpenLocalForward({
-            sessionId,
-            remoteHost,
-            remotePort,
-            // SSH 호스트 힌트 — quick-connect 시 session.id 가 불일치해도 매칭 가능
-            sshHost: (session as any).host,
-            sshPort: (session as any).port || 22,
-          });
-        } catch { fwd = null; }
-        console.log('[SqlTool] sshOpenLocalForward result =', fwd);
-        // 2차 폴백: 활성 터미널이 없으면 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 수립해 포워딩
-        if (!fwd || fwd.success !== true || !fwd.localPort) {
-          const reuseErr = fwd?.error;
-          let ded: any = null;
-          if (typeof api.sshOpenDedicatedForward === 'function') {
-            try { ded = await api.sshOpenDedicatedForward({ sessionId, remoteHost, remotePort }); } catch { ded = null; }
-          }
-          console.log('[SqlTool] sshOpenDedicatedForward result =', ded);
-          if (ded?.success && ded.localPort) {
-            fwd = ded;
-            dedConnId = ded.connId || '';
-          } else {
-            const msg = ded?.error || reuseErr;
-            setConnectError(msg ? tr('wsSshOpenFailedErr', { error: msg }) : tr('wsSshOpenFailedNoResp'));
-            return;
-          }
-        }
-        forwardId = fwd.forwardId;
-        // urlOverride 가 남아있으면 host/port 교체가 무시되므로 함께 비움
-        effectiveDbms = { ...session.dbms, host: '127.0.0.1', port: fwd.localPort, urlOverride: undefined };
-        console.log('[SqlTool] SSH tunnel opened:', { remoteHost, remotePort, localPort: fwd.localPort, forwardId, dedicated: !!dedConnId, forcedByJump: forceSshTunnel });
-      }
-      const newBackend = new JdbcBackend(sessionId, effectiveDbms, def);
-      // forwardId/전용연결 id 를 backend 에 저장해 disconnect 시 정리
-      (newBackend as any).__forwardId = forwardId;
-      (newBackend as any).__dedConnId = dedConnId;
-      // 진단 로그 — 실제 빌드된 URL
-      const dbgUrl = newBackend.buildUrl();
-      console.log('[SqlTool] connecting JDBC →', dbgUrl, forwardId ? `(via SSH tunnel ${forwardId})` : '(direct)');
+      const newBackend = new JdbcBackend(sessionId, session.dbms, def, useSshTunnel ? () => openSshTunnel(def) : undefined);
       const cr = await newBackend.ensureConnected();
       if (!cr.ok) {
-        if (dedConnId) { try { await api.sshCloseDedicatedForward?.({ forwardId, connId: dedConnId }); } catch {} }
-        else if (forwardId) { try { await api.sshCloseLocalForward?.({ forwardId }); } catch {} }
-        const prefix = forwardId ? `[SSH tunnel: ${dbgUrl}] ` : '';
+        if (newBackend.__dedConnId) { try { await api.sshCloseDedicatedForward?.({ forwardId: newBackend.__forwardId, connId: newBackend.__dedConnId }); } catch {} }
+        else if (newBackend.__forwardId) { try { await api.sshCloseLocalForward?.({ forwardId: newBackend.__forwardId }); } catch {} }
+        const dbgUrl = newBackend.buildUrl();
+        const prefix = newBackend.__forwardId ? `[SSH tunnel: ${dbgUrl}] ` : '';
         setConnectError(prefix + (cr.error || tr('wsConnectFailed')));
         return;
       }
+      console.log('[SqlTool] connected JDBC →', newBackend.buildUrl(), newBackend.__forwardId ? `(via SSH tunnel ${newBackend.__forwardId})` : '(direct)');
       setBackend(newBackend);
       setConnected(true);
     } catch (e: any) {
@@ -722,7 +704,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
     } finally {
       setConnecting(false);
     }
-  }, [session, sessionId]);
+  }, [session, sessionId, openSshTunnel]);
 
   // 자동 연결은 세션당 1회만 — 실패 시 effect 가 즉시 재호출해 무한 재시도(상태 깜빡임)되던 문제 방지.
   const autoConnectedRef = useRef(false);

@@ -6,12 +6,14 @@ import { TransferLog } from './TransferLog';
 import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
 import type { OfficeFormat } from './OfficeLauncher';
+import { ContextMenu } from './ContextMenu';
 import type { PanelSession } from '../utils/layoutUtils';
 import {
   type FeTab, type FePanel, type FeLayoutNode,
   makeFeTab, createInitialFeLayout, splitFeNode, removeFeLeafNode, updateFeLeafPanel,
   countFeLeaves, findFirstFeLeafId, collectFeLeaves, findFeTabByTermId, mapAllFeTabs,
-  setFeContainerSizes, serializeFeLayout, reviveFeLayout,
+  setFeContainerSizes, serializeFeLayout, reviveFeLayout, isLiveBackendConnId,
+  consumePreservedFeConnId,
 } from '../utils/feLayoutUtils';
 import { makeId } from '../utils/layoutUtils';
 
@@ -61,7 +63,12 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 최초 1회 계산 값을 layout/selectedLeafId 두 state 가 같이 참조해야 하므로 ref 에 담아 공유.
   const initialLayoutRef = useRef<FeLayoutNode | null>(null);
   if (!initialLayoutRef.current) {
-    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isTermConnected) || createInitialFeLayout(localLabel);
+    // "살아있는 연결" 판정에 isTermConnected 만 쓰면 안 된다 — 파일전송이 직접 맺는 SFTP 전용
+    // 연결(fe-lazy-…/sftp-…)은 인터랙티브 터미널이 아니라 항상 false 로 나와서, 창을 분리/복원할
+    // 때마다 살아있는 연결까지 강등돼 전부 재연결 + 파일목록 재로딩이 됐다. 백엔드가 알려준
+    // 실제 생존 목록(isLiveBackendConnId)도 함께 본다.
+    const isLive = (tid: string) => isTermConnected(tid) || isLiveBackendConnId(tid);
+    initialLayoutRef.current = reviveFeLayout(initialState?.layout, localLabel, isLive) || createInitialFeLayout(localLabel);
   }
   const [layout, setLayout] = useState<FeLayoutNode>(() => initialLayoutRef.current!);
   const [selectedLeafId, setSelectedLeafId] = useState<string>(() => {
@@ -83,14 +90,67 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, source: s } : t) }));
   const setLeafPath = (leafId: string, path: string) =>
     updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, path } : t) }));
-  const setLeafSelected = (leafId: string, sel: Set<string>) =>
-    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, selected: sel } : t) }));
-  // 로드된 목록을 활성 탭에 캐싱 — 창 분리/재합침으로 재마운트될 때 initialFiles 로 즉시 표시하기 위함.
-  const setLeafEntries = (leafId: string, entries: any[]) =>
-    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map((t, i) => i === p.activeIdx ? { ...t, entries } : t) }));
+  // ── 탭 id 로 정확히 지정하는 setter 들 ───────────────────────────────────
+  // 위 setLeafSource/setLeafPath 는 "그 leaf 의 활성 탭"에 쓴다(p.activeIdx). 복제 등으로 한 leaf 에
+  // 탭이 여러 개일 때, FilePanel 의 비동기 콜백(navigate 는 feListDir 를 await 한 뒤 onPathChange 를
+  // 호출)이 진행되는 동안 사용자가 탭을 바꾸면 그 결과가 **엉뚱한 탭**에 써진다. 그러면 원래 탭의
+  // 경로가 다른 탭의 경로로 덮여, 그 경로에서 폴더를 클릭하면 존재하지 않는 경로가 되어 loadDir 이
+  // ENOENT 로 목록만 비우고(인라인 에러 없이) 완전 공백이 된다 — 사용자 재현 버그.
+  // 그래서 FilePanel 에 넘기는 콜백들은 렌더 시점의 탭 id 를 캡처해 그 탭만 갱신한다.
+  // (entries = 로드된 목록 캐시 — 재마운트 시 initialFiles 로 즉시 표시하기 위함)
+  const setTabPathById = (leafId: string, tabId: string, path: string) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, path } : t) }));
+  const setTabSelectedById = (leafId: string, tabId: string, sel: Set<string>) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, selected: sel } : t) }));
+  const setTabEntriesById = (leafId: string, tabId: string, entries: any[]) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, entries } : t) }));
+  // 이전/다음 폴더 기록도 entries 와 같은 이유로 탭 데이터에 싣는다 — FilePanel.tsx 의
+  // initialPathHistory/onPathHistoryChange 주석 참고(창 분리 시 렌더러 프로세스에 안 묶이도록).
+  // hist 는 FilePanel 이 in-place 로 계속 변형하는 배열이라 사본으로 저장한다 — 참조를 그대로
+  // 넣으면 탭 데이터와 패널이 같은 배열을 공유해 저장 시점의 스냅샷이 아니게 된다.
+  const setTabPathHistoryById = (leafId: string, tabId: string, hist: string[], idx: number) =>
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tabId ? { ...t, pathHistory: [...hist], pathHistoryIdx: idx } : t) }));
 
   const [initDone, setInitDone] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 패널 탭 우클릭 메뉴 — 대상 탭을 leafId+idx 로 특정한다(활성 탭이 아닐 수 있음).
+  const [tabCtx, setTabCtx] = useState<{ x: number; y: number; leafId: string; idx: number } | null>(null);
+  // 패널 탭 스트립(.fe-panel-tabs-scroll)이 넘칠 때만 ‹ › 스크롤 버튼을 노출한다 — 워크스페이스
+  // 탭바(TabBar.tsx)와 같은 UX. leaf 마다 스트립이 하나씩이라 leafId 로 키를 잡는다.
+  const feTabScrollEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  const feTabsRO = useRef<ResizeObserver | null>(null);
+  const [feTabsOverflow, setFeTabsOverflow] = useState<Record<string, boolean>>({});
+  const measureFeTabsOverflow = React.useCallback(() => {
+    setFeTabsOverflow(prev => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const [id, el] of feTabScrollEls.current) {
+        next[id] = el.scrollWidth > el.clientWidth + 1;
+        if (prev[id] !== next[id]) changed = true;
+      }
+      // 사라진 leaf 의 키가 남아있어도 changed 로 잡아 정리
+      if (!changed && Object.keys(prev).length !== Object.keys(next).length) changed = true;
+      return changed ? next : prev;
+    });
+  }, []);
+  const setFeTabScrollRef = (leafId: string) => (el: HTMLDivElement | null) => {
+    const map = feTabScrollEls.current;
+    const prev = map.get(leafId);
+    if (prev === el) return;
+    if (prev) { try { feTabsRO.current?.unobserve(prev); } catch {} }
+    if (el) { map.set(leafId, el); try { feTabsRO.current?.observe(el); } catch {} }
+    else map.delete(leafId);
+  };
+  useEffect(() => {
+    const ro = new ResizeObserver(() => measureFeTabsOverflow());
+    feTabsRO.current = ro;
+    for (const el of feTabScrollEls.current.values()) { try { ro.observe(el); } catch {} }
+    window.addEventListener('resize', measureFeTabsOverflow);
+    return () => { ro.disconnect(); feTabsRO.current = null; window.removeEventListener('resize', measureFeTabsOverflow); };
+  }, [measureFeTabsOverflow]);
+  // 탭 추가/삭제/라벨변경은 컨테이너 크기를 안 바꿔서 ResizeObserver 가 안 뜬다 — 레이아웃이
+  // 바뀔 때마다 직접 다시 잰다.
+  useEffect(() => { measureFeTabsOverflow(); }, [layout, measureFeTabsOverflow]);
   // initialState 로 시작했으면(분리 창에서 복원) 자동 원격 연결 effect 비활성 — 복원 상태 우선.
   const autoConnectDoneRef = React.useRef<boolean>(!!suppressAutoSelect || !!initialState?.layout);
   const [showSftpConnect, setShowSftpConnect] = useState<string | null>(null); // leafId
@@ -111,7 +171,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // lazy 연결로 생성된 SFTP 임시 connId — FileExplorer unmount 시 정리
   const [lazyConns, setLazyConns] = useState<string[]>(Array.isArray(initialState?.lazyConns) ? initialState!.lazyConns! : []);
   // 자격증명 입력 프롬프트 — 비밀번호 미저장 세션 연결 실패 시 표시
-  const [credPrompt, setCredPrompt] = useState<{ sess: any; leafId: string; jumps: any[] } | null>(null);
+  // tabId — 자격증명 재입력 대상 탭. 병합으로 한 leaf 에 여러 세션 탭이 모일 수 있으므로, 완료 후
+  // "활성 탭"이 아니라 정확히 이 탭에만 결과를 써야 한다(안 그러면 다른 세션 탭이 덮어써진다).
+  const [credPrompt, setCredPrompt] = useState<{ sess: any; leafId: string; tabId?: string; jumps: any[] } | null>(null);
   const [credUser, setCredUser] = useState('');
   const [credPass, setCredPass] = useState('');
   const [credShowPass, setCredShowPass] = useState(false);
@@ -176,16 +238,30 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return () => { cancelled = true; };
   }, [sessions.length, bootReady]);
 
+  // 항상 최신 lazyConns 를 들고 있는 ref — 아래 언마운트 cleanup 이 "진짜 언마운트" 때만
+  // 최신 목록으로 정리하도록 함(다음 주석 참고).
+  const lazyConnsRef = useRef<string[]>(lazyConns);
+  useEffect(() => { lazyConnsRef.current = lazyConns; }, [lazyConns]);
   // 언마운트 시 lazy 연결 정리 — 다만 "새 창 분리" 케이스에서는 보존(window.__preserveFileExplorerConns).
+  // 버그 수정: deps 에 lazyConns 를 직접 넣으면, 연결을 하나 더 추가할 때마다(배열 참조 변경)
+  // "새 effect 적용 전 이전 effect의 cleanup"이 실행되어 그 순간의 lazyConns(추가 전 목록)를
+  // 통째로 disconnect 해버린다 — 즉 두 번째 파일전송 연결을 열 때마다 첫 번째 연결이 끊기는
+  // 버그였다(병합으로 연속 연결할 때 실사용 중 재현: 두 번째 서버를 합치자 첫 번째 서버가
+  // "연결되지 않음" 에러로 끊김). deps 를 [bootReady] 로 고정해 이 effect가 실제 언마운트
+  // 때만 cleanup 을 실행하도록 하고, 정리 시점엔 ref 로 항상 최신 lazyConns 를 읽는다.
   useEffect(() => {
     if (!bootReady) return;
     return () => {
       if ((window as any).__preserveFileExplorerConns) return;
-      for (const cid of lazyConns) {
+      for (const cid of lazyConnsRef.current) {
+        // 분리로 다른 창이 그대로 이어받는 연결은 끊지 않는다. 전역 플래그만으로는 React 18 이
+        // 언마운트를 스케줄러 태스크로 미룰 때 플래그가 먼저 꺼져버리는 레이스가 있어서(그러면
+        // 새 창이 쓰려던 연결을 여기서 끊어 전부 재연결됐다) connId 단위로 명시 등록된 목록도 본다.
+        if (consumePreservedFeConnId(cid)) continue;
         try { api?.feSftpDisconnect?.(cid); } catch {}
       }
     };
-  }, [lazyConns, bootReady]);
+  }, [bootReady]);
   // 상태 변경 시 부모(App.tsx)에 보고 — 분리 시 사용. selected 는 Set → Array 로 직렬화.
   useEffect(() => {
     if (!bootReady) return;
@@ -236,7 +312,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   useEffect(() => {
     if (!bootReady) return;
     const handler = async (e: Event) => {
-      const { connId, sessionName, host, feTabId } = (e as CustomEvent).detail;
+      const { connId, sessionName, host, feTabId, sessionId } = (e as CustomEvent).detail;
       // 특정 파일 전송 탭을 대상으로 한 이벤트면 그 탭의 인스턴스만 처리 (중복 추가 방지)
       if (feTabId && tabId && feTabId !== tabId) return;
       // 이미 추가된 연결이면 무시
@@ -244,7 +320,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       const sameNameCount = sources.filter(s => s.label?.includes(sessionName)).length;
       const num = sameNameCount + 1;
       const label = `🌐 ${sessionName} #${num} (${host})`;
-      const newSrc: PanelSource = { mode: 'remote', termId: connId, label };
+      // sessionId 를 안 넣으면 창 분리/파일전송 탭 병합 시 이 연결을 재구성할 방법이 없어 유실된다.
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sessionId || undefined, label };
       // 소스 드롭다운 목록에도 추가
       setSources(prev => {
         if (prev.find(s => s.termId === connId)) return prev;
@@ -302,10 +379,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       if (info.feTabId && tabId && info.feTabId !== tabId) return;
       const connId = `sftp-${Date.now()}`;
       try {
-        const result = await api.feSftpConnect?.(connId, info.host, Number(info.port) || 22, info.username, { type: 'password', password: info.auth?.password ?? '' });
+        const manualConn = { host: info.host, port: Number(info.port) || 22, username: info.username, password: info.auth?.password ?? '' };
+        const result = await api.feSftpConnect?.(connId, info.host, manualConn.port, info.username, { type: 'password', password: manualConn.password });
         if (!result?.success) { notifyError(t('connectFail', { err: result?.error || t('unknownError') })); return; }
         if (findFeTabByTermId(layoutRef.current, connId)) return;
-        const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${info.username}@${info.host}` };
+        const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${info.username}@${info.host}`, manualConn };
         setSources(prev => {
           if (prev.find(s => s.termId === connId)) return prev;
           const idx = prev.findIndex(s => (s.mode as any) === 'sftp-connect');
@@ -360,7 +438,9 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     if (initDone && sessions.length > 0 && !autoConnectDoneRef.current) {
       autoConnectDoneRef.current = true;
       const first = (initialTermId ? sessions.find(s => s.termId === initialTermId) : null) || sessions[0];
-      const newSrc: PanelSource = { mode: 'remote', termId: first.termId, label: `🌐 ${first.sessionName}` };
+      // sessionId 를 빠뜨리면(터미널 인스턴스 termId만 있으면) 창 분리/파일전송 탭 병합 시 이
+      // 소스를 재연결할 방법이 없어 그대로 유실된다 — 저장된 세션이면 반드시 같이 넣는다.
+      const newSrc: PanelSource = { mode: 'remote', termId: first.termId, sessionId: first.sessionId || undefined, label: `🌐 ${first.sessionName}` };
       const leaves = collectFeLeaves(layoutRef.current);
       let targetLeafId: string;
       if (leaves.length === 1) {
@@ -417,8 +497,34 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
 
   // lazy-remote 소스를 실제 연결된 remote 소스로 변환. 실패 시 null 반환.
   // 연결 실패(인증 오류 등) → 자격증명 입력 다이얼로그 표시.
-  const realizeLazyRemote = async (src: PanelSource, leafId: string): Promise<PanelSource | null> => {
-    if (src.mode !== 'lazy-remote' || !src.sessionId) return null;
+  // forTabId — 자격증명 다이얼로그로 넘어가는 경우, 완료 후 결과를 써야 할 탭. 병합으로 한 leaf 에
+  // 여러 세션 탭이 모일 수 있어서 "활성 탭"에 쓰면 엉뚱한 세션 탭이 덮어써진다.
+  const realizeLazyRemote = async (src: PanelSource, leafId: string, forTabId?: string): Promise<PanelSource | null> => {
+    if (src.mode !== 'lazy-remote') return null;
+    // 세션 저장이 안 된 즉석 SFTP 연결(manualConn 만 있고 sessionId 없음) — 자격증명이 이미
+    // 있으므로 자격증명 다이얼로그 없이 바로 연결한다.
+    if (!src.sessionId && src.manualConn) {
+      const { host, port, username, password } = src.manualConn;
+      const connId = `sftp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        const r: any = await api?.feSftpConnect?.(connId, host, port || 22, username, { type: 'password', password: password || '' });
+        if (!r?.success) { notifyError(t('connectFail', { err: r?.error || t('unknownError') })); return null; }
+      } catch (err: any) { notifyError(t('connectFail', { err })); return null; }
+      setLazyConns(prev => [...prev, connId]);
+      // ClearCase 뷰 루트가 src 에 실려 있으면(이전 병합/재연결에서 이관받은 값) 새 termId 에도
+      // 심어서 계속 이어간다 — 인터랙티브 셸이 없는 이 연결은 스스로 알아낼 방법이 없다.
+      if (src.viewRoot) { try { await api?.feSetViewRoot?.(connId, src.viewRoot); } catch {} }
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${username}@${host}`, manualConn: src.manualConn, viewRoot: src.viewRoot };
+      setSources(prev => {
+        if (prev.find(s => s.termId === connId)) return prev;
+        const idx = prev.findIndex(s => (s.mode as any) === 'sftp-connect');
+        const arr = [...prev];
+        if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
+        return arr;
+      });
+      return newSrc;
+    }
+    if (!src.sessionId) return null;
     const sess = allSessionsList.find(s => s.id === src.sessionId);
     if (!sess) { notifyError(t('remoteSessionMissing')); return null; }
     const connId = `fe-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -427,7 +533,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const hasCredential = sess.auth?.type === 'key' || (sess.auth?.type === 'password' && sess.auth?.password);
     const openCred = () => {
       setTermFocusBlocked(true); // 렌더 전에 동기 차단 — useEffect 보다 먼저 실행됨
-      setCredPrompt({ sess, leafId, jumps });
+      setCredPrompt({ sess, leafId, tabId: forTabId, jumps });
       setCredUser(sess.username || '');
       setCredPass('');
       setCredShowPass(false);
@@ -447,9 +553,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       return null;
     }
     setLazyConns(prev => [...prev, connId]);
+    if (src.viewRoot) { try { await api?.feSetViewRoot?.(connId, src.viewRoot); } catch {} }
     const folder = sessionFolderMap[sess.id];
     const label = folder ? `🟢 ${sess.name}  [${folder}]` : `🟢 ${sess.name}`;
-    const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sess.id, label };
+    const newSrc: PanelSource = { mode: 'remote', termId: connId, sessionId: sess.id, label, viewRoot: src.viewRoot };
     // 소스 리스트 업데이트 — lazy 항목 제거하고 연결된 항목 추가
     setSources(prev => {
       const filtered = prev.filter(s => !(s.mode === 'lazy-remote' && s.sessionId === sess.id));
@@ -465,7 +572,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
   // 자격증명 다이얼로그 확인 — 입력된 id/비밀번호로 연결 재시도
   const handleCredSubmit = async () => {
     if (!credPrompt) return;
-    const { sess, leafId, jumps } = credPrompt;
+    const { sess, leafId, tabId: credTabId, jumps } = credPrompt;
     setCredConnecting(true);
     const newConnId = `fe-lazy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -486,8 +593,15 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
         if (idx >= 0) arr.splice(idx, 0, newSrc); else arr.push(newSrc);
         return arr;
       });
-      setLeafSource(leafId, newSrc);
-      setLeafPath(leafId, await getHomeWithRetry('remote', newSrc.termId));
+      const credHome = await getHomeWithRetry('remote', newSrc.termId);
+      // 대상 탭이 특정돼 있으면 그 탭만 갱신 — setLeafSource/setLeafPath 는 활성 탭에 쓰므로
+      // 한 leaf 에 여러 세션 탭이 있으면 엉뚱한 탭을 덮어쓴다.
+      if (credTabId) {
+        updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === credTabId ? { ...t, source: newSrc, path: credHome } : t) }));
+      } else {
+        setLeafSource(leafId, newSrc);
+        setLeafPath(leafId, credHome);
+      }
       setCredPrompt(null);
     } catch (err: any) {
       notifyError(t('connectFailNamed', { name: sess.name, err: err?.message || err }));
@@ -535,18 +649,25 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       for (const leaf of leaves) {
         for (let i = 0; i < leaf.panel.tabs.length; i++) {
           const tab = leaf.panel.tabs[i];
-          if (tab.source.mode !== 'lazy-remote' || !tab.source.sessionId) continue;
+          if (tab.source.mode !== 'lazy-remote' || (!tab.source.sessionId && !tab.source.manualConn)) continue;
           const savedPath = tab.path;
-          const real = await realizeLazyRemote(tab.source, leaf.id);
+          const real = await realizeLazyRemote(tab.source, leaf.id, tab.id);
           if (!real) continue; // 세션이 삭제됐거나 자격증명이 없어 다이얼로그로 넘어간 경우
-          updatePanel(leaf.id, p => ({ ...p, tabs: p.tabs.map((t, idx) => idx === i ? { ...t, source: real } : t) }));
+          // 버그 수정: 예전엔 source 를 먼저 반영한 뒤 savedPath 를 setLeafPath 로 적용했는데,
+          // setLeafPath 는 "그 leaf 의 **활성** 탭"에 쓴다(p.activeIdx) — 한 leaf 에 탭이 여러
+          // 개면(병합으로 여러 세션이 한 leaf 에 모인 경우) 복원 중인 탭이 아니라 활성 탭에
+          // 경로가 덮어써진다. 그래서 A세션 탭에 B세션의 저장 경로(/root 등)가 꽂혀
+          // "Permission denied"가 나던 문제가 있었다(사용자 재현: ClearCase 개발서버 탭에 다른
+          // 세션의 /root 가 뜸). 반드시 복원 중인 탭(tab.id)만 지정해서 갱신한다.
+          // 또한 source 를 먼저 반영하면 FilePanel 이 준비 안 된 연결로 즉시 목록을 읽으려
+          // 하므로(버그 수정 #1 과 동일한 레이스), 워밍업을 먼저 끝내고 source+path 를 한 번에 쓴다.
           if (savedPath) {
             for (let r = 0; r < 10; r++) {
               try { const h = await api?.feHomeDir?.('remote', real.termId); if (h) break; } catch {}
               await new Promise(res => setTimeout(res, 500));
             }
-            setLeafPath(leaf.id, savedPath);
           }
+          updatePanel(leaf.id, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, source: real, path: savedPath || t.path } : t) }));
         }
       }
     })();
@@ -561,7 +682,7 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     try {
       const result = await api.feSftpConnect?.(connId, sftpHost, sftpPort, sftpUser, { type: 'password', password: sftpPass });
       if (!result?.success) { notifyError(t('connectFail', { error: result?.error || t('unknownError') })); setSftpConnecting(false); return; }
-      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${sftpUser}@${sftpHost}` };
+      const newSrc: PanelSource = { mode: 'remote', termId: connId, label: `🔌 ${sftpUser}@${sftpHost}`, manualConn: { host: sftpHost, port: sftpPort, username: sftpUser, password: sftpPass } };
       setSources(prev => [...prev, newSrc]);
       setLeafSource(targetLeafId, newSrc);
       try { const home = await api.feHomeDir('remote', connId); setLeafPath(targetLeafId, home || '/'); } catch { setLeafPath(targetLeafId, '/'); }
@@ -570,6 +691,65 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     setShowSftpConnect(null);
     setSftpHost(''); setSftpPort(22); setSftpUser(''); setSftpPass('');
   };
+
+  // 다른 (창의) 파일 전송 탭을 이 탭 위로 끌어다 놓아 병합할 때 — 그 탭에 열려있던 세션ID 기반
+  // 원격 소스와 즉석 SFTP(manualConn) 소스를 이 인스턴스에 새로 열어 재연결한다. termId 는 서로
+  // 다른 프로세스/창의 것이라 그대로 옮길 수 없어 항상 새로 연결한다(기존 세션 그대로 이관 X).
+  const mergeInRemoteSource = async (item: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }) => {
+    let src: PanelSource | null = null;
+    if (item.sessionId) src = { mode: 'lazy-remote', sessionId: item.sessionId, label: item.label || '', viewRoot: item.viewRoot };
+    else if (item.manualConn) src = { mode: 'lazy-remote', manualConn: item.manualConn, label: item.label || '', viewRoot: item.viewRoot };
+    if (!src) return;
+    const tab = makeFeTab(src, item.path || '');
+    // 이전/다음 폴더 기록도 이어받는다 — 안 그러면 병합으로 새로 생기는 탭은 항상 빈 기록으로
+    // 시작해 "이전 폴더" 화살표가 꺼진다(App.tsx 의 extractMergeableFeSources 가 실어 보낸 값).
+    if (item.pathHistory?.length) { tab.pathHistory = item.pathHistory; tab.pathHistoryIdx = item.pathHistoryIdx; }
+    const leaves = collectFeLeaves(layoutRef.current);
+    let leafId: string;
+    if (leaves.length === 1) {
+      leafId = makeId('fenode');
+      setLayout(prev => splitFeNode(prev, leaves[0].id, 'row', localLabel, false, leafId));
+      setLayout(prev => updateFeLeafPanel(prev, leafId, p => ({ ...p, tabs: [tab], activeIdx: 0 })));
+    } else {
+      leafId = (selectedLeafIdRef.current && leaves.some(l => l.id === selectedLeafIdRef.current))
+        ? selectedLeafIdRef.current : leaves[leaves.length - 1].id;
+      updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, tab], activeIdx: p.tabs.length }));
+    }
+    setSelectedLeafId(leafId);
+    const real = await realizeLazyRemote(src, leafId, tab.id);
+    if (!real) return; // 연결 실패(자격증명 오류 등) — 탭은 lazy-remote 상태로 남아 사용자가 다시 시도 가능
+    // ClearCase 뷰 루트(src.viewRoot) 이관은 realizeLazyRemote 내부에서 처리됨(App.tsx의
+    // extractMergeableFeSources 가 원본 연결에서 미리 읽어와 item.viewRoot 로 실어 보낸 값).
+    // source 를 먼저 반영하면 FilePanel 이 termId 변경을 감지해 즉시 목록 로딩을 시도하는데,
+    // 이 시점엔 SFTP 서브시스템이 아직 준비 안 돼 실패/빈 목록으로 끝나버린다. 게다가 그 다음
+    // setLeafPath(item.path) 는 path 값이 이미 같아서(탭 생성 시 이미 넣어둠) no-op 라 재시도도
+    // 안 걸린다 — "병합하면 목록이 안 뜨는" 버그의 원인. 워밍업 확인 후 source+path 를 한 번에
+    // 반영해서 첫 로딩 자체가 준비된 상태에서 일어나게 한다.
+    for (let i = 0; i < 10; i++) {
+      try { const h = await api?.feHomeDir?.('remote', real.termId); if (h) break; } catch {}
+      await new Promise(r => setTimeout(r, 500));
+    }
+    updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, source: real, path: item.path || t.path } : t) }));
+  };
+
+  useEffect(() => {
+    if (!bootReady) return;
+    const handler = async (e: Event) => {
+      const { feTabId, items } = (e as CustomEvent).detail || {};
+      if (feTabId && tabId && feTabId !== tabId) return;
+      if (!Array.isArray(items)) return;
+      for (const item of items) { await mergeInRemoteSource(item); }
+      // source/path 갱신만으로 FilePanel 의 자동 재로딩 effect 가 못 미더운 케이스(관찰됨)에 대한
+      // 안전망 — 파일 전송 완료 후에도 쓰는 것과 동일한 강제 새로고침 트리거.
+      setRefreshKey(k => k + 1);
+    };
+    window.addEventListener('fe-merge-remote-sources', handler);
+    return () => window.removeEventListener('fe-merge-remote-sources', handler);
+    // allSessionsList 를 deps 에 넣어야 한다 — 안 그러면 이 리스너가 bootReady 최초 true 시점의
+    // (아직 세션 목록 로딩 전이라 비어있는) allSessionsList 를 클로저로 영구히 물고 있어서,
+    // 나중에 목록이 채워진 뒤 병합 이벤트가 와도 realizeLazyRemote 가 "세션 정보를 찾을 수
+    // 없습니다"로 실패한다(사용자가 실제로 겪은 버그).
+  }, [bootReady, allSessionsList]);
 
   // feTransfer는 즉시 반환 + fe:transfer-done 이벤트로 완료 통보 → IPC 채널 해제로 progress 이벤트 실시간 수신
   const doTransfer = (src: any, dst: any, name: string): Promise<{ success: boolean; error?: string }> =>
@@ -624,12 +804,77 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     setRefreshKey(k => k + 1);
   };
 
+  // Windows 탐색기 등 OS 밖에서 실제 파일(절대경로)을 끌어다 놓았을 때 — 항상 local 소스로 취급해
+  // 현재 패널(로컬이면 local→local 복사, 원격이면 local→remote 업로드)로 그대로 전송한다.
+  const handleOsFilesDrop = async (targetLeafId: string, absPaths: string[]) => {
+    const leaf = getLeaf(targetLeafId);
+    if (!leaf) return;
+    const dstTab = leaf.panel.tabs[leaf.panel.activeIdx];
+    if (!dstTab) return;
+    const dstSep = sep(dstTab.source);
+    const failures: { name: string; err: string }[] = [];
+    for (const absPath of absPaths) {
+      const name = absPath.split(/[\\/]/).pop() || absPath;
+      const dstFull = dstTab.path.endsWith(dstSep) ? dstTab.path + name : dstTab.path + dstSep + name;
+      const result = await doTransfer(
+        { mode: 'local', path: absPath },
+        { mode: dstTab.source.mode, termId: dstTab.source.termId, path: dstFull },
+        name,
+      );
+      if (!result.success) failures.push({ name, err: String(result.error || '') });
+    }
+    if (failures.length > 0) {
+      const preview = failures.slice(0, 5).map(f => `${f.name}: ${f.err}`).join('\n');
+      const more = failures.length > 5 ? `\n... 외 ${failures.length - 5}개` : '';
+      notifyError(t('transferFailSummary', { count: failures.length, defaultValue: `파일 전송 실패 ${failures.length}건` }), `${preview}${more}`);
+    }
+    setRefreshKey(k => k + 1);
+  };
+
   // 폴더 탭 추가 — 현재 활성 탭의 source/path 복제 (사용자가 현재 위치에서 가지 치기 의도)
   const addPanelTab = (leafId: string) => {
     const leaf = getLeaf(leafId);
     if (!leaf) return;
     const cur = leaf.panel.tabs[leaf.panel.activeIdx] || leaf.panel.tabs[0];
     updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, makeFeTab(cur.source, cur.path)], activeIdx: p.tabs.length }));
+  };
+
+  // 특정 탭을 복제 — 우클릭 대상이 활성 탭이 아닐 수 있으므로 addPanelTab(활성 탭 기준)과 별도.
+  // 같은 source(=같은 SFTP 연결)를 공유한다. closeTabInLeaf 는 연결을 끊지 않으므로 복제본 중
+  // 하나를 닫아도 나머지가 살아있다. 복제한 탭은 원본 바로 뒤에 삽입한다.
+  const duplicatePanelTab = (leafId: string, idx: number) => {
+    const leaf = getLeaf(leafId);
+    const src = leaf?.panel.tabs[idx];
+    if (!src) return;
+    updatePanel(leafId, p => {
+      const tabs = [...p.tabs];
+      tabs.splice(idx + 1, 0, makeFeTab(src.source, src.path));
+      return { ...p, tabs, activeIdx: idx + 1 };
+    });
+  };
+
+  // 이 패널에 로컬 탭 하나 추가 — 새 탭은 path 가 빈 문자열이라 홈 디렉토리를 채워줘야 목록이 보인다.
+  const addLocalPanelTab = (leafId: string) => {
+    const leaf = getLeaf(leafId);
+    if (!leaf) return;
+    const tab = makeFeTab({ mode: 'local', label: localLabel }, '');
+    updatePanel(leafId, p => ({ ...p, tabs: [...p.tabs, tab], activeIdx: p.tabs.length }));
+    (async () => {
+      const home = await getHomeWithRetry('local');
+      updatePanel(leafId, p => ({ ...p, tabs: p.tabs.map(t => t.id === tab.id ? { ...t, path: home } : t) }));
+    })();
+  };
+
+  // 우클릭한 탭만 남기고 이 패널의 나머지 탭을 모두 닫는다.
+  const closeOtherTabsInLeaf = (leafId: string, idx: number) => {
+    const leaf = getLeaf(leafId);
+    const keepId = leaf?.panel.tabs[idx]?.id;
+    if (!keepId) return;
+    updatePanel(leafId, p => {
+      const keep = p.tabs.find(t => t.id === keepId);
+      if (!keep) return p;
+      return { ...p, tabs: [keep], activeIdx: 0 };
+    });
   };
 
   const closeTabInLeaf = (leafId: string, idx: number) => {
@@ -811,8 +1056,19 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     const tabs = panel.tabs;
     const active = panel.activeIdx;
     const totalLeaves = countFeLeaves(layout);
+    const scrollFeTabs = (dx: number) => {
+      feTabScrollEls.current.get(leafId)?.scrollBy({ left: dx, behavior: 'smooth' });
+    };
+    // 탭 목록만 스크롤 영역에 넣고, +/분할/닫기 버튼은 밖에 고정 — 예전엔 버튼들도 스크롤
+    // 컨테이너 안에 있어서 탭이 많아지면 같이 밀려 사라졌다.
+    // onWheel: 스크롤바를 숨겼으므로(App.css 참고) 세로 휠을 가로 스크롤로 변환 — 메인 탭바와 동일.
     return (
       <div className="fe-panel-tabs">
+        <div
+          className="fe-panel-tabs-scroll"
+          ref={setFeTabScrollRef(leafId)}
+          onWheel={e => { e.currentTarget.scrollLeft += e.deltaY > 0 ? 60 : -60; }}
+        >
         {tabs.map((tab, idx) => {
           const isDragging = tabDrag?.fromLeafId === leafId && tabDrag.from === idx;
           const isDropTarget = tabDrag && tabDrag.overLeafId === leafId && tabDrag.over === idx
@@ -827,6 +1083,11 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
               updatePanel(leafId, p => ({ ...p, activeIdx: idx }));
             }}
             onAuxClick={e => { if (e.button === 1) { e.preventDefault(); closeTabInLeaf(leafId, idx); } }}
+            onContextMenu={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              setTabCtx({ x: e.clientX, y: e.clientY, leafId, idx });
+            }}
             onDragStart={e => {
               setTabDrag({ fromLeafId: leafId, from: idx, overLeafId: leafId, over: idx });
               try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(idx)); } catch {}
@@ -879,6 +1140,13 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             setTabDrag(null);
           }}
         />
+        </div>
+        {feTabsOverflow[leafId] && (
+          <div className="fe-panel-tab-scroll-group">
+            <button className="fe-panel-tab-scroll-btn" onClick={() => scrollFeTabs(-150)} title={t('scrollPrev', { defaultValue: '이전' })}>‹</button>
+            <button className="fe-panel-tab-scroll-btn" onClick={() => scrollFeTabs(150)} title={t('scrollNext', { defaultValue: '다음' })}>›</button>
+          </div>
+        )}
         <button
           className="fe-panel-tab-add"
           onClick={() => addPanelTab(leafId)}
@@ -911,15 +1179,22 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
     return (
       <>
         {renderPanelTabs(leafId, panel)}
-        <FilePanel panelId={leafId} refreshKey={refreshKey}
+        {/* key={tab.id} — 탭마다 독립된 FilePanel 인스턴스를 쓴다. 예전엔 key 가 없어서 한 leaf 의
+            모든 탭이 인스턴스 하나를 공유했고, 그래서 목록/로딩·에러 상태/경로 history/정렬이
+            탭을 바꿔도 그대로 남아 서로 섞였다(복제 탭에서 특히 문제). 탭 전환 시 재마운트되지만
+            캐시된 목록(initialFiles=tab.entries)이 즉시 그려지므로 빈 화면은 보이지 않는다. */}
+        <FilePanel key={tab.id} panelId={leafId} refreshKey={refreshKey}
           source={tab.source} sources={sources} onSourceChange={src => handleSourceChangeForLeaf(leafId, src)}
-          selectedFiles={tab.selected} onSelectionChange={sel => setLeafSelected(leafId, sel)}
-          currentPath={tab.path} onPathChange={p => setLeafPath(leafId, p)}
+          selectedFiles={tab.selected} onSelectionChange={sel => setTabSelectedById(leafId, tab.id, sel)}
+          currentPath={tab.path} onPathChange={p => setTabPathById(leafId, tab.id, p)}
+          initialPathHistory={tab.pathHistory} initialPathHistoryIdx={tab.pathHistoryIdx}
+          onPathHistoryChange={(hist, idx) => setTabPathHistoryById(leafId, tab.id, hist, idx)}
           onFileDrop={(files, srcMode, srcTermId, srcPath) => handleFileDrop(leafId, files, srcMode, srcTermId, srcPath)}
+          onOsFilesDrop={absPaths => handleOsFilesDrop(leafId, absPaths)}
           onDisconnect={() => handleDisconnect(tab.source)}
           workspaceId={workspaceIdRef.current}
           initialFiles={tab.entries}
-          onFilesLoaded={entries => setLeafEntries(leafId, entries)}
+          onFilesLoaded={entries => setTabEntriesById(leafId, tab.id, entries)}
           onOpenInMedia={onOpenInMedia}
           onOpenInOffice={onOpenInOffice}
         />
@@ -986,6 +1261,25 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
       <div className="fe-transfers" style={{ height: transfersHeight }}>
         <TransferLog workspaceId={workspaceIdRef.current} />
       </div>
+      {tabCtx && (() => {
+        const leaf = getLeaf(tabCtx.leafId);
+        const tabCount = leaf?.panel.tabs.length ?? 0;
+        const onlyTabInOnlyLeaf = countFeLeaves(layout) === 1 && tabCount <= 1;
+        return (
+          <ContextMenu
+            x={tabCtx.x} y={tabCtx.y}
+            onClose={() => setTabCtx(null)}
+            items={[
+              { icon: '📋', label: t('menu.duplicateTab', { defaultValue: '복제' }), onClick: () => duplicatePanelTab(tabCtx.leafId, tabCtx.idx) },
+              { icon: '🖥️', label: t('menu.newLocalTab', { defaultValue: '새 로컬 탭' }), onClick: () => addLocalPanelTab(tabCtx.leafId) },
+              { separator: true },
+              // 트리에 leaf 도 탭도 하나뿐이면 전체가 빈 상태가 되므로 닫기 금지(closeTabInLeaf 와 동일 규칙).
+              { icon: '✕', label: t('tabClose'), disabled: onlyTabInOnlyLeaf, onClick: () => closeTabInLeaf(tabCtx.leafId, tabCtx.idx) },
+              { icon: '🗙', label: t('menu.closeOtherTabs', { defaultValue: '다른 탭 모두 닫기' }), disabled: tabCount <= 1, onClick: () => closeOtherTabsInLeaf(tabCtx.leafId, tabCtx.idx) },
+            ]}
+          />
+        );
+      })()}
       {credPrompt && (
         <div className="session-editor-backdrop" onClick={() => setCredPrompt(null)}>
           <div className="cred-modal" ref={credModalRef} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ outline: 'none' }}>

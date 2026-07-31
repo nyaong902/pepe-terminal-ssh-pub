@@ -168,6 +168,10 @@
     "sshOpening": "جارٍ فتح نفق SSH...",
     "sshFailed": "❌ فشل نفق SSH: {{error}} — قم بتوصيل طرفية لنفس الجلسة أولاً",
     "sshTunnelOk": "نفق SSH جاهز ({{remoteHost}}:{{remotePort}} ← محلي={{localPort}}) — جارٍ اختبار JDBC...",
-    "exception": "❌ استثناء: {{error}}"
+    "exception": "❌ استثناء: {{error}}",
+    "tunnelSectionTitle": "اتصال نفق SSH",
+    "tunnelSectionSub": "اتركه فارغاً للاتصال مباشرة بدون نفق.",
+    "sqlSessionName": "الاسم",
+    "tunnelEnable": "استخدام نفق SSH"
   }
 }

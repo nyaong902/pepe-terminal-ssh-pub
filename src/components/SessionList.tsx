@@ -9,6 +9,11 @@ const MenuIcon: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <span style={{ display: 'inline-block', width: 18, textAlign: 'center', marginRight: 6, fontSize: 13 }}>{children}</span>
 );
 
+// "대상 워크스페이스" select 의 옵션 텍스트 — 브라우저 워크스페이스는 로드된 페이지의
+// <title> 을 그대로 탭 제목으로 쓰므로 길이 제한이 없다. 이걸 그대로 넣으면 <select> 가
+// 그 폭에 맞춰 커져 컨텍스트 메뉴 전체가 늘어나므로 여기서 미리 잘라준다.
+const truncateWsTitle = (title: string): string => (title.length > 20 ? `${title.slice(0, 20)}…` : title);
+
 type LoginScriptRule = {
   expect: string;
   send: string;
@@ -41,12 +46,6 @@ type Session = {
   x11Display?: number;
   browserUrl?: string;
   jumps?: { host: string; user?: string; port?: number; password?: string }[];
-  dbms?: {
-    type: 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
-    port: number; user: string; password: string; host?: string;
-    driverId?: string; database?: string; useSshTunnel?: boolean; urlOverride?: string;
-    props?: Record<string, string>;
-  };
 };
 
 type Folder = {
@@ -61,7 +60,6 @@ type Props = {
   onConnect: (sessionId: string, sessionName: string, targetPanelId?: string | null, sessionTheme?: string, fontFamily?: string, fontSize?: number, scrollback?: number) => void;
   onMultiConnect?: (sessions: Session[], mode: 'minitab' | 'split-h' | 'split-v' | 'split-tile', opts?: { newWorkspace?: boolean; targetTabId?: string }) => void;
   onFileTransfer?: (sessionId: string, sessionName: string) => void;
-  onOpenSqlTool?: (sessionId: string, sessionName: string) => void;
   onDisconnect?: (targetPanelId?: string | null) => void;
   targetPanelId?: string | null;
   workspaceTabs?: { id: string; title: string }[];
@@ -69,7 +67,7 @@ type Props = {
   onSetTopPanel?: (panel: 'session' | 'filetree') => void;
 };
 
-export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, onOpenSqlTool, targetPanelId, workspaceTabs = [], activeTabId, onSetTopPanel }) => {
+export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisconnect, onFileTransfer, targetPanelId, workspaceTabs = [], activeTabId, onSetTopPanel }) => {
   const { t } = useTranslation('sessionList');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -261,21 +259,11 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
       add(session.auth?.type);
       add(session.auth?.password);
       add(session.auth?.keyPath);
-      add(session.dbms?.type);
-      add(session.dbms?.driverId);
-      add(session.dbms?.database);
-      add(session.dbms?.useSshTunnel);
-      add(session.dbms?.urlOverride);
-      add(session.dbms?.port);
-      add(session.dbms?.user);
-      add(session.dbms?.password);
-      add(session.dbms?.host);
       for (const rule of session.loginScript || []) {
         add(rule.expect);
         add(rule.send);
         add(rule.isRegex);
       }
-      for (const value of Object.values(session.dbms?.props || {})) add(value);
     }
     return parts.join(' ').toLowerCase();
   }, [folderPathById]);
@@ -1092,12 +1080,13 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                         value={multiTargetWs}
                         onChange={e => setMultiTargetWs(e.target.value)}
                         onClick={e => e.stopPropagation()}
-                        style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
+                        title={multiTargetWs === 'current' ? t('ctxCurrentWs') : multiTargetWs === 'new' ? t('ctxNewWs') : (workspaceTabs.find(tab => tab.id === multiTargetWs)?.title || '')}
+                        style={{ flex: 1, minWidth: 0, maxWidth: 160, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
                       >
                         <option value="current">{t('ctxCurrentWs')}</option>
                         <option value="new">{t('ctxNewWs')}</option>
                         {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
-                          <option key={tab.id} value={tab.id}>{tab.title}</option>
+                          <option key={tab.id} value={tab.id} title={tab.title}>{truncateWsTitle(tab.title)}</option>
                         ))}
                       </select>
                     </div>
@@ -1155,12 +1144,13 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                     value={multiTargetWs}
                     onChange={e => setMultiTargetWs(e.target.value)}
                     onClick={e => e.stopPropagation()}
-                    style={{ flex: 1, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
+                    title={multiTargetWs === 'current' ? t('ctxCurrentWs') : multiTargetWs === 'new' ? t('ctxNewWs') : (workspaceTabs.find(tab => tab.id === multiTargetWs)?.title || '')}
+                    style={{ flex: 1, minWidth: 0, maxWidth: 160, background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 3, padding: '2px 4px', fontSize: 11 }}
                   >
                     <option value="current">{t('ctxCurrentWs')}</option>
                     <option value="new">{t('ctxNewWs')}</option>
                     {workspaceTabs.filter(tab => tab.id !== activeTabId).map(tab => (
-                      <option key={tab.id} value={tab.id}>{tab.title}</option>
+                      <option key={tab.id} value={tab.id} title={tab.title}>{truncateWsTitle(tab.title)}</option>
                     ))}
                   </select>
                 </div>
@@ -1238,17 +1228,6 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
               <MenuIcon>📁</MenuIcon>{t('ctxFileTransfer')}
             </div>
           )}
-          {contextMenu.type === 'session' && (() => {
-            const s = sessions.find(x => x.id === contextMenu.id);
-            return s?.dbms ? (
-              <div className="context-menu-item" onClick={() => {
-                onOpenSqlTool?.(s.id, s.name);
-                setContextMenu(null);
-              }}>
-                🗄️ SQL Tool
-              </div>
-            ) : null;
-          })()}
           <div className="context-menu-separator" />
           <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'up'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↑</MenuIcon>{t('ctxUp')}</div>
           <div className="context-menu-item" onClick={() => { (async () => { await (window as any).api.reorderSession(contextMenu.id, contextMenu.type, 'down'); await reload(); })(); setContextMenu(null); }}><MenuIcon>↓</MenuIcon>{t('ctxDown')}</div>

@@ -38,6 +38,8 @@
   "colSize": "大小",
   "colDate": "日期",
   "statusSummary": "{{total}} 项 | 已选 {{selected}}",
+  "deleteFailed": "删除失败",
+  "dragCountLabel": "{{count}} 项",
   "deleteConfirm": "删除 {{count}} 项?\n{{names}}",
   "deleteConfirmRecursive": "删除此{{kind}}?\n\n{{path}}",
   "kindFolder": "文件夹(递归)",
@@ -177,5 +179,10 @@
   "conflictApplyAll": "应用于全部 (A)",
   "conflictNewName": "新名称：",
   "renameTitle": "重命名",
-  "renameNewLabel": "新名称"
+  "renameNewLabel": "新名称",
+  "menu": {
+    "duplicateTab": "复制",
+    "newLocalTab": "新建本地标签页",
+    "closeOtherTabs": "关闭其他标签页"
+  }
 }

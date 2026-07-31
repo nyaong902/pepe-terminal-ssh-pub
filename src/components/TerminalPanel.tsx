@@ -365,9 +365,14 @@ const visibleTermIds: Set<string> = new Set();
 // 손실 시 addon 을 버리고 xterm 기본 DOM 렌더러로 잠깐 폴백해두고, 창이 다시 포커스를 받거나
 // 이 탭이 다시 보일 때만(visible && focused 상태에서만 새 GPU 컨텍스트 생성 가능) 재부착한다.
 const termWebglPendingRecovery: Set<string> = new Set();
-// 개발용 진단 스위치 — GPU 프로세스(모든 렌더러 공유) 의 WebGL 커맨드 처리가 병목인지 확인하기
-// 위해 임시로 WebGL 자체를 아예 끄고 xterm 기본 DOM 렌더러로 비교 테스트할 때 사용.
-let webglDisabledForTesting = false;
+// 기본값 true(WebGL 비활성) — xterm-addon-webgl 0.16.0(레거시 xterm 5.3 계열, @xterm/* 로 개명되기
+// 전 마지막 배포판)에서 background-color-erase 렌더링이 깨져 SGR 배경색을 지워야 할 영역에
+// 엉뚱하게 칠해진 채로 남는 버그를 확인했다(예: ClearCase vdiff 출력에서 초록 배경이 화면 전체에
+// 번짐 — 다른 터미널 클라이언트에선 재현 안 됨, DOM 렌더러로 전환하면 사라짐). @xterm/xterm 6.x +
+// @xterm/addon-webgl 0.19.x 로 옮기면 고쳐졌을 수 있으나 core 메이저 버전업이라 별도 마이그레이션
+// 작업으로 미루고, 우선 안전한 DOM 렌더러를 기본으로 쓴다. 콘솔에서
+// window.__pepeSetWebglDisabled(false) 로 다시 켜서 비교 테스트 가능.
+let webglDisabledForTesting = true;
 export function setWebglDisabledForTesting(disabled: boolean) { webglDisabledForTesting = disabled; }
 function attachWebglAddon(termId: string) {
   if (webglDisabledForTesting) return;
@@ -428,6 +433,34 @@ const COMPACT_IDLE_MS = 60_000; // 안 보이는 채로 이 시간 이상 지나
 function cancelCompaction(termId: string) {
   const t = termCompactTimer.get(termId);
   if (t) { clearTimeout(t); termCompactTimer.delete(termId); }
+}
+
+// ── 대체화면(alt screen) 이탈 시 SGR 누출 보정 ──────────────────────────────────
+// 증상: 원격에서 vimdiff 를 빠져나오면 그 뒤 셸 출력 전체가 초록 배경으로 칠린 채 남는다.
+//       그 초록은 테마의 전경색과 정확히 같은 값 — 즉 vim 기본 StatusLine 의 reverse video(SGR 7)
+//       속성이 셸로 새어나온 것이고, `\x1b[0m` 을 뱉는 출력(ls --color 등)이 나올 때까지 계속된다.
+// 원인: xterm.js 는 DECRST 1049 에서만 저장해둔 fg/bg 를 복원한다(restoreCursor). 47/1047 은
+//       버퍼만 정상화면으로 되돌리고 속성은 건드리지 않는다. 이건 xterm 스펙 그대로라 xterm.js
+//       버그가 아니고, 제대로 된 terminfo 면 rmcup 이 \E8(DECRC)나 SGR 리셋을 함께 보낸다.
+//       이 개발서버의 vim 은 그걸 보내지 않아서 속성이 그대로 남는다.
+// 검증: xterm.js 5.3 격리 테스트 — 47l / 1047l 은 이탈 후 inverse=true 가 남고, 1049l 은 남지 않음.
+// 대책: alt screen 이탈 시퀀스 바로 뒤에 SGR 리셋을 끼워 넣는다. CSI 핸들러에서 term.write() 로
+//       넣는 방법은 같은 청크의 뒤쪽 바이트에는 이미 늦다(rmcup 과 셸 프롬프트가 한 SSH 패킷에
+//       실려오는 경우 — 같은 테스트에서 재현됨). 그래서 스트림 자체를 고쳐서 넣는다.
+//       1049 는 이미 정상이지만 함께 처리한다 — 복원되는 값은 풀스크린 앱 진입 직전 속성이고,
+//       그 시점은 실질적으로 항상 기본값이라 결과가 같고, 서버가 어느 변형을 쓰든 덮인다.
+const ALT_EXIT_PREFILTER = /\x1b\[\?[\d;]*(?:47|1049)[\d;]*l/;
+const PRIV_MODE_RESET_RE = /\x1b\[\?([\d;]*)l/g;
+function patchAltScreenExit(data: string): string {
+  // 대부분의 청크에는 해당 시퀀스가 없다 — 값싼 사전 검사로 replace 자체를 피한다.
+  // (\x1b[?25l 처럼 흔한 사설 모드는 prefilter 에서 걸러진다)
+  if (!data || !ALT_EXIT_PREFILTER.test(data)) return data;
+  return data.replace(PRIV_MODE_RESET_RE, (m, params: string) => {
+    for (const p of params.split(';')) {
+      if (p === '47' || p === '1047' || p === '1049') return m + '\x1b[m';
+    }
+    return m;
+  });
 }
 
 // 안 보이는 탭이 tail -f 처럼 아주 오래 heavy 출력을 계속 내면 청크가 무한정 쌓일 수 있어서
@@ -1454,6 +1487,40 @@ const PARTICLE_THEMES: Record<string, ParticleTheme> = {
 };
 interface Particle { x: number; y: number; vx: number; vy: number; color: string; emoji?: string; alpha: number; size: number; }
 
+// 이모지 파티클 스프라이트 캐시.
+// 컬러(비트맵) 이모지를 ctx.fillText 로 매 프레임 래스터화하는 건 대단히 비싸다 — 실측(트레이스):
+//   무지개 커서: fillText 가 렌더러 busy 시간의 87% (10.5초 중 1.22초)
+//   불꽃 커서  : fillText 29% + requestAnimationFrame 18%
+// 파티클이 fade 0.94 로 약 48프레임(0.8초) 살아있고 키 입력마다 4~9개가 생기니, 연속 입력 중엔
+// 수십 개를 매 프레임 다시 그리게 된다. 🔥/🌈 만 유독 심했던 이유가 이것 — 나머지 테마의
+// ♥ ✦ ★ 는 단색 글리프이고 circle 은 arc() 라 훨씬 싸다.
+// 같은 (이모지, 크기, 색) 조합을 오프스크린 캔버스에 한 번만 그려두고 drawImage 로 복사한다.
+// 덤으로 파티클마다 하던 `ctx.font = ...` 대입(문자열 파싱)도 없어진다.
+const emojiSpriteCache = new Map<string, HTMLCanvasElement>();
+function getEmojiSprite(emoji: string, size: number, color: string): HTMLCanvasElement | null {
+  const key = `${emoji}|${size}|${color}`;
+  const hit = emojiSpriteCache.get(key);
+  if (hit) return hit;
+  // 폭주 방지 — spawn 에서 size 를 정수로 양자화하므로 테마별 조합은 수백 개가 상한이고
+  // 실제로 여기에 도달하지 않는다(스프라이트 하나가 30px 내외라 메모리도 무시할 수준).
+  if (emojiSpriteCache.size > 600) emojiSpriteCache.clear();
+  try {
+    const pad = Math.ceil(size * 0.4);
+    const dim = Math.ceil(size + pad * 2);
+    const c = document.createElement('canvas');
+    c.width = dim; c.height = dim;
+    const cx = c.getContext('2d');
+    if (!cx) return null;
+    cx.font = `${size}px sans-serif`;
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillStyle = color; // 단색 글리프(♥ ✦ ★ 등)는 이 색을 따른다. 컬러 이모지는 무시한다.
+    cx.fillText(emoji, dim / 2, dim / 2);
+    emojiSpriteCache.set(key, c);
+    return c;
+  } catch { return null; }
+}
+
 function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): () => void {
   const screen = elem.querySelector('.xterm-screen') as HTMLElement | null;
   const host = (screen && screen.parentElement) || elem;
@@ -1464,70 +1531,211 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   host.appendChild(canvas);
   const ctx = canvas.getContext('2d');
   if (!ctx) { try { canvas.remove(); } catch {} return () => {}; }
+  // ── 캔버스는 터미널 전체가 아니라 "커서 주변 띠"만 덮는다 ────────────────────────
+  // 측정(작업 관리자 GPU, 같은 강도로 연속 타이핑):  일반 블록 커서 1.5%  vs  불꽃 커서 9.5%.
+  // 렌더러 JS 는 이미 무죄다(트레이스 86초 중 drawImage 38.7ms). 남은 8%p 는 전부 GPU 쪽인데,
+  // Chromium 은 canvas 내용이 바뀌면 그린 영역이 아무리 작아도 **레이어 전체**를 damaged 로
+  // 표시한다. 그래서 앞서 넣은 dirty rect 는 캔버스에 그리는 비용만 줄였고, 컴포지터가 매번
+  // 터미널 크기(약 1860x860 ≈ 1.6M px)의 쿼드를 다시 합성하는 비용은 그대로 남아 있었다.
+  //
+  // 파티클이 실제로 도달하는 세로 거리를 테마별로 계산하면 최대 220px 정도다
+  // (flame: vy -1.5~-4 에 gravity -0.04, fade 0.94 → 약 48프레임 동안 위로 ~200px.
+  //  power: gravity 0.2, fade 0.9 → 28프레임에 ~110px. heart/star: 40~70px).
+  // 그래서 높이만 띠로 줄이면 겉모습은 그대로 두고 합성 면적을 2~3배 줄일 수 있다.
+  // 가로는 줄이지 않는다 — 타이핑하면 커서 x 가 한 줄을 계속 훑고 지나가서 자주 옮겨야 하고,
+  // 옮기는 순간 살아있는 파티클이 잘려 보이기 때문에 이득보다 부작용이 크다.
+  const BAND_ABOVE = 260;   // 커서 위쪽 확보 높이 (최대 도달 220px + 여유)
+  const BAND_BELOW = 60;    // 커서 아래쪽 (heart 처럼 다시 떨어지는 테마용)
+  let hostW = 0, hostH = 0; // 터미널(호스트) CSS 크기
+  let bandY = 0;            // 캔버스의 host 기준 top (CSS px)
+  let bandH = 0;            // 캔버스 높이 (CSS px)
+  let needFullClear = false;
+  // 파티클 좌표는 계속 host 기준으로 다루고, 캔버스는 그 공간을 들여다보는 창으로 쓴다.
+  // canvas.width 대입은 transform 을 초기화하므로 리사이즈 후에도 다시 걸어줘야 한다.
+  const applyBand = () => {
+    canvas.style.top = bandY + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, -bandY);
+    needFullClear = true;
+  };
   const resize = () => {
     const rect = host.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    canvas.width = Math.floor(rect.width);
-    canvas.height = Math.floor(rect.height);
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
+    hostW = Math.floor(rect.width);
+    hostH = Math.floor(rect.height);
+    const h = Math.min(BAND_ABOVE + BAND_BELOW, hostH);
+    // 크기가 그대로면 손대지 않는다 — width/height 대입은 값이 같아도 백킹 스토어를 재할당한다.
+    if (canvas.width !== hostW || canvas.height !== h) {
+      canvas.width = hostW;
+      canvas.height = h;
+      canvas.style.width = hostW + 'px';
+      canvas.style.height = h + 'px';
+      bandH = h;
+      bandY = Math.max(0, Math.min(bandY, hostH - bandH));
+      applyBand();
+    }
   };
   resize();
   const ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(resize) : null;
   ro?.observe(host);
+  // spawn 지점이 띠 안에 편하게 들어오지 않으면 띠를 커서 기준으로 다시 잡는다.
+  // 프롬프트에서 타이핑하는 동안은 커서 행이 그대로여서 한 번도 움직이지 않는다.
+  const ensureBand = (y: number) => {
+    if (!bandH) return;
+    if (y >= bandY + 8 && y <= bandY + bandH - 24) return;
+    const want = Math.max(0, Math.min(hostH - bandH, Math.round(y - BAND_ABOVE)));
+    if (want === bandY) return;
+    bandY = want;
+    applyBand();
+  };
+  let canvasHidden = false;
+  const hideCanvas = () => {
+    if (canvasHidden) return;
+    canvasHidden = true;
+    canvas.style.display = 'none';
+  };
+  const showCanvas = () => {
+    if (!canvasHidden) return;
+    canvasHidden = false;
+    canvas.style.display = '';
+    // 숨기기 직전 프레임의 잔상(alpha < 0.05 로 거의 안 보이던 픽셀)이 다시 드러나지 않게
+    needFullClear = true;
+  };
   // 흔들림 적용 대상 — xterm-screen 의 부모 (커서/뷰포트 함께 흔들림)
   const shakeTarget = host;
   const particles: Particle[] = [];
   let shake = 0;
   let rafId = 0;
   let alive = true;
-  const loop = () => {
+  // 흔들림(power 테마 전용) 상태 — 직전 offset 과 레이어 승격 힌트 여부
+  let lastSx = 0, lastSy = 0, shakeHinted = false;
+  // 지난 프레임에 실제로 그린 영역(host 좌표) — 다음 프레임에 "그만큼만" 지운다.
+  // 캔버스에 그리는 비용을 줄인다. 컴포지터 합성 면적은 이걸로 줄지 않으므로(위 띠 주석 참고)
+  // 둘이 서로 보완 관계다.
+  let dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  // 파티클 애니메이션은 30fps 로 제한 — 장식 효과라 60fps 가 필요하지 않고, 프레임당 텍스처
+  // 업로드가 그대로 절반이 된다.
+  const FRAME_MS = 33;
+  let lastDraw = 0;
+  const loop = (ts?: number) => {
     if (!alive) return;
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    const now = ts ?? performance.now();
+    // 다음 프레임 예약을 먼저 — 스로틀로 이번 프레임을 건너뛰어도 루프가 끊기지 않게.
+    const keepGoing = particles.length > 0 || shake > 0;
+    if (now - lastDraw < FRAME_MS) {
+      rafId = keepGoing ? requestAnimationFrame(loop) : 0;
+      return;
+    }
+    // 프레임을 건너뛴 만큼 물리 스텝을 곱해준다 — 그러지 않으면 30fps 로 낮춘 만큼
+    // 파티클이 절반 속도로 움직이고 수명도 두 배가 되어 효과가 달라 보인다.
+    const steps = lastDraw ? Math.min(3, Math.max(1, (now - lastDraw) / 16.7)) : 1;
+    const fadeF = steps === 1 ? theme.fade : Math.pow(theme.fade, steps);
+    lastDraw = now;
+    // 좌표는 모두 host 기준. 캔버스가 덮는 세로 구간은 [bandY, bandY + bandH).
+    const yTop = bandY, yBot = bandY + bandH;
+    if (needFullClear) {
+      // 띠가 옮겨졌거나(transform 변경) 숨김에서 돌아온 직후 — 잔상 제거를 위해 띠 전체를 지운다.
+      ctx.clearRect(0, yTop, hostW, bandH);
+      needFullClear = false;
+      dirty = null;
+    } else if (dirty) {
+      ctx.clearRect(dirty.x0, dirty.y0, dirty.x1 - dirty.x0, dirty.y1 - dirty.y0);
+      dirty = null;
+    }
     ctx.globalCompositeOperation = theme.composite;
     if (theme.shape === 'emoji') {
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
     }
     let writeIdx = 0;
+    let nx0 = Infinity, ny0 = Infinity, nx1 = -Infinity, ny1 = -Infinity;
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += theme.gravity;
-      p.alpha *= theme.fade;
-      if (p.alpha < 0.05 || p.y > h + 30 || p.y < -30) continue;
+      p.x += p.vx * steps;
+      p.y += p.vy * steps;
+      p.vy += theme.gravity * steps;
+      p.alpha *= fadeF;
+      // 띠 밖으로 나간 파티클은 어차피 보이지 않으므로 여기서 버린다.
+      if (p.alpha < 0.05 || p.y > yBot + 30 || p.y < yTop - 30) continue;
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
+      let ext = p.size;
       if (theme.shape === 'circle') {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();
       } else if (p.emoji) {
-        ctx.font = `${p.size}px sans-serif`;
-        ctx.fillText(p.emoji, p.x, p.y);
+        // 캐시된 스프라이트를 복사 — fillText 로 매 프레임 글리프를 래스터화하지 않는다.
+        const spr = getEmojiSprite(p.emoji, p.size, p.color);
+        if (spr) { ctx.drawImage(spr, p.x - spr.width / 2, p.y - spr.height / 2); ext = spr.width / 2; }
+        else { ctx.font = `${p.size}px sans-serif`; ctx.fillText(p.emoji, p.x, p.y); }
       }
+      // 그린 범위 누적 (다음 프레임에 이 영역만 지운다)
+      if (p.x - ext < nx0) nx0 = p.x - ext;
+      if (p.y - ext < ny0) ny0 = p.y - ext;
+      if (p.x + ext > nx1) nx1 = p.x + ext;
+      if (p.y + ext > ny1) ny1 = p.y + ext;
       particles[writeIdx++] = p;
     }
     particles.length = writeIdx;
+    if (writeIdx > 0) {
+      // 여유 1px — 안티에일리어싱 잔상 방지. 띠 범위로 clamp.
+      dirty = {
+        x0: Math.max(0, Math.floor(nx0) - 1), y0: Math.max(yTop, Math.floor(ny0) - 1),
+        x1: Math.min(hostW, Math.ceil(nx1) + 1), y1: Math.min(yBot, Math.ceil(ny1) + 1),
+      };
+    }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     // shake step — 강도 누적/감쇠 (hyperpower 시그니처)
-    shake *= theme.shakeDecay;
+    shake *= steps === 1 ? theme.shakeDecay : Math.pow(theme.shakeDecay, steps);
     if (shake > 0.15) {
-      const sx = (Math.random() - 0.5) * shake;
-      const sy = (Math.random() - 0.5) * shake;
-      shakeTarget.style.transform = `translate(${sx}px, ${sy}px)`;
+      // 정수 px 로 양자화한다 — 소수점 offset 은 터미널 텍스트 전체를 서브픽셀로 다시
+      // 래스터화시킨다(파워 커서만 GPU 12% 였던 이유). 흔들림 폭이 최대 ±7px 이라 1px 단위로
+      // 끊어도 체감 차이가 없다. 값이 같은 프레임에는 스타일 대입 자체를 건너뛴다.
+      const sx = Math.round((Math.random() - 0.5) * shake);
+      const sy = Math.round((Math.random() - 0.5) * shake);
+      if (sx !== lastSx || sy !== lastSy) {
+        lastSx = sx; lastSy = sy;
+        // translate3d — 레이어로 승격시켜 매 프레임 repaint 대신 합성만 하게 한다.
+        // JS 로 바꾸는 transform 은 Chromium 이 애니메이션으로 인식하지 않아 자동 승격되지 않는다.
+        shakeTarget.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+      }
+      if (!shakeHinted) { shakeHinted = true; shakeTarget.style.willChange = 'transform'; }
     } else {
       shake = 0;
+      lastSx = lastSy = 0;
       shakeTarget.style.transform = '';
+      // 흔들림이 끝나면 힌트를 반드시 걷어낸다 — 안 그러면 터미널 크기의 레이어가 계속 남는다.
+      if (shakeHinted) { shakeHinted = false; shakeTarget.style.willChange = ''; }
     }
     if (particles.length > 0 || shake > 0) rafId = requestAnimationFrame(loop);
-    else rafId = 0;
+    else {
+      rafId = 0;
+      // 파티클이 다 사라지면 레이어를 아예 빼버린다 — 투명해도 남아 있으면 터미널이 출력으로
+      // 프레임을 만들 때마다 함께 합성된다. 타이핑을 쉬는 사이(대부분의 시간)의 비용이 0 이 된다.
+      // display 전환은 idle 진입 시 한 번뿐이고, position:absolute 라 주변 레이아웃에 영향 없다.
+      hideCanvas();
+    }
   };
   const spawn = (x: number, y: number) => {
-    const n = theme.countMin + Math.floor(Math.random() * (theme.countMax - theme.countMin + 1));
+    // 동시 생존 파티클 상한.
+    // 파티클은 fade 0.94 로 약 49프레임(0.82초) 살아있다. 키를 누르고 있으면 자동반복이
+    // 초당 30회 넘게 들어오므로, flame(키당 4~9개) 기준 165개가 동시에 살아있게 되고 매 프레임
+    // 그 전부를 다시 그려 초당 1만 회 가까운 글리프 래스터화가 발생한다 — 트레이스에서 fillText
+    // 가 렌더러 busy 시간의 87%를 차지하며 앱 전체가 버벅인 이유. 정상적인 타이핑 속도(초당
+    // 10키 내외 → 약 53개)에는 걸리지 않는 값으로 상한만 둔다.
+    const MAX_PARTICLES = 90;
+    showCanvas();
+    // 커서 행이 띠 밖으로 나갔으면 띠를 다시 잡는다 (프롬프트 타이핑 중엔 움직이지 않는다)
+    ensureBand(y);
+    if (particles.length >= MAX_PARTICLES) {
+      shake = Math.min(theme.shakeMax, shake + theme.shakePerKey);
+      if (!rafId) rafId = requestAnimationFrame(loop);
+      return;
+    }
+    const room = MAX_PARTICLES - particles.length;
+    let n = theme.countMin + Math.floor(Math.random() * (theme.countMax - theme.countMin + 1));
+    if (n > room) n = room;
     const colors = theme.colors && theme.colors.length ? theme.colors : ['#ffffff'];
     const emojis = theme.emojis;
     // arc 위치 배치 활성화 여부 (rainbow 처럼 정확한 호 형태로 배치할 때 사용)
@@ -1559,7 +1767,9 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
         color,
         emoji: emojis ? emojis[Math.floor(Math.random() * emojis.length)] : undefined,
         alpha: 1,
-        size: theme.sizeMin + Math.random() * (theme.sizeMax - theme.sizeMin),
+        // 정수로 양자화 — 스프라이트 캐시 키가 (이모지, 크기, 색) 이므로 크기가 실수면 캐시가
+        // 사실상 매번 미스가 된다. 1px 단위 차이는 눈에 보이지 않는다.
+        size: Math.round(theme.sizeMin + Math.random() * (theme.sizeMax - theme.sizeMin)),
       });
     }
     shake = Math.min(theme.shakeMax, shake + theme.shakePerKey);
@@ -1590,6 +1800,7 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     try { ro?.disconnect(); } catch {}
     try { canvas.remove(); } catch {}
     try { shakeTarget.style.transform = ''; } catch {}
+    try { shakeTarget.style.willChange = ''; } catch {}
   };
 }
 
@@ -1632,24 +1843,31 @@ export function applyCursorStyleToTerm(termId: string, style?: 'block' | 'underl
       };
       const colors = ['#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ccff', '#3366ff', '#cc00ff'];
       const origTheme = { ...(term.options.theme || {}) };
+      const rootEl = term.element as HTMLElement | undefined;
+      // cursorAccent(커서 위 글자색)는 프리즘 동안 고정이므로 여기서 딱 한 번만 적용한다.
+      // 색 순환은 아래 tick 이 CSS 변수로 처리 — theme 재할당은 더 이상 하지 않는다.
+      try { term.options.theme = { ...origTheme, cursorAccent: origTheme.background || '#000000' }; } catch {}
+      rootEl?.classList.add('xterm-prism-cursor');
       let phase = 0;
       const tick = () => {
         // 숨겨진 패널(비활성 탭/분할, display:none → offsetParent===null)에서는 갱신 스킵.
-        // term.options.theme 재할당은 xterm 전체 색 재계산+전 행 refresh 를 유발하므로 매우 비싸다.
-        const el = term.element as HTMLElement | undefined;
-        if (el && el.offsetParent === null) return;
-        phase = (phase + 0.03) % 1; // 주기 보정(틱 간격 2배 → 위상 증가 2배)로 체감 속도 유지
+        if (!rootEl || rootEl.offsetParent === null) return;
+        phase = (phase + 0.03) % 1;
         const f = phase * colors.length;
         const idx = Math.floor(f);
         const next = (idx + 1) % colors.length;
         const localT = f - idx;
         const color = lerpHex(colors[idx], colors[next], localT);
-        try { term.options.theme = { ...origTheme, cursor: color, cursorAccent: origTheme.background || '#000000' }; } catch {}
+        // CSS 변수만 갱신 — xterm 은 전혀 관여하지 않으므로 CSS 재주입/전 행 refresh 가 없다.
+        // (App.css 의 .xterm-prism-cursor 규칙이 이 값을 커서 배경색으로 쓴다.)
+        rootEl.style.setProperty('--pepe-prism-cursor', color);
       };
       tick();
-      const intervalId = window.setInterval(tick, 50); // 25→50ms (40→20fps): 그라데이션엔 충분, 비용 절반
+      const intervalId = window.setInterval(tick, 50);
       flameOverlayCleanup.set(termId, () => {
         try { window.clearInterval(intervalId); } catch {}
+        try { rootEl?.classList.remove('xterm-prism-cursor'); } catch {}
+        try { rootEl?.style.removeProperty('--pepe-prism-cursor'); } catch {}
         try { term.options.theme = origTheme; } catch {}
       });
       return;
@@ -2185,6 +2403,9 @@ function ensureSSHSetup(termId: string) {
 
   sshDataHandlers.set(termId, (p: any) => {
     try {
+      // alt screen 이탈 시 SGR 누출 보정 (patchAltScreenExit 주석 참고).
+      // 백그라운드 누적 경로도 나중에 그대로 write 되므로 분기 전에 한 번만 고친다.
+      if (p && typeof p.data === 'string') p.data = patchAltScreenExit(p.data);
       // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면(다른 세션
       // 탭이 활성 상태) 굳이 실시간으로 파싱/렌더할 필요가 없다 — 문자열로만 모아두고 그 탭을
       // 다시 볼 때 한 번에 반영. 앱 자체의 포커스 유무와는 무관 (그건 항상 실시간 유지).
@@ -2472,6 +2693,9 @@ function ensurePtySetup(termId: string) {
 
   ptyDataHandlers.set(termId, (p: any) => {
     try {
+      // alt screen 이탈 시 SGR 누출 보정 (patchAltScreenExit 주석 참고).
+      // 아래 ConPTY repaint 시그니처 판정은 \x1b[?25l 로 시작하는 패턴이라 영향 없다.
+      if (p && typeof p.data === 'string') p.data = patchAltScreenExit(p.data);
       // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면 실시간
       // 파싱/렌더 없이 문자열로만 모아두고 다시 볼 때 반영.
       if (!visibleTermIds.has(termId)) {

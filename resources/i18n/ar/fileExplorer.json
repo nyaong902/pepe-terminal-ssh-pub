@@ -38,6 +38,8 @@
   "colSize": "الحجم",
   "colDate": "التاريخ",
   "statusSummary": "{{total}} عنصر | {{selected}} محدد",
+  "deleteFailed": "فشل الحذف",
+  "dragCountLabel": "{{count}} عنصر",
   "deleteConfirm": "هل تريد حذف {{count}} عنصر؟\n{{names}}",
   "deleteConfirmRecursive": "هل تريد حذف هذا الـ{{kind}}؟\n\n{{path}}",
   "kindFolder": "مجلد (متضمن المحتويات)",
@@ -177,5 +179,10 @@
   "conflictApplyAll": "تطبيق على الكل (A)",
   "conflictNewName": "الاسم الجديد:",
   "renameTitle": "إعادة تسمية",
-  "renameNewLabel": "الاسم الجديد"
+  "renameNewLabel": "الاسم الجديد",
+  "menu": {
+    "duplicateTab": "تكرار",
+    "newLocalTab": "تبويب محلي جديد",
+    "closeOtherTabs": "إغلاق التبويبات الأخرى"
+  }
 }

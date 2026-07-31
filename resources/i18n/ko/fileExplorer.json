@@ -41,6 +41,8 @@
   "colSize": "크기",
   "colDate": "날짜",
   "statusSummary": "{{total}}개 항목 | {{selected}}개 선택",
+  "deleteFailed": "삭제 실패",
+  "dragCountLabel": "{{count}}개 항목",
   "deleteConfirm": "{{count}}개 항목을 삭제하시겠습니까?\n{{names}}",
   "deleteConfirmRecursive": "{{kind}}을(를) 삭제하시겠습니까?\n\n{{path}}",
   "kindFolder": "폴더(재귀)",
@@ -178,5 +180,10 @@
   "conflictApplyAll": "모두 적용(A)",
   "conflictNewName": "새 이름:",
   "renameTitle": "이름 바꾸기",
-  "renameNewLabel": "새 이름"
+  "renameNewLabel": "새 이름",
+  "menu": {
+    "duplicateTab": "복제",
+    "newLocalTab": "새 로컬 탭",
+    "closeOtherTabs": "다른 탭 모두 닫기"
+  }
 }

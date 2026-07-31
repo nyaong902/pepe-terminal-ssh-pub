@@ -1,10 +1,9 @@
 // src/components/SessionEditor.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getThemeList, getThemeByName } from '../utils/terminalThemes';
 import { getAvailableMonoFonts } from '../utils/monoFonts';
 import { isValidHost, normalizeHost } from '../utils/hostValidate';
-import { DriverManagerModal } from './DriverManagerModal';
 
 type LoginScriptRule = {
   expect: string;
@@ -46,18 +45,6 @@ export type Session = {
   x11Display?: number;
   browserUrl?: string;
   jumps?: JumpHop[];
-  dbms?: {
-    type: 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
-    driverId?: string;
-    database?: string;
-    useSshTunnel?: boolean;
-    urlOverride?: string;
-    props?: Record<string, string>;
-    port: number;
-    user: string;
-    password: string;
-    host?: string;
-  };
   cursorStyle?: 'block' | 'underline' | 'bar' | 'flame' | 'star' | 'heart' | 'circle' | 'rainbow' | 'power' | 'prism';
   cursorBlink?: boolean;
 };
@@ -74,9 +61,11 @@ type Props = {
   onSave: (s: Session) => void;
   onCancel: () => void;
   onSaveAndConnect?: (s: Session) => void;
+  // SQL Tool 쪽 "새 DB 연결 추가"처럼, 열자마자 특정 카테고리 탭(예: 'dbms')을 보여주고 싶을 때.
+  initialCategory?: string;
 };
 
-export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, onCancel, onSaveAndConnect }) => {
+export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, onCancel, onSaveAndConnect, initialCategory }) => {
   const { t } = useTranslation('sessionEditor');
   const [id] = useState(session?.id ?? `sess-${Date.now()}`);
   const [name, setName] = useState(session?.name ?? 'New Session');
@@ -112,38 +101,12 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
   }));
   const [jumps, setJumps] = useState<JumpRow[]>(() => toJumpRows(session));
   const [showJumpPw, setShowJumpPw] = useState<Set<number>>(new Set());
-  const [dbmsEnabled, setDbmsEnabled] = useState<boolean>(!!session?.dbms);
-  const [dbmsPort, setDbmsPort] = useState<number>(session?.dbms?.port ?? 20300);
-  const [dbmsUser, setDbmsUser] = useState<string>(session?.dbms?.user ?? '');
-  const [dbmsPassword, setDbmsPassword] = useState<string>(session?.dbms?.password ?? '');
-  const [dbmsHost, setDbmsHost] = useState<string>(session?.dbms?.host ?? '127.0.0.1');
-  const [dbmsDatabase, setDbmsDatabase] = useState<string>(session?.dbms?.database ?? '');
-  const [dbmsDriverId, setDbmsDriverId] = useState<string>(session?.dbms?.driverId ?? 'altibase-builtin');
-  const [dbmsUseSshTunnel, setDbmsUseSshTunnel] = useState<boolean>(!!session?.dbms?.useSshTunnel);
-  const [dbmsUrlEditMode, setDbmsUrlEditMode] = useState<boolean>(!!session?.dbms?.urlOverride);
-  const [dbmsUrlOverride, setDbmsUrlOverride] = useState<string>(session?.dbms?.urlOverride ?? '');
-  const [showDbmsPassword, setShowDbmsPassword] = useState(false);
-  // 등록된 JDBC 드라이버 목록 (Driver Manager 와 동일 소스)
-  const [jdbcDrivers, setJdbcDrivers] = useState<any[]>([]);
-  const refreshJdbcDrivers = useCallback(async () => {
-    try {
-      const list = await (window as any).api?.jdbcListDrivers?.();
-      if (Array.isArray(list)) setJdbcDrivers(list);
-    } catch {}
-  }, []);
-  useEffect(() => { void refreshJdbcDrivers(); }, [refreshJdbcDrivers]);
-  // 세션 편집 중에도 드라이버 등록/편집이 가능하도록 — 예전엔 SQL Tool 접속 후에만 열 수 있었음.
-  const [driverManagerOpen, setDriverManagerOpen] = useState(false);
-  const [dbmsTestResult, setDbmsTestResult] = useState<string>('');
-  const [dbmsTesting, setDbmsTesting] = useState<boolean>(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [category, setCategory] = useState<string>('connection');
+  const [category, setCategory] = useState<string>(initialCategory ?? 'connection');
   const [cursorStyle, setCursorStyle] = useState<'block' | 'underline' | 'bar' | 'flame' | 'star' | 'heart' | 'circle' | 'rainbow' | 'power' | 'prism'>(session?.cursorStyle ?? 'block');
   const [cursorBlink, setCursorBlink] = useState<boolean>(!!session?.cursorBlink);
-  const hasConfiguredJumps = () => jumps.some(j => (j.host || '').trim());
-  const dbmsRemoteHostForCurrentSession = () => hasConfiguredJumps() ? '127.0.0.1' : (dbmsHost || '127.0.0.1');
 
   useEffect(() => {
     setName(session?.name ?? 'New Session');
@@ -173,17 +136,6 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     setBrowserUrl(session?.browserUrl ?? '');
     setJumps(toJumpRows(session));
     setShowJumpPw(new Set());
-    setDbmsEnabled(!!session?.dbms);
-    setDbmsPort(session?.dbms?.port ?? 20300);
-    setDbmsUser(session?.dbms?.user ?? '');
-    setDbmsPassword(session?.dbms?.password ?? '');
-    setDbmsHost(session?.dbms?.host ?? '127.0.0.1');
-    setDbmsDatabase(session?.dbms?.database ?? '');
-    setDbmsDriverId(session?.dbms?.driverId ?? 'altibase-builtin');
-    setDbmsUseSshTunnel(!!session?.dbms?.useSshTunnel);
-    setDbmsUrlEditMode(!!session?.dbms?.urlOverride);
-    setDbmsUrlOverride(session?.dbms?.urlOverride ?? '');
-    setDbmsTestResult('');
   }, [session]);
 
   const getFolderPath = (f: Folder): string => {
@@ -221,11 +173,6 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     setSaveError('');
     const auth = authType === 'password' ? { type: 'password', password } : { type: 'key', keyPath };
     const script = loginScript.filter(r => r.expect.trim() !== '' || r.send.trim() !== '');
-    // SQL Tool 활성화 체크가 켜져 있으면 user 미입력이어도 dbms 를 저장 — 우클릭 메뉴 노출 보장.
-    // (user 가 비면 SqlToolWorkspace 가 연결 시점에 안내)
-    // dialect 는 선택된 driverId 에서 추론 (E-6).
-    const selectedDriver = jdbcDrivers.find(d => d.id === dbmsDriverId);
-    const dialect = (selectedDriver?.dialect || 'altibase') as 'altibase' | 'mysql' | 'postgres' | 'oracle' | 'mssql' | 'sqlite';
     const cleanedJumps: JumpHop[] = [];
     for (const row of jumps) {
       const h = (row.host || '').trim();
@@ -237,20 +184,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
         password: row.password || undefined,
       });
     }
-    const dbms = dbmsEnabled
-      ? {
-          type: dialect,
-          driverId: dbmsDriverId || undefined,
-          port: dbmsPort || (selectedDriver?.defaultPort || 20300),
-          user: dbmsUser.trim(),
-          password: dbmsPassword,
-          host: dbmsHost.trim() || '127.0.0.1',
-          database: dbmsDatabase.trim() || undefined,
-          useSshTunnel: (dbmsUseSshTunnel || cleanedJumps.length > 0) || undefined,
-          urlOverride: dbmsUrlEditMode && dbmsUrlOverride.trim() ? dbmsUrlOverride.trim() : undefined,
-        }
-      : undefined;
-    return { id, name, host: normalizeHost(host), port, username, auth, encoding, folderId: folderId || undefined, loginScript: script.length > 0 ? script : undefined, theme: theme || undefined, fontFamily: fontFamily || undefined, fontSize: fontSize || undefined, scrollback: scrollback || undefined, icon: icon || undefined, initialPath: initialPath.trim() || undefined, fileTreeEnabled: fileTreeEnabled || undefined, autoTrackPwd: (fileTreeEnabled && autoTrackPwd) ? true : undefined, backspaceKeyMode, deleteKeyMode, logPath: logPath.trim() || undefined, codePath: codePath.trim() || undefined, x11Forward: x11Forward || undefined, x11Display: x11Forward ? x11Display : undefined, browserUrl: browserUrl.trim() || undefined, jumps: cleanedJumps.length > 0 ? cleanedJumps : undefined, cursorStyle: cursorStyle !== 'block' ? cursorStyle : undefined, cursorBlink: !!cursorBlink, dbms } as Session;
+    return { id, name, host: normalizeHost(host), port, username, auth, encoding, folderId: folderId || undefined, loginScript: script.length > 0 ? script : undefined, theme: theme || undefined, fontFamily: fontFamily || undefined, fontSize: fontSize || undefined, scrollback: scrollback || undefined, icon: icon || undefined, initialPath: initialPath.trim() || undefined, fileTreeEnabled: fileTreeEnabled || undefined, autoTrackPwd: (fileTreeEnabled && autoTrackPwd) ? true : undefined, backspaceKeyMode, deleteKeyMode, logPath: logPath.trim() || undefined, codePath: codePath.trim() || undefined, x11Forward: x11Forward || undefined, x11Display: x11Forward ? x11Display : undefined, browserUrl: browserUrl.trim() || undefined, jumps: cleanedJumps.length > 0 ? cleanedJumps : undefined, cursorStyle: cursorStyle !== 'block' ? cursorStyle : undefined, cursorBlink: !!cursorBlink } as Session;
   };
   // ── 점프 행 조작 ──
   const addJump = () => setJumps(prev => [...prev, { host: '', user: '', port: '', password: '' }]);
@@ -313,7 +247,6 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     { id: 'advanced', label: t('categories.advanced'), depth: 0 },
     { id: 'filetree', label: t('categories.filetree'), depth: 1 },
     { id: 'x11', label: t('categories.x11'), depth: 1 },
-    { id: 'dbms', label: t('categories.dbms'), depth: 1 },
   ];
 
   return (
@@ -663,155 +596,6 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                 </div>
               </div>
             )}
-            {category === 'dbms' && (() => {
-              const selectedDriver = jdbcDrivers.find(d => d.id === dbmsDriverId);
-              // URL 자동 합성: 템플릿의 {host}/{port}/{database} 치환. 직접 편집 모드면 override 우선.
-              const composedUrl = selectedDriver?.urlTemplate
-                ? selectedDriver.urlTemplate
-                    .replace('{host}', dbmsHost || '127.0.0.1')
-                    .replace('{port}', String(dbmsPort || selectedDriver.defaultPort || 0))
-                    .replace('{database}', dbmsDatabase || '')
-                    .replace(/\/+$/, '')  // database 미지정으로 끝에 남는 빈 슬래시 제거
-                : '';
-              const effectiveUrl = dbmsUrlEditMode && dbmsUrlOverride ? dbmsUrlOverride : composedUrl;
-              const driverUsable = selectedDriver?.diag?.usable;
-              const runTest = async () => {
-                if (!selectedDriver) { setDbmsTestResult(t('dbms.noDriver')); return; }
-                if (!driverUsable) { setDbmsTestResult(t('dbms.driverJarMissing')); return; }
-                setDbmsTesting(true);
-                setDbmsTestResult(t('dbms.testing'));
-                const cid = `test-${Date.now().toString(36)}`;
-                const api: any = (window as any).api || {};
-                let testUrl = effectiveUrl;
-                let forwardId = '';
-                try {
-                  // SSH 터널 사용 시 — 로컬 포워드 열고 URL 의 host:port 를 127.0.0.1:localPort 로 재작성
-                  const forceSshTunnel = hasConfiguredJumps();
-                  const useSshTunnel = dbmsUseSshTunnel || forceSshTunnel;
-                  if (useSshTunnel && session?.id) {
-                    if (typeof api.sshOpenLocalForward !== 'function') {
-                      setDbmsTestResult(t('dbms.sshIpcMissing')); return;
-                    }
-                    setDbmsTestResult(t('dbms.sshOpening'));
-                    const remoteHost = dbmsRemoteHostForCurrentSession();
-                    const remotePort = dbmsPort || selectedDriver?.defaultPort || 0;
-                    const fwd = await api.sshOpenLocalForward({
-                      sessionId: session.id,
-                      remoteHost,
-                      remotePort,
-                      sshHost: host,
-                      sshPort: parseInt(String(port || '22'), 10) || 22,
-                    });
-                    console.log('[SessionEditor] sshOpenLocalForward =', fwd);
-                    if (!fwd?.success) {
-                      setDbmsTestResult(t('dbms.sshFailed', { error: fwd?.error || '?' })); return;
-                    }
-                    forwardId = fwd.forwardId;
-                    // 원래 호스트:포트를 127.0.0.1:localPort 로 치환
-                    const orig = `${dbmsHost || '127.0.0.1'}:${dbmsPort || selectedDriver?.defaultPort || 0}`;
-                    testUrl = effectiveUrl.replace(orig, `127.0.0.1:${fwd.localPort}`);
-                    setDbmsTestResult(t('dbms.sshTunnelOk', { remoteHost, remotePort, localPort: fwd.localPort }));
-                  }
-                  const cr = await api.jdbcConnect?.({
-                    connectionId: cid,
-                    driver: selectedDriver,
-                    url: testUrl,
-                    user: dbmsUser,
-                    password: dbmsPassword,
-                  });
-                  if (!cr?.success) { setDbmsTestResult(`❌ ${cr?.error || '?'} (URL: ${testUrl})`); return; }
-                  const info = cr.result || {};
-                  setDbmsTestResult(`✅ ${info.productName || ''} ${info.productVersion || ''} (driver: ${info.driverName || '?'})${forwardId ? ' [via SSH tunnel]' : ''}`);
-                  await api.jdbcDisconnect?.(cid);
-                } catch (e: any) {
-                  setDbmsTestResult(t('dbms.exception', { error: e?.message || e }));
-                } finally {
-                  if (forwardId) { try { await api.sshCloseLocalForward?.({ forwardId }); } catch {} }
-                  setDbmsTesting(false);
-                }
-              };
-              return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <label className="dbms-checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <input type="checkbox" checked={dbmsEnabled} onChange={e => setDbmsEnabled(e.target.checked)} />
-                  <span>{t('fields.sqlToolEnable')}</span>
-                </label>
-                <div className="session-editor-grid">
-                  <label>{t('fields.jdbcDriver')}</label>
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                    <select
-                      value={dbmsDriverId}
-                      onChange={e => {
-                        const next = e.target.value;
-                        setDbmsDriverId(next);
-                        // 새 드라이버 선택 시 기본 포트 채택 (사용자가 직접 바꿨으면 유지)
-                        const d = jdbcDrivers.find(x => x.id === next);
-                        if (d?.defaultPort && d.defaultPort > 0) setDbmsPort(d.defaultPort);
-                      }}
-                      disabled={!dbmsEnabled}
-                      style={{ flex: 1 }}
-                    >
-                      {jdbcDrivers.length === 0 && <option value="">{t('dbms.driverLoading')}</option>}
-                      {jdbcDrivers.map(d => (
-                        <option key={d.id} value={d.id}>
-                          {d.diag?.usable ? '✓' : '⚠'} {d.name} [{d.dialect}]
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" className="btn-cancel" onClick={() => setDriverManagerOpen(true)} title={t('dbms.driverManager')}>
-                      🔧 {t('dbms.driverManager')}
-                    </button>
-                  </div>
-
-                  <label>{t('fields.dbmsHost')}</label>
-                  <input type="text" value={dbmsHost} onChange={e => setDbmsHost(e.target.value)} placeholder="127.0.0.1" disabled={!dbmsEnabled} />
-                  <label>{t('fields.dbmsPort')}</label>
-                  <input type="number" value={dbmsPort} onChange={e => setDbmsPort(Number(e.target.value) || 0)} placeholder={String(selectedDriver?.defaultPort || 0)} disabled={!dbmsEnabled} min={1} max={65535} />
-                  <label>{t('fields.dbmsDatabase')}</label>
-                  <input type="text" value={dbmsDatabase} onChange={e => setDbmsDatabase(e.target.value)} placeholder={selectedDriver?.dialect === 'sqlite' ? '/path/to/file.db' : 'mydb'} disabled={!dbmsEnabled} />
-                  <label>{t('fields.dbmsUser')}</label>
-                  <input type="text" value={dbmsUser} onChange={e => setDbmsUser(e.target.value)} placeholder="ipageon" disabled={!dbmsEnabled} autoComplete="off" />
-                  <label>{t('fields.dbmsPassword')}</label>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <input type={showDbmsPassword ? 'text' : 'password'} value={dbmsPassword} onChange={e => setDbmsPassword(e.target.value)} disabled={!dbmsEnabled} style={{ flex: 1 }} autoComplete="off" />
-                    <button type="button" onClick={() => setShowDbmsPassword(v => !v)} disabled={!dbmsEnabled}>{showDbmsPassword ? '🙈' : '👁'}</button>
-                  </div>
-                  <label>{t('fields.sshTunnel')}</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#bbb', fontSize: 12 }}>
-                    <input type="checkbox" checked={dbmsUseSshTunnel || hasConfiguredJumps()} onChange={e => setDbmsUseSshTunnel(e.target.checked)} disabled={!dbmsEnabled || hasConfiguredJumps()} />
-                    <span>{hasConfiguredJumps() ? t('dbms.useSshTunnelJump') : t('dbms.useSshTunnelNormal')}</span>
-                  </label>
-                </div>
-
-                <div style={{ background: '#1e1e1e', border: '1px solid #333', borderRadius: 3, padding: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: 12, color: '#9cdcfe' }}>JDBC URL</span>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#aaa', fontSize: 11 }}>
-                      <input type="checkbox" checked={dbmsUrlEditMode} onChange={e => { setDbmsUrlEditMode(e.target.checked); if (e.target.checked && !dbmsUrlOverride) setDbmsUrlOverride(composedUrl); }} disabled={!dbmsEnabled} />
-                      <span>{t('fields.directInput')}</span>
-                    </label>
-                    {!dbmsUrlEditMode && composedUrl && (
-                      <button type="button" onClick={() => navigator.clipboard.writeText(composedUrl)} style={{ marginLeft: 'auto', background: 'transparent', color: '#aaa', border: '1px solid #444', padding: '1px 6px', borderRadius: 2, cursor: 'pointer', fontSize: 11 }}>{t('dbms.copy')}</button>
-                    )}
-                  </div>
-                  {dbmsUrlEditMode ? (
-                    <input type="text" value={dbmsUrlOverride} onChange={e => setDbmsUrlOverride(e.target.value)} disabled={!dbmsEnabled} style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 12 }} />
-                  ) : (
-                    <code style={{ color: '#d4d4d4', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{composedUrl || t('dbms.urlPlaceholder')}</code>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <button type="button" onClick={runTest} disabled={!dbmsEnabled || dbmsTesting || !selectedDriver} style={{ background: '#3a7d3a', color: '#fff', border: 0, padding: '5px 12px', borderRadius: 3, cursor: dbmsTesting ? 'wait' : 'pointer', fontSize: 12 }}>
-                    {dbmsTesting ? '...' : t('dbms.testConnect')}
-                  </button>
-                  {dbmsTestResult && (
-                    <span style={{ color: dbmsTestResult.startsWith('✅') ? '#5fb55f' : (dbmsTestResult.startsWith('테스트') ? '#bbb' : '#fcc'), fontSize: 12, fontFamily: 'monospace' }}>{dbmsTestResult}</span>
-                  )}
-                </div>
-              </div>
-              );
-            })()}
           </div>
         </div>
 
@@ -822,7 +606,6 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
           <button className="btn-save" style={{ background: '#2b9b6b', borderColor: '#3ac88b' }} onClick={saveAndConnect} title={t('tooltips.connectTitle')}>{t('actions.connect')}</button>
         </div>
       </div>
-      <DriverManagerModal open={driverManagerOpen} onClose={() => { setDriverManagerOpen(false); void refreshJdbcDrivers(); }} />
     </div>
   );
 };

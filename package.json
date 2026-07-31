@@ -2,7 +2,7 @@
   "name": "pepe-terminal-ssh",
   "productName": "PePe Terminal(SSH)",
   "private": true,
-  "version": "2.3.2",
+  "version": "2.3.5",
   "description": "PePe Terminal(SSH)",
   "author": "Claude (feat. ghjeong[prompt])",
   "type": "commonjs",
@@ -166,11 +166,8 @@
       },
       "extraResources": [
         {
-          "from": "resources/jre/win-x64",
-          "to": "jre",
-          "filter": [
-            "**/*"
-          ]
+          "from": "resources/optional-bundles/jre-win-x64.zip",
+          "to": "jre-win-x64.zip"
         },
         {
           "from": "resources/everything-sdk",
@@ -206,6 +203,10 @@
         {
           "from": "resources/optional-bundles/flowchart-editor.zip",
           "to": "flowchart-editor.zip"
+        },
+        {
+          "from": "resources/optional-bundles/calllog-cdr-tool.zip",
+          "to": "calllog-cdr-tool.zip"
         }
       ]
     },

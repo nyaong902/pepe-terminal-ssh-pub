@@ -41,6 +41,8 @@
   "colSize": "Size",
   "colDate": "Date",
   "statusSummary": "{{total}} items | {{selected}} selected",
+  "deleteFailed": "Delete failed",
+  "dragCountLabel": "{{count}} items",
   "deleteConfirm": "Delete {{count}} items?\n{{names}}",
   "deleteConfirmRecursive": "Delete this {{kind}}?\n\n{{path}}",
   "kindFolder": "folder (recursive)",
@@ -178,5 +180,10 @@
   "conflictApplyAll": "Apply to all (A)",
   "conflictNewName": "New name:",
   "renameTitle": "Rename",
-  "renameNewLabel": "New name"
+  "renameNewLabel": "New name",
+  "menu": {
+    "duplicateTab": "Duplicate",
+    "newLocalTab": "New local tab",
+    "closeOtherTabs": "Close other tabs"
+  }
 }

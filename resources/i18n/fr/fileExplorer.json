@@ -38,6 +38,8 @@
   "colSize": "Taille",
   "colDate": "Date",
   "statusSummary": "{{total}} éléments | {{selected}} sélectionnés",
+  "deleteFailed": "Échec de la suppression",
+  "dragCountLabel": "{{count}} éléments",
   "deleteConfirm": "Supprimer {{count}} éléments ?\n{{names}}",
   "deleteConfirmRecursive": "Supprimer ce {{kind}} ?\n\n{{path}}",
   "kindFolder": "dossier (récursif)",
@@ -177,5 +179,10 @@
   "conflictApplyAll": "Appliquer à tout (A)",
   "conflictNewName": "Nouveau nom :",
   "renameTitle": "Renommer",
-  "renameNewLabel": "Nouveau nom"
+  "renameNewLabel": "Nouveau nom",
+  "menu": {
+    "duplicateTab": "Dupliquer",
+    "newLocalTab": "Nouvel onglet local",
+    "closeOtherTabs": "Fermer les autres onglets"
+  }
 }

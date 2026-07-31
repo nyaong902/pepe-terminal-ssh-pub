@@ -15,6 +15,7 @@ import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
 import { initScrollbarHoverTracking } from './utils/scrollbarHover'
+import { setDebugLogEnabled } from './utils/debugLog'
 
 // Windows 터미널 스타일 스크롤바(마우스가 스크롤바 픽셀 영역에 있을 때만 확장) 추적 시작 —
 // 이 파일은 host/tab/panel/popout 등 모든 렌더러 진입점에서 로드되므로 한 번만 등록해도 전체
@@ -24,6 +25,25 @@ initScrollbarHoverTracking();
 // 개발용 진단 스위치 — 이 프로세스(호스트/탭/패널 어느 쪽이든) 안에서 앞으로 마운트되는 xterm 의
 // WebGL 렌더러를 끄고 DOM 렌더러로 비교 테스트할 때 devtools 콘솔에서 호출.
 (window as any).__pepeSetWebglDisabled = setWebglDisabledForTesting;
+// 브라우저/커스텀 워크스페이스 [cw-debug]/[auto-submit] 진단 로그 — 기본 꺼짐, 필요할 때만
+// devtools 콘솔에서 window.__pepeSetDebugLogEnabled(true) 로 켠다.
+(window as any).__pepeSetDebugLogEnabled = setDebugLogEnabled;
+
+// xterm.js(레거시 xterm 5.3 계열) 자체 내부의 알려진 disposal race — Viewport.syncScrollArea() 가
+// requestAnimationFrame 으로 예약해둔 내부 리프레시 콜백이, 그 사이 터미널이 dispose() 된 뒤에
+// (탭/미니탭 닫기 직후 refitAllTerms 계열 호출과 겹칠 때) 실행되면서 이미 해제된 렌더 서비스의
+// `.dimensions` 를 읽다가 크래시한다. 실제로 사용자가 재현: WebGL 렌더러 꺼도 동일하게 발생 —
+// 즉 우리 렌더러 선택과 무관한 xterm 자체 버그이고, 이 콜백은 우리 코드의 try/catch 바깥(다음
+// 애니메이션 프레임)에서 던져지므로 호출부에서 막을 수 없다. dispose 되어 화면에서 사라진
+// 터미널의 화면 갱신 실패는 사용자에게 아무 영향이 없으므로, 이 특정 시그니처만 콘솔 소음/크래시
+// 리포트에서 걸러낸다 — 다른 에러는 그대로 통과.
+window.addEventListener('error', (event) => {
+  const msg = event.message || '';
+  const stack = event.error?.stack || '';
+  if (msg.includes("reading 'dimensions'") && /Viewport/.test(stack) && /_innerRefresh/.test(stack)) {
+    event.preventDefault();
+  }
+});
 
 // 저장된 윈도우(앱 chrome) 테마를 렌더 전에 적용 — 깜빡임 방지. popout 창에도 동일 적용.
 initWindowTheme();

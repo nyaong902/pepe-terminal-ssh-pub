@@ -94,7 +94,9 @@
     "connectFail": "파일 전송 연결 실패",
     "connectFailDetail": "{{name}}\n\n{{msg}}",
     "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nDevTools Console 에 [sftp-connect] 로그 확인 권장.",
-    "connectException": "파일 전송 연결 예외"
+    "connectException": "파일 전송 연결 예외",
+    "mergeLostTitle": "일부 연결을 병합하지 못했습니다",
+    "mergeLostDetail": "자격증명을 알 수 없는 연결 {{count}}개가 병합에서 제외됐습니다."
   },
   "sessionMenu": {
     "wipe": "세션 비우기",

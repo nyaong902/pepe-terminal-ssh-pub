@@ -25,5 +25,8 @@
   "testFailed": "فشل: {{reason}}",
   "unknownError": "خطأ غير معروف",
   "remoteExec": " (تنفيذ عن بُعد)",
-  "testSuccess": "نجح{{via}}: {{detail}}"
+  "testSuccess": "نجح{{via}}: {{detail}}",
+  "newTab": "علامة تبويب جديدة",
+  "scrollPrev": "السابق",
+  "scrollNext": "التالي"
 }

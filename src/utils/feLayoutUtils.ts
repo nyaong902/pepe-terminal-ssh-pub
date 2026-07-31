@@ -8,7 +8,16 @@ import type { PanelSource, FileInfo } from '../components/FilePanel';
 // entries — 마지막으로 로드된 디렉토리 목록 캐시. 창 분리/재합침으로 FilePanel 이 새
 // 렌더러에서 다시 마운트될 때, 빈 목록에서 시작해 SFTP readdir 을 기다리는 대신 이 캐시로
 // 즉시 그려주고 백그라운드에서 새로고침한다(깜빡임 방지 용도일 뿐 — 항상 최신은 loadDir 가 보장).
-export type FeTab = { id: string; source: PanelSource; path: string; selected: Set<string>; entries?: FileInfo[] };
+// pathHistory/pathHistoryIdx — 이전/다음 폴더 기록. 예전엔 FilePanel.tsx 의 렌더러 모듈 레벨
+// Map 에 탭 id 로 보관했는데, 그건 "이 렌더러 프로세스" 안에서만 유효하다 — 창을 분리하면 새
+// 렌더러(새 프로세스)라 기록이 안 보이고, 원래 창으로 돌아오면 그 창의 프로세스는 계속 살아있던
+// 것이라 기록이 남아있어서 다시 보인다(사용자 재현: 분리하면 사라졌다가 원래 창으로 돌아오면
+// 다시 뜸 — 저장 위치가 프로세스에 묶여 있었다는 신호). entries 와 같은 패턴으로 탭 데이터 자체에
+// 실어서 serializeFeLayout/reviveFeLayout 을 타고 어느 창으로 옮겨져도 함께 다니게 한다.
+export type FeTab = {
+  id: string; source: PanelSource; path: string; selected: Set<string>;
+  entries?: FileInfo[]; pathHistory?: string[]; pathHistoryIdx?: number;
+};
 export type FePanel = { id: string; tabs: FeTab[]; activeIdx: number };
 
 export type FeLeafNode = { id: string; type: 'leaf'; panel: FePanel };
@@ -132,11 +141,58 @@ export function serializeFeLayout(node: FeLayoutNode): any {
       id: node.id, type: 'leaf',
       panel: {
         id: node.panel.id, activeIdx: node.panel.activeIdx,
-        tabs: node.panel.tabs.map(t => ({ id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected), entries: t.entries })),
+        tabs: node.panel.tabs.map(t => ({
+          id: t.id, source: t.source, path: t.path, selected: Array.from(t.selected), entries: t.entries,
+          pathHistory: t.pathHistory, pathHistoryIdx: t.pathHistoryIdx,
+        })),
       },
     };
   }
   return { id: node.id, type: node.type, sizes: node.sizes, children: node.children.map(serializeFeLayout) };
+}
+
+/** 백엔드(main)에 아직 살아있는 연결 id 집합 — 창 분리/재부착 직전에 App.tsx 의 seedReattach 가
+ * `fe:connected-sessions`(SSHBridge.clients 키 목록) 로 채운다.
+ *
+ * 왜 필요한가: reviveFeLayout 은 termId 가 "지금도 살아있는지"를 isLiveTermId 로 판단하는데,
+ * FileExplorer 는 그 자리에 TerminalPanel 의 isTermConnected 를 넘긴다. 그런데 파일전송이 직접 맺는
+ * SFTP 전용 연결(`fe-lazy-…`, `sftp-…`)은 인터랙티브 터미널이 아니라서 isTermConnected 가 항상
+ * false 다 — 그래서 창을 분리/복원할 때마다 살아있는 연결까지 lazy-remote 로 강등돼 전부 재연결 +
+ * 파일목록 재로딩이 발생했다(사용자 재현). 이 집합을 같이 참고해서 살아있는 연결은 그대로 둔다.
+ *
+ * 앱을 재시작한 경우엔 seedReattach 가 안 돌아 이 집합이 비어 있으므로, 기존처럼 정상적으로
+ * 강등 → 재연결된다(백엔드 연결도 실제로 죽어있으니 그게 맞다). */
+const liveBackendConnIds = new Set<string>();
+/** 백엔드에서 조회한 살아있는 연결 목록으로 교체 — main 이 authoritative 이므로 누적이 아니라 대체. */
+export function setLiveBackendConnIds(ids: string[]) {
+  liveBackendConnIds.clear();
+  for (const id of ids) if (id) liveBackendConnIds.add(id);
+}
+export function isLiveBackendConnId(termId: string): boolean {
+  return liveBackendConnIds.has(termId);
+}
+
+/** 창 분리로 다른 창이 그대로 이어받는 SFTP connId — 원본 FileExplorer 가 언마운트될 때 끊지 말아야 한다.
+ *
+ * 왜 전역 플래그(`__preserveFileExplorerConns`) 대신 이게 필요한가: 그 플래그는
+ * `detachTabToNewWindow` 가 true 로 켜고 `finally` 의 `setTimeout(…, 0)` 으로 끄는데, React 18 은
+ * 상태 업데이트(=언마운트) 를 스케줄러 태스크로 미룰 수 있어서 **플래그가 꺼진 뒤에 cleanup 이
+ * 실행되는 레이스**가 있었다. 그러면 새 창이 이어받아 쓰려던 연결을 원본 창이 끊어버려서, 새 창은
+ * 백엔드 생존 목록에 그 connId 이 없다고 보고 lazy-remote 로 강등 → 전부 재연결한다(사용자 재현:
+ * 병합 직후엔 살아있던 `fe-lazy-…` 가 분리 직후엔 사라져 있었고, 스스로 끊겼을 때 남는
+ * `closed — clearing record` 로그는 없었다 = 명시적 disconnect 였다는 뜻).
+ *
+ * 타이밍에 의존하지 않도록 "이 id 는 보존" 을 명시적으로 등록하고, cleanup 에서 한 번 소비하면
+ * 목록에서 지운다(소비형이라 오래 남아 다른 정리를 막지 않는다). */
+const preservedFeConnIds = new Set<string>();
+export function preserveFeConnIds(ids: string[]) {
+  for (const id of ids) if (id) preservedFeConnIds.add(id);
+}
+/** 보존 대상이면 true 를 돌려주고 목록에서 제거(1회성). */
+export function consumePreservedFeConnId(id: string): boolean {
+  if (!preservedFeConnIds.has(id)) return false;
+  preservedFeConnIds.delete(id);
+  return true;
 }
 
 /** serializeFeLayout 의 역변환. 형식이 어긋나거나 빈 트리면 null.
@@ -153,8 +209,13 @@ export function reviveFeLayout(saved: any, localLabel: string, isLiveTermId?: (t
     const rawTabs = Array.isArray(saved.panel?.tabs) ? saved.panel.tabs : [];
     const tabs: FeTab[] = rawTabs.map((t: any) => {
       let source: PanelSource = t?.source || { mode: 'local', label: localLabel };
-      if (source.mode === 'remote' && source.sessionId && !(source.termId && isLiveTermId?.(source.termId))) {
-        source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label };
+      if (source.mode === 'remote' && !(source.termId && isLiveTermId?.(source.termId))) {
+        if (source.sessionId) {
+          source = { mode: 'lazy-remote', sessionId: source.sessionId, label: source.label, viewRoot: source.viewRoot };
+        } else if (source.manualConn) {
+          // 세션 저장이 안 된 즉석 SFTP 연결 — manualConn 자격증명으로 lazy 재연결 대상이 된다.
+          source = { mode: 'lazy-remote', manualConn: source.manualConn, label: source.label, viewRoot: source.viewRoot };
+        }
       }
       return {
         id: String(t?.id || makeId('fetab')),
@@ -162,6 +223,8 @@ export function reviveFeLayout(saved: any, localLabel: string, isLiveTermId?: (t
         path: String(t?.path || ''),
         selected: new Set<string>(Array.isArray(t?.selected) ? t.selected : []),
         entries: Array.isArray(t?.entries) ? t.entries : undefined,
+        pathHistory: Array.isArray(t?.pathHistory) ? t.pathHistory : undefined,
+        pathHistoryIdx: typeof t?.pathHistoryIdx === 'number' ? t.pathHistoryIdx : undefined,
       };
     });
     if (tabs.length === 0) return null;

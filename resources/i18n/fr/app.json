@@ -92,7 +92,9 @@
     "connectFail": "Échec de la connexion de transfert de fichiers",
     "connectFailDetail": "{{name}}\n\n{{msg}}",
     "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nVérifiez le journal [sftp-connect] dans la console DevTools.",
-    "connectException": "Exception de connexion de transfert de fichiers"
+    "connectException": "Exception de connexion de transfert de fichiers",
+    "mergeLostTitle": "Certaines connexions n'ont pas pu être fusionnées",
+    "mergeLostDetail": "{{count}} connexion(s) avec des identifiants inconnus ont été exclues de la fusion."
   },
   "sessionMenu": {
     "wipe": "Vider les sessions",

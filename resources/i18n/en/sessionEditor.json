@@ -151,7 +151,11 @@
     "sshOpening": "Opening SSH tunnel...",
     "sshFailed": "❌ SSH tunnel failed: {{error}} — connect a terminal for the same session first",
     "sshTunnelOk": "SSH tunnel OK ({{remoteHost}}:{{remotePort}} → local={{localPort}}) — testing JDBC...",
-    "exception": "❌ Exception: {{error}}"
+    "exception": "❌ Exception: {{error}}",
+    "tunnelSectionTitle": "SSH Tunnel Connection",
+    "tunnelSectionSub": "Leave empty to connect directly without a tunnel.",
+    "sqlSessionName": "Name",
+    "tunnelEnable": "Use SSH tunnel"
   },
   "actions": {
     "save": "Save",

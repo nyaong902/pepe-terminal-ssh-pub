@@ -297,6 +297,21 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
           }
           startPath = typeof home === 'string' ? home : (home?.path || '/');
         } else if (mode === 'remote') {
+          // ClearCase dynamic view 경로(/vobs/...)는 뷰 루트(/view/<tag>)를 알아야 SFTP 로 접근된다.
+          // 그런데 뷰 루트 탐지는 인터랙티브 셸에 의존한다(프롬프트의 뷰태그 또는 셸 PID 의
+          // /proc/<pid>/environ). 트리 초기 로드는 접속 직후라 그 정보가 아직 없을 수 있는데,
+          // 예전엔 아래 probe 를 5회(2.5초)만 돌리고 실패하면 그대로 포기해서 — 프롬프트가 조금
+          // 늦게 오는 PC/회선에서는 파일트리가 아예 안 열렸다(간헐적 재현). 그래서 /vobs 경로일
+          // 때는 "뷰 루트가 잡힐 때까지" 명시적으로 기다린다.
+          if (startPath === '/vobs' || startPath.startsWith('/vobs/')) {
+            for (let i = 0; i < 30; i++) {   // 최대 15초
+              if (lastNavPathRef.current) return;
+              let vr = '';
+              try { vr = await (window as any).api?.feGetViewRoot?.(termId); } catch {}
+              if (vr) break;
+              await new Promise(r => setTimeout(r, 500));
+            }
+          }
           // SFTP 준비 대기 — local 은 즉시 가능
           for (let i = 0; i < 5; i++) {
             try {

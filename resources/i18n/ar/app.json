@@ -92,7 +92,9 @@
     "connectFail": "فشل اتصال نقل الملفات",
     "connectFailDetail": "{{name}}\n\n{{msg}}",
     "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nتحقق من سجل [sftp-connect] في وحدة تحكم DevTools.",
-    "connectException": "استثناء اتصال نقل الملفات"
+    "connectException": "استثناء اتصال نقل الملفات",
+    "mergeLostTitle": "تعذر دمج بعض الاتصالات",
+    "mergeLostDetail": "تم استبعاد {{count}} اتصال(ات) ذات بيانات اعتماد غير معروفة من الدمج."
   },
   "sessionMenu": {
     "wipe": "تفريغ الجلسات",

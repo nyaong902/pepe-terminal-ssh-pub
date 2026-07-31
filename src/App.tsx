@@ -11,6 +11,7 @@ import { SearchBar } from './components/SearchBar';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ContextMenu } from './components/ContextMenu';
 import { FileExplorer } from './components/FileExplorer';
+import { setLiveBackendConnIds, preserveFeConnIds } from './utils/feLayoutUtils';
 import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
 import { playReminderChime } from './utils/reminderChime';
@@ -28,8 +29,10 @@ import { SswSoftphoneWorkspace, type SswSoftphoneView } from './components/SswSo
 import { SippWorkspace } from './components/SippWorkspace';
 import { OfficeLauncher, type OfficeFormat } from './components/OfficeLauncher';
 import { MediaLauncher } from './components/MediaLauncher';
+import { CdrToolWorkspace } from './components/CdrToolWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
-import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { SqlToolTabShell } from './components/SqlToolTabShell';
 import { ChatArchiveSearch } from './components/ChatArchiveSearch';
 import { CustomWorkspaceDialog, CustomWorkspaceManager } from './components/CustomWorkspaceDialog';
 import { CustomWorkspaceView } from './components/CustomWorkspaceView';
@@ -77,7 +80,7 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'customWorkspace' | 'chatArchiveSearch' | 'pepeThing' | 'pepeBox';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'cdrTool' | 'customWorkspace' | 'chatArchiveSearch' | 'pepeThing' | 'pepeBox';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
 export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate; pendingOfficeFile?: { format: OfficeFormat; filePath: string } };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
@@ -381,7 +384,7 @@ function App() {
   const isOptionsPopout = false; // popout 비활성 — localStorage 격리로 데이터 유실 위험
   const [showOptions, setShowOptions] = useState(false);
   const [showRemoteShare, setShowRemoteShare] = useState(false);
-  const [editSessionCtx, setEditSessionCtx] = useState<{ session: any; termId: string; isQuick?: boolean } | null>(null);
+  const [editSessionCtx, setEditSessionCtx] = useState<{ session: any; termId: string; isQuick?: boolean; initialCategory?: string } | null>(null);
   const [editSessionFolders, setEditSessionFolders] = useState<any[]>([]);
   const [optFontFamily, setOptFontFamily] = useState(() => localStorage.getItem('terminalFontFamily') || '');
   const [optFontSize, setOptFontSize] = useState(() => Number(localStorage.getItem('terminalFontSize')) || 14);
@@ -750,7 +753,7 @@ function App() {
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
   // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
   // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
-  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, pepeBox: true });
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, cdrTool: true, pepeBox: true });
   useEffect(() => {
     (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
   }, []);
@@ -1617,9 +1620,6 @@ function App() {
     const added = [...currentIds].filter(termId => !prevConnectedWebdavTermIdsRef.current.has(termId)).map(termId => current.get(termId)!);
     prevConnectedWebdavTermIdsRef.current = currentIds;
     if (added.length === 0) return;
-    console.log('[App][ClaudeWebDAV] connected session(s) added', {
-      added,
-    });
     window.dispatchEvent(new CustomEvent('claude-webdav-auto-restore', {
       detail: { sessions: added },
     }));
@@ -1705,13 +1705,23 @@ function App() {
   });
   useEffect(() => { localStorage.setItem('showQuickConnect', showQuickConnect ? '1' : '0'); }, [showQuickConnect]);
 
-  // 도구 모음 바 위치 슬롯
+  // 도구 모음 바 위치 슬롯 — localStorage 는 인스턴스별 sessionData 분리 때문에 재시작 시 영속되지
+  // 않는다(캐시 충돌 방지용 PID+timestamp 분리, main.ts 22줄 부근 참고) — ui-prefs(config.json) 사용.
   type ToolbarSlot = 'top' | 'qc-left' | 'qc-right';
-  const [toolbarSlot, setToolbarSlot] = useState<ToolbarSlot>(() => {
-    try { const s = localStorage.getItem('toolbarSlot') as ToolbarSlot | null; if (s === 'top' || s === 'qc-left' || s === 'qc-right') return s; } catch {}
-    return 'qc-right';
-  });
-  useEffect(() => { try { localStorage.setItem('toolbarSlot', toolbarSlot); } catch {} }, [toolbarSlot]);
+  const [toolbarSlot, setToolbarSlotState] = useState<ToolbarSlot>('qc-right');
+  const toolbarSlotLoadedRef = useRef(false);
+  useEffect(() => {
+    (window as any).api?.getUIPrefs?.().then((prefs: any) => {
+      if (prefs?.toolbarSlot === 'top' || prefs?.toolbarSlot === 'qc-left' || prefs?.toolbarSlot === 'qc-right') {
+        setToolbarSlotState(prefs.toolbarSlot);
+      }
+      toolbarSlotLoadedRef.current = true;
+    }).catch(() => { toolbarSlotLoadedRef.current = true; });
+  }, []);
+  const setToolbarSlot = (next: ToolbarSlot) => {
+    setToolbarSlotState(next);
+    try { (window as any).api?.setUIPrefs?.({ toolbarSlot: next }); } catch {}
+  };
   const [toolbarDragHint, setToolbarDragHint] = useState<ToolbarSlot | null>(null);
   // (qcWidth 제거됨 — QC 바는 항상 자연 너비)
   useEffect(() => { try { localStorage.removeItem('qcWidth'); } catch {} }, []);
@@ -1828,11 +1838,18 @@ function App() {
   useEffect(() => {
     const handler = async (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (!detail?.sessionId && !detail?.quickSession) return;
+      if (!detail?.sessionId && !detail?.quickSession && !detail?.newSession) return;
       try {
         const data = await (window as any).api?.listSessions?.();
         const all = data?.sessions ?? data ?? [];
         const flds = data?.folders ?? [];
+        // SQL Tool "새 DB 연결 추가" 등 — SSH 세션 목록에 없는, 아직 저장 안 된 새 세션을
+        // 그대로 편집 대상으로 띄운다(look-up 없이 바로 사용).
+        if (detail.newSession) {
+          setEditSessionCtx({ session: detail.newSession, termId: detail.termId || '', initialCategory: detail.initialCategory });
+          setEditSessionFolders(flds);
+          return;
+        }
         if (detail.quickSession) {
           const q = detail.quickSession;
           setEditSessionCtx({
@@ -1853,7 +1870,7 @@ function App() {
         }
         const sess = all.find((x: any) => x.id === detail.sessionId);
         if (sess) {
-          setEditSessionCtx({ session: sess, termId: detail.termId });
+          setEditSessionCtx({ session: sess, termId: detail.termId, initialCategory: detail.initialCategory });
           setEditSessionFolders(flds);
         }
       } catch {}
@@ -2731,6 +2748,7 @@ function App() {
   const addSippTab = () => addSpecialTab('sipp', '📶 SIPp');
   const addOfficeTab = () => addSpecialTab('office', '📄 오피스');
   const addMediaTab = () => addSpecialTab('media', '🎵 미디어');
+  const addCdrToolTab = () => addSpecialTab('cdrTool', '🧾 SSW CDR 로그 분석');
   // Pepe-Thing(파일 검색) 더블클릭 시 "이 앱 워크스페이스로 열기" 확인 후 호출 — 빈 워크스페이스
   // 탭이 아니라, 생성과 동시에 해당 파일을 재생/편집 상태로 띄운다.
   const addMediaTabWithFile = (filePath: string, fileName: string) => {
@@ -2842,6 +2860,7 @@ function App() {
     { id: 'cmd-browser', label: '브라우저 워크스페이스', icon: '🌐', keywords: ['browser', 'web'], run: () => addBrowserTab() },
     { id: 'cmd-compare', label: '파일 비교 워크스페이스', icon: '🔍', keywords: ['compare', 'diff'], run: () => addCompareTab() },
     { id: 'cmd-fileTransfer', label: '파일전송 워크스페이스', icon: '📁', keywords: ['file transfer', 'sftp', 'upload', 'download'], run: () => { void openFileTransferTab(tApp('tabs.fileTransfer')); } },
+    { id: 'cmd-sqlTool', label: 'SQL Tool', icon: '🗄️', keywords: ['sql', 'db', 'database', 'jdbc'], run: () => openSqlToolPicker() },
     { id: 'cmd-bcastXfer', label: '일괄전송', icon: '📤', keywords: ['broadcast', 'bulk transfer', '일괄 전송', '파일'], run: () => { setBcastXferFiles([]); setBcastXferPath(''); setBcastXferLog([]); setShowBcastFileXfer(true); } },
     { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
@@ -2850,6 +2869,7 @@ function App() {
     ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
     ...(availableFeatures.sswPhone ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
     ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
+    ...(availableFeatures.cdrTool ? [{ id: 'cmd-cdrTool', label: 'SSW CDR 로그 분석', icon: '🧾', keywords: ['cdr', 'clog', 'call log', 'ssw', 'skb', 'q850'], run: () => addCdrToolTab() }] : []),
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
@@ -2890,17 +2910,32 @@ function App() {
     const removedTabs = tabsRef.current.filter(t => t.type === 'customWorkspace' && t.customWorkspaceId === templateId);
     removedTabs.forEach(tab => closeTab(tab.id));
   }, []);
-  const openSqlToolTab = (sessionId: string, sessionName: string) => {
-    // 동일 sessionId 의 SQL Tool 탭이 이미 있으면 그 탭으로 전환
-    const existing = tabs.find(t => t.type === 'sqlTool' && t.sqlTool?.sessionId === sessionId);
+  // 도구모음 "SQL Tool" 버튼 — 특정 세션 없이 SQL Tool 탭을 연다. sqlTool.sessionId 가 비어있으면
+  // SqlSessionPicker(DBMS 설정된 세션 목록)를 대신 렌더링한다(아래 JSX 참고).
+  const openSqlToolPicker = () => {
+    const existing = tabs.find(t => t.type === 'sqlTool' && !t.sqlTool?.sessionId);
     if (existing) { setActiveTabId(existing.id); return; }
     const id = `tab-sqltool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
     const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
     setTabs(prev => {
       const color = pickWorkspaceColor(prev, prev.length);
-      return [...prev, { id, title: `🗄️ ${sessionName}`, layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId, sessionName }, color }];
+      return [...prev, { id, title: '🗄️ SQL Tool', layout: emptyLayout, type: 'sqlTool', sqlTool: { sessionId: '', sessionName: '' }, color }];
     });
     setActiveTabId(id);
+  };
+  // SqlToolTabShell 사이드바에서 연결(세션)을 고르거나 바꿨을 때 — 이 SQL Tool 탭 자체를 그
+  // 세션으로 전환한다(연결 전 picker 상태였든, 다른 세션에 이미 연결돼 있었든 동일하게 동작).
+  // 이미 같은 세션의 SQL Tool 탭이 따로 열려있으면 그쪽으로 전환하고, 지금 탭은 닫는다.
+  const connectSqlToolPickerTab = (sqlTabId: TabId, sessionId: string, sessionName: string) => {
+    const existing = tabs.find(t => t.type === 'sqlTool' && t.sqlTool?.sessionId === sessionId && t.id !== sqlTabId);
+    if (existing) {
+      setTabs(prev => prev.filter(t => t.id !== sqlTabId));
+      setActiveTabId(existing.id);
+      return;
+    }
+    setTabs(prev => prev.map(t => t.id === sqlTabId
+      ? { ...t, title: `🗄️ ${sessionName}`, sqlTool: { sessionId, sessionName } }
+      : t));
   };
 
   // 단일 termId 의 모든 백엔드 리소스 해제 — close 경로 어디서든 일관되게 호출
@@ -3007,6 +3042,15 @@ function App() {
     let connected: string[] = [];
     try { connected = (await (window as any).api?.getConnectedPanels?.()) || []; } catch {}
     const connSet = new Set(connected);
+    // 파일전송이 직접 맺은 SFTP 전용 연결(fe-lazy-…/sftp-…)은 인터랙티브 터미널이 아니라서
+    // getConnectedPanels/isTermConnected 로는 안 잡힌다. 백엔드(SSHBridge.clients)의 실제 생존
+    // 목록을 따로 받아 feLayoutUtils 에 심어두면, reviveFeLayout 이 살아있는 연결을 lazy-remote 로
+    // 강등하지 않아 창 분리/복원 때 불필요한 재연결 + 파일목록 재로딩이 사라진다.
+    // 이 호출은 아래 setTabs(→ FileExplorer 마운트) 보다 먼저 끝나야 의미가 있다 — 호출부 두 곳
+    // (분리창 init, onAdoptTab) 모두 seedReattach 를 await 하고 나서 setTabs 를 한다.
+    try {
+      setLiveBackendConnIds((await (window as any).api?.feConnectedSessions?.()) || []);
+    } catch (e) { console.warn('[fe-seed] feConnectedSessions 실패', e); }
     try {
       for (const s of collectAllSessions(tab.layout)) {
         if (!s.termId) continue;
@@ -3132,6 +3176,34 @@ function App() {
             const allSess = collectAllSessions(payload.tab.layout);
             const sess = allSess[0];
             const curTabId = activeTabIdRef.current;
+            // 파일전송 탭은 드롭 위치를 전혀 따지지 않고, 이 창에 파일전송 탭이 있으면 그것과
+            // 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을 전제로 한 사용자 요청
+            // ("아무곳에 놓아도 되어야 한다"). 특정 탭 위에 놓였으면 그 탭을 우선 대상으로 한다.
+            const overTabItem = el?.closest('.tab-item') as HTMLElement | null;
+            const overTabId = overTabItem?.getAttribute('data-tab-id') || null;
+            if (payload.kind === 'workspace' && payload.tab.type === 'fileExplorer') {
+              const targetTab = (overTabId && tabsRef.current.find(t => t.id === overTabId && t.type === 'fileExplorer'))
+                || tabsRef.current.find(t => t.type === 'fileExplorer');
+              if (targetTab) {
+                // 뷰 루트 조회(extractMergeableFeSources 내부)가 원본 termId 가 아직 살아있는
+                // 동안 끝나야 하므로, 아래 disconnect 전에 반드시 await.
+                const merged = await dispatchFeMerge(targetTab.id, payload.tab.fileExplorerState);
+                // 재연결 가능한 원격 소스가 하나도 없으면(로컬 패널만이거나 상태 유실) 병합을
+                // 포기하고 아래 일반 경로로 새 탭 복원 — 예전엔 여기서 무조건 return 해버려서
+                // 끌어온 탭이 아무 데도 안 생기고 그냥 사라졌다.
+                if (merged) {
+                  // 병합에서는 새 연결로 다시 여는 것이라 원본 탭(원본 창에서 detach 시 보존해온)의
+                  // 옛 SFTP 연결은 더 이상 쓰이지 않는다 — 정리 안 하면 백엔드에 유령 연결로 남는다.
+                  try {
+                    for (const cid of (payload.tab.fileExplorerState?.lazyConns || [])) {
+                      (window as any).api?.feSftpDisconnect?.(cid);
+                    }
+                  } catch {}
+                  setActiveTabId(targetTab.id);
+                  return;
+                }
+              }
+            }
             // 탭바 위 드롭 — 단일 세션(kind='session')만 활성 탭의 첫 leaf 에 미니탭으로 병합.
             // 워크스페이스 전체(kind='workspace')는 탭바에 드롭해도 병합하지 않고 새 탭으로 복원(폴백)돼야 함.
             if (onChrome && payload.kind === 'session' && allSess.length > 0 && curTabId) {
@@ -3211,6 +3283,91 @@ function App() {
       }
     } catch {}
     return styles;
+  };
+
+  // 파일전송 탭(다른 탭 위로 드래그해 병합)의 저장/직렬화된 레이아웃에서 재연결 가능한 원격
+  // 소스만 추출 — 세션ID 로 저장된 세션이거나, 즉석 SFTP 연결(manualConn 자격증명 보존)인 것만
+  // 대상. 그 외(로컬 탭, 혹은 이 기능 이전에 저장돼 manualConn 이 없는 구버전 즉석 연결)는
+  // 재연결할 자격증명이 없으므로 조용히 제외한다(기존에 알려진 한계 — 사용자에게 문서화됨).
+  const extractMergeableFeSources = async (feState: any): Promise<{ items: { sessionId?: string; manualConn?: any; label?: string; path?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }[]; droppedCount: number }> => {
+    try {
+      const layout = feState?.layout;
+      if (!layout) return { items: [], droppedCount: 0 };
+      const items: { sessionId?: string; manualConn?: any; label?: string; path?: string; termId?: string; viewRoot?: string; pathHistory?: string[]; pathHistoryIdx?: number }[] = [];
+      const seen = new Set<string>();
+      let droppedCount = 0;
+      const walk = (node: any) => {
+        if (!node) return;
+        if (node.type === 'leaf') {
+          for (const t of node.panel?.tabs || []) {
+            const src = t?.source;
+            if (!src || src.mode === 'local') continue;
+            // 이전/다음 폴더 기록도 함께 넘긴다 — 안 넘기면 병합으로 새로 만들어지는 탭은 항상
+            // 빈 기록으로 시작해 "이전 폴더" 화살표가 꺼진다(사용자 재현: 분리했던 탭을 다시
+            // 병합하면 기록이 사라짐).
+            const hist = Array.isArray(t.pathHistory) ? t.pathHistory : undefined;
+            const histIdx = typeof t.pathHistoryIdx === 'number' ? t.pathHistoryIdx : undefined;
+            if (src.sessionId) {
+              const key = `s:${src.sessionId}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              items.push({ sessionId: src.sessionId, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot, pathHistory: hist, pathHistoryIdx: histIdx });
+            } else if (src.manualConn) {
+              const key = `m:${src.manualConn.host}:${src.manualConn.port}:${src.manualConn.username}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              items.push({ manualConn: src.manualConn, label: src.label, path: t.path, termId: src.termId, viewRoot: src.viewRoot, pathHistory: hist, pathHistoryIdx: histIdx });
+            } else {
+              // 자격증명을 복원할 방법이 없는 원격 소스(이 기능 이전에 저장된 즉석 SFTP 연결 등)
+              droppedCount++;
+            }
+          }
+          return;
+        }
+        for (const c of node.children || []) walk(c);
+      };
+      walk(layout);
+      // ClearCase dynamic view(/vobs) 뷰 루트 확보 — source 에 이미 실려있으면(이전 병합/재연결에서
+      // 이관받은 값) 그걸 그대로 쓴다(원본 연결이 이미 끊겼어도 안전). 없으면(터미널 세션 재사용
+      // 등 첫 hop) 원본(구) termId 가 아직 살아있는 지금(disconnect 전) 백엔드에서 조회해 온다.
+      // 인터랙티브 셸이 없는 SFTP 전용 재연결은 이 값을 스스로 알아낼 방법이 없다.
+      const withViewRoot = await Promise.all(items.map(async ({ termId, viewRoot, ...rest }) => {
+        if (!viewRoot && termId) { try { viewRoot = await (window as any).api?.feGetViewRoot?.(termId) || ''; } catch {} }
+        return viewRoot ? { ...rest, viewRoot } : rest;
+      }));
+      return { items: withViewRoot, droppedCount };
+    } catch { return { items: [], droppedCount: 0 }; }
+  };
+
+  // 병합으로 새로 연결하는 항목 dispatch + 재연결 불가능해 유실된 항목이 있으면 사용자에게 알림.
+  // 반환값 = 실제로 병합할 항목이 있어 dispatch 했는지. false 면 호출부가 원본 탭을 그대로
+  // 두거나 새 탭으로 복원하는 폴백을 해야 한다(안 그러면 탭이 그냥 사라진다).
+  const dispatchFeMerge = async (feTabId: string, feState: any): Promise<boolean> => {
+    const { items, droppedCount } = await extractMergeableFeSources(feState);
+    if (items.length > 0) {
+      window.dispatchEvent(new CustomEvent('fe-merge-remote-sources', { detail: { feTabId, items } }));
+    }
+    if (droppedCount > 0) {
+      notifyError(
+        tApp('fileTransfer.mergeLostTitle', { defaultValue: '일부 연결을 병합하지 못했습니다' }),
+        tApp('fileTransfer.mergeLostDetail', { count: droppedCount, defaultValue: `자격증명을 알 수 없는 연결 ${droppedCount}개가 병합에서 제외됐습니다.` }),
+      );
+    }
+    return items.length > 0;
+  };
+
+  // 같은 창 안에서 파일전송 탭을 (위치 무관) 놓았을 때 — 새 탭을 만들지 않고 원본 탭에 열려있던
+  // 원격 연결들을 대상 탭에 새로 연결해 이어 열고, 원본 탭은 닫는다.
+  const mergeFileExplorerTabs = async (fromId: TabId, toId: TabId) => {
+    const fromTab = tabsRef.current.find(t => t.id === fromId);
+    if (!fromTab || fromTab.type !== 'fileExplorer') return;
+    const liveState = fileExplorerStateRef.current.get(fromId) || fromTab.fileExplorerState;
+    const merged = await dispatchFeMerge(toId, liveState);
+    // 옮길 원격 연결이 하나도 없으면 원본 탭을 닫지 않는다 — 닫으면 아무것도 안 옮겨진 채로
+    // 탭만 사라진다.
+    if (!merged) return;
+    setActiveTabId(toId);
+    closeTab(fromId);
   };
 
   // FileExplorer 탭 분리 시 — 같은 창의 다른 탭들로부터 계산되는 sessions 가 새 창에서 비어버리는
@@ -3303,6 +3460,14 @@ function App() {
         console.error('[detachTabToNewWindow] serializeTab 실패 — 탭 type:', tab.type, err);
         return;
       }
+      // 이 탭이 들고 있던 SFTP 연결은 새 창이 그대로 이어받는다 — connId 단위로 "보존" 등록.
+      // 위의 __preserveFileExplorerConns 플래그만으로는 부족했다: finally 의 setTimeout 이 플래그를
+      // 끄는 시점과 React 18 이 언마운트를 커밋하는 시점 사이에 레이스가 있어서, 원본 창의 cleanup 이
+      // 플래그가 꺼진 뒤 실행되며 새 창이 쓰려던 연결을 끊어버렸다(→ 새 창에서 전부 재연결).
+      try {
+        const feConns: string[] = (payload as any)?.tab?.fileExplorerState?.lazyConns || [];
+        if (feConns.length) preserveFeConnIds(feConns);
+      } catch {}
       const res = await (window as any).api?.dropTab?.(payload, point, { sourceTabCount: tabsRef.current.length });
       if (res === undefined || res?.blocked) return; // IPC 실패 또는 (새 창인데 탭이 하나뿐이라) 거부됨
       removeTabAfterMove(tabId, tab.layout);
@@ -3915,7 +4080,7 @@ function App() {
     // 터미널이 아닌 워크스페이스(브라우저/파일비교/로그분석/VPN/다국어/SQL Tool)에서 더블클릭한 경우
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
-    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media', 'pepeThing', 'pepeBox'];
+    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media', 'cdrTool', 'pepeThing', 'pepeBox'];
     const isTermTabType = (t: TabType | undefined) => t === undefined || t === 'terminal';
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
       // 이미 우측 분할에 터미널 워크스페이스가 떠 있으면 — activeTab 을 전환하지 않고
@@ -3967,7 +4132,7 @@ function App() {
           const displayHost = jumps.length ? jumps[jumps.length - 1].host : sess.host;
           const result = await (window as any).api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, sess.auth, undefined, jumps.length ? jumps : undefined);
           if (result?.success) {
-            window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost } }));
+            window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, sessionId: sess.id } }));
           } else {
             const msg = result?.error || tApp('common.unknownError');
             console.error('[fe-sftp-connect dblclick] failed:', msg);
@@ -4411,6 +4576,7 @@ function App() {
         ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
         ...(availableFeatures.sswPhone ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
+        ...(availableFeatures.cdrTool ? [{ label: '🧾 SSW CDR 로그 분석', action: addCdrToolTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         { label: '🗄 대화 아카이브 검색', action: addChatArchiveSearchTab },
         { label: tMenu('tools.pepeThingWs'), action: addPepeThingTab },
@@ -5033,7 +5199,6 @@ function App() {
           }
         }}
         onDisconnect={panelId => handleDisconnectSession(panelId)}
-        onOpenSqlTool={(sessionId, sessionName) => openSqlToolTab(sessionId, sessionName)}
         targetPanelId={selectedPanelId}
         onFileTransfer={async (sessionId, sessionName) => {
           // 이미 열린 파일 전송 워크스페이스가 있으면 재사용(거기에 새 연결 추가) — 없으면 새로 생성.
@@ -5067,7 +5232,7 @@ function App() {
             const displayHost = jumps.length ? jumps[jumps.length - 1].host : sess.host;
             const result = await (window as any).api.feSftpConnect?.(connId, sess.host, sess.port || 22, sess.username, sess.auth, undefined, jumps.length ? jumps : undefined);
             if (result?.success) {
-              window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, feTabId } }));
+              window.dispatchEvent(new CustomEvent('fe-sftp-connected', { detail: { connId, sessionName, host: displayHost, feTabId, sessionId: sess.id } }));
             } else {
               const msg = result?.error || tApp('common.unknownError');
               console.error('[fe-sftp-connect] failed:', msg);
@@ -5094,6 +5259,7 @@ function App() {
           onAddSippTab={addSippTab}
           onAddOfficeTab={addOfficeTab}
           onAddMediaTab={addMediaTab}
+          onAddCdrToolTab={addCdrToolTab}
           onAddI18nEditorTab={addI18nEditorTab}
           onAddPepeThingTab={addPepeThingTab}
           onAddPepeBoxTab={addPepeBoxTab}
@@ -5118,6 +5284,7 @@ function App() {
               return next;
             });
           }}
+          onMergeFileExplorerTabs={mergeFileExplorerTabs}
           onDetachTab={detachTabToNewWindow}
           onSetTabColor={(id, color) => setTabs(prev => prev.map(t => t.id === id ? { ...t, color } : t))}
           splitRightTabId={splitRightTabId}
@@ -5212,6 +5379,7 @@ function App() {
                 onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
               >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
+              <button className="tool-btn" title="SQL Tool" onClick={openSqlToolPicker}>🗄️</button>
               <button className="tool-btn" title={tApp('toolbar.chatArchiveSearchTooltip')} onClick={() => addChatArchiveSearchTab()}>🗄</button>
               <button className="tool-btn" title={tApp('toolbar.pepeThingTooltip')} onClick={() => addPepeThingTab()}>🔎</button>
           <button
@@ -5701,7 +5869,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5712,7 +5880,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5793,6 +5961,16 @@ function App() {
             </ErrorBoundary>
           </div>
         ))}
+        {tabs.filter(t => t.type === 'cdrTool').map(t => (
+          <div key={t.id} style={tabSlotStyle(t)}>
+            <ErrorBoundary label="CdrTool">
+              <CdrToolWorkspace
+                instanceId={t.id}
+                sshSessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId).map(s => ({ termId: s.termId, label: s.sessionName }))}
+              />
+            </ErrorBoundary>
+          </div>
+        ))}
         {tabs.filter(t => t.type === 'i18nEditor').map(t => (
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.i18nEditor')}>
@@ -5818,7 +5996,7 @@ function App() {
                     setCustomWorkspaces(prev => prev.map(ws => ws.id === normalized.id ? normalized : ws));
                     setTabs(prev => prev.map(tab => tab.type === 'customWorkspace' && tab.customWorkspaceId === normalized.id ? { ...tab, title: normalized.name, customWorkspaceTemplate: normalized } : tab));
                   }}
-                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|customWorkspace|pepeThing/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
+                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|customWorkspace|pepeThing|pepeBox/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
                   connectedBrowserSessions={connectedBrowserSessions}
                   availableShells={availableShells}
                   onCloseTerm={releaseTermResources}
@@ -5849,8 +6027,12 @@ function App() {
           }
           return (
             <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden' }}>
-              <ErrorBoundary label={`SQL Tool — ${t.sqlTool!.sessionName}`}>
-                <SqlToolWorkspace sessionId={t.sqlTool!.sessionId} sessionName={t.sqlTool!.sessionName} />
+              <ErrorBoundary label={t.sqlTool!.sessionId ? `SQL Tool — ${t.sqlTool!.sessionName}` : 'SQL Tool'}>
+                <SqlToolTabShell
+                  sessionId={t.sqlTool!.sessionId}
+                  sessionName={t.sqlTool!.sessionName}
+                  onSessionChange={(sessionId, sessionName) => connectSqlToolPickerTab(t.id, sessionId, sessionName)}
+                />
               </ErrorBoundary>
             </div>
           );
@@ -6491,6 +6673,7 @@ function App() {
         <SessionEditor
           session={editSessionCtx.session}
           folders={editSessionFolders}
+          initialCategory={editSessionCtx.initialCategory}
           onSave={async (s: any) => {
             if (editSessionCtx.isQuick) {
               try { await (window as any).api?.saveSession?.(s); } catch {}
@@ -6506,6 +6689,8 @@ function App() {
             applySessionToTerm(s, editSessionCtx.termId);
             // 편집 컨텍스트 갱신 (창 유지)
             setEditSessionCtx({ session: s, termId: editSessionCtx.termId });
+            // SessionList 사이드바 외에도 SqlToolTabShell 등 다른 곳의 세션 목록을 갱신.
+            try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
             // X11 forwarding 변경 시 안내 (수동 재접속 권유)
             const x11Changed = !!prev && (!!prev.x11Forward !== !!s.x11Forward || (prev.x11Display ?? 0) !== (s.x11Display ?? 0));
             if (x11Changed) {
@@ -6538,6 +6723,7 @@ function App() {
               return;
             }
             try { await (window as any).api?.saveSession?.(s); } catch {}
+            try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
             const editedTid = editSessionCtx.termId;
             setEditSessionCtx(null);
             // 새 탭으로 연결 (panelId=null → 새 패널/탭 생성)

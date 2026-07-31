@@ -14,6 +14,7 @@
   "retainDays": "Période de conservation (jours)",
   "clearAll": "Effacer toutes les conversations",
   "clearAllConfirm": "Supprimer toutes les conversations de la messagerie ?",
+  "deleteTitle": "Supprimer",
   "scanButton": "Mettre à jour la liste",
   "scanHintHidden": "La découverte d'utilisateurs et les réponses sont désactivées en mode masqué.",
   "scanHintNormal": "Analyse directement la plage de classe B de l'IPv4 attribuée à votre carte réseau.",

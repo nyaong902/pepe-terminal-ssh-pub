@@ -25,5 +25,8 @@
   "testFailed": "失败：{{reason}}",
   "unknownError": "未知错误",
   "remoteExec": "（远程执行）",
-  "testSuccess": "成功{{via}}：{{detail}}"
+  "testSuccess": "成功{{via}}：{{detail}}",
+  "newTab": "新建标签页",
+  "scrollPrev": "上一个",
+  "scrollNext": "下一个"
 }

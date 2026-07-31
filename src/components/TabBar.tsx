@@ -42,6 +42,7 @@ type Props = {
   onAddSippTab?: () => void;
   onAddOfficeTab?: () => void;
   onAddMediaTab?: () => void;
+  onAddCdrToolTab?: () => void;
   onAddI18nEditorTab?: () => void;
   onAddChatArchiveSearchTab?: () => void;
   onAddPepeThingTab?: () => void;
@@ -51,6 +52,8 @@ type Props = {
   onCloseTab: (id: string) => void;
   onRenameTab?: (id: string, name: string) => void;
   onReorderTabs?: (fromId: string, toId: string) => void;
+  // 파일전송 탭을 다른 파일전송 탭 위로 정확히 드롭했을 때 — 순서 재정렬 대신 병합.
+  onMergeFileExplorerTabs?: (fromId: string, toId: string) => void;
   onDetachTab?: (id: string, screenX?: number, screenY?: number) => void;
   onSetTabColor?: (id: string, color: TabColor) => void;
   // 우측 분할 관련 — 활성 탭 옆에 다른 워크스페이스 탭 표시
@@ -64,10 +67,10 @@ type Props = {
   onThemeChange?: (name: string) => void;
   availableShells?: ShellInfo[];
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp) 의 "+" 워크스페이스 메뉴 표시 여부
-  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean; pepeBox?: boolean };
+  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean; pepeBox?: boolean };
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddPepeThingTab, onAddPepeBoxTab, onAddChatArchiveSearchTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCdrToolTab, onAddPepeThingTab, onAddPepeBoxTab, onAddChatArchiveSearchTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onMergeFileExplorerTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -153,7 +156,22 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
             const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
             const overItem = el?.closest('.tab-item') as HTMLElement | null;
             const overId = overItem?.getAttribute('data-tab-id') || null;
-            if (overId && overId !== st.tabId) onReorderTabs?.(st.tabId, overId);
+            const fromTab = tabs.find(x => x.id === st.tabId);
+            const overTab = overId ? tabs.find(x => x.id === overId) : null;
+            // 파일전송 탭은 드롭 위치를 전혀 따지지 않고, 창 안에 놓으면 이 창의 파일전송 탭과
+            // 병합한다 — 창마다 파일전송 탭은 하나만 유지되는 것을 전제로 한 사용자 요청
+            // ("아무곳에 놓아도 되어야 한다"). 위치를 따지던 이전 구현은 `.tab-bar`(탭 아이템만
+            // 감싸는 좁은 박스) 밖의 빈 영역이나 탭에서 멀찌감치 떨어진 지점에서 병합이 안 걸렸다.
+            // 단, 다른 워크스페이스 탭 아이템 위에 정확히 올린 경우엔 순서 재정렬 의도로 보고 양보.
+            const wantsReorder = !!overTab && overTab.type !== 'fileExplorer';
+            const mergeTargetFe = (fromTab?.type === 'fileExplorer' && !wantsReorder)
+              ? tabs.find(x => x.type === 'fileExplorer' && x.id !== st.tabId)
+              : null;
+            if (mergeTargetFe && onMergeFileExplorerTabs) {
+              onMergeFileExplorerTabs(st.tabId, mergeTargetFe.id);
+            } else if (overId && overId !== st.tabId) {
+              onReorderTabs?.(st.tabId, overId);
+            }
           }
         } catch {}
         setDraggingId(null);
@@ -233,8 +251,8 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
               autoFocus
               onClick={e => e.stopPropagation()}
             />
-          ) : (
-            <span>{(() => {
+          ) : (() => {
+            const label = (() => {
               if (tab.customTitle) return tab.title;
               switch (tab.type) {
                 case 'compare': return t('compareWorkspace');
@@ -246,8 +264,12 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
               const m = tab.title.match(/^Workspace (\d+)$/);
               if (m) return t('workspaceN', { n: m[1] });
               return tab.title;
-            })()}</span>
-          )}
+            })();
+            // 브라우저 워크스페이스는 로드된 페이지의 <title> 을 그대로 탭 제목으로 쓰므로 길이
+            // 제한이 없다 — .tab-item 이 flex-shrink:0(탭 자체는 안 줄고 넘치면 스크롤) 이라
+            // 이 span 을 안 잘라주면 탭 하나가 탭바 전체를 잡아먹는다. 전체 제목은 title 로 hover.
+            return <span className="tab-title-text" title={label}>{label}</span>;
+          })()}
           {tabs.length > 1 && (
             <button
               className="tab-close"
@@ -353,6 +375,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() }] : []),
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📡 SSW 소프트폰', onClick: () => onAddSswPhoneTab?.() }] : []),
                 ...((availableFeatures?.sipp ?? true) ? [{ label: '📶 SIPp', onClick: () => onAddSippTab?.() }] : []),
+                ...((availableFeatures?.cdrTool ?? true) ? [{ label: '🧾 SSW CDR 로그 분석', onClick: () => onAddCdrToolTab?.() }] : []),
                 ...((availableFeatures?.office ?? true) ? [{ label: '📄 오피스', onClick: () => onAddOfficeTab?.() }] : []),
                 ...((availableFeatures?.media ?? true) ? [{ label: '🎵 미디어', onClick: () => onAddMediaTab?.() }] : []),
                 ...((availableFeatures?.pepeBox ?? true) ? [{ label: '📦 Pepe-Box', onClick: () => onAddPepeBoxTab?.() }] : []),

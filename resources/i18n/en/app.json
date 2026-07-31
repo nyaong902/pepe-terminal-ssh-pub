@@ -94,7 +94,9 @@
     "connectFail": "File transfer connection failed",
     "connectFailDetail": "{{name}}\n\n{{msg}}",
     "connectFailDetailLog": "{{name}}\n\n{{msg}}\n\nCheck the [sftp-connect] log in the DevTools Console.",
-    "connectException": "File transfer connection exception"
+    "connectException": "File transfer connection exception",
+    "mergeLostTitle": "Some connections could not be merged",
+    "mergeLostDetail": "{{count}} connection(s) with unknown credentials were excluded from the merge."
   },
   "sessionMenu": {
     "wipe": "Empty sessions",

@@ -42,6 +42,14 @@ export type PanelSource = {
   mode: 'local' | 'remote' | 'lazy-remote' | 'cloud';
   termId?: string;
   sessionId?: string; // lazy-remote 용 식별자
+  // 저장된 세션이 아닌 즉석 SFTP 연결(빠른연결 바 / "SFTP 연결" 다이얼로그)의 자격증명 — sessionId
+  // 가 없는 remote 소스를 창 분리·탭 병합 시 재연결하기 위해 보존한다(다른 저장 세션과 동일하게
+  // 평문 저장 — 이 앱의 sessions.json 저장 방식과 같은 신뢰 수준).
+  manualConn?: { host: string; port: number; username: string; password?: string };
+  // ClearCase dynamic view(/vobs) 연결의 뷰 루트(CLEARCASE_ROOT, 예: /view/ghj_view). 인터랙티브
+  // 셸이 없는 SFTP 전용 재연결(병합/창분리 재연결 등)은 이 값을 스스로 알아낼 방법이 없어서,
+  // 한 번 알아낸 값을 source 에 실어 재연결(realizeLazyRemote)마다 새 termId 에 이관한다.
+  viewRoot?: string;
   label: string;
 };
 
@@ -57,6 +65,8 @@ type Props = {
   currentPath: string;
   onPathChange: (path: string) => void;
   onFileDrop?: (files: string[], srcMode: string, srcTermId?: string, srcPath?: string) => void;
+  // Windows 탐색기 등 OS 밖에서 실제 파일을 끌어다 놓았을 때 — 절대경로 목록.
+  onOsFilesDrop?: (absPaths: string[]) => void;
   onDisconnect?: () => void;
   panelId: string;
   refreshKey?: number;
@@ -69,9 +79,23 @@ type Props = {
   // 먼저 로컬 임시 경로로 받아야 하므로(sftp:download-to-temp), 다운로드 완료 후 로컬 경로로 호출된다.
   onOpenInMedia?: (filePath: string, fileName: string) => void;
   onOpenInOffice?: (format: OfficeFormat, filePath: string, fileName: string) => void;
+  // 이전/다음 폴더 기록(경로 배열 + 현재 위치) — FeTab.pathHistory/pathHistoryIdx 와 대응.
+  // 렌더러 프로세스 내부 저장소가 아니라 탭 데이터 자체로 다뤄야 하는 이유: 창을 분리하면 새
+  // 렌더러 프로세스가 뜨는데, 예전엔 이 기록을 렌더러 모듈 레벨 Map 에 탭 id 로 보관해서 그 새
+  // 프로세스에는 기록이 없었다(분리하면 화살표가 사라짐). 그러다 원래 창으로 돌아오면 그 창의
+  // 프로세스는 계속 살아있던 것이라 Map 이 안 비워져 있어서 다시 나타났다(사용자 재현: 분리 시
+  // 사라짐 → 원래 창 복귀 시 재등장 — 저장 위치가 "이 프로세스"에 묶여 있었다는 신호).
+  // entries(파일 목록 캐시)와 같은 패턴으로 탭 데이터에 실어서 serializeFeLayout 을 타고 어느
+  // 창으로 옮겨져도 함께 다니게 한다.
+  initialPathHistory?: string[];
+  initialPathHistoryIdx?: number;
+  onPathHistoryChange?: (hist: string[], idx: number) => void;
 };
 
 const api = (window as any).api || {};
+
+// 드라이브/특수폴더 목록 캐시(창 단위) — 값이 거의 안 바뀌는데 조회가 무겁다(main 에서 PowerShell).
+let drivesModuleCache: { path: string; label: string; depth?: number }[] | null = null;
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
@@ -176,7 +200,19 @@ function getFileIcon(name: string, isDir: boolean, shellPath?: string): string {
   return '📁';
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded, onOpenInMedia, onOpenInOffice }) => {
+// 드래그 시 브라우저 기본 동작(드래그한 DOM 요소 전체를 스냅샷으로 사용 — 파일 목록 행이 컬럼까지
+// 통째로 끌려다니는 것처럼 보임)을 대체할 작은 라벨 뱃지. setDragImage 는 호출 시점에 실제 렌더된
+// 요소를 스냅샷 뜨므로, 화면 밖에 잠깐 붙였다가 다음 tick 에 제거한다.
+function setNameDragImage(e: React.DragEvent, label: string) {
+  const el = document.createElement('div');
+  el.textContent = label;
+  el.style.cssText = 'position:fixed; top:-1000px; left:-1000px; padding:4px 10px; background:#2b6b9b; color:#fff; font-size:12px; font-family:inherit; border-radius:4px; white-space:nowrap; pointer-events:none; box-shadow:0 2px 6px rgba(0,0,0,0.4);';
+  document.body.appendChild(el);
+  e.dataTransfer.setDragImage(el, 12, 14);
+  setTimeout(() => el.remove(), 0);
+}
+
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onOsFilesDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded, onOpenInMedia, onOpenInOffice, initialPathHistory, initialPathHistoryIdx, onPathHistoryChange }) => {
   const { t } = useTranslation('fileExplorer');
   const { t: tPepeThing } = useTranslation('pepeThing');
   const [bootReady, setBootReady] = useState(false);
@@ -260,13 +296,17 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // 사용한다. 아래 iconCache/extIconCache 는 항상 빈 채로 남아 getFileIcon() 으로 흘러간다.
   const iconCache = useMemo(() => new Map<string, string>(), []);
   const extIconCache = useMemo(() => new Map<string, string>(), []);
-  // 드라이브 / 특수 폴더 목록 — source 모드와 무관하게 항상 로드해서 source 드롭다운에 항상 노출
+  // 드라이브 / 특수 폴더 목록 — source 모드와 무관하게 항상 로드해서 source 드롭다운에 항상 노출.
+  // 모듈 레벨 캐시를 먼저 쓴다: 이 effect 는 마운트마다 돌고, 탭을 전환하면 패널이 재마운트되므로
+  // (FileExplorer 의 key={tab.id}) 캐시가 없으면 탭을 옮길 때마다 IPC → PowerShell 실행이 된다.
   useEffect(() => {
+    if (drivesModuleCache) { setDrives(drivesModuleCache); return; }
     (async () => {
       try {
         const list: any = await api.feGetDrives?.();
         if (Array.isArray(list)) {
           const norm = list.map((x: any) => typeof x === 'string' ? { path: x, label: x } : x).filter((x: any) => x && x.path);
+          drivesModuleCache = norm;
           setDrives(norm);
         }
       } catch {}
@@ -339,6 +379,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   const onFilesLoadedRef = useRef(onFilesLoaded);
   useEffect(() => { onFilesLoadedRef.current = onFilesLoaded; }, [onFilesLoaded]);
 
+  // navigate() 가 이미 받아온 목록을 loadDir 가 재사용하도록 잠깐 물려둔다.
+  // 예전엔 폴더를 한 번 이동할 때마다 같은 경로를 **두 번** 조회했다 — navigate() 가 사전 검증으로
+  // feListDir 를 부르고, 그 뒤 onPathChange 로 currentPath 가 바뀌면 loadDir 가 또 부른다.
+  // ClearCase MVFS 처럼 느린 원격에서는 체감 대기가 그대로 두 배였고(로그에 같은 경로가 계속 쌍으로
+  // 찍힌 이유), SFTP 채널에 거는 부하도 두 배였다.
+  const prefetchRef = useRef<{ dir: string; files: FileInfo[]; at: number } | null>(null);
+
   // 디렉토리 오류 메시지 — ENOENT 류는 친화적 한글로 변환 후 모달로 노출, 그 외엔 인라인.
   const isPathNotFoundError = (err: string): boolean => {
     if (!err) return false;
@@ -348,6 +395,28 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   // "이미 들어와 있던 폴더가 사라진" edge case (외부에서 삭제됨/연결 끊김 등) → 모달만 띄우고 경로는 그대로 둠.
   const loadDir = useCallback(async (dir: string) => {
     if (!dir) return;
+    // lazy-remote 는 아직 실제 연결 전(FileExplorer 가 백그라운드에서 재연결 중) 상태 — 이대로
+    // feListDir 를 호출하면 termId 가 없어 "연결 ID가 없습니다" 에러가 잠깐 떴다가 실제 연결이
+    // 끝나면 목록이 정상 로딩되는 것처럼 보인다(병합 등에서 관찰된 깜빡임). 연결 중에는 호출만
+    // 건너뛴다 — 연결 완료 후 source 가 바뀌면 다시 loadDir 가 트리거돼 정상적으로 불러온다.
+    // 주의: 여기서 setFiles([]) 를 하면 안 된다. 창 분리로 재연결이 필요해진 탭은 캐시된 목록
+    // (initialFiles=tab.entries)을 이미 그려둔 상태인데, 비우면 "로딩 중"이 노출되면서 창을
+    // 분리할 때마다 목록이 재로딩되는 것처럼 보인다(사용자 재현). 캐시는 그대로 두고 백그라운드
+    // 재연결이 끝나면 조용히 갱신되게 한다.
+    // loading 은 켜두되 files 는 유지 — 캐시가 있으면 로딩 표시가 가려지고(files.length > 0),
+    // 캐시가 없을 때만 "로딩 중"이 보인다(그때는 그게 맞는 피드백).
+    if (source.mode === 'lazy-remote') { setLoading(true); setError(''); return; }
+    // navigate() 가 직전에 같은 경로를 이미 조회했으면 그 결과를 쓴다(중복 조회 제거).
+    // 1회성으로 소비하므로 이후 새로고침(⟳)/refreshKey 는 정상적으로 서버를 다시 조회한다.
+    const pf = prefetchRef.current;
+    if (pf && pf.dir === dir && Date.now() - pf.at < 3000) {
+      prefetchRef.current = null;
+      setError('');
+      setFiles(pf.files);
+      try { onFilesLoadedRef.current?.(pf.files); } catch {}
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -387,38 +456,92 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
 
   const sep = source.mode === 'local' && navigator.platform.startsWith('Win') ? '\\' : '/';
 
-  // 경로 history (이전/다음 폴더) — source 별로 독립
-  const historyRef = useRef<string[]>([currentPath]);
-  const historyIdxRef = useRef<number>(0);
+  // 경로 history (이전/다음 폴더) — 초기값은 props(FeTab.pathHistory/pathHistoryIdx)에서
+  // 복원한다. 부모(FileExplorer)가 이 값을 탭 데이터에 저장해두므로, 탭이 다른 창으로 옮겨가도
+  // (분리) 그 탭의 직렬화된 상태와 함께 따라간다 — 렌더러 프로세스에 묶인 저장소가 아니다.
+  // "같은 세션"인지 판정하는 안정적인 식별자 — termId 는 넣지 않는다.
+  // termId 는 연결마다 새로 발급되는 임시 값이라, lazy-remote(연결 전) → remote(연결 후) 자동
+  // 재연결이나 병합으로 새 연결을 맺을 때마다 바뀐다. termId 를 식별자에 넣으면 그런 재연결이
+  // "사용자가 드롭다운에서 다른 세션을 골랐다"와 구분이 안 돼서, 아래 리셋 이펙트가 매번
+  // 도는 재연결마다 방금 이어받은 기록을 지워버렸다(사용자 재현: 병합 직후 기록이 다시 사라짐).
+  // sessionId/manualConn(호스트·계정)은 재연결해도 그대로이므로 이걸로 "같은 세션"을 판정한다.
+  const sourceIdentity = source.mode === 'local'
+    ? 'local'
+    : (source.sessionId || (source.manualConn ? `mc:${source.manualConn.host}:${source.manualConn.port}:${source.manualConn.username}` : `term:${source.termId || ''}`));
+  const historyRef = useRef<string[]>(initialPathHistory?.length ? [...initialPathHistory] : [currentPath]);
+  const historyIdxRef = useRef<number>(
+    initialPathHistory?.length
+      ? Math.min(Math.max(0, initialPathHistoryIdx ?? initialPathHistory.length - 1), initialPathHistory.length - 1)
+      : 0,
+  );
   const skipHistoryRef = useRef<boolean>(false);
+  // 다음 currentPath 변경이 "사용자 이동"인지 표시 — navigate() 가 세운다(위 push effect 참고).
+  const userNavRef = useRef<boolean>(false);
   const [, forceHistoryTick] = useState(0);
-  // source 변경 시 history 리셋
+  const persistHistory = () => {
+    try { onPathHistoryChange?.(historyRef.current, historyIdxRef.current); } catch {}
+  };
+  // 마운트 시 최초 상태를 한 번 부모에 알려둔다(새 탭이면 [currentPath] 를 그대로 보고).
+  useEffect(() => { persistHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // 세션 자체가 바뀌면(드롭다운으로 다른 세션 선택 등) 기록을 리셋한다. lazy-remote→remote 자동
+  // 재연결처럼 sourceIdentity 가 그대로인 경우는 여기서 안 걸린다(위 주석 참고).
+  //
+  // 반드시 "이전 값과 비교"로 판정해야 한다 — "마운트 후 첫 실행인지" 플래그로는 안 된다.
+  // React.StrictMode(main.tsx)는 dev 빌드에서 이펙트를 의도적으로 두 번 실행하는데(마운트 →
+  // 가상 언마운트 → 재마운트, ref 는 유지됨), 플래그 방식은 2회차에서 플래그가 이미 true 라
+  // 리셋 분기로 떨어져 방금 props 로 복원한 기록을 지워버렸다. 그래서 dev 에서만 "이전 폴더"
+  // 화살표가 꺼지고 프로덕션 빌드(build:dev)에서는 정상이었다 — StrictMode 가 잡아준 실제 결함이다.
+  // 이전 값과 비교하면 두 번 실행돼도 결과가 같다(멱등).
+  const prevIdentityRef = useRef<string | null>(null);
   useEffect(() => {
+    const prev = prevIdentityRef.current;
+    prevIdentityRef.current = sourceIdentity;
+    if (prev === null || prev === sourceIdentity) return; // 최초 실행 또는 실제로 안 바뀜 → 유지
     historyRef.current = [currentPath];
     historyIdxRef.current = 0;
+    persistHistory();
     forceHistoryTick(t => t + 1);
-    // source.mode / termId / sessionId 가 바뀐 경우만 (currentPath 는 navigate 별 추적)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source.mode, source.termId, source.sessionId]);
-  // currentPath 가 외부에서 바뀐 경우 (handleClick / enterDir 등) history 에 push
+  }, [sourceIdentity]);
+  // currentPath 가 바뀌면 history 를 갱신한다.
+  // 단 "사용자가 이동한 것"만 기록으로 쌓는다 — 부모(FileExplorer)가 프로그램적으로 지정하는
+  // 경로는 현재 위치만 갱신한다. 초기 연결/재연결/복원 과정에서 경로가 '' → '/'(홈 조회 폴백) →
+  // 실제 작업 경로 순으로 바뀌는데, 이 중간 단계를 이동으로 기록하면 사용자가 가본 적 없는 '/'
+  // 가 "이전 폴더"에 남는다(사용자 재현: 처음 들어간 곳이 /vobs/REL/SSW_SKBC4_70A 인데 이전
+  // 폴더에 / 가 들어있음). 사용자 이동은 전부 navigate() 를 거치므로 그 지점에서만 표시한다.
   useEffect(() => {
     if (skipHistoryRef.current) { skipHistoryRef.current = false; return; }
+    const wasUserNav = userNavRef.current;
+    userNavRef.current = false;
+    if (!currentPath) return; // 아직 경로가 정해지지 않은 초기 상태 — 기록하지 않는다
     const hist = historyRef.current;
     const idx = historyIdxRef.current;
     if (hist[idx] === currentPath) return; // 같은 경로면 skip
+    if (!wasUserNav) {
+      // 프로그램적 경로 지정 — 현재 위치만 바꾸고 기록은 늘리지 않는다
+      hist[idx] = currentPath;
+      persistHistory();
+      forceHistoryTick(t => t + 1);
+      return;
+    }
     // 현재 idx 이후 항목 잘라내고 새 경로 push
     hist.splice(idx + 1);
     hist.push(currentPath);
     // 너무 길어지면 최대 50 까지 유지
     if (hist.length > 50) hist.splice(0, hist.length - 50);
     historyIdxRef.current = hist.length - 1;
+    persistHistory();
     forceHistoryTick(t => t + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPath]);
 
   // navigate — 경로 이동 전 사전 검증. 못 찾으면 모달만 띄우고 경로는 그대로 둠 (currentPath 변경 X).
   // .lnk 단축 (`lnk:...`) 은 main 이 resolvedPath 로 실제 target 을 반환 → 경로바에는 그 실제 경로 사용.
   const navigate = async (dir: string) => {
     if (!dir) return;
+    // 사용자 이동임을 표시 — 이것만 history 에 쌓인다(위 push effect 참고).
+    // 폴더 진입/상위로/경로 직접 입력/브레드크럼 모두 이 함수를 거친다.
+    userNavRef.current = true;
     if (typeof api.feListDir !== 'function') { onPathChange(dir); return; }
     try {
       const result: any = await api.feListDir(source.mode, dir, source.termId, encoding);
@@ -426,17 +549,23 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         const errStr = String(result.error);
         if (isPathNotFoundError(errStr)) {
           setErrorMessage(t('pathNotFound', { dir }));
+          userNavRef.current = false; // 이동이 취소됐으니 표시도 되돌린다(안 그러면 다음 변경을 오인)
           return; // 경로 미변경
         }
         // 다른 종류 에러는 일단 경로 이동 후 loadDir 가 inline 에러 표시
       }
       // shortcut 해석 결과가 있으면 그 실제 경로로 currentPath 갱신 → "lnk:..." 같은 raw 표기 회피
       const finalPath = (result && typeof result.resolvedPath === 'string' && result.resolvedPath) ? result.resolvedPath : dir;
+      // 방금 받아온 목록을 loadDir 가 재사용하도록 넘겨 같은 경로 재조회를 막는다(prefetchRef 주석 참고).
+      if (!result?.error && Array.isArray(result?.files)) {
+        prefetchRef.current = { dir: finalPath, files: result.files, at: Date.now() };
+      }
       onPathChange(finalPath);
     } catch (e: any) {
       const errStr = String(e?.message || e);
       if (isPathNotFoundError(errStr)) {
         setErrorMessage(t('pathNotFound', { dir }));
+        userNavRef.current = false; // 위와 동일 — 이동이 취소됨
         return;
       }
       onPathChange(dir);
@@ -449,6 +578,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (!canGoBack) return;
     historyIdxRef.current--;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[historyIdxRef.current]);
     forceHistoryTick(t => t + 1);
   };
@@ -456,6 +586,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (!canGoForward) return;
     historyIdxRef.current++;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[historyIdxRef.current]);
     forceHistoryTick(t => t + 1);
   };
@@ -463,6 +594,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     if (idx < 0 || idx >= historyRef.current.length) return;
     historyIdxRef.current = idx;
     skipHistoryRef.current = true;
+    persistHistory();
     onPathChange(historyRef.current[idx]);
     forceHistoryTick(t => t + 1);
   };
@@ -652,18 +784,23 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
         if (result?.deleteId) pendingDeleteIds.add(result.deleteId);
       }
       onSelectionChange(new Set());
-      // 모든 삭제 완료 후 목록 갱신
+      // 모든 삭제 완료 후 목록 갱신 — 실패한 항목은 모아뒀다가 한 번에 알림.
       if (pendingDeleteIds.size > 0) {
+        const failures: string[] = [];
         await new Promise<void>(resolve => {
           let remaining = pendingDeleteIds.size;
           const unsub = api.onFeDeleteDone?.((p: any) => {
             if (pendingDeleteIds.has(p.deleteId)) {
+              if (p.success === false) failures.push(String(p.error || p.deleteId));
               remaining--;
               if (remaining <= 0) { unsub?.(); resolve(); }
             }
           });
           if (!unsub) resolve();
         });
+        if (failures.length > 0) {
+          notifyError(t('deleteFailed'), failures.slice(0, 5).join('\n') + (failures.length > 5 ? `\n... 외 ${failures.length - 5}건` : ''));
+        }
       }
       loadDir(currentPath);
     } catch { loadDir(currentPath); }
@@ -1173,17 +1310,33 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           }
         }}
         onContextMenu={e => handleContextMenu(e)}
-        onDragOver={e => { if (e.dataTransfer.types.includes('text/fe-files')) { e.preventDefault(); e.currentTarget.classList.add('fe-drop-target'); } }}
+        onDragOver={e => {
+          if (e.dataTransfer.types.includes('text/fe-files') || e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            e.currentTarget.classList.add('fe-drop-target');
+          }
+        }}
         onDragLeave={e => { e.currentTarget.classList.remove('fe-drop-target'); }}
         onDrop={e => {
           e.currentTarget.classList.remove('fe-drop-target');
           const raw = e.dataTransfer.getData('text/fe-files');
-          if (!raw) return;
-          e.preventDefault();
-          try {
-            const data = JSON.parse(raw);
-            if (data.panelId !== panelId) onFileDrop?.(data.files, data.srcMode, data.srcTermId, data.srcPath);
-          } catch {}
+          if (raw) {
+            e.preventDefault();
+            try {
+              const data = JSON.parse(raw);
+              if (data.panelId !== panelId) onFileDrop?.(data.files, data.srcMode, data.srcTermId, data.srcPath);
+            } catch {}
+            return;
+          }
+          // Windows 탐색기 등에서 실제 OS 파일을 끌어다 놓은 경우 — File.path 는 최신 Electron 에서
+          // 더 이상 채워지지 않으므로(보안상 제거) webUtils.getPathForFile 로 조회해야 한다.
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            e.preventDefault();
+            const rawFiles = Array.from(e.dataTransfer.files);
+            const absPaths = rawFiles.map(f => api.getPathForFile?.(f)).filter((p): p is string => !!p);
+            console.log('[fe] OS drop —', rawFiles.length, 'file(s), resolved', absPaths.length, 'path(s)', absPaths);
+            if (absPaths.length > 0) onOsFilesDrop?.(absPaths);
+          }
         }}
       >
         {/* 캐시된 목록(initialFiles)이 있는 상태에서 백그라운드 새로고침 중이면 로딩 표시로
@@ -1207,6 +1360,16 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
                 panelId, files: filesToDrag, srcMode: source.mode, srcTermId: source.termId, srcPath: currentPath,
               }));
               e.dataTransfer.effectAllowed = 'copy';
+              const label = filesToDrag.length > 1 ? t('dragCountLabel', { count: filesToDrag.length }) : `${file.isDir ? '📁' : '📄'} ${file.name}`;
+              setNameDragImage(e, label);
+              // Windows 탐색기 등 앱 밖으로 직접 끌어다 놓기 — DownloadURL 은 브라우저 제약상 파일 1개만 지원(폴더 제외).
+              if (filesToDrag.length === 1 && !file.isDir) {
+                const fullPath = currentPath.endsWith(sep) ? currentPath + file.name : currentPath + sep + file.name;
+                const url = source.mode === 'local'
+                  ? `pepeapp://app/__local-file?path=${encodeURIComponent(fullPath)}`
+                  : `pepeapp://app/__sftp-file?termId=${encodeURIComponent(source.termId || '')}&path=${encodeURIComponent(fullPath)}`;
+                e.dataTransfer.setData('DownloadURL', `application/octet-stream:${file.name}:${url}`);
+              }
             }}
           >
             <span className="fe-col-name" style={{ width: colWidths.name }}>
@@ -1299,6 +1462,16 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
               panelId, files: selectedNames, srcMode: source.mode, srcTermId: source.termId, srcPath: currentPath,
             }));
             e.dataTransfer.effectAllowed = 'copy';
+            const first = files.find(f => selectedNames[0] === f.name);
+            const label = selectedNames.length > 1 ? t('dragCountLabel', { count: selectedNames.length }) : `${first?.isDir ? '📁' : '📄'} ${selectedNames[0] ?? ''}`;
+            setNameDragImage(e, label);
+            if (selectedNames.length === 1 && first && !first.isDir) {
+              const fullPath = currentPath.endsWith(sep) ? currentPath + first.name : currentPath + sep + first.name;
+              const url = source.mode === 'local'
+                ? `pepeapp://app/__local-file?path=${encodeURIComponent(fullPath)}`
+                : `pepeapp://app/__sftp-file?termId=${encodeURIComponent(source.termId || '')}&path=${encodeURIComponent(fullPath)}`;
+              e.dataTransfer.setData('DownloadURL', `application/octet-stream:${first.name}:${url}`);
+            }
           }}
         />
       </div>
