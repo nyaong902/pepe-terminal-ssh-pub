@@ -7562,14 +7562,14 @@ ipcMain.handle('ssh:close-local-forward', (_e, args: { forwardId: string }) => {
 });
 // SQL Tool 등 — 활성 터미널 없이도 세션의 점프 체인으로 백그라운드 SSH 연결을 직접 맺고
 // 그 위로 DB 포트를 로컬 포워딩. (점프된 세션에서 터미널을 안 띄워도 SQL 연결되도록)
-ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId?: string; remoteHost: string; remotePort: number; sshConn?: { host: string; port?: number; username: string; auth?: any } }) => {
+ipcMain.handle('ssh:open-dedicated-forward', async (_e, args: { sessionId?: string; remoteHost: string; remotePort: number; sshConn?: { host: string; port?: number; username: string; auth?: any; jumps?: any[] } }) => {
   try {
     const bridge: any = getSSHBridge();
     // SQL Tool 독립 세션처럼 sessions.json 에 없는 자체 SSH 접속 정보(sshConn)를 직접 줄 수도 있고,
     // (레거시 경로) sessionId 로 기존 SSH 세션의 접속 정보를 재사용할 수도 있다.
     let host: string, port: number, username: string, auth: any, jumps: any;
     if (args.sshConn) {
-      host = args.sshConn.host; port = args.sshConn.port || 22; username = args.sshConn.username; auth = args.sshConn.auth;
+      host = args.sshConn.host; port = args.sshConn.port || 22; username = args.sshConn.username; auth = args.sshConn.auth; jumps = args.sshConn.jumps;
     } else {
       const session = sessionsData.sessions.find(s => s.id === args.sessionId);
       if (!session) return { success: false, error: '세션을 찾을 수 없습니다.' };

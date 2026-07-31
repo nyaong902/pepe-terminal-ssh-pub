@@ -28,6 +28,8 @@ export type SqlSession = {
     port: number;
     username: string;
     auth?: { type: 'password'; password: string } | { type: 'key'; keyPath: string };
+    // 다단계 점프 — host 가 최종 게이트웨이, jumps 는 그 앞에 거치는 중간 홉들(순서대로).
+    jumps?: { host: string; user?: string; port?: number; password?: string }[];
   };
 };
 
@@ -60,6 +62,41 @@ export const SqlSessionEditor: React.FC<Props> = ({ session, onSave, onCancel })
     session.sshTunnel?.auth?.type === 'password' ? session.sshTunnel.auth.password : ''
   );
   const [showTunnelPassword, setShowTunnelPassword] = useState(false);
+
+  // 다단계 점프 — 편집용 행 배열 (SessionEditor 의 jump 편집과 동일한 모양).
+  type JumpRow = { host: string; user: string; port: number | ''; password: string };
+  const toJumpRows = (s: SqlSession): JumpRow[] => (s.sshTunnel?.jumps ?? []).map(j => ({
+    host: j.host ?? '', user: j.user ?? '', port: (typeof j.port === 'number' ? j.port : ''), password: j.password ?? '',
+  }));
+  const [jumps, setJumps] = useState<JumpRow[]>(() => toJumpRows(session));
+  const [showJumpPw, setShowJumpPw] = useState<Set<number>>(new Set());
+  const addJump = () => setJumps(prev => [...prev, { host: '', user: '', port: '', password: '' }]);
+  const removeJump = (idx: number) => {
+    setJumps(prev => prev.filter((_, i) => i !== idx));
+    setShowJumpPw(prev => {
+      const next = new Set<number>();
+      for (const i of prev) { if (i < idx) next.add(i); else if (i > idx) next.add(i - 1); }
+      return next;
+    });
+  };
+  const updateJump = (idx: number, patch: Partial<JumpRow>) =>
+    setJumps(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  const toggleJumpPw = (idx: number) =>
+    setShowJumpPw(prev => { const n = new Set(prev); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
+  const buildJumps = (): NonNullable<SqlSession['sshTunnel']>['jumps'] => {
+    const cleaned: NonNullable<NonNullable<SqlSession['sshTunnel']>['jumps']> = [];
+    for (const row of jumps) {
+      const h = (row.host || '').trim();
+      if (!h) break;
+      cleaned.push({
+        host: h,
+        user: (row.user || '').trim() || undefined,
+        port: (typeof row.port === 'number' && row.port > 0) ? row.port : undefined,
+        password: row.password || undefined,
+      });
+    }
+    return cleaned.length > 0 ? cleaned : undefined;
+  };
 
   const [jdbcDrivers, setJdbcDrivers] = useState<any[]>([]);
   const refreshJdbcDrivers = useCallback(async () => {
@@ -102,7 +139,7 @@ export const SqlSessionEditor: React.FC<Props> = ({ session, onSave, onCancel })
       urlOverride: dbmsUrlEditMode && dbmsUrlOverride.trim() ? dbmsUrlOverride.trim() : undefined,
     },
     sshTunnel: useSshTunnel
-      ? { host: tunnelHost.trim(), port: tunnelPort || 22, username: tunnelUsername.trim(), auth: { type: 'password', password: tunnelPassword } }
+      ? { host: tunnelHost.trim(), port: tunnelPort || 22, username: tunnelUsername.trim(), auth: { type: 'password', password: tunnelPassword }, jumps: buildJumps() }
       : undefined,
   });
 
@@ -123,7 +160,7 @@ export const SqlSessionEditor: React.FC<Props> = ({ session, onSave, onCancel })
         const remotePort = dbmsPort || selectedDriver?.defaultPort || 0;
         const fwd = await api.sshOpenDedicatedForward({
           remoteHost, remotePort,
-          sshConn: { host: tunnelHost.trim(), port: tunnelPort || 22, username: tunnelUsername.trim(), auth: { type: 'password', password: tunnelPassword } },
+          sshConn: { host: tunnelHost.trim(), port: tunnelPort || 22, username: tunnelUsername.trim(), auth: { type: 'password', password: tunnelPassword }, jumps: buildJumps() },
         });
         if (!fwd?.success) { setTestResult(t('dbms.sshFailed', { error: fwd?.error || '?' })); return; }
         forwardId = fwd.forwardId;
@@ -240,6 +277,35 @@ export const SqlSessionEditor: React.FC<Props> = ({ session, onSave, onCancel })
                     <input type={showTunnelPassword ? 'text' : 'password'} value={tunnelPassword} onChange={e => setTunnelPassword(e.target.value)} style={{ flex: 1 }} autoComplete="off" />
                     <button type="button" onClick={() => setShowTunnelPassword(v => !v)}>{showTunnelPassword ? '🙈' : '👁'}</button>
                   </div>
+                </div>
+
+                <div style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 8 }}>
+                  <div style={{ fontSize: 12, color: '#8aa', marginBottom: 10, lineHeight: 1.5 }}>{t('fields.jumpChainHint')}</div>
+                  {jumps.length === 0 && (
+                    <div style={{ fontSize: 12, color: '#778', fontStyle: 'italic', padding: '4px 0' }}>{t('fields.jumpChainEmpty')}</div>
+                  )}
+                  {jumps.map((row, idx) => (
+                    <div key={idx} style={{ border: '1px solid #2a3a50', borderRadius: 6, padding: '10px 12px', marginBottom: 10, background: '#10161f' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#9cf' }}>{t('fields.jumpHopTitle', { n: idx + 1 })}</span>
+                        <button type="button" onClick={() => removeJump(idx)} style={{ background: 'transparent', border: '1px solid #5a3a3a', color: '#e88', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 11 }}>{t('fields.jumpHopRemove')}</button>
+                      </div>
+                      <div className="session-editor-grid">
+                        <label>{t('fields.jumpTargetHost')}</label>
+                        <input type="text" value={row.host} onChange={e => updateJump(idx, { host: e.target.value })} placeholder={t('placeholders.jumpTargetHost')} />
+                        <label>{t('fields.jumpTargetUser')}</label>
+                        <input type="text" value={row.user} onChange={e => updateJump(idx, { user: e.target.value })} placeholder={t('placeholders.jumpTargetUser')} disabled={!row.host.trim()} />
+                        <label>{t('fields.jumpTargetPort')}</label>
+                        <input type="number" value={row.port} onChange={e => updateJump(idx, { port: Number(e.target.value) || '' })} placeholder="22" disabled={!row.host.trim()} min={1} max={65535} />
+                        <label>{t('fields.jumpTargetPassword')}</label>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input type={showJumpPw.has(idx) ? 'text' : 'password'} value={row.password} onChange={e => updateJump(idx, { password: e.target.value })} placeholder={t('placeholders.jumpTargetPassword')} disabled={!row.host.trim()} style={{ flex: 1 }} autoComplete="off" />
+                          <button type="button" onClick={() => toggleJumpPw(idx)} disabled={!row.host.trim()}>{showJumpPw.has(idx) ? '🙈' : '👁'}</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <button type="button" onClick={addJump} style={{ background: '#1a2a3a', border: '1px solid #3a5075', color: '#9cf', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>{t('fields.jumpHopAdd')}</button>
                 </div>
               </div>
             )}

@@ -72,6 +72,7 @@ type Session = {
     port: number;
     username: string;
     auth?: any;
+    jumps?: { host: string; user?: string; port?: number; password?: string }[];
   };
 };
 
@@ -628,7 +629,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
       try {
         ded = await api.sshOpenDedicatedForward({
           remoteHost, remotePort,
-          sshConn: { host: tunnelConn.host, port: tunnelConn.port || 22, username: tunnelConn.username, auth: tunnelConn.auth },
+          sshConn: { host: tunnelConn.host, port: tunnelConn.port || 22, username: tunnelConn.username, auth: tunnelConn.auth, jumps: tunnelConn.jumps },
         });
       } catch { ded = null; }
     }

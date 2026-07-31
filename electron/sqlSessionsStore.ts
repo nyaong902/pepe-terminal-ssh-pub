@@ -33,6 +33,8 @@ export type SqlSession = {
     port: number;
     username: string;
     auth?: SqlSessionAuth;
+    // 다단계 점프 — host 가 최종 DB 게이트웨이, jumps 는 그 앞에 거치는 중간 홉들(순서대로).
+    jumps?: { host: string; user?: string; port?: number; password?: string }[];
   };
 };
 
@@ -85,7 +87,7 @@ function migrateFromSshSessions(): SqlSessionsData {
         dbms: { ...legacyDbms },
       };
       if (legacyDbms.useSshTunnel) {
-        sql.sshTunnel = { host: s.host, port: s.port || 22, username: s.username, auth: s.auth as any };
+        sql.sshTunnel = { host: s.host, port: s.port || 22, username: s.username, auth: s.auth as any, jumps: (s as any).jumps };
       }
       migrated.push(sql);
       delete (s as any).dbms;
