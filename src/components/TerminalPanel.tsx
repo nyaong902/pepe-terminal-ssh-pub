@@ -1521,6 +1521,37 @@ function getEmojiSprite(emoji: string, size: number, color: string): HTMLCanvasE
   } catch { return null; }
 }
 
+// 파티클이 사라지는 alpha 임계. 루프의 컬링과 computeBandExtents 가 반드시 같은 값을 써야
+// 띠 범위가 도달 거리를 정확히 덮는다(= 잘려 보이지 않는다).
+// 0.05 대신 0.1 — 어두운 터미널 배경 위에서 5% 와 10% 불투명도는 눈으로 구분되지 않는데,
+// 띠 높이는 불꽃 335->272px, 파워 176->162px 로 줄어든다. 되돌리려면 이 값만 0.05 로.
+const PARTICLE_CULL_ALPHA = 0.1;
+// 파티클을 수명 끝까지 수치 시뮬레이션해서 spawn 지점 기준 위/아래 최대 도달 거리를 구한다.
+// 루프의 물리(y += vy; vy += gravity; alpha *= fade)와 동일한 식이다.
+// 초기속도는 vyMin~vyMax 전 구간을 샘플링해야 한다 — 최대속도만 보면 gravity 가 양수인 테마
+// (circle 등)에서 아래쪽을 놓친다. 위로 느리게 올라간 파티클이 더 빨리 돌아서 남은 수명 동안
+// 더 멀리 떨어지기 때문이다. 몬테카를로 검증에서 circle 이 아래로 18px 잘리는 걸로 잡혔다.
+function computeBandExtents(theme: ParticleTheme): { above: number; below: number } {
+  let up = 0, down = 0;
+  const SAMPLES = 16;
+  for (let s = 0; s <= SAMPLES; s++) {
+    const vy0 = -(theme.vyMin + (theme.vyMax - theme.vyMin) * (s / SAMPLES));
+    let y = 0, vy = vy0, a = 1;
+    for (let i = 0; i < 2000 && a >= PARTICLE_CULL_ALPHA; i++) {
+      y += vy;
+      vy += theme.gravity;
+      a *= theme.fade;
+      if (y < up) up = y;
+      if (y > down) down = y;
+    }
+  }
+  // 스프라이트 반경 + arc 배치 오프셋 + 프레임 스킵(steps 최대 3) 이산화 오차 여유.
+  // 정수로 올린다 — sizeMax 가 소수인 테마(power 는 3.5)가 있어서, 그대로 두면 캔버스
+  // 백킹 스토어 크기(정수로 절삭)와 CSS 크기(소수)가 어긋나 확대/축소로 흐려진다.
+  const pad = Math.ceil(theme.sizeMax + (theme.arcRadiusY ?? theme.arcRadiusX ?? 0) + 24);
+  return { above: Math.ceil(-up) + pad, below: Math.ceil(down) + pad };
+}
+
 function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): () => void {
   const screen = elem.querySelector('.xterm-screen') as HTMLElement | null;
   const host = (screen && screen.parentElement) || elem;
@@ -1544,8 +1575,19 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   // 그래서 높이만 띠로 줄이면 겉모습은 그대로 두고 합성 면적을 2~3배 줄일 수 있다.
   // 가로는 줄이지 않는다 — 타이핑하면 커서 x 가 한 줄을 계속 훑고 지나가서 자주 옮겨야 하고,
   // 옮기는 순간 살아있는 파티클이 잘려 보이기 때문에 이득보다 부작용이 크다.
-  const BAND_ABOVE = 260;   // 커서 위쪽 확보 높이 (최대 도달 220px + 여유)
-  const BAND_BELOW = 60;    // 커서 아래쪽 (heart 처럼 다시 떨어지는 테마용)
+  // 띠 높이는 테마별로 계산한다. 처음엔 모든 테마에 320px 고정이었는데, 실측에서 엔터 연타
+  // (= 터미널 스크롤) 시 불꽃 9.2% / 파워 9.3% 로 **파티클 개수와 무관하게** 같은 값에 붙었다.
+  // 스크롤하면 매 프레임 화면 전체가 damage 되고, 그때 캔버스 레이어를 그 위에 한 번 더
+  // 블렌딩하는 비용이 그대로 붙는데 그건 띠 높이에만 비례하기 때문이다(기준선: 블록 커서 3%).
+  // 그래서 루프의 컬링 조건과 똑같은 기준으로 최대 초기속도 파티클을 수치 시뮬레이션해
+  // 실제 도달 거리만큼만 확보한다 — 원리적으로 파티클이 이 범위를 벗어날 수 없으므로 잘려
+  // 보이지 않는다. 계산 결과(위/아래 합):
+  //   circle 131px · power 162px · star 187px · heart 191px · rainbow 253px · flame 272px
+  // 불꽃/무지개는 원래 위로 240px 넘게 솟는 효과라 줄일 여지가 거의 없고, 나머지는 2배 안팎
+  // 줄어든다. (예전 320px 고정값은 오히려 불꽃의 꼬리 끝을 조금 자르고 있었다.)
+  const ext = computeBandExtents(theme);
+  const BAND_ABOVE = ext.above;
+  const BAND_BELOW = ext.below;
   let hostW = 0, hostH = 0; // 터미널(호스트) CSS 크기
   let bandY = 0;            // 캔버스의 host 기준 top (CSS px)
   let bandH = 0;            // 캔버스 높이 (CSS px)
@@ -1655,7 +1697,8 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
       p.vy += theme.gravity * steps;
       p.alpha *= fadeF;
       // 띠 밖으로 나간 파티클은 어차피 보이지 않으므로 여기서 버린다.
-      if (p.alpha < 0.05 || p.y > yBot + 30 || p.y < yTop - 30) continue;
+      // alpha 임계는 computeBandExtents 와 같은 값을 써야 한다(위 주석 참고).
+      if (p.alpha < PARTICLE_CULL_ALPHA || p.y > yBot + 30 || p.y < yTop - 30) continue;
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
       let ext = p.size;
