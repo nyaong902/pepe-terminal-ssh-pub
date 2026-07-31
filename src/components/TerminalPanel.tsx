@@ -1606,6 +1606,8 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   let shake = 0;
   let rafId = 0;
   let alive = true;
+  // 흔들림(power 테마 전용) 상태 — 직전 offset 과 레이어 승격 힌트 여부
+  let lastSx = 0, lastSy = 0, shakeHinted = false;
   // 지난 프레임에 실제로 그린 영역(host 좌표) — 다음 프레임에 "그만큼만" 지운다.
   // 캔버스에 그리는 비용을 줄인다. 컴포지터 합성 면적은 이걸로 줄지 않으므로(위 띠 주석 참고)
   // 둘이 서로 보완 관계다.
@@ -1687,12 +1689,24 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     // shake step — 강도 누적/감쇠 (hyperpower 시그니처)
     shake *= steps === 1 ? theme.shakeDecay : Math.pow(theme.shakeDecay, steps);
     if (shake > 0.15) {
-      const sx = (Math.random() - 0.5) * shake;
-      const sy = (Math.random() - 0.5) * shake;
-      shakeTarget.style.transform = `translate(${sx}px, ${sy}px)`;
+      // 정수 px 로 양자화한다 — 소수점 offset 은 터미널 텍스트 전체를 서브픽셀로 다시
+      // 래스터화시킨다(파워 커서만 GPU 12% 였던 이유). 흔들림 폭이 최대 ±7px 이라 1px 단위로
+      // 끊어도 체감 차이가 없다. 값이 같은 프레임에는 스타일 대입 자체를 건너뛴다.
+      const sx = Math.round((Math.random() - 0.5) * shake);
+      const sy = Math.round((Math.random() - 0.5) * shake);
+      if (sx !== lastSx || sy !== lastSy) {
+        lastSx = sx; lastSy = sy;
+        // translate3d — 레이어로 승격시켜 매 프레임 repaint 대신 합성만 하게 한다.
+        // JS 로 바꾸는 transform 은 Chromium 이 애니메이션으로 인식하지 않아 자동 승격되지 않는다.
+        shakeTarget.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+      }
+      if (!shakeHinted) { shakeHinted = true; shakeTarget.style.willChange = 'transform'; }
     } else {
       shake = 0;
+      lastSx = lastSy = 0;
       shakeTarget.style.transform = '';
+      // 흔들림이 끝나면 힌트를 반드시 걷어낸다 — 안 그러면 터미널 크기의 레이어가 계속 남는다.
+      if (shakeHinted) { shakeHinted = false; shakeTarget.style.willChange = ''; }
     }
     if (particles.length > 0 || shake > 0) rafId = requestAnimationFrame(loop);
     else {
@@ -1786,6 +1800,7 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     try { ro?.disconnect(); } catch {}
     try { canvas.remove(); } catch {}
     try { shakeTarget.style.transform = ''; } catch {}
+    try { shakeTarget.style.willChange = ''; } catch {}
   };
 }
 
