@@ -2488,9 +2488,9 @@ body.popout-options .session-editor h3:first-child {
   gap: 2px;
   pointer-events: none;
   z-index: 5;
-  /* 마스터 펄스 — scale/glint 를 컨테이너에서 한 번에 구동해 모든 닷이 같은 위상으로 동작 */
-  animation: panel-ctl-master-pulse 1s ease-in-out infinite;
   transform-origin: center;
+  /* 예전엔 여기서 scale 펄스(panel-ctl-master-pulse)를 무한 반복했다 — 제거함.
+     이유는 아래 .panel-controls-active-dot::after 주석 참고(유휴 GPU 점유). */
 }
 .panel-controls-active-dot {
   width: 10px;
@@ -2503,33 +2503,32 @@ body.popout-options .session-editor h3:first-child {
     radial-gradient(circle at 50% 65%, currentColor 0%, rgba(0,0,0,0) 55%),
     linear-gradient(145deg, #e3e7ec 0%, #9aa3ad 45%, #4a525c 100%);
   border: 1px solid rgba(30, 38, 50, 0.95);
+  /* 정적 베이스 — 여기엔 애니메이션을 걸지 않는다(아래 ::after 주석 참고) */
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,0.7),
     inset 0 -1px 0 rgba(0,0,0,0.45),
-    0 0 4px currentColor,
-    0 0 8px currentColor;
-  /* 후광 진동은 닷 단위지만 컨테이너 펄스와 같은 1s 주기로 시작 → 모든 닷이 동일 위상 */
-  animation: panel-ctl-dot-glow 1s ease-in-out infinite;
+    0 0 3px currentColor,
+    0 0 6px currentColor;
 }
-@keyframes panel-ctl-master-pulse {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.12); }
-}
-@keyframes panel-ctl-dot-glow {
-  0%, 100% {
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.6),
-      inset 0 -1px 0 rgba(0,0,0,0.45),
-      0 0 3px currentColor,
-      0 0 6px currentColor;
-  }
-  50% {
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.95),
-      inset 0 -1px 0 rgba(0,0,0,0.55),
-      0 0 7px currentColor,
-      0 0 14px currentColor;
-  }
+/* 후광은 "정적"이다 — 예전엔 이 닷의 box-shadow 를, 그리고 컨테이너의 transform:scale 을
+   각각 1s 무한 반복으로 애니메이션했다. 그게 아무 작업도 안 하는 유휴 상태에서 GPU 사용률이
+   계속 움직이던 원인이다(사용자 보고). 실측(트레이스, 65초 유휴):
+     Paint 70/s · UpdateLayer 487/s · Swap 87/s · RasterTask 47/s   ← JS rAF 는 1/s 뿐
+   box-shadow 는 컴포지터가 처리할 수 없는 페인트 속성이라 매 프레임 repaint+raster 를 강제하고,
+   transform/opacity 로 바꿔도 애니메이션이 살아있는 한 컴포지터가 vsync 마다 프레임을 만들어
+   GPU 는 계속 깨어 있다. 패널마다 하나씩이라 창 2개 × 터미널 2개면 4배가 된다.
+   그래서 후광 자체를 없애지 않고 진동만 멈췄다 — 활성 상태 표시라는 목적은 그대로 유지된다.
+   (펄스를 되살리려면 여기에 opacity 키프레임 애니메이션을 걸면 된다. box-shadow 애니메이션은
+    페인트를 유발하므로 절대 되돌리지 말 것.) */
+.panel-controls-active-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow:
+    0 0 7px currentColor,
+    0 0 14px currentColor;
 }
 .panel-controls-wrap {
   position: relative;
@@ -4874,6 +4873,19 @@ body.popout-options .session-editor h3:first-child {
 /* ── xterm overrides ── */
 .xterm .xterm-cursor-layer .xterm-cursor {
   mix-blend-mode: normal !important;
+}
+
+/* 프리즘 커서 — 색을 CSS 변수로만 갱신한다.
+   예전엔 색을 바꾸려고 term.options.theme 을 초당 20회 재할당했는데, 그러면 xterm 이 전체 색을
+   재계산하고 CSS 를 다시 주입하고 전 행을 refresh 한다 — 트레이스에서 _innerRefresh 11.7% +
+   _injectCss 6.5% 로 렌더러 busy 시간의 최상위였다(코드 주석도 "매우 비싸다"고 적혀 있었다).
+   xterm(DOM 렌더러)이 주입하는 규칙은
+     <터미널선택자> .xterm-rows .xterm-cursor.xterm-cursor-block { background-color: cursor; color: cursorAccent; }
+   이므로 background-color 만 !important 로 덮어쓴다. 프리즘은 cursor 색만 순환하고
+   cursorAccent 는 고정이므로(설정 시 1회만 적용) 겉모습은 예전과 같다.
+   변수 갱신은 xterm 을 전혀 건드리지 않아 재주입/refresh 가 발생하지 않는다. */
+.xterm-prism-cursor .xterm-cursor.xterm-cursor-block {
+  background-color: var(--pepe-prism-cursor, currentColor) !important;
 }
 
 /* ── xterm search highlight (xterm-addon-search 네이티브 decorations) ── */

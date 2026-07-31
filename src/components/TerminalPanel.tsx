@@ -1459,6 +1459,40 @@ const PARTICLE_THEMES: Record<string, ParticleTheme> = {
 };
 interface Particle { x: number; y: number; vx: number; vy: number; color: string; emoji?: string; alpha: number; size: number; }
 
+// 이모지 파티클 스프라이트 캐시.
+// 컬러(비트맵) 이모지를 ctx.fillText 로 매 프레임 래스터화하는 건 대단히 비싸다 — 실측(트레이스):
+//   무지개 커서: fillText 가 렌더러 busy 시간의 87% (10.5초 중 1.22초)
+//   불꽃 커서  : fillText 29% + requestAnimationFrame 18%
+// 파티클이 fade 0.94 로 약 48프레임(0.8초) 살아있고 키 입력마다 4~9개가 생기니, 연속 입력 중엔
+// 수십 개를 매 프레임 다시 그리게 된다. 🔥/🌈 만 유독 심했던 이유가 이것 — 나머지 테마의
+// ♥ ✦ ★ 는 단색 글리프이고 circle 은 arc() 라 훨씬 싸다.
+// 같은 (이모지, 크기, 색) 조합을 오프스크린 캔버스에 한 번만 그려두고 drawImage 로 복사한다.
+// 덤으로 파티클마다 하던 `ctx.font = ...` 대입(문자열 파싱)도 없어진다.
+const emojiSpriteCache = new Map<string, HTMLCanvasElement>();
+function getEmojiSprite(emoji: string, size: number, color: string): HTMLCanvasElement | null {
+  const key = `${emoji}|${size}|${color}`;
+  const hit = emojiSpriteCache.get(key);
+  if (hit) return hit;
+  // 폭주 방지 — spawn 에서 size 를 정수로 양자화하므로 테마별 조합은 수백 개가 상한이고
+  // 실제로 여기에 도달하지 않는다(스프라이트 하나가 30px 내외라 메모리도 무시할 수준).
+  if (emojiSpriteCache.size > 600) emojiSpriteCache.clear();
+  try {
+    const pad = Math.ceil(size * 0.4);
+    const dim = Math.ceil(size + pad * 2);
+    const c = document.createElement('canvas');
+    c.width = dim; c.height = dim;
+    const cx = c.getContext('2d');
+    if (!cx) return null;
+    cx.font = `${size}px sans-serif`;
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillStyle = color; // 단색 글리프(♥ ✦ ★ 등)는 이 색을 따른다. 컬러 이모지는 무시한다.
+    cx.fillText(emoji, dim / 2, dim / 2);
+    emojiSpriteCache.set(key, c);
+    return c;
+  } catch { return null; }
+}
+
 function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): () => void {
   const screen = elem.querySelector('.xterm-screen') as HTMLElement | null;
   const host = (screen && screen.parentElement) || elem;
@@ -1472,8 +1506,11 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   const resize = () => {
     const rect = host.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    canvas.width = Math.floor(rect.width);
-    canvas.height = Math.floor(rect.height);
+    const cw = Math.floor(rect.width), ch = Math.floor(rect.height);
+    // 크기가 그대로면 손대지 않는다 — width/height 대입은 값이 같아도 백킹 스토어를 재할당한다.
+    if (canvas.width === cw && canvas.height === ch) return;
+    canvas.width = cw;
+    canvas.height = ch;
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
   };
@@ -1486,40 +1523,81 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   let shake = 0;
   let rafId = 0;
   let alive = true;
-  const loop = () => {
+  // 지난 프레임에 실제로 그린 영역 — 다음 프레임에 "그만큼만" 지운다.
+  // 전체 clearRect 는 캔버스 전체를 dirty 로 만들어, 터미널 크기(예: 900x480 ≈ 1.7MB)의 텍스처를
+  // 매 프레임 GPU 로 다시 올리게 한다(60fps 면 초당 100MB 규모) — 타이핑 중 GPU 점유가 10%를
+  // 넘던 남은 원인. 캔버스를 매 프레임 리사이즈하는 방식은 백킹 스토어가 재할당돼 오히려 더
+  // 비싸므로, 크기는 그대로 두고 갱신 영역만 좁힌다.
+  let dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  // 파티클 애니메이션은 30fps 로 제한 — 장식 효과라 60fps 가 필요하지 않고, 프레임당 텍스처
+  // 업로드가 그대로 절반이 된다.
+  const FRAME_MS = 33;
+  let lastDraw = 0;
+  const loop = (ts?: number) => {
     if (!alive) return;
+    const now = ts ?? performance.now();
+    // 다음 프레임 예약을 먼저 — 스로틀로 이번 프레임을 건너뛰어도 루프가 끊기지 않게.
+    const keepGoing = particles.length > 0 || shake > 0;
+    if (now - lastDraw < FRAME_MS) {
+      rafId = keepGoing ? requestAnimationFrame(loop) : 0;
+      return;
+    }
+    // 프레임을 건너뛴 만큼 물리 스텝을 곱해준다 — 그러지 않으면 30fps 로 낮춘 만큼
+    // 파티클이 절반 속도로 움직이고 수명도 두 배가 되어 효과가 달라 보인다.
+    const steps = lastDraw ? Math.min(3, Math.max(1, (now - lastDraw) / 16.7)) : 1;
+    const fadeF = steps === 1 ? theme.fade : Math.pow(theme.fade, steps);
+    lastDraw = now;
     const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    if (dirty) {
+      ctx.clearRect(dirty.x0, dirty.y0, dirty.x1 - dirty.x0, dirty.y1 - dirty.y0);
+      dirty = null;
+    }
     ctx.globalCompositeOperation = theme.composite;
     if (theme.shape === 'emoji') {
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
     }
     let writeIdx = 0;
+    let nx0 = Infinity, ny0 = Infinity, nx1 = -Infinity, ny1 = -Infinity;
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += theme.gravity;
-      p.alpha *= theme.fade;
+      p.x += p.vx * steps;
+      p.y += p.vy * steps;
+      p.vy += theme.gravity * steps;
+      p.alpha *= fadeF;
       if (p.alpha < 0.05 || p.y > h + 30 || p.y < -30) continue;
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
+      let ext = p.size;
       if (theme.shape === 'circle') {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();
       } else if (p.emoji) {
-        ctx.font = `${p.size}px sans-serif`;
-        ctx.fillText(p.emoji, p.x, p.y);
+        // 캐시된 스프라이트를 복사 — fillText 로 매 프레임 글리프를 래스터화하지 않는다.
+        const spr = getEmojiSprite(p.emoji, p.size, p.color);
+        if (spr) { ctx.drawImage(spr, p.x - spr.width / 2, p.y - spr.height / 2); ext = spr.width / 2; }
+        else { ctx.font = `${p.size}px sans-serif`; ctx.fillText(p.emoji, p.x, p.y); }
       }
+      // 그린 범위 누적 (다음 프레임에 이 영역만 지운다)
+      if (p.x - ext < nx0) nx0 = p.x - ext;
+      if (p.y - ext < ny0) ny0 = p.y - ext;
+      if (p.x + ext > nx1) nx1 = p.x + ext;
+      if (p.y + ext > ny1) ny1 = p.y + ext;
       particles[writeIdx++] = p;
     }
     particles.length = writeIdx;
+    if (writeIdx > 0) {
+      // 여유 1px — 안티에일리어싱 잔상 방지
+      dirty = {
+        x0: Math.max(0, Math.floor(nx0) - 1), y0: Math.max(0, Math.floor(ny0) - 1),
+        x1: Math.min(w, Math.ceil(nx1) + 1), y1: Math.min(h, Math.ceil(ny1) + 1),
+      };
+    }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     // shake step — 강도 누적/감쇠 (hyperpower 시그니처)
-    shake *= theme.shakeDecay;
+    shake *= steps === 1 ? theme.shakeDecay : Math.pow(theme.shakeDecay, steps);
     if (shake > 0.15) {
       const sx = (Math.random() - 0.5) * shake;
       const sy = (Math.random() - 0.5) * shake;
@@ -1532,7 +1610,21 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     else rafId = 0;
   };
   const spawn = (x: number, y: number) => {
-    const n = theme.countMin + Math.floor(Math.random() * (theme.countMax - theme.countMin + 1));
+    // 동시 생존 파티클 상한.
+    // 파티클은 fade 0.94 로 약 49프레임(0.82초) 살아있다. 키를 누르고 있으면 자동반복이
+    // 초당 30회 넘게 들어오므로, flame(키당 4~9개) 기준 165개가 동시에 살아있게 되고 매 프레임
+    // 그 전부를 다시 그려 초당 1만 회 가까운 글리프 래스터화가 발생한다 — 트레이스에서 fillText
+    // 가 렌더러 busy 시간의 87%를 차지하며 앱 전체가 버벅인 이유. 정상적인 타이핑 속도(초당
+    // 10키 내외 → 약 53개)에는 걸리지 않는 값으로 상한만 둔다.
+    const MAX_PARTICLES = 90;
+    if (particles.length >= MAX_PARTICLES) {
+      shake = Math.min(theme.shakeMax, shake + theme.shakePerKey);
+      if (!rafId) rafId = requestAnimationFrame(loop);
+      return;
+    }
+    const room = MAX_PARTICLES - particles.length;
+    let n = theme.countMin + Math.floor(Math.random() * (theme.countMax - theme.countMin + 1));
+    if (n > room) n = room;
     const colors = theme.colors && theme.colors.length ? theme.colors : ['#ffffff'];
     const emojis = theme.emojis;
     // arc 위치 배치 활성화 여부 (rainbow 처럼 정확한 호 형태로 배치할 때 사용)
@@ -1564,7 +1656,9 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
         color,
         emoji: emojis ? emojis[Math.floor(Math.random() * emojis.length)] : undefined,
         alpha: 1,
-        size: theme.sizeMin + Math.random() * (theme.sizeMax - theme.sizeMin),
+        // 정수로 양자화 — 스프라이트 캐시 키가 (이모지, 크기, 색) 이므로 크기가 실수면 캐시가
+        // 사실상 매번 미스가 된다. 1px 단위 차이는 눈에 보이지 않는다.
+        size: Math.round(theme.sizeMin + Math.random() * (theme.sizeMax - theme.sizeMin)),
       });
     }
     shake = Math.min(theme.shakeMax, shake + theme.shakePerKey);
@@ -1637,24 +1731,31 @@ export function applyCursorStyleToTerm(termId: string, style?: 'block' | 'underl
       };
       const colors = ['#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ccff', '#3366ff', '#cc00ff'];
       const origTheme = { ...(term.options.theme || {}) };
+      const rootEl = term.element as HTMLElement | undefined;
+      // cursorAccent(커서 위 글자색)는 프리즘 동안 고정이므로 여기서 딱 한 번만 적용한다.
+      // 색 순환은 아래 tick 이 CSS 변수로 처리 — theme 재할당은 더 이상 하지 않는다.
+      try { term.options.theme = { ...origTheme, cursorAccent: origTheme.background || '#000000' }; } catch {}
+      rootEl?.classList.add('xterm-prism-cursor');
       let phase = 0;
       const tick = () => {
         // 숨겨진 패널(비활성 탭/분할, display:none → offsetParent===null)에서는 갱신 스킵.
-        // term.options.theme 재할당은 xterm 전체 색 재계산+전 행 refresh 를 유발하므로 매우 비싸다.
-        const el = term.element as HTMLElement | undefined;
-        if (el && el.offsetParent === null) return;
-        phase = (phase + 0.03) % 1; // 주기 보정(틱 간격 2배 → 위상 증가 2배)로 체감 속도 유지
+        if (!rootEl || rootEl.offsetParent === null) return;
+        phase = (phase + 0.03) % 1;
         const f = phase * colors.length;
         const idx = Math.floor(f);
         const next = (idx + 1) % colors.length;
         const localT = f - idx;
         const color = lerpHex(colors[idx], colors[next], localT);
-        try { term.options.theme = { ...origTheme, cursor: color, cursorAccent: origTheme.background || '#000000' }; } catch {}
+        // CSS 변수만 갱신 — xterm 은 전혀 관여하지 않으므로 CSS 재주입/전 행 refresh 가 없다.
+        // (App.css 의 .xterm-prism-cursor 규칙이 이 값을 커서 배경색으로 쓴다.)
+        rootEl.style.setProperty('--pepe-prism-cursor', color);
       };
       tick();
-      const intervalId = window.setInterval(tick, 50); // 25→50ms (40→20fps): 그라데이션엔 충분, 비용 절반
+      const intervalId = window.setInterval(tick, 50);
       flameOverlayCleanup.set(termId, () => {
         try { window.clearInterval(intervalId); } catch {}
+        try { rootEl?.classList.remove('xterm-prism-cursor'); } catch {}
+        try { rootEl?.style.removeProperty('--pepe-prism-cursor'); } catch {}
         try { term.options.theme = origTheme; } catch {}
       });
       return;
