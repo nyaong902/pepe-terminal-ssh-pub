@@ -319,6 +319,23 @@ contextBridge.exposeInMainWorld('api', {
   browserCredSave: (args: { url?: string; siteKey?: string; username: string; password: string }) => ipcRenderer.invoke('browser-creds:save', args),
   browserCredDelete: (args: { url?: string; siteKey?: string }) => ipcRenderer.invoke('browser-creds:delete', args),
   browserCredList: () => ipcRenderer.invoke('browser-creds:list'),
+
+  // ── Cloud Box (Pepe-Box) ──
+  cloudboxListProviders: () => ipcRenderer.invoke('cloudbox:list-providers'),
+  cloudboxListAccounts: () => ipcRenderer.invoke('cloudbox:list-accounts'),
+  cloudboxGetProviderSettings: (provider: string) => ipcRenderer.invoke('cloudbox:get-provider-settings', { provider }),
+  cloudboxSaveProviderSettings: (provider: string, clientId: string, clientSecret: string) =>
+    ipcRenderer.invoke('cloudbox:save-provider-settings', { provider, clientId, clientSecret }),
+  cloudboxConnect: (provider: string) => ipcRenderer.invoke('cloudbox:connect', { provider }),
+  cloudboxDisconnect: (accountId: string) => ipcRenderer.invoke('cloudbox:disconnect', { accountId }),
+  cloudboxReauth: (accountId: string) => ipcRenderer.invoke('cloudbox:reauth', { accountId }),
+  cloudboxRefreshLabel: (accountId: string) => ipcRenderer.invoke('cloudbox:refresh-label', { accountId }),
+  onCloudboxEvent: (cb: (payload: any) => void) => {
+    const handler = (_: any, p: any) => cb(p);
+    ipcRenderer.on('cloudbox:event', handler);
+    return () => ipcRenderer.removeListener('cloudbox:event', handler);
+  },
+
   sshTestWebTarget: (args: { panelId: string; url: string }) => ipcRenderer.invoke('ssh:test-web-target', args),
   sshGetShellCwd: (args: { termId: string }) => ipcRenderer.invoke('ssh:get-shell-cwd', args),
   saveTextFile: (args: { defaultName?: string; content: string; filters?: { name: string; extensions: string[] }[] }) =>
@@ -344,12 +361,23 @@ contextBridge.exposeInMainWorld('api', {
   sftpDownload: (panelId: string, remotePath: string, isDir?: boolean) => ipcRenderer.invoke('sftp:download', { panelId, remotePath, isDir }),
   sftpDownloadMulti: (panelId: string, items: { path: string; isDir: boolean }[]) => ipcRenderer.invoke('sftp:download-multi', { panelId, items }),
   sftpQuickShare: (panelId: string, items: { path: string; isDir: boolean }[]) => ipcRenderer.invoke('sftp:quick-share', { panelId, items }),
+  sftpDownloadToTemp: (panelId: string, remotePath: string) => ipcRenderer.invoke('sftp:download-to-temp', { panelId, remotePath }),
   sftpUpload: (panelId: string, remotePath: string, kind?: 'file' | 'folder' | 'multi-file') => ipcRenderer.invoke('sftp:upload', { panelId, remotePath, kind }),
   sftpListDir: (panelId: string, remotePath: string) => ipcRenderer.invoke('sftp:list-dir', { panelId, remotePath }),
   sftpReadFile: (panelId: string, remotePath: string, encoding?: string) => ipcRenderer.invoke('sftp:read-file', { panelId, remotePath, encoding }),
   sftpWriteFile: (panelId: string, remotePath: string, content: string, encoding?: string) => ipcRenderer.invoke('sftp:write-file', { panelId, remotePath, content, encoding }),
   gitBlameFile: (termId: string, remotePath: string) => ipcRenderer.invoke('git:blame-file', { termId, remotePath }),
   ctagsFindDefinition: (termId: string, remotePath: string, symbol: string) => ipcRenderer.invoke('ctags:find-definition', { termId, remotePath, symbol }),
+  chatArchiveAppendChunks: (roomId: string, chunks: Array<{ ts: number; sender: string; text: string }>) => ipcRenderer.invoke('chat-archive:append-chunks', { roomId, chunks }),
+  chatArchiveEmbedText: (text: string) => ipcRenderer.invoke('chat-archive:embed-text', { text }),
+  chatArchiveSearch: (queryText: string, embedding: number[], topK?: number) => ipcRenderer.invoke('chat-archive:search', { queryText, embedding, topK }),
+  chatArchiveGetStats: () => ipcRenderer.invoke('chat-archive:get-stats'),
+  chatArchiveFilterUnknown: (roomId: string, items: Array<{ ts: number; sender: string }>) => ipcRenderer.invoke('chat-archive:filter-unknown', { roomId, items }),
+  // 진단용 — 특정 문구가 아카이브에 순수 문자열 포함으로 존재하는지 확인(임베딩/스코어링 없음).
+  chatArchiveRawContains: (substring: string, roomId?: string) => ipcRenderer.invoke('chat-archive:raw-contains', { substring, roomId }),
+  everythingSearch: (query: string, opts?: { matchPath?: boolean; matchCase?: boolean; matchWholeWord?: boolean; regex?: boolean; sort?: number; offset?: number; max?: number }) =>
+    ipcRenderer.invoke('everything:search', { query, ...opts }),
+  everythingIsAvailable: () => ipcRenderer.invoke('everything:is-available'),
   onSFTPProgress: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('sftp:progress', handler);

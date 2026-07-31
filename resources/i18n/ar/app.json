@@ -81,7 +81,8 @@
     "logAnalyzer": "📈 محلل السجلات",
     "vpn": "🔒 VPN",
     "i18nEditor": "🌍 محرر الترجمة",
-    "fileTransfer": "📁 نقل الملفات"
+    "fileTransfer": "📁 نقل الملفات",
+    "pepeThing": "🔎 Pepe-Thing"
   },
   "term": {
     "connectCancelled": "✕ تم إلغاء الاتصال.",
@@ -109,6 +110,8 @@
   "toolbar": {
     "dragHint": "اسحب لنقل الاتصال السريع يمينًا/يسارًا أو إلى الأعلى",
     "fileTransferTooltip": "نقل الملفات",
+    "chatArchiveSearchTooltip": "البحث في أرشيف المحادثات",
+    "pepeThingTooltip": "Pepe-Thing (البحث عن الملفات)",
     "resetSplitTooltip": "موازنة نسب اللوحات (إعادة تعيين جميع نسب التقسيم في مساحة العمل الحالية)",
     "quickConnectShow": "إظهار شريط الاتصال السريع",
     "quickConnectHide": "إخفاء شريط الاتصال السريع",

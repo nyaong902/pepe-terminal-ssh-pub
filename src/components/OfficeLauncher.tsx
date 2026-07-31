@@ -2,13 +2,13 @@
 // 오피스 워크스페이스 진입점 — 상단 탭 바에는 이미 형식이 정해진 탭(한글/워드/엑셀/파워포인트/PDF)만
 // 나타난다. "+" 를 누르면 형식 선택 화면이 그 자리에 잠깐 나타날 뿐 탭으로 남지 않고, 형식을
 // 고르는 즉시 그 이름의 탭이 새로 생긴다. 각 형식 에디터 내부에는 문서 단위 미니탭이 별도로 있다.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OfficeWorkspace } from './OfficeWorkspace';
 import { ZiziyiOfficeWorkspace } from './ZiziyiOfficeWorkspace';
 import { PdfWorkspace } from './PdfWorkspace';
 import { FlowChartWorkspace } from './FlowChartWorkspace';
 
-type OfficeFormat = 'hwp' | 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'drawio';
+export type OfficeFormat = 'hwp' | 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'drawio';
 
 const FORMATS: { id: OfficeFormat; label: string; icon: string; desc: string }[] = [
   { id: 'hwp', label: '한글', icon: '📄', desc: 'HWP / HWPX' },
@@ -55,16 +55,21 @@ const slotTabStyle = (active: boolean): React.CSSProperties => ({
 
 type OfficeLauncherState = { slots: Slot[]; activeId: string | null; pickerOpen: boolean };
 
-export function OfficeLauncher({ instanceId, initialState, onStateChange }: {
+export function OfficeLauncher({ instanceId, initialState, onStateChange, initialFile }: {
   instanceId: string;
   // 다른 창으로 분리될 때 "어떤 형식 탭이 열려 있었는지"만 가볍게 보존한다 — 편집기(iframe)
   // 내부의 실제 문서 편집 내용까지는 살릴 수 없다(그 안은 각 에디터 프로세스 고유 상태).
   initialState?: OfficeLauncherState;
   onStateChange?: (state: OfficeLauncherState) => void;
+  // Pepe-Thing(파일 검색) 등에서 "이 파일을 오피스 워크스페이스로 열기"를 선택했을 때 — 탭 생성과
+  // 동시에 해당 형식 슬롯을 만들고 그 파일을 바로 연다. 탭당 1회만 적용(같은 값이 재전달돼도 무시).
+  initialFile?: { format: OfficeFormat; filePath: string };
 }) {
   const [slots, setSlots] = useState<Slot[]>(initialState?.slots || []);
   const [activeId, setActiveId] = useState<string | null>(initialState?.activeId ?? null);
-  const [pickerOpen, setPickerOpen] = useState(initialState ? initialState.pickerOpen : true);
+  const [pickerOpen, setPickerOpen] = useState(initialState ? initialState.pickerOpen : !initialFile);
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
+  const initialFileAppliedRef = useRef(false);
 
   useEffect(() => {
     onStateChange?.({ slots, activeId, pickerOpen });
@@ -75,7 +80,25 @@ export function OfficeLauncher({ instanceId, initialState, onStateChange }: {
     setSlots(prev => [...prev, { id, format }]);
     setActiveId(id);
     setPickerOpen(false);
+    return id;
   };
+
+  useEffect(() => {
+    if (!initialFile || initialFileAppliedRef.current) return;
+    initialFileAppliedRef.current = true;
+    selectFormat(initialFile.format);
+    setPendingFilePath(initialFile.filePath);
+  }, [initialFile]);
+
+  // pendingFilePath 는 슬롯 생성 직후 하위 워크스페이스가 마운트 시점에 한 번 읽도록 하는 용도일
+  // 뿐이라, 그 다음 렌더에서는 지워야 한다 — 자식(OfficeWorkspace 등)의 useEffect 는 부모보다 먼저
+  // 커밋되므로 여기서 지워도 최초 오픈에는 영향이 없다. 지우지 않으면 이 슬롯이 활성인 동안 매
+  // 렌더마다 initialFilePath prop 이 계속 전달되는데, 자식의 1회성 ref 가드 덕에 실제 버그(재오픈
+  // 반복)로 이어지진 않지만 의도가 불분명한 상태가 계속 남는 건 피한다.
+  useEffect(() => {
+    if (pendingFilePath === null) return;
+    setPendingFilePath(null);
+  }, [pendingFilePath]);
 
   const closeSlot = (id: string) => {
     const idx = slots.findIndex(s => s.id === id);
@@ -115,19 +138,26 @@ export function OfficeLauncher({ instanceId, initialState, onStateChange }: {
       )}
       <div style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, position: 'relative' }}>
         {showingPicker && <FormatPicker onSelect={selectFormat} />}
-        {slots.map(slot => (
-          <div key={slot.id} style={{ position: 'absolute', inset: 0, display: !pickerOpen && slot.id === activeId ? 'flex' : 'none', flexDirection: 'column' }}>
-            {slot.format === 'hwp' ? (
-              <OfficeWorkspace instanceId={instanceId} />
-            ) : slot.format === 'pdf' ? (
-              <PdfWorkspace instanceId={instanceId} />
-            ) : slot.format === 'drawio' ? (
-              <FlowChartWorkspace instanceId={instanceId} />
-            ) : (
-              <ZiziyiOfficeWorkspace instanceId={instanceId} kind={slot.format} />
-            )}
-          </div>
-        ))}
+        {slots.map(slot => {
+          // pendingFilePath 는 initialFile 로 생성된 슬롯에만 1회성으로 흘려보낸다 — 다른 슬롯이나
+          // 이후 재렌더에 재사용되면 안 되므로 여기서 꺼내는 즉시 지운다(각 하위 워크스페이스는
+          // 마운트 시 1회만 여는 자체 ref 가드를 갖고 있어 중복 오픈은 없지만, prop 자체를 슬롯
+          // 고유값으로 한정해 의도를 명확히 한다).
+          const filePathForThisSlot = pendingFilePath && slot.id === activeId ? pendingFilePath : undefined;
+          return (
+            <div key={slot.id} style={{ position: 'absolute', inset: 0, display: !pickerOpen && slot.id === activeId ? 'flex' : 'none', flexDirection: 'column' }}>
+              {slot.format === 'hwp' ? (
+                <OfficeWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot} />
+              ) : slot.format === 'pdf' ? (
+                <PdfWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot} />
+              ) : slot.format === 'drawio' ? (
+                <FlowChartWorkspace instanceId={instanceId} />
+              ) : (
+                <ZiziyiOfficeWorkspace instanceId={instanceId} kind={slot.format} initialFilePath={filePathForThisSlot} />
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

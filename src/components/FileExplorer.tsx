@@ -5,6 +5,7 @@ import { FilePanel, PanelSource } from './FilePanel';
 import { TransferLog } from './TransferLog';
 import { setTermFocusBlocked, isTermConnected } from './TerminalPanel';
 import { notifyError } from './Notify';
+import type { OfficeFormat } from './OfficeLauncher';
 import type { PanelSession } from '../utils/layoutUtils';
 import {
   type FeTab, type FePanel, type FeLayoutNode,
@@ -43,9 +44,12 @@ type Props = {
   // 세션 우클릭 "파일전송"처럼 fe-sftp-connected 이벤트로 명시적 연결이 곧 도착하는 경우 사용 —
   // 아니면 그 명시적 연결과 별개로 다른(관련 없는) 세션이 함께 자동 연결돼버린다.
   suppressAutoSelect?: boolean;
+  // 미디어/오피스 확장자 파일 더블클릭 시 "이 앱 워크스페이스로 열기" 확인 후 호출.
+  onOpenInMedia?: (filePath: string, fileName: string) => void;
+  onOpenInOffice?: (format: OfficeFormat, filePath: string, fileName: string) => void;
 };
 
-export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId, initialState, onStateChange, suppressAutoSelect }) => {
+export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initialRemotePath, tabId, initialState, onStateChange, suppressAutoSelect, onOpenInMedia, onOpenInOffice }) => {
   // 이 FileExplorer 인스턴스의 고유 ID — 전송 이벤트 필터링에 사용
   const workspaceIdRef = React.useRef(`fe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const { t } = useTranslation('fileExplorer');
@@ -916,6 +920,8 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           workspaceId={workspaceIdRef.current}
           initialFiles={tab.entries}
           onFilesLoaded={entries => setLeafEntries(leafId, entries)}
+          onOpenInMedia={onOpenInMedia}
+          onOpenInOffice={onOpenInOffice}
         />
       </>
     );

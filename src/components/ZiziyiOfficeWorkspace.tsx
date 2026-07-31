@@ -32,7 +32,7 @@ type OpenDoc = { id: string; title: string; src: string; blobUrl: string | null 
 
 let nextDocId = 0;
 
-export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocKind }) {
+export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: string; kind: DocKind; initialFilePath?: string }) {
   const [docs, setDocs] = useState<OpenDoc[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -111,6 +111,13 @@ export function ZiziyiOfficeWorkspace({ kind }: { instanceId: string; kind: DocK
     openBytes(result.data, result.fileName);
     addRecent(kind, { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
+
+  const initialFileOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!initialFilePath || initialFileOpenedRef.current) return;
+    initialFileOpenedRef.current = true;
+    handleOpenRecent({ filePath: initialFilePath, fileName: initialFilePath.split(/[\\/]/).pop() || initialFilePath, openedAt: 0, openCount: 0 });
+  }, [initialFilePath]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: 'var(--win-bg, #0d1117)' }}>

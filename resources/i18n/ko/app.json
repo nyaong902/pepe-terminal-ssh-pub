@@ -82,7 +82,9 @@
     "logAnalyzer": "📈 로그 분석",
     "vpn": "🔒 VPN",
     "i18nEditor": "🌍 다국어 편집",
-    "fileTransfer": "📁 파일 전송"
+    "fileTransfer": "📁 파일 전송",
+    "pepeThing": "🔎 Pepe-Thing",
+    "pepeBox": "📦 Pepe-Box"
   },
   "term": {
     "connectCancelled": "✕ 연결 취소됨.",
@@ -110,6 +112,8 @@
   "toolbar": {
     "dragHint": "드래그하여 빠른연결 좌/우 또는 상단으로",
     "fileTransferTooltip": "파일 전송",
+    "chatArchiveSearchTooltip": "대화 아카이브 검색",
+    "pepeThingTooltip": "Pepe-Thing (파일 검색)",
     "resetSplitTooltip": "패널 비율 균등 정렬 (현재 워크스페이스의 모든 분할 비율 리셋)",
     "quickConnectShow": "빠른 연결 바 표시",
     "quickConnectHide": "빠른 연결 바 숨기기",

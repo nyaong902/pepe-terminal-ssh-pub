@@ -81,7 +81,8 @@
     "logAnalyzer": "📈 Analyseur de journaux",
     "vpn": "🔒 VPN",
     "i18nEditor": "🌍 Éditeur de traduction",
-    "fileTransfer": "📁 Transfert de fichiers"
+    "fileTransfer": "📁 Transfert de fichiers",
+    "pepeThing": "🔎 Pepe-Thing"
   },
   "term": {
     "connectCancelled": "✕ Connexion annulée.",
@@ -109,6 +110,8 @@
   "toolbar": {
     "dragHint": "Faites glisser pour déplacer la connexion rapide à gauche/droite ou en haut",
     "fileTransferTooltip": "Transfert de fichiers",
+    "chatArchiveSearchTooltip": "Recherche dans les archives de discussion",
+    "pepeThingTooltip": "Pepe-Thing (recherche de fichiers)",
     "resetSplitTooltip": "Égaliser les proportions des panneaux (réinitialiser toutes les proportions de division de l'espace de travail actuel)",
     "quickConnectShow": "Afficher la barre de connexion rapide",
     "quickConnectHide": "Masquer la barre de connexion rapide",

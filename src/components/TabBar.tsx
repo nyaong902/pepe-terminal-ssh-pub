@@ -43,6 +43,9 @@ type Props = {
   onAddOfficeTab?: () => void;
   onAddMediaTab?: () => void;
   onAddI18nEditorTab?: () => void;
+  onAddChatArchiveSearchTab?: () => void;
+  onAddPepeThingTab?: () => void;
+  onAddPepeBoxTab?: () => void;
   onAddCustomWorkspace?: (templateId?: string) => void;
   customWorkspaces?: { id: string; name: string }[];
   onCloseTab: (id: string) => void;
@@ -61,10 +64,10 @@ type Props = {
   onThemeChange?: (name: string) => void;
   availableShells?: ShellInfo[];
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp) 의 "+" 워크스페이스 메뉴 표시 여부
-  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean };
+  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean; pepeBox?: boolean };
 };
 
-export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
+export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddPepeThingTab, onAddPepeBoxTab, onAddChatArchiveSearchTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
   const { t } = useTranslation('tabBar');
   const { t: tc } = useTranslation('common');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -352,6 +355,9 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 ...((availableFeatures?.sipp ?? true) ? [{ label: '📶 SIPp', onClick: () => onAddSippTab?.() }] : []),
                 ...((availableFeatures?.office ?? true) ? [{ label: '📄 오피스', onClick: () => onAddOfficeTab?.() }] : []),
                 ...((availableFeatures?.media ?? true) ? [{ label: '🎵 미디어', onClick: () => onAddMediaTab?.() }] : []),
+                ...((availableFeatures?.pepeBox ?? true) ? [{ label: '📦 Pepe-Box', onClick: () => onAddPepeBoxTab?.() }] : []),
+                { label: '🔎 Pepe-Thing', onClick: () => onAddPepeThingTab?.() },
+                { label: '🗄 대화 아카이브 검색', onClick: () => onAddChatArchiveSearchTab?.() },
               ],
             },
             {

@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
 import { subscribePwdChange, isTermPty, subscribeConnectedChange, getCurrentPwdForTerm } from './TerminalPanel';
 import { notifyError, notifyConfirm, notifyOk } from './Notify';
+import type { OfficeFormat } from './OfficeLauncher';
+import { isMediaExtension, getOfficeFormatForFile } from '../utils/openableFileTypes';
 
 const ROW_HEIGHT = 22; // App.css 의 .remote-file-item height 와 동기
 
@@ -80,10 +82,15 @@ type Props = {
   initialPath?: string; // 세션 연결 시 사용할 초기 경로 (없으면 홈)
   onOpenFile: (termId: string, remotePath: string, fileName: string) => void;
   onAttachToClaude?: (termId: string, remotePath: string, fileName: string, isDir: boolean) => void;
+  // 미디어/오피스 확장자 파일 더블클릭 시 "이 앱 워크스페이스로 열기" 확인 후 호출 — 원격 파일이라
+  // 먼저 로컬 임시 경로로 받아야 하므로(sftp:download-to-temp), 다운로드 완료 후 로컬 경로로 호출된다.
+  onOpenInMedia?: (filePath: string, fileName: string) => void;
+  onOpenInOffice?: (format: OfficeFormat, filePath: string, fileName: string) => void;
 };
 
-export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId, initialPath: initialPathProp, onOpenFile, onAttachToClaude }) => {
+export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId, initialPath: initialPathProp, onOpenFile, onAttachToClaude, onOpenInMedia, onOpenInOffice }) => {
   const { t } = useTranslation('fileExplorer');
+  const { t: tPepeThing } = useTranslation('pepeThing');
   // mode: 'local' (PTY 로컬 셸) or 'remote' (SSH/SFTP)
   // sessionId 가 있으면 SSH, 없거나 PTY 가 활성이면 local
   const [mode, setMode] = useState<'local' | 'remote'>(() => (sessionId ? 'remote' : (isTermPty(termId) ? 'local' : 'remote')));
@@ -441,7 +448,10 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
           onDoubleClick={(e) => {
             if (node.isDir) return; // 폴더는 더블클릭 무시 (단일클릭으로 이미 처리)
             e.stopPropagation();
-            onOpenFile(termId, node.path, node.name);
+            (async () => {
+              const handled = await tryOpenInAppWorkspace(node.path, node.name);
+              if (!handled) onOpenFile(termId, node.path, node.name);
+            })();
           }}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -506,6 +516,41 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
         navigateTo(folderPath);
       },
     });
+  };
+
+  // 미디어/오피스 확장자 파일을 더블클릭했을 때 — 확인 후 이 앱의 워크스페이스로 연다.
+  // local 모드(PTY 로컬 셸)는 node.path 가 이미 실제 로컬 경로라 바로 열면 되고, remote 모드는
+  // sftp:download-to-temp 로 임시 폴더에 조용히 받은 뒤 그 로컬 경로로 연다.
+  // 반환값 true = 이 워크스페이스 오픈 플로우로 처리됨(호출부는 기존 onOpenFile 폴백을 건너뛴다).
+  const tryOpenInAppWorkspace = async (remotePath: string, fileName: string): Promise<boolean> => {
+    const isMedia = isMediaExtension(fileName) && !!onOpenInMedia;
+    const officeFormat = getOfficeFormatForFile(fileName);
+    const isOffice = !!officeFormat && !!onOpenInOffice;
+    if (!isMedia && !isOffice) return false;
+
+    const yes = await notifyConfirm(
+      isMedia ? tPepeThing('openInMediaTitle') : tPepeThing('openInOfficeTitle'),
+      isMedia ? tPepeThing('openInMediaBody', { name: fileName }) : tPepeThing('openInOfficeBody', { name: fileName }),
+    );
+    if (!yes) return false;
+
+    let localPath = remotePath;
+    if (mode === 'remote') {
+      try {
+        const r = await (window as any).api?.sftpDownloadToTemp?.(termId, remotePath);
+        if (!r?.success) {
+          notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), r?.error || t('unknownError'));
+          return true; // 사용자가 이미 "예"를 선택했으므로 기존 텍스트 편집기 폴백으로 넘기지 않는다.
+        }
+        localPath = r.localPath;
+      } catch (err: any) {
+        notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
+        return true;
+      }
+    }
+    if (isMedia) onOpenInMedia!(localPath, fileName);
+    else onOpenInOffice!(officeFormat!, localPath, fileName);
+    return true;
   };
 
   const quickShareItems = async (items: { path: string; isDir: boolean }[]) => {
@@ -664,8 +709,12 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             <>
           {!ctxMenu.node.isDir && (
             <div className="remote-file-ctx-item" onClick={() => {
-              onOpenFile(termId, ctxMenu.node.path, ctxMenu.node.name);
+              const node = ctxMenu.node;
               setCtxMenu(null);
+              (async () => {
+                const handled = await tryOpenInAppWorkspace(node.path, node.name);
+                if (!handled) onOpenFile(termId, node.path, node.name);
+              })();
             }}>{t('openFileMenu')}</div>
           )}
           {ctxMenu.node.isDir && (

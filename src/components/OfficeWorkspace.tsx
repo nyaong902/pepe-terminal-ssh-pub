@@ -22,7 +22,7 @@ type OpenHwp = { id: string; title: string; fileData?: FileData };
 
 let nextHwpId = 0;
 
-export function OfficeWorkspace({ instanceId: _instanceId }: { instanceId: string }) {
+export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { instanceId: string; initialFilePath?: string }) {
   const [docs, setDocs] = useState<OpenHwp[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [statusById, setStatusById] = useState<Record<string, string>>({});
@@ -111,6 +111,15 @@ export function OfficeWorkspace({ instanceId: _instanceId }: { instanceId: strin
     addDoc(result.fileName, { data: result.data, fileName: result.fileName });
     addRecent('hwp', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
+
+  // Pepe-Thing(파일 검색) 등 외부에서 "이 파일을 오피스 워크스페이스로 열기"를 선택했을 때 —
+  // 마운트 시 1회, 사용자가 열기 버튼을 누른 것과 동일하게 자동으로 문서를 연다.
+  const initialFileOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!initialFilePath || initialFileOpenedRef.current) return;
+    initialFileOpenedRef.current = true;
+    handleOpenRecent({ filePath: initialFilePath, fileName: initialFilePath.split(/[\\/]/).pop() || initialFilePath, openedAt: 0, openCount: 0 });
+  }, [initialFilePath]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: 'var(--win-bg, #0d1117)' }}>

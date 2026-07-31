@@ -39,6 +39,8 @@ import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
+import * as chatArchiveStore from './chatArchiveStore';
+import * as everythingService from './everythingService';
 import { loadWorklog, saveWorklogDay, WorklogDay } from './worklogStore';
 import { loadStickyNotes, addStickyNote, updateStickyNote, removeStickyNote, getStickyNote, StickyNote } from './stickyNotesStore';
 import { loadClockWidgetState, saveClockWidgetState, ClockWidgetState } from './clockWidgetStore';
@@ -70,6 +72,10 @@ import { t, setCurrentLang } from './i18n';
 import { setupAutoUpdater, checkForUpdatesOnStartup } from './updater';
 import { RemoteShareServer, type RemoteShareStartOptions } from './remoteShareServer';
 import { PlainAppConnectServer } from './plainAppConnectServer';
+import * as cloudBox from './cloudBoxHandlers';
+import { capabilitiesFor as cloudProviderCapabilities } from './cloudProviders/registry';
+import { OAUTH_FIXED_PORTS as cloudOAuthFixedPorts, OAUTH_REDIRECT_HOST as cloudOAuthRedirectHost } from './cloudOAuthServer';
+import type { ProviderKind } from './cloudProviders/types';
 // MCP 서버 스크립트를 번들에 임베드 (vite ?raw) — 런타임에 임시 파일로 추출 후 spawn
 // @ts-ignore
 import mcpSshServerScript from './mcpSshServer.cjs?raw';
@@ -1100,7 +1106,7 @@ function scheduleDetachedTempCleanup() {
       /^pepe-ai-mirror-/, /^pepe-mcp-localfs-server\.cjs$/, /^pepe-mcp-ssh-server\.cjs$/,
       /^pepe-codex-home-/, /^pepe-agy-/, /^pepe-agy-report-/, /^pepe-agy-cont-/,
       /^gemini-prompt-\d+/, /^gemini-mcp-\d+/, /^claude-mcp-\d+/, /^claude-prompt-\d+/,
-      /^codex-prompt-\d+/, /^pepe-quick-share-/, /^pepe-openvpn-/, /^pepe-openvpn-auth-/,
+      /^codex-prompt-\d+/, /^pepe-quick-share-/, /^pepe-media-open-/, /^pepe-openvpn-/, /^pepe-openvpn-auth-/,
       /^pepe-claude-hook(\.cjs|\.cmd)?$/, /^claude-settings-\d+\.json$/,
       /^claude-mcp-\d+.*\.json$/, /^gemini-settings-\d+\.json$/, /^gemini-mcp-\d+.*\.json$/,
     ];
@@ -4373,6 +4379,9 @@ if ($ok -and $folder) {
       // 일반 로컬 디렉토리 — 물리 파일만 (가상 항목은 shell:Desktop 경로에서만)
       const physical = await bridge.handleLocalListDir(dirPath);
       return { files: physical };
+    } else if (mode === 'cloud') {
+      if (!termId) return { error: t('error.noConnectionId') };
+      return await cloudBox.cloudListFolder(termId, dirPath, (ev) => mainWindow?.webContents.send('cloudbox:event', ev));
     } else {
       if (!termId) return { error: t('error.noConnectionId') };
       const files = await bridge.handleSFTPListDir(termId, dirPath);
@@ -5494,8 +5503,34 @@ ipcMain.handle('fe:get-home', () => {
 let _feTransferSeq = 0;
 ipcMain.handle('fe:transfer', (_e, { src, dst, filename, workspaceId }: any) => {
   const seq = ++_feTransferSeq;
-  const bridge = getSSHBridge();
-  bridge.handleTransfer(src, dst, filename, undefined, workspaceId)
+  const emit = (ev: any) => mainWindow?.webContents.send('cloudbox:event', ev);
+  const runTransfer = async () => {
+    // 클라우드 계정이 관여하는 전송은 cloudBoxHandlers 로 위임 (Dropbox/Drive/OneDrive 만 실제 지원).
+    // cloud→cloud(교차 provider 포함)는 서버 사이드 복사가 없으므로 임시 로컬 파일을 경유한다.
+    if (src.mode === 'cloud' && dst.mode === 'cloud') {
+      const tmp = path.join(os.tmpdir(), `pepebox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${filename}`);
+      try {
+        await cloudBox.cloudDownload(src.termId, src.path, tmp, emit);
+        await cloudBox.cloudUpload(dst.termId, dst.path, tmp, filename, emit);
+      } finally {
+        // 업로드 실패로 위에서 예외가 던져져도 다운로드된 임시 파일은 반드시 정리한다.
+        await fs.promises.unlink(tmp).catch(() => {});
+      }
+      return;
+    }
+    if (src.mode === 'cloud') {
+      const dstFull = dst.path.endsWith('/') || dst.path.endsWith('\\') ? dst.path + filename : `${dst.path}/${filename}`;
+      await cloudBox.cloudDownload(src.termId, src.path, dstFull, emit);
+      return;
+    }
+    if (dst.mode === 'cloud') {
+      await cloudBox.cloudUpload(dst.termId, dst.path, src.path, filename, emit);
+      return;
+    }
+    const bridge = getSSHBridge();
+    await bridge.handleTransfer(src, dst, filename, undefined, workspaceId);
+  };
+  runTransfer()
     .then(() => mainWindow?.webContents.send('fe:transfer-done', { seq, success: true }))
     .catch((err: any) => mainWindow?.webContents.send('fe:transfer-done', { seq, success: false, error: String(err) }));
   return { seq }; // 즉시 반환 — 완료는 fe:transfer-done 이벤트로 수신
@@ -5599,8 +5634,11 @@ ipcMain.handle('fe:create-file', async (_e, { mode, termId, filePath }: any) => 
 
 ipcMain.handle('fe:delete', (_e, { mode, termId, filePath, workspaceId }: any) => {
   const deleteId = `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const bridge = getSSHBridge();
-  bridge.handleDeleteWithProgress(deleteId, mode, termId, filePath, workspaceId)
+  const emit = (ev: any) => mainWindow?.webContents.send('cloudbox:event', ev);
+  const runDelete = mode === 'cloud'
+    ? cloudBox.cloudDelete(termId, filePath, emit)
+    : getSSHBridge().handleDeleteWithProgress(deleteId, mode, termId, filePath, workspaceId);
+  runDelete
     .then(() => mainWindow?.webContents.send('fe:delete-done', { deleteId, success: true }))
     .catch((err: any) => mainWindow?.webContents.send('fe:delete-done', { deleteId, success: false, error: String(err) }));
   return { deleteId };
@@ -5619,6 +5657,7 @@ ipcMain.handle('fe:home-dir', async (_e, { mode, termId }: { mode: string; termI
   try {
     const bridge = getSSHBridge();
     if (mode === 'local') return require('os').homedir();
+    if (mode === 'cloud') return await cloudBox.cloudHomeDir(termId!, (ev) => mainWindow?.webContents.send('cloudbox:event', ev));
     const home = await bridge.handleSFTPRealPath(termId!, '.');
     // 경로 접근 가능한지 확인
     try { await bridge.handleSFTPListDir(termId!, home); return home; } catch {}
@@ -6235,6 +6274,21 @@ async function downloadRemoteItemsToTemp(panelId: string, items: { path: string;
   }
   return { tempDir, results, localPaths };
 }
+
+// 원격 파일을 임시 폴더로 조용히 받기만 함 — sftp:quick-share 와 달리 OS 공유시트/탐색기를
+// 자동으로 열지 않는다. 원격 미디어 파일을 로컬 전용인 미디어 워크스페이스에서 재생하려면
+// 먼저 로컬 임시 경로가 있어야 하는데, 이 경우엔 재생만 하면 되므로 부가 동작이 필요 없다.
+ipcMain.handle('sftp:download-to-temp', async (_e, { panelId, remotePath }: { panelId: string; remotePath: string }) => {
+  try {
+    const { localPaths, results } = await downloadRemoteItemsToTemp(panelId, [{ path: remotePath, isDir: false }], 'pepe-media-open-');
+    if (localPaths.length === 0) {
+      return { success: false, error: results[0]?.error || '다운로드 실패' };
+    }
+    return { success: true, localPath: localPaths[0] };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
 
 ipcMain.handle('sftp:quick-share', async (_e, { panelId, items }: { panelId: string; items: { path: string; isDir: boolean }[] }) => {
   if (!mainWindow || !items || items.length === 0) return { success: false, error: '공유할 파일이 없습니다.' };
@@ -8094,6 +8148,49 @@ ipcMain.handle('browser-creds:list', async () => {
     return { ok: false, error: String(err?.message || err) };
   }
 });
+
+// ── Cloud Box (Pepe-Box) ──
+const CLOUD_PROVIDER_KINDS: ProviderKind[] = ['dropbox', 'gdrive', 'onedrive', 'naver', 'kakao'];
+const cloudEmit = (ev: any) => mainWindow?.webContents.send('cloudbox:event', ev);
+
+ipcMain.handle('cloudbox:list-providers', () => {
+  // redirectUri 를 여기서 함께 내려줘서, 렌더러(CloudAccountSettingsDialog)가 OAUTH_FIXED_PORTS/
+  // OAUTH_REDIRECT_HOST 를 별도로 복제해 유지할 필요가 없게 한다 — 두 사본이 어긋나면 사용자에게
+  // 실제와 다른 redirect URI 를 안내하는 문제가 있었다.
+  return CLOUD_PROVIDER_KINDS.map(kind => {
+    const port = cloudOAuthFixedPorts[kind];
+    const host = cloudOAuthRedirectHost[kind] || '127.0.0.1';
+    return {
+      kind,
+      capabilities: cloudProviderCapabilities(kind),
+      redirectUri: port ? `http://${host}:${port}/callback` : undefined,
+    };
+  });
+});
+ipcMain.handle('cloudbox:list-accounts', () => cloudBox.listAccounts());
+ipcMain.handle('cloudbox:get-provider-settings', (_e, { provider }: { provider: ProviderKind }) => {
+  return cloudBox.getProviderSettingsSafe(provider);
+});
+ipcMain.handle('cloudbox:save-provider-settings', (_e, { provider, clientId, clientSecret }: { provider: ProviderKind; clientId: string; clientSecret: string }) => {
+  try {
+    cloudBox.saveProviderSettings(provider, clientId, clientSecret);
+    return { ok: true };
+  } catch (err: any) { return { ok: false, error: String(err?.message || err) }; }
+});
+ipcMain.handle('cloudbox:connect', async (_e, { provider }: { provider: ProviderKind }) => {
+  return await cloudBox.connectAccount(provider, cloudEmit);
+});
+ipcMain.handle('cloudbox:disconnect', (_e, { accountId }: { accountId: string }) => {
+  cloudBox.disconnectAccount(accountId);
+  return { ok: true };
+});
+ipcMain.handle('cloudbox:reauth', async (_e, { accountId }: { accountId: string }) => {
+  return await cloudBox.reauthAccount(accountId, cloudEmit);
+});
+ipcMain.handle('cloudbox:refresh-label', async (_e, { accountId }: { accountId: string }) => {
+  return await cloudBox.refreshAccountLabel(accountId, cloudEmit);
+});
+
 ipcMain.handle('vpn:available', () => vpn.isAvailable());
 ipcMain.handle('vpn:state', () => vpn.getState());
 ipcMain.handle('vpn:logs', () => vpn.getLogs());
@@ -8735,6 +8832,63 @@ ipcMain.handle('ctags:find-definition', async (_e, { termId, remotePath, symbol 
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }
+});
+
+// 사내 메신저 대화 아카이브 — 암호화 저장 + 임베딩 검색 (electron/chatArchiveStore.ts)
+ipcMain.handle('chat-archive:append-chunks', async (_e, { roomId, chunks }: { roomId: string; chunks: chatArchiveStore.ChatChunk[] }) => {
+  try {
+    const result = await chatArchiveStore.appendChunks(roomId, chunks || []);
+    return { ok: true, ...result };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('chat-archive:embed-text', async (_e, { text }: { text: string }) => {
+  try {
+    const [embedding] = await chatArchiveStore.embedTexts([text]);
+    return { ok: true, embedding: embedding || [] };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('chat-archive:search', (_e, { queryText, embedding, topK }: { queryText: string; embedding: number[]; topK?: number }) => {
+  try {
+    return { ok: true, results: chatArchiveStore.search(queryText || '', embedding, topK ?? 8) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('chat-archive:get-stats', () => {
+  try {
+    return { ok: true, stats: chatArchiveStore.getStats() };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('chat-archive:filter-unknown', (_e, { roomId, items }: { roomId: string; items: Array<{ ts: number; sender: string }> }) => {
+  try {
+    return { ok: true, items: chatArchiveStore.filterUnknown(roomId, items || []) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+// 진단용 — 검색 로직 문제 vs 백필 누락 문제를 구분하기 위해, 특정 문구가 아카이브에 순수하게
+// (임베딩/스코어링 없이) 존재하는지만 확인한다. 개발자 도구 콘솔에서 직접 호출하는 용도.
+ipcMain.handle('chat-archive:raw-contains', (_e, { substring, roomId }: { substring: string; roomId?: string }) => {
+  try {
+    return { ok: true, items: chatArchiveStore.rawContains(substring, roomId) };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle('everything:search', (_e, { query, matchPath, matchCase, matchWholeWord, regex, sort, offset, max }: {
+  query: string; matchPath?: boolean; matchCase?: boolean; matchWholeWord?: boolean; regex?: boolean; sort?: number; offset?: number; max?: number;
+}) => {
+  return everythingService.searchEverything(query || '', { matchPath, matchCase, matchWholeWord, regex, sort, offset, max });
+});
+ipcMain.handle('everything:is-available', () => {
+  return everythingService.isEverythingAvailable();
 });
 
 ipcMain.handle('claude:check', async () => {

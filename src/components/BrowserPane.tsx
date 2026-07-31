@@ -27,6 +27,9 @@ type Props = {
   autoFitBaseWidth?: number;
   autoFitMinZoom?: number;
   autoFitMaxZoom?: number;
+  // 내부 webview 엘리먼트를 상위 컴포넌트에 노출 — 사내 메신저 대화 아카이브 스크래핑처럼
+  // 상위에서 executeJavaScript 를 직접 호출해야 하는 경우에 사용(dom-ready 마다 최신 참조로 호출됨).
+  onWebviewReady?: (webview: any) => void;
 };
 
 type ActiveSshTarget = {
@@ -47,7 +50,7 @@ type StoredSession = {
   hasJumps?: boolean;
 };
 
-export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, partitionKey, embedded = false, chromeless = false, externalizeLinks = false, autoFitZoom = false, autoFitBaseWidth = 960, autoFitMinZoom = 0.35, autoFitMaxZoom = 1 }) => {
+export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connectedSessions = [], initialState, onStateChange, partitionKey, embedded = false, chromeless = false, externalizeLinks = false, autoFitZoom = false, autoFitBaseWidth = 960, autoFitMinZoom = 0.35, autoFitMaxZoom = 1, onWebviewReady }) => {
   const { t } = useTranslation('browser');
   const webviewRef = useRef<any>(null);
   const webviewWrapRef = useRef<HTMLDivElement | null>(null);
@@ -1004,6 +1007,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       } catch {}
       syncWebviewHeight('dom-ready');
       window.setTimeout(() => syncWebviewHeight('dom-ready-late'), 60);
+      try { onWebviewReady?.(wv); } catch {}
     };
     wv.__pepeOnReadyHandler = onReady;
     wv.__pepeOnReadyBound = true;

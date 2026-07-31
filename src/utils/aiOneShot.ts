@@ -8,9 +8,10 @@ const ONE_SHOT_TIMEOUT_MS = 60_000;
 
 const uid = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export function runOneShotPrompt(agent: AiOneShotAgent, prompt: string, model?: string): Promise<string> {
+export function runOneShotPrompt(agent: AiOneShotAgent, prompt: string, model?: string, signal?: AbortSignal): Promise<string> {
   const api = (window as any).api;
   if (!api?.onClaudeStream) return Promise.reject(new Error('API unavailable'));
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
 
   const sessionId = uid('worklog');
   const requestId = uid('worklog-req');
@@ -34,9 +35,16 @@ export function runOneShotPrompt(agent: AiOneShotAgent, prompt: string, model?: 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       try { dispose?.(); } catch {}
       fn();
     };
+
+    const onAbort = () => {
+      stopAgent();
+      settle(() => reject(new DOMException('Aborted', 'AbortError')));
+    };
+    signal?.addEventListener('abort', onAbort);
 
     const timer = setTimeout(() => {
       stopAgent();

@@ -8,6 +8,8 @@ import { MessengerWorkspace } from './MessengerWorkspace';
 import { PlainAppWorkspace } from './PlainAppWorkspace';
 import { WorkLogWorkspace } from './WorkLogWorkspace';
 import { BrowserPane } from './BrowserPane';
+import { scrapeAllRooms, scrapeLatestForRoom, getSelectedRoomKey, listAllRoomsWithNames, type RoomBackfillProgress, type BackfillMode } from '../utils/messengerScraper';
+import { setRoomName } from '../utils/chatArchiveRoomNames';
 import { ContextMenu, MenuItem } from './ContextMenu';
 import { COMPANY_MESSENGER_LOGIN_URL } from '../utils/companyMessenger';
 import { adjustClaudeFontSize } from '../utils/claudeFont';
@@ -56,6 +58,13 @@ const GEMINI_MODELS: { v: string; l: string; icon: string; pro?: boolean }[] = [
   { v: 'gemini-3-pro', l: 'Gemini 3 Pro', icon: '✨', pro: true },
   { v: 'gemini-2.5-pro', l: 'Gemini 2.5 Pro', icon: '✨', pro: true },
 ];
+// 대화 아카이브 방 선택 패널 — 방별 최종 백필(아카이브에 저장된 가장 최근 대화) 날짜 표시용.
+function formatArchiveRoomLastTs(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const isValidGeminiModel = (m: string) => GEMINI_MODELS.some(x => x.v === m);
 // 요금제(isPaid)에 따라 해당 모델을 실제 사용할 수 있는지
 const isGeminiModelUsable = (m: string, isPaid: boolean) => {
@@ -1196,12 +1205,227 @@ type Props = {
   messengerMode?: 'mini' | 'company';
   onOpenPlainApp?: () => void;
   onMessengerModeChange?: (mode: 'mini' | 'company') => void;
+  // 대화 아카이브 검색 결과의 "메신저에서 보기" — 사내 메신저 상단 검색창에 이 텍스트를 입력+제출.
+  // fallbackText — text(AI 인용문 등) 검색이 결과 없음일 때 재시도할 원본 발췌 문장.
+  messengerJumpQuery?: { text: string; fallbackText?: string; sender?: string; roomId: string; nonce: number } | null;
 };
 
 let sessionCounter = 0;
 
-export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo, messengerMode = 'mini', onMessengerModeChange }) => {
+export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContextConsumed, mountEntries = [], onClearMounted, onRemoveMountedEntry, connectedSessions = [], defaultSshSession, pinned = true, onTogglePin, visible = true, view = 'ai', onViewChange, aiAgent = 'claude', onAgentChange, worklogFocusTodo, messengerMode = 'mini', onMessengerModeChange, messengerJumpQuery }) => {
   const activeView = view;
+  // 사내 메신저 대화 아카이브 — 전체 백필(수동 트리거) + 열려있는 방 주기적 경량 업데이트.
+  // 스크래핑은 이미 로그인된 webview 안에서 executeJavaScript 로 직접 수행(src/utils/messengerScraper.ts),
+  // 임베딩/암호화/저장은 메인 프로세스(electron/chatArchiveStore.ts)가 담당.
+  const messengerWebviewRef = useRef<any>(null);
+  const [archiveBackfill, setArchiveBackfill] = useState<{ running: boolean; roomIndex: number; roomTotal: number; roomName?: string; totalMessages: number } | null>(null);
+  // 백필 모드 선택 — '증분'(기본, 이미 아는 지점 만나면 빨리 종료)과 '전체 재백필'(느리지만
+  // 스크래퍼 로직이 개선된 뒤 과거에 잘못 저장된 텍스트까지 끝까지 훑어 갱신, 실측 사례:
+  // <br> 개행 유실 메시지 복구 참고 — messengerScraper.ts 의 BackfillMode 주석).
+  const [archiveBackfillMode, setArchiveBackfillMode] = useState<BackfillMode>('incremental');
+  const archiveStopRef = useRef(false);
+  const onMessengerWebviewReady = useCallback((wv: any) => { messengerWebviewRef.current = wv; }, []);
+  // 방 선택 UI — 백필 버튼을 누르면 바로 전체 백필을 도는 대신, 먼저 방 목록(이름 포함)만 빠르게
+  // 뽑아 사용자가 원하는 방만 고를 수 있게 한다. 111개 방 전부를 매번 도는 게 너무 느리고(실측:
+  // 밤새 돌려도 10번째 방), 그중엔 수집하고 싶지 않은 사적인 대화도 섞여 있다는 지적을 반영.
+  // loadingRooms — 방 목록을 스크롤해서 뽑아오는 중(수 초~수십 초 걸림, listAllRoomsWithNames 참고).
+  const [archiveRoomPickerLoading, setArchiveRoomPickerLoading] = useState(false);
+  // lastBackfilledAt — roomId -> 아카이브에 저장된 가장 최근 대화 시각(ms epoch, chatArchiveStore.ts
+  // 의 getStats() 가 반환하는 lastTs 그대로). "이 방을 백필한 적 있는지/언제까지 수집됐는지"를 방
+  // 선택 패널에서 바로 보여주기 위함 — 실제 백필 실행 시각이 아니라 저장된 대화 내용의 최근 시각
+  // 이라는 점에 유의(그 이후 새 대화가 없었다면 둘은 사실상 같다).
+  const [archiveRoomPicker, setArchiveRoomPicker] = useState<{ rooms: Array<{ key: string; name?: string }>; selected: Set<string>; lastBackfilledAt: Record<string, number> } | null>(null);
+  const openArchiveRoomPicker = useCallback(async () => {
+    const wv = messengerWebviewRef.current;
+    if (!wv || archiveRoomPickerLoading || archiveBackfill?.running) return;
+    setArchiveRoomPickerLoading(true);
+    try {
+      const [rooms, statsRes] = await Promise.all([
+        listAllRoomsWithNames(wv),
+        (window as any).api?.chatArchiveGetStats?.().catch(() => null),
+      ]);
+      // 방 이름은 여기서 이미 확인되므로(strong.name), 실제 백필을 시작하기 전에도 매핑을 채워둔다
+      // — 방 선택 패널 자체가 roomId 대신 이름을 바로 보여줄 수 있게.
+      for (const r of rooms) if (r.name) setRoomName(r.key, r.name);
+      const lastBackfilledAt: Record<string, number> = {};
+      if (statsRes?.ok) for (const s of (statsRes.stats || [])) lastBackfilledAt[s.roomId] = s.lastTs;
+      setArchiveRoomPicker({ rooms, selected: new Set(rooms.map(r => r.key)), lastBackfilledAt }); // 기본값: 전체 선택
+    } catch (err) {
+      console.error('[chat-archive] 방 목록 조회 실패', err);
+    } finally {
+      setArchiveRoomPickerLoading(false);
+    }
+  }, [archiveRoomPickerLoading, archiveBackfill?.running]);
+  const closeArchiveRoomPicker = useCallback(() => setArchiveRoomPicker(null), []);
+  const toggleArchiveRoomSelected = useCallback((key: string) => {
+    setArchiveRoomPicker(prev => {
+      if (!prev) return prev;
+      const next = new Set(prev.selected);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return { ...prev, selected: next };
+    });
+  }, []);
+  const selectAllArchiveRooms = useCallback(() => {
+    setArchiveRoomPicker(prev => (prev ? { ...prev, selected: new Set(prev.rooms.map(r => r.key)) } : prev));
+  }, []);
+  const deselectAllArchiveRooms = useCallback(() => {
+    setArchiveRoomPicker(prev => (prev ? { ...prev, selected: new Set() } : prev));
+  }, []);
+  const startArchiveBackfill = useCallback(async () => {
+    const wv = messengerWebviewRef.current;
+    if (!wv || archiveBackfill?.running) return;
+    const roomIds = archiveRoomPicker ? Array.from(archiveRoomPicker.selected) : undefined;
+    if (roomIds && roomIds.length === 0) return; // 아무것도 선택 안 했으면 시작하지 않음
+    setArchiveRoomPicker(null); // 선택 패널 닫고 진행 표시로 전환
+    archiveStopRef.current = false;
+    setArchiveBackfill({ running: true, roomIndex: 0, roomTotal: 0, totalMessages: 0 });
+    try {
+      await scrapeAllRooms(
+        wv,
+        (p: RoomBackfillProgress) => {
+          setArchiveBackfill({ running: true, roomIndex: p.roomIndex, roomTotal: p.roomTotal, roomName: p.roomName, totalMessages: p.totalMessages });
+          // 백필 중 확인된 방 이름을 roomId -> name 매핑에 누적 — 대화 아카이브 검색 화면(UI)이
+          // roomId 숫자 대신 방 이름을 표시할 수 있게(내부 저장/검색 로직은 roomId 그대로 유지).
+          if (p.roomName) setRoomName(p.roomId, p.roomName);
+        },
+        () => archiveStopRef.current,
+        archiveBackfillMode,
+        roomIds,
+      );
+    } catch (err) {
+      console.error('[chat-archive] 백필 실패', err);
+    } finally {
+      setArchiveBackfill(prev => (prev ? { ...prev, running: false } : null));
+    }
+  }, [archiveBackfill?.running, archiveBackfillMode, archiveRoomPicker]);
+  const stopArchiveBackfill = useCallback(() => { archiveStopRef.current = true; }, []);
+  // 열려있는 방을 주기적으로 가볍게 갱신 — 백그라운드에서 임의로 다른 방을 열지 않고, 지금 보고
+  // 있는 방만 대상으로 함(백필 도중엔 겹치지 않게 건너뜀). webview 는 이 탭이 마운트돼 있을 때만
+  // 존재하므로, 앱/탭이 닫혀있으면 이 갱신도 동작하지 않음(렌더러 종속적 한계).
+  useEffect(() => {
+    if (messengerMode !== 'company') return;
+    const id = window.setInterval(() => {
+      const wv = messengerWebviewRef.current;
+      if (!wv || archiveBackfill?.running) return;
+      (async () => {
+        const roomId = await getSelectedRoomKey(wv);
+        if (roomId) await scrapeLatestForRoom(wv, roomId).catch(() => {});
+      })();
+    }, 10 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [messengerMode, archiveBackfill?.running]);
+  // 대화 아카이브 검색 결과의 "메신저에서 보기" — 방을 먼저 특정(roomId 로 사이드바에서 클릭)한
+  // 다음 그 방 안의 내부검색(우측 패널, "메시지방 내부 검색")으로 찾는다. 처음엔 상단 전체검색으로
+  // 했었는데, 같은 문장이 여러 방/사람에서 반복되면 어느 결과가 맞는지 알 수 없는 문제가 있었음 —
+  // 방을 먼저 열어서 검색 범위를 그 방으로 좁히면 이 모호함이 구조적으로 사라짐.
+  // React 등 프레임워크가 관리하는 input 은 단순 .value = 대입으로는 내부 상태가 안 바뀌므로,
+  // installBrowserCredentialHooks(로그인 자동입력)와 동일하게 네이티브 setter 로 값을 넣는다.
+  useEffect(() => {
+    if (!messengerJumpQuery) return;
+    let cancelled = false;
+    (async () => {
+      let wv = messengerWebviewRef.current;
+      let waited = 0;
+      while (!wv && !cancelled && waited < 3000) {
+        await new Promise(r => setTimeout(r, 150));
+        wv = messengerWebviewRef.current;
+        waited += 150;
+      }
+      if (!wv || cancelled) return;
+      // 이미 예전에(정규화 고치기 전에) 저장된 아카이브 텍스트에 &nbsp; 등 특수 공백이 남아있을 수
+      // 있어 재백필 없이도 안전하게, 여기서도 방어적으로 한 번 더 일반 스페이스로 정규화한다.
+      const normalize = (s: string) => s.replace(/[^\S\n]+/g, ' ').trim().slice(0, 60);
+      const q = normalize(messengerJumpQuery.text);
+      // fallbackQ — AI 가 인용문을 원문과 미묘하게 다르게 적으면(어미/구두점) 메신저 자체 검색
+      // (정확한 부분 문자열 매칭)이 조용히 0건으로 실패한다(실측 사례: "문제되서"→"문제되어").
+      // q 로 검색해 결과가 없으면, 아카이브에 저장된 원본 발췌 문장(fallbackText)으로 자동 재시도.
+      // 원본이 곧 q 와 같다면(=인용문이 아니라 이미 원본으로 검색 중) 재시도할 필요 없음.
+      const fallbackQ = messengerJumpQuery.fallbackText ? normalize(messengerJumpQuery.fallbackText) : '';
+      const script = `
+(function() {
+  var roomKey = ${JSON.stringify(messengerJumpQuery.roomId)};
+  var queryText = ${JSON.stringify(q)};
+  var fallbackQueryText = ${JSON.stringify(fallbackQ && fallbackQ !== q ? fallbackQ : '')};
+  function setNativeValue(input, value) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  var li = document.querySelector('ul.chat_grp_lst > li.item_chat[data-key="' + roomKey + '"]');
+  if (!li) return { ok: false, error: 'room-not-found' };
+  li.click();
+
+  // 검색 결과 리스트는 보통 최신순 정렬이라, 무작정 첫 번째 카드를 클릭하면 검색어와 유사하지만
+  // 다른(더 최근) 메시지가 선택되는 경우가 있었다(예: "[65]" 클릭 시 검색어는 정확히 넘어갔지만
+  // 결과가 여러 건이라 첫 카드가 원하는 메시지가 아니었음). 그래서 각 결과 카드의 텍스트를 훑어
+  // queryText 를 포함하는 카드를 우선 찾고, 없으면 첫 번째 카드로 폴백한다.
+  function normalizeText(s) { return (s || '').replace(/\s+/g, ' ').trim(); }
+  function pickBestResultItem(items) {
+    var normQuery = normalizeText(queryText);
+    for (var i = 0; i < items.length; i++) {
+      if (normalizeText(items[i].textContent).indexOf(normQuery) !== -1) return items[i];
+    }
+    return items[0] || null;
+  }
+
+  // 1단계: 방 전환 확인(사이드바 selected 가 이 방으로 바뀔 때까지) → 2단계: 방 헤더의 검색
+  // 토글 버튼(.info_tools 안, i.ico_srch 포함) 클릭 → 3단계: 열린 내부검색 input 에 값 입력 후
+  // 검색 버튼 클릭 → 4단계: 검색 결과 리스트(.search_box .chat_grp_lst > li.item_chat, 사이드바
+  // 방 목록과 같은 클래스명을 재사용하므로 반드시 .search_box 로 스코프를 좁혀야 함)에서 검색어와
+  // 텍스트가 일치하는 항목을 찾아 클릭 — 이 카드를 누르면 NAVER WORKS 자체 동작으로 해당 메시지
+  // 위치까지 스크롤 이동됨. 각 단계 최대 ~3초 폴링.
+  //
+  // 돋보기 버튼은 "토글"이라, "메신저에서 보기"를 연속으로 누르면(이전 검색창이 아직 열려있는
+  // 상태) 무조건 다시 클릭하는 기존 로직이 검색창을 닫아버려 그 다음 검색이 실패했다(실측 사례).
+  // 검색 input(.search_area input[type="text"])이 이미 화면에 있으면 검색창이 이미 열린 상태로
+  // 보고 돋보기 클릭(1→2단계 전환)을 건너뛰고 바로 검색어 입력 단계로 간다.
+  var step = 0, tries = 0, usedFallback = false;
+  var iv = setInterval(function() {
+    tries++;
+    if (step === 0) {
+      var selected = document.querySelector('ul.chat_grp_lst > li.item_chat.selected[data-key]');
+      if (selected && selected.getAttribute('data-key') === roomKey) {
+        var alreadyOpenInput = document.querySelector('.search_area input[type="text"]');
+        step = alreadyOpenInput ? 2 : 1;
+        tries = 0;
+      }
+    } else if (step === 1) {
+      var tools = document.querySelectorAll('.info_tools .btn_tool');
+      var searchBtn = null;
+      for (var i = 0; i < tools.length; i++) { if (tools[i].querySelector('.ico_srch')) { searchBtn = tools[i]; break; } }
+      if (searchBtn) { searchBtn.click(); step = 2; tries = 0; }
+    } else if (step === 2) {
+      var input = document.querySelector('.search_area input[type="text"]');
+      if (input) {
+        setNativeValue(input, queryText);
+        var submitBtn = document.querySelector('.search_area .btn_search');
+        if (submitBtn) submitBtn.click();
+        step = 3; tries = 0;
+      }
+    } else if (step === 3) {
+      var resultItems = document.querySelectorAll('.search_box .chat_grp_lst > li.item_chat, .search_box li.item_chat');
+      if (resultItems.length > 0) {
+        clearInterval(iv);
+        var best = pickBestResultItem(Array.prototype.slice.call(resultItems));
+        if (best) best.click();
+      } else if (tries > 20) {
+        if (!usedFallback && fallbackQueryText) {
+          usedFallback = true;
+          queryText = fallbackQueryText;
+          step = 2; tries = 0;
+        }
+      }
+    }
+    if (step !== 3 && tries > 20) clearInterval(iv); // 각 단계(3단계 제외) 최대 ~3초
+    if (step === 3 && tries > 20 && (usedFallback || !fallbackQueryText)) clearInterval(iv); // 폴백까지 다 썼으면 종료
+  }, 150);
+  return { ok: true };
+})()
+`;
+      try { await wv.executeJavaScript(script); } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [messengerJumpQuery]);
   // 채팅창 내에서 독립적으로 전환 가능한 에이전트 (전역 설정과 분리)
   const [currentAgent, setCurrentAgentState] = useState<AgentType>(aiAgent);
   const currentAgentRef = useRef<AgentType>(aiAgent);
@@ -4638,10 +4862,120 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       {/* activeView 전환 시 언마운트되지 않도록 항상 마운트해두고 CSS로만 숨김 —
           그래야 첨부 목록 등 MessengerWorkspace 내부 state 가 AI Chat 탭을 오갈 때 유지됨. */}
       <div className="claude-chat-messenger-pane" style={{ display: activeView === 'messenger' ? 'flex' : 'none' }}>
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'company' ? 'flex' : 'none' }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'company' ? 'flex' : 'none', flexDirection: 'column' }}>
+          <div style={{ flex: '0 0 auto', position: 'relative', display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', fontSize: 11, color: '#aac', background: 'rgba(0,0,0,0.15)' }}>
+            {archiveBackfill?.running ? (
+              <>
+                <span>백필 중... {archiveBackfill.roomIndex}/{archiveBackfill.roomTotal || '?'}방 {archiveBackfill.roomName ? `(${archiveBackfill.roomName})` : ''} · {archiveBackfill.totalMessages}건 수집</span>
+                <button onClick={stopArchiveBackfill} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #5a3a3a', background: '#2e1a1a', color: '#ccc', cursor: 'pointer' }}>
+                  중단
+                </button>
+              </>
+            ) : (
+              <>
+                {/* 백필 버튼은 바로 전체 백필을 돌리지 않고, 먼저 방 목록(이름 포함)만 빠르게 뽑아
+                    체크박스로 원하는 방만 고를 수 있게 한다 — 111개 방 전부를 매번 도는 게 너무
+                    느리고, 그중엔 수집하고 싶지 않은 사적인 대화도 섞여 있다는 지적을 반영. */}
+                <button
+                  onClick={openArchiveRoomPicker}
+                  disabled={archiveRoomPickerLoading}
+                  style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: archiveRoomPickerLoading ? 'default' : 'pointer', opacity: archiveRoomPickerLoading ? 0.6 : 1 }}
+                >
+                  {archiveRoomPickerLoading ? '방 목록 불러오는 중...' : '🗄 대화 아카이브 백필'}
+                </button>
+                {/* 증분(빠름, 기본) — 이미 저장된 지점을 만나면 곧 조기 종료.
+                    전체 재백필(느림) — 조기 종료 없이 끝까지 스크롤해 과거에 잘못 저장된 텍스트도
+                    갱신(chatArchiveStore.ts 의 텍스트-변경 감지와 짝을 이룸). */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }} title="이미 저장된 지점을 만나면 그 방은 곧바로 다음 방으로 넘어갑니다. 빠릅니다.">
+                  <input
+                    type="radio"
+                    checked={archiveBackfillMode === 'incremental'}
+                    onChange={() => setArchiveBackfillMode('incremental')}
+                    style={{ margin: 0 }}
+                  />
+                  증분
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }} title="이미 백필된 방도 처음부터 끝까지 다시 훑어, 과거에 잘못 저장된 메시지(예: 개행 유실)를 갱신합니다. 느립니다.">
+                  <input
+                    type="radio"
+                    checked={archiveBackfillMode === 'full'}
+                    onChange={() => setArchiveBackfillMode('full')}
+                    style={{ margin: 0 }}
+                  />
+                  전체 재백필
+                </label>
+              </>
+            )}
+            {/* 방 선택 패널 — 헤더 바 아래로 펼쳐지는 절대 위치 드롭다운. 111개 방 체크박스를
+                가로 바에 인라인으로 넣기엔 너무 많아 별도 패널로 분리, 자체 스크롤. */}
+            {archiveRoomPicker && (
+              <div style={{ position: 'absolute', top: '100%', left: 8, zIndex: 20, width: 360, maxHeight: 420, display: 'flex', flexDirection: 'column', background: '#14141f', border: '1px solid #3a3a5a', borderRadius: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, padding: 8, borderBottom: '1px solid #2a2a3a' }}>
+                  <button onClick={selectAllArchiveRooms} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer' }}>전체 선택</button>
+                  <button onClick={deselectAllArchiveRooms} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer' }}>전체 해제</button>
+                  <span style={{ marginLeft: 'auto', alignSelf: 'center', color: '#889' }}>{archiveRoomPicker.selected.size}/{archiveRoomPicker.rooms.length}개 선택</span>
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {archiveRoomPicker.rooms.map(r => {
+                    const lastTs = archiveRoomPicker.lastBackfilledAt[r.key];
+                    return (
+                      <label key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', fontSize: 12, color: '#ddd', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={archiveRoomPicker.selected.has(r.key)}
+                          onChange={() => toggleArchiveRoomSelected(r.key)}
+                          style={{ margin: 0, flexShrink: 0 }}
+                        />
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || r.key}</span>
+                        {/* 백필 여부/최종 시각 — chatArchiveStore.ts 의 getStats() 가 반환하는 방별
+                            lastTs(아카이브에 저장된 가장 최근 대화 시각) 를 그대로 보여준다. 백필 이력이
+                            없는 방은 이 값이 없어 아무 표시도 하지 않는다(=수집 안 된 방임을 암묵적으로 드러냄). */}
+                        {lastTs != null && (
+                          <span style={{ flexShrink: 0, fontSize: 10, color: '#789' }} title="아카이브에 저장된 가장 최근 대화 시각">
+                            {formatArchiveRoomLastTs(lastTs)}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ flex: '0 0 auto', display: 'flex', gap: 8, padding: 8, borderTop: '1px solid #2a2a3a' }}>
+                  <button
+                    onClick={startArchiveBackfill}
+                    disabled={archiveRoomPicker.selected.size === 0}
+                    style={{ flex: 1, fontSize: 12, padding: '6px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: archiveRoomPicker.selected.size === 0 ? '#222233' : '#2b6b9b', color: '#fff', cursor: archiveRoomPicker.selected.size === 0 ? 'default' : 'pointer' }}
+                  >
+                    선택한 {archiveRoomPicker.selected.size}개 방 백필 시작
+                  </button>
+                  <button onClick={closeArchiveRoomPicker} style={{ fontSize: 12, padding: '6px 10px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer' }}>
+                    취소
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           {/* partitionKey 로 영속 세션 사용 — 기존엔 매 마운트마다 임시 partition 이라 로그인이
               앱 재시작마다 풀려서, 대화 아카이브 백그라운드 스크래핑이 세션 만료로 끊기는 문제가 있었음. */}
-          <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} partitionKey="persist:company-messenger" chromeless autoFitZoom autoFitBaseWidth={960} autoFitMinZoom={0.35} autoFitMaxZoom={1} />
+          <div style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', display: 'flex' }}>
+            <BrowserPane initialUrl={COMPANY_MESSENGER_LOGIN_URL} partitionKey="persist:company-messenger" chromeless autoFitZoom autoFitBaseWidth={960} autoFitMinZoom={0.35} autoFitMaxZoom={1} onWebviewReady={onMessengerWebviewReady} />
+            {/* 백필 도중 사용자가 실수로 메신저를 조작하면(스크롤/클릭 등) 백필 로직이 방을 잘못
+                인식하거나 스크래핑이 꼬일 수 있다 — Electron webview 는 별도 컴포지팅 레이어(OOPIF)라
+                일반 DOM 처럼 z-index 로 안 가려지므로(백그라운드 webview 시도에서 확인됨), 대신
+                webview 위에 이 오버레이를 얹어 클릭을 가로채고(pointer-events 기본값, webview 보다
+                DOM 순서상 뒤에 위치) 블러+안내 문구로 "작업 중"임을 명확히 알린다. */}
+            {archiveBackfill?.running && (
+              <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', background: 'rgba(10,10,20,0.35)', cursor: 'not-allowed' }}>
+                <div style={{ background: 'rgba(20,20,30,0.9)', border: '1px solid #3a3a5a', borderRadius: 8, padding: '16px 24px', textAlign: 'center', color: '#ddd', fontSize: 13, maxWidth: 320 }}>
+                  <div style={{ fontSize: 22, marginBottom: 8 }}>🚧</div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>대화 아카이브 백필 작업 중</div>
+                  <div style={{ color: '#99a', fontSize: 12 }}>
+                    {archiveBackfill.roomIndex}/{archiveBackfill.roomTotal || '?'}방 · {archiveBackfill.totalMessages}건 수집
+                  </div>
+                  <div style={{ color: '#778', fontSize: 11, marginTop: 6 }}>완료되기 전까지 메신저 조작을 삼가주세요.</div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: messengerMode === 'mini' ? 'flex' : 'none' }}>
           <MessengerWorkspace

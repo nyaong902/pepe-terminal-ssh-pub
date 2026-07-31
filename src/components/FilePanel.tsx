@@ -4,6 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { ContextMenu } from './ContextMenu';
 import { ChmodDialog } from './ChmodDialog';
+import { notifyConfirm, notifyError } from './Notify';
+import type { OfficeFormat } from './OfficeLauncher';
+import { isMediaExtension, getOfficeFormatForFile } from '../utils/openableFileTypes';
 
 // 파일 패널 간 공유 클립보드 (양쪽 패널에서 복사/붙여넣기 공유)
 type FileClipboard = {
@@ -35,7 +38,8 @@ export type FileInfo = {
 
 export type PanelSource = {
   // 'lazy-remote' 는 아직 연결되지 않은 원격 세션 (FileExplorer 가 선택 시 자동 SFTP 연결)
-  mode: 'local' | 'remote' | 'lazy-remote';
+  // 'cloud' 는 Pepe-Box 클라우드 스토리지 계정 — termId 가 accountId("dropbox:acct1") 로 쓰인다.
+  mode: 'local' | 'remote' | 'lazy-remote' | 'cloud';
   termId?: string;
   sessionId?: string; // lazy-remote 용 식별자
   label: string;
@@ -61,6 +65,10 @@ type Props = {
   initialFiles?: FileInfo[];
   // loadDir 로 새 목록을 성공적으로 받아올 때마다 호출 — 부모가 캐시로 들고 있다가 다음 마운트 때 initialFiles 로 넘겨준다.
   onFilesLoaded?: (files: FileInfo[]) => void;
+  // 미디어/오피스 확장자 파일 더블클릭 시 "이 앱 워크스페이스로 열기" 확인 후 호출 — remote 모드는
+  // 먼저 로컬 임시 경로로 받아야 하므로(sftp:download-to-temp), 다운로드 완료 후 로컬 경로로 호출된다.
+  onOpenInMedia?: (filePath: string, fileName: string) => void;
+  onOpenInOffice?: (format: OfficeFormat, filePath: string, fileName: string) => void;
 };
 
 const api = (window as any).api || {};
@@ -168,8 +176,9 @@ function getFileIcon(name: string, isDir: boolean, shellPath?: string): string {
   return '📁';
 }
 
-export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded }) => {
+export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, selectedFiles, onSelectionChange, currentPath, onPathChange, onFileDrop, onDisconnect, panelId, refreshKey, workspaceId, initialFiles, onFilesLoaded, onOpenInMedia, onOpenInOffice }) => {
   const { t } = useTranslation('fileExplorer');
+  const { t: tPepeThing } = useTranslation('pepeThing');
   const [bootReady, setBootReady] = useState(false);
   const [files, setFiles] = useState<FileInfo[]>(initialFiles || []);
   const [loading, setLoading] = useState(false);
@@ -510,13 +519,54 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   };
 
   const handleDoubleClick = (file: FileInfo) => {
-    if (!file.isDir) return;
+    if (!file.isDir) {
+      void tryOpenInAppWorkspace(file);
+      return;
+    }
     // 가상 shell 항목 (내 PC / 네트워크 등) — shellPath 직접 navigate
     if (file.shellPath) {
       navigate(file.shellPath);
       return;
     }
     enterDir(file.name);
+  };
+
+  // 미디어/오피스 확장자 파일 더블클릭 — 확인 후 이 앱의 워크스페이스로 연다. local 모드는
+  // realPath(shell 가상 폴더 내부) 또는 currentPath+name 이 이미 실제 로컬 경로라 바로 열면 되고,
+  // remote 모드는 sftp:download-to-temp 로 임시 폴더에 조용히 받은 뒤 그 로컬 경로로 연다.
+  // cloud/lazy-remote 모드는 로컬 임시 다운로드 경로가 없어 지원 대상에서 제외(기존 동작 없음 유지).
+  const tryOpenInAppWorkspace = async (file: FileInfo) => {
+    if (source.mode !== 'local' && source.mode !== 'remote') return;
+    const isMedia = isMediaExtension(file.name) && !!onOpenInMedia;
+    const officeFormat = getOfficeFormatForFile(file.name);
+    const isOffice = !!officeFormat && !!onOpenInOffice;
+    if (!isMedia && !isOffice) return;
+
+    const yes = await notifyConfirm(
+      isMedia ? tPepeThing('openInMediaTitle') : tPepeThing('openInOfficeTitle'),
+      isMedia ? tPepeThing('openInMediaBody', { name: file.name }) : tPepeThing('openInOfficeBody', { name: file.name }),
+    );
+    if (!yes) return;
+
+    const remoteOrLocalPath = file.realPath || (currentPath.endsWith(sep) ? currentPath + file.name : currentPath + sep + file.name);
+    let localPath = remoteOrLocalPath;
+    if (source.mode === 'remote') {
+      try {
+        // sftp:download-to-temp 는 ssh 세션 스토어 키(= source.termId, feSftpConnect 가 발급한
+        // connId 또는 터미널 세션 termId)를 요구한다 — panelId(레이아웃 패널 UI id)와는 다른 값이다.
+        const r = await api.sftpDownloadToTemp?.(source.termId, remoteOrLocalPath);
+        if (!r?.success) {
+          notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), r?.error || t('unknownError', { defaultValue: '알 수 없는 오류' }));
+          return;
+        }
+        localPath = r.localPath;
+      } catch (err: any) {
+        notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
+        return;
+      }
+    }
+    if (isMedia) onOpenInMedia!(localPath, file.name);
+    else onOpenInOffice!(officeFormat!, localPath, file.name);
   };
 
   // 선택 키 — 동명 객체 (shell library aggregator 등) 구분 위해 realPath/shellPath 우선
@@ -839,14 +889,19 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
             const localSources = sources.filter(s => s.mode === 'local');
             const connected = sources.filter(s => s.mode === 'remote');
             const lazy = sources.filter(s => s.mode === 'lazy-remote');
+            const cloud = sources.filter(s => s.mode === 'cloud');
             const renderOpt = (s: PanelSource) => (
               <option key={`${s.mode}:${s.termId || s.sessionId || ''}`} value={`${s.mode}:${s.termId || s.sessionId || ''}`}>{s.label}</option>
             );
             return (
               <>
                 {localSources.map(renderOpt)}
-                {/* 로컬 드라이브/특수 폴더 — depth 기반 트리 들여쓰기 */}
-                {drives.map(d => {
+                {cloud.map(renderOpt)}
+                {/* 로컬 드라이브/특수 폴더 — depth 기반 트리 들여쓰기. cloud 전용 패널(로컬 소스가
+                    아예 없는 경우)에는 드라이브 전환 옵션을 노출하지 않는다 — onSourceChange 가
+                    로컬로 전환해줄 수 없는 상태라 선택해도 아무 반응이 없거나 드롭다운/본문이
+                    어긋나 보이는 문제가 있었음. */}
+                {localSources.length > 0 && drives.map(d => {
                   const depth = (d.depth ?? 0) + 1; // 로컬 아래로 한 단계 더 들여씀
                   const indent = '    '.repeat(depth);
                   return (

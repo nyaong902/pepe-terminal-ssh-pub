@@ -21,13 +21,16 @@ import { PlainAppWorkspace } from './components/PlainAppWorkspace';
 import { CompareWorkspace } from './components/CompareWorkspace';
 import { LogAnalyzer } from './components/LogAnalyzer';
 import { VpnWorkspace } from './components/VpnWorkspace';
+import { PepeBoxWorkspace } from './components/PepeBoxWorkspace';
+import { PepeThingWorkspace } from './components/PepeThingWorkspace';
 import { MicroSipWorkspace, type MicroSipView } from './components/MicroSipWorkspace';
 import { SswSoftphoneWorkspace, type SswSoftphoneView } from './components/SswSoftphoneWorkspace';
 import { SippWorkspace } from './components/SippWorkspace';
-import { OfficeLauncher } from './components/OfficeLauncher';
+import { OfficeLauncher, type OfficeFormat } from './components/OfficeLauncher';
 import { MediaLauncher } from './components/MediaLauncher';
 import { TranslationEditor } from './components/TranslationEditor';
 import { SqlToolWorkspace, serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { ChatArchiveSearch } from './components/ChatArchiveSearch';
 import { CustomWorkspaceDialog, CustomWorkspaceManager } from './components/CustomWorkspaceDialog';
 import { CustomWorkspaceView } from './components/CustomWorkspaceView';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -74,9 +77,9 @@ import {
 export type { LayoutNode, ContainerNode, LeafNode, Panel, PanelSession } from './utils/layoutUtils';
 
 export type TabId = string;
-export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'customWorkspace';
+export type TabType = 'terminal' | 'fileExplorer' | 'fileEditor' | 'browser' | 'plainApp' | 'compare' | 'logAnalyzer' | 'vpn' | 'i18nEditor' | 'sqlTool' | 'messenger' | 'microsip' | 'sswPhone' | 'sipp' | 'office' | 'media' | 'customWorkspace' | 'chatArchiveSearch' | 'pepeThing' | 'pepeBox';
 export type TabColor = 'default' | 'red' | 'purple' | 'yellow' | 'green' | 'blue' | 'orange';
-export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate };
+export type Tab = { id: TabId; title: string; layout: LayoutNode; type?: TabType; customTitle?: boolean; color?: TabColor; editor?: { termId: string; remotePath: string; fileName: string }; sqlTool?: { sessionId: string; sessionName: string }; initialTermId?: string; initialRemotePath?: string; noAutoSelectSession?: boolean; fileExplorerState?: any; workspaceState?: any; customWorkspaceId?: string; customWorkspaceTemplate?: CustomWorkspaceTemplate; pendingOfficeFile?: { format: OfficeFormat; filePath: string } };
 const WORKSPACE_COLORS: TabColor[] = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
 
 // 세션의 점프 체인을 SFTP 연결용 배열로 정규화. host 있는 항목만, 첫 빈 host 에서 종료.
@@ -144,7 +147,7 @@ function App() {
   const [splitRightTabId, setSplitRightTabId] = useState<TabId | null>(null);
   const [splitRatio, setSplitRatio] = useState<number>(0.5); // 좌 비율 0.2~0.8
   // 지원 대상: 특수 워크스페이스 전체 + 터미널 (type undefined / 'terminal').
-  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'plainApp', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sswPhone', 'sipp', 'fileExplorer', 'fileEditor', undefined];
+  const SPLITTABLE_TYPES: (TabType | undefined)[] = ['terminal', 'browser', 'plainApp', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'microsip', 'sswPhone', 'sipp', 'fileExplorer', 'fileEditor', 'pepeThing', undefined];
   const canSplit = (tab: Tab | undefined) => !!tab && (tab.type === undefined || SPLITTABLE_TYPES.includes(tab.type));
   const splitRightTab = tabs.find(t => t.id === splitRightTabId) || null;
   // 활성 탭 자체를 분할 대상으로 설정 못 하게 — 자동 해제
@@ -747,7 +750,7 @@ function App() {
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
   // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
   // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
-  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true });
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, pepeBox: true });
   useEffect(() => {
     (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
   }, []);
@@ -1159,6 +1162,26 @@ function App() {
     const onPrefill = () => setShowClaudeChat(true);
     window.addEventListener('claude-prefill', onPrefill);
     return () => window.removeEventListener('claude-prefill', onPrefill);
+  }, []);
+  // 대화 아카이브 검색 결과에서 "메신저에서 보기" 클릭 시 — 사내 메신저(회사 모드)를 열고, 그
+  // 검색어를 ClaudeChat 에 전달해 NAVER WORKS 자체 상단 검색창에 입력+제출까지 시켜준다.
+  // nonce 는 같은 텍스트로 다시 눌러도 ClaudeChat 쪽 effect 가 재발동하게 하기 위함.
+  const [messengerJumpQuery, setMessengerJumpQuery] = useState<{ text: string; fallbackText?: string; sender?: string; roomId: string; nonce: number } | null>(null);
+  useEffect(() => {
+    const onJump = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const text = detail?.text;
+      if (!text || !detail?.roomId) return;
+      setClaudeChatView('messenger');
+      setMessengerMode('company');
+      setShowClaudeChat(true);
+      setClaudeChatVisible(true);
+      // fallbackText — AI 인용문이 원문과 미묘하게 달라(어미/구두점) 메신저 자체 검색이 실패할 때
+      // 재시도용으로 쓸 원본 발췌 문장(ChatArchiveSearch.tsx 참고). 없으면 text 자신으로 폴백.
+      setMessengerJumpQuery({ text, fallbackText: detail?.fallbackText || text, sender: detail?.sender, roomId: detail.roomId, nonce: Date.now() });
+    };
+    window.addEventListener('chat-archive-open-in-messenger', onJump);
+    return () => window.removeEventListener('chat-archive-open-in-messenger', onJump);
   }, []);
   // 옵션 화면(메신저 탭)이 열릴 때 저장된 사내메신저 계정을 불러와 입력칸에 채워둔다.
   useEffect(() => {
@@ -2702,12 +2725,35 @@ function App() {
   const addCompareTab = () => addSpecialTab('compare', tApp('tabs.compare'));
   const addLogAnalyzerTab = () => addSpecialTab('logAnalyzer', tApp('tabs.logAnalyzer'));
   const addVpnTab = () => addSpecialTab('vpn', tApp('tabs.vpn'));
+  const addPepeBoxTab = () => addSpecialTab('pepeBox', tApp('tabs.pepeBox'));
   const addMicroSipTab = () => addSpecialTab('microsip', '📞 MicroSIP');
   const addSswPhoneTab = () => addSpecialTab('sswPhone', '📡 SSW 소프트폰');
   const addSippTab = () => addSpecialTab('sipp', '📶 SIPp');
   const addOfficeTab = () => addSpecialTab('office', '📄 오피스');
   const addMediaTab = () => addSpecialTab('media', '🎵 미디어');
+  // Pepe-Thing(파일 검색) 더블클릭 시 "이 앱 워크스페이스로 열기" 확인 후 호출 — 빈 워크스페이스
+  // 탭이 아니라, 생성과 동시에 해당 파일을 재생/편집 상태로 띄운다.
+  const addMediaTabWithFile = (filePath: string, fileName: string) => {
+    const id = `tab-media-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
+    const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title: `🎵 ${fileName}`, layout: emptyLayout, type: 'media' as TabType, color, workspaceState: { files: [{ filePath, fileName }], activeFilePath: filePath } }];
+    });
+    setActiveTabId(id);
+  };
+  const addOfficeTabWithFile = (format: OfficeFormat, filePath: string, fileName: string) => {
+    const id = `tab-office-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` as TabId;
+    const emptyLayout: LayoutNode = { id: `node-${id}`, type: 'leaf', panel: { id: `panel-${id}`, sessions: [], activeIdx: 0 } };
+    setTabs(prev => {
+      const color = pickWorkspaceColor(prev, prev.length);
+      return [...prev, { id, title: `📄 ${fileName}`, layout: emptyLayout, type: 'office' as TabType, color, pendingOfficeFile: { format, filePath } }];
+    });
+    setActiveTabId(id);
+  };
   const addI18nEditorTab = () => addSpecialTab('i18nEditor', tApp('tabs.i18nEditor'));
+  const addChatArchiveSearchTab = () => addSpecialTab('chatArchiveSearch', '🗄 대화 아카이브 검색');
+  const addPepeThingTab = () => addSpecialTab('pepeThing', tApp('tabs.pepeThing'));
   const openCustomWorkspaceTemplate = useCallback((templateId: string) => {
     const tpl = customWorkspaces.find(t => t.id === templateId);
     if (!tpl) return;
@@ -2800,12 +2846,15 @@ function App() {
     { id: 'cmd-quickCmd', label: '빠른 명령', icon: '🚀', keywords: ['quick command', 'broadcast', '명령'], run: () => { setShowBroadcast(true); setQuickCmdMenuOpen(true); } },
     { id: 'cmd-logAnalyzer', label: '로그 분석 워크스페이스', icon: '📊', keywords: ['log', 'analyzer'], run: () => addLogAnalyzerTab() },
     ...(availableFeatures.vpn ? [{ id: 'cmd-vpn', label: 'VPN 워크스페이스', icon: '🔒', keywords: ['vpn'], run: () => addVpnTab() }] : []),
+    ...(availableFeatures.pepeBox ? [{ id: 'cmd-pepeBox', label: 'Pepe-Box', icon: '📦', keywords: ['pepebox', 'cloud', 'dropbox', 'google drive', 'onedrive', '클라우드', '네이버', '카카오'], run: () => addPepeBoxTab() }] : []),
     ...(availableFeatures.microsip ? [{ id: 'cmd-microsip', label: 'MicroSIP', icon: '📞', keywords: ['sip', 'phone', '전화'], run: () => addMicroSipTab() }] : []),
     ...(availableFeatures.sswPhone ? [{ id: 'cmd-sswPhone', label: 'SSW 소프트폰', icon: '📡', keywords: ['ssw', 'sip', 'phone', '전화', 'skb'], run: () => addSswPhoneTab() }] : []),
     ...(availableFeatures.sipp ? [{ id: 'cmd-sipp', label: 'SIPp', icon: '📶', keywords: ['sipp', 'load test', 'cps', '부하테스트'], run: () => addSippTab() }] : []),
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
+    { id: 'cmd-chatArchiveSearch', label: '대화 아카이브 검색', icon: '🗄', keywords: ['chat archive', 'messenger search', '메신저 검색', '대화 검색', 'naver works'], run: () => addChatArchiveSearchTab() },
+    { id: 'cmd-pepeThing', label: 'Pepe-Thing (파일 검색)', icon: '🔎', keywords: ['everything', 'file search', '파일 검색', '빠른 검색', 'pepe-thing'], run: () => addPepeThingTab() },
     { id: 'cmd-customWorkspaceAdd', label: '커스텀 워크스페이스 추가', icon: '➕', keywords: ['custom workspace', '커스텀'], run: () => openCustomWorkspaceCreator() },
     ...customWorkspaces.map((ws, i) => ({
       id: `cmd-customWorkspace-${ws.id}`,
@@ -3866,7 +3915,7 @@ function App() {
     // 터미널이 아닌 워크스페이스(브라우저/파일비교/로그분석/VPN/다국어/SQL Tool)에서 더블클릭한 경우
     // → 기존 터미널 워크스페이스 탭을 찾아 활성화하고 거기서 세션 연결 (없으면 새로 생성).
     // fileExplorer / fileEditor 는 아래에서 별도 처리(SFTP/편집기 흐름).
-    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media'];
+    const NON_TERMINAL_NON_FE: TabType[] = ['browser', 'compare', 'logAnalyzer', 'vpn', 'i18nEditor', 'sqlTool', 'messenger', 'microsip', 'sswPhone', 'sipp', 'office', 'media', 'pepeThing', 'pepeBox'];
     const isTermTabType = (t: TabType | undefined) => t === undefined || t === 'terminal';
     if (activeTab.type && NON_TERMINAL_NON_FE.includes(activeTab.type)) {
       // 이미 우측 분할에 터미널 워크스페이스가 떠 있으면 — activeTab 을 전환하지 않고
@@ -4358,10 +4407,13 @@ function App() {
         { label: tMenu('tools.compareWs'), action: addCompareTab },
         { label: tMenu('tools.logAnalyzerWs'), action: addLogAnalyzerTab },
         ...(availableFeatures.vpn ? [{ label: tMenu('tools.vpnWs'), action: addVpnTab }] : []),
+        ...(availableFeatures.pepeBox ? [{ label: tMenu('tools.pepeBoxWs'), action: addPepeBoxTab }] : []),
         ...(availableFeatures.microsip ? [{ label: '📞 MicroSIP', action: addMicroSipTab }] : []),
         ...(availableFeatures.sswPhone ? [{ label: '📡 SSW 소프트폰', action: addSswPhoneTab }] : []),
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
+        { label: '🗄 대화 아카이브 검색', action: addChatArchiveSearchTab },
+        { label: tMenu('tools.pepeThingWs'), action: addPepeThingTab },
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
         { separator: true, label: '' },
@@ -4734,6 +4786,8 @@ function App() {
               initialPath={getCurrentPwdForTerm(sess.termId)}
               onOpenFile={handleOpenRemoteFile}
               onAttachToClaude={handleAttachToClaude}
+              onOpenInMedia={addMediaTabWithFile}
+              onOpenInOffice={addOfficeTabWithFile}
             />
           ) : (
             <div style={{ padding: 16, color: 'var(--win-text-dim)', fontSize: 12, flex: 1 }}>
@@ -5041,6 +5095,9 @@ function App() {
           onAddOfficeTab={addOfficeTab}
           onAddMediaTab={addMediaTab}
           onAddI18nEditorTab={addI18nEditorTab}
+          onAddPepeThingTab={addPepeThingTab}
+          onAddPepeBoxTab={addPepeBoxTab}
+          onAddChatArchiveSearchTab={addChatArchiveSearchTab}
           onAddCustomWorkspace={(templateId?: string) => {
             if (templateId) {
               openCustomWorkspaceTemplate(templateId);
@@ -5155,6 +5212,8 @@ function App() {
                 onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
               >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
+              <button className="tool-btn" title={tApp('toolbar.chatArchiveSearchTooltip')} onClick={() => addChatArchiveSearchTab()}>🗄</button>
+              <button className="tool-btn" title={tApp('toolbar.pepeThingTooltip')} onClick={() => addPepeThingTab()}>🔎</button>
           <button
             className="tool-btn"
             title={tApp('toolbar.resetSplitTooltip')}
@@ -5468,6 +5527,8 @@ function App() {
                 // ref 에 저장 — setTabs 를 매번 호출하면 재렌더 루프 발생. 분리 시점(serializeTab)에 끌어 쓴다.
                 fileExplorerStateRef.current.set(t.id, st);
               }}
+              onOpenInMedia={addMediaTabWithFile}
+              onOpenInOffice={addOfficeTabWithFile}
             />
           </div>
         ))}
@@ -5560,6 +5621,8 @@ function App() {
                     initialPath={getCurrentPwdForTerm(sess.termId)}
                     onOpenFile={handleOpenRemoteFile}
                     onAttachToClaude={handleAttachToClaude}
+                    onOpenInMedia={addMediaTabWithFile}
+                    onOpenInOffice={addOfficeTabWithFile}
                   />
                   <div
                     className="workspace-file-tree-resizer"
@@ -5638,7 +5701,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.compare')}>
               <CompareWorkspace
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5649,7 +5712,7 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label={tApp('errorBoundary.logAnalyzer')}>
               <LogAnalyzer
-                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
+                sessions={tabs.filter(t => t.type !== 'fileExplorer' && t.type !== 'fileEditor' && !t.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|pepeThing|pepeBox/)).flatMap(t => collectAllSessions(t.layout)).filter(s => s.sessionId)}
                 initialState={t.workspaceState}
                 onStateChange={(st: any) => { workspaceStateRef.current.set(t.id, st); }}
               />
@@ -5660,6 +5723,13 @@ function App() {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="VPN">
               <VpnWorkspace />
+            </ErrorBoundary>
+          </div>
+        ))}
+        {tabs.filter(t => t.type === 'pepeBox').map(t => (
+          <div key={t.id} style={tabSlotStyle(t)}>
+            <ErrorBoundary label="Pepe-Box">
+              <PepeBoxWorkspace />
             </ErrorBoundary>
           </div>
         ))}
@@ -5707,6 +5777,7 @@ function App() {
                 instanceId={t.id}
                 initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
                 onStateChange={(st) => workspaceStateRef.current.set(t.id, st)}
+                initialFile={t.pendingOfficeFile}
               />
             </ErrorBoundary>
           </div>
@@ -5747,7 +5818,7 @@ function App() {
                     setCustomWorkspaces(prev => prev.map(ws => ws.id === normalized.id ? normalized : ws));
                     setTabs(prev => prev.map(tab => tab.type === 'customWorkspace' && tab.customWorkspaceId === normalized.id ? { ...tab, title: normalized.name, customWorkspaceTemplate: normalized } : tab));
                   }}
-                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
+                  sessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|customWorkspace|pepeThing/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId)}
                   connectedBrowserSessions={connectedBrowserSessions}
                   availableShells={availableShells}
                   onCloseTerm={releaseTermResources}
@@ -5756,6 +5827,20 @@ function App() {
             </div>
           );
         })}
+        {tabs.filter(t => t.type === 'chatArchiveSearch').map(t => (
+          <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden' }}>
+            <ErrorBoundary label="대화 아카이브 검색">
+              <ChatArchiveSearch />
+            </ErrorBoundary>
+          </div>
+        ))}
+        {tabs.filter(t => t.type === 'pepeThing').map(t => (
+          <div key={t.id} style={{ ...tabSlotStyle(t), overflow: 'hidden' }}>
+            <ErrorBoundary label="Pepe-Thing">
+              <PepeThingWorkspace onOpenInMedia={addMediaTabWithFile} onOpenInOffice={addOfficeTabWithFile} />
+            </ErrorBoundary>
+          </div>
+        ))}
         {/* SQL Tool 탭은 sessionId 별로 마운트 유지 (재방문 시 쿼리/연결 상태 보존) */}
         {tabs.filter(t => t.type === 'sqlTool').map(t => {
           // 분리/복원으로 carry 된 workspaceState 가 있으면 자식 마운트 전 cache 에 hydrate.
@@ -7357,6 +7442,7 @@ function App() {
               worklogFocusTodo={worklogFocusTodo}
               messengerMode={messengerMode}
               onMessengerModeChange={setMessengerMode}
+              messengerJumpQuery={messengerJumpQuery}
             />
             </div>
           </>

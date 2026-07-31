@@ -81,7 +81,8 @@
     "logAnalyzer": "📈 日志分析",
     "vpn": "🔒 VPN",
     "i18nEditor": "🌍 翻译编辑器",
-    "fileTransfer": "📁 文件传输"
+    "fileTransfer": "📁 文件传输",
+    "pepeThing": "🔎 Pepe-Thing"
   },
   "term": {
     "connectCancelled": "✕ 连接已取消。",
@@ -109,6 +110,8 @@
   "toolbar": {
     "dragHint": "拖动以左右移动快速连接或移至顶部",
     "fileTransferTooltip": "文件传输",
+    "chatArchiveSearchTooltip": "聊天存档搜索",
+    "pepeThingTooltip": "Pepe-Thing（文件搜索）",
     "resetSplitTooltip": "均分面板比例（重置当前工作区所有分割比例）",
     "quickConnectShow": "显示快速连接栏",
     "quickConnectHide": "隐藏快速连接栏",

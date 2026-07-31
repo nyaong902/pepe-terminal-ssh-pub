@@ -82,7 +82,9 @@
     "logAnalyzer": "📈 Log Analyzer",
     "vpn": "🔒 VPN",
     "i18nEditor": "🌍 Translation Editor",
-    "fileTransfer": "📁 File transfer"
+    "fileTransfer": "📁 File transfer",
+    "pepeThing": "🔎 Pepe-Thing",
+    "pepeBox": "📦 Pepe-Box"
   },
   "term": {
     "connectCancelled": "✕ Connection cancelled.",
@@ -110,6 +112,8 @@
   "toolbar": {
     "dragHint": "Drag to move quick-connect left/right or to the top",
     "fileTransferTooltip": "File transfer",
+    "chatArchiveSearchTooltip": "Chat archive search",
+    "pepeThingTooltip": "Pepe-Thing (file search)",
     "resetSplitTooltip": "Equalize panel ratios (reset all split ratios in current workspace)",
     "quickConnectShow": "Show quick-connect bar",
     "quickConnectHide": "Hide quick-connect bar",

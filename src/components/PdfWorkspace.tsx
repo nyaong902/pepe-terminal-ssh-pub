@@ -37,7 +37,7 @@ const MODE_TO_TYPE: Record<Exclude<EditorMode, 'none'>, number> = {
 
 let nextPdfId = 0;
 
-export function PdfWorkspace(_props: { instanceId: string }) {
+export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialFilePath?: string }) {
   const [docs, setDocs] = useState<OpenPdf[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -91,6 +91,13 @@ export function PdfWorkspace(_props: { instanceId: string }) {
     openBytes(result.data, result.fileName, doc.filePath);
     addRecent('pdf', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
+
+  const initialFileOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!initialFilePath || initialFileOpenedRef.current) return;
+    initialFileOpenedRef.current = true;
+    handleOpenRecent({ filePath: initialFilePath, fileName: initialFilePath.split(/[\\/]/).pop() || initialFilePath, openedAt: 0, openCount: 0 });
+  }, [initialFilePath]);
 
   const handleSave = async () => {
     if (!activeId) return;

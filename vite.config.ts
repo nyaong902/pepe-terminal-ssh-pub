@@ -62,7 +62,7 @@ export default defineConfig({
           build: {
             sourcemap: 'hidden',
             rollupOptions: {
-              external: ['ssh2', 'cpu-features', 'iconv-lite', 'node-pty', 'webdav-server', 'electron-updater'],
+              external: ['ssh2', 'cpu-features', 'iconv-lite', 'node-pty', 'webdav-server', 'electron-updater', '@xenova/transformers', 'onnxruntime-node', 'sharp', 'koffi'],
             },
           },
         },
