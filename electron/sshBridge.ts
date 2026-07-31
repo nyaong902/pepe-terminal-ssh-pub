@@ -45,6 +45,15 @@ export function setSftpDebugLog(enabled: boolean) { sftpDebugLogEnabled = !!enab
 function sftpDebug(msg: string) {
   if (!sftpDebugLogEnabled) return;
   console.log(msg);
+  // 메인 프로세스 콘솔은 패키지된 앱에서 볼 수 없다 — 렌더러 DevTools 로도 보낸다.
+  // (App.tsx 의 onDebugLog 구독이 '[main] ...' 로 찍어준다.) 이게 없어서 사용자가
+  // setSftpDebugLog(true) 를 켜도 DevTools 에 ClearCase 로그가 하나도 안 보였다.
+  try {
+    const { BrowserWindow } = require('electron');
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('debug:log', msg);
+    }
+  } catch {}
 }
 
 // sshTerminalWorker.cjs 의 sanitizeForClone 이 attrs.isDirectory()/isSymbolicLink()/isFile() 를
@@ -499,6 +508,12 @@ class SSHBridge extends EventEmitter {
           break;
         case 'data':
           this.emit('message', { type: 'data', panelId, data: msg.data });
+          // 프롬프트에서 cwd + ClearCase 뷰태그 파싱 — 비-워커 경로(handleConnect 의
+          // stream.on('data'))에는 있었는데 이 워커 경로에만 빠져 있었다. 그래서 로그인
+          // 스크립트가 없는 세션(=워커로 위임되는 조건)은 promptTail 이 끝까지 비어 있어
+          // 뷰 루트를 절대 못 찾았고, /vobs 파일트리가 열리지 않았다. 같은 세션에 로그인
+          // 스크립트를 넣으면 비-워커 경로를 타서 잘 되던 이유가 이것이다.
+          this._parsePromptCwd(panelId, String(msg.data ?? ''));
           break;
         case 'closed':
           this.clients.delete(panelId);
@@ -989,6 +1004,13 @@ class SSHBridge extends EventEmitter {
         return otherRoot;
       }
     }
+    // 실패 경로도 반드시 남긴다 — 예전엔 성공했을 때만 로그를 찍어서, 정작 문제가 되는
+    // "끝까지 못 찾은" 경우에 아무 로그도 안 나왔다(사용자: "clearcase 로그는 없어").
+    // 어느 단계에서 왜 막혔는지 알 수 있도록 판단에 쓴 입력들을 함께 남긴다.
+    sftpDebug(`[clearcase-${panelId.slice(-6)}] view root NOT FOUND` +
+      ` (host=${host || '?'}, shellPid=${this.activeShellPids.get(panelId) || this.shellPids.get(panelId) || 'none'},` +
+      ` promptTail=${tail.length}B, prompt="${tail.replace(/\s+/g, ' ').slice(-70)}")` +
+      ` → /vobs 경로를 변환 없이 그대로 사용`);
     return '';
   }
 
@@ -2457,7 +2479,12 @@ probe_curl || probe_wget || probe_python
       // 디렉토리를 오판하지 않는다.
       list = await this._sftpReaddirOnce(sftp, ccPath, reusedChannel ? 6000 : 30000);
     } catch (err) {
-      if (ccPath === rawPath) throw err;
+      if (ccPath === rawPath) {
+        // 변환이 없었던 경우(뷰 루트 미탐지거나 애초에 /vobs 가 아닌 경로) — 폴백할 대상이 없다.
+        // 여기서 조용히 던지면 "파일트리가 안 열린다"의 실제 원인이 로그에 전혀 안 남으므로 기록한다.
+        sftpDebug(`[clearcase-${panelId.slice(-6)}] listdir 실패 (변환 없음, path=${rawPath}): ${(err as any)?.message || err}`);
+        throw err;
+      }
       // ★ 채널이 죽은 신호면 raw 로 폴백하지 않는다.
       // 이건 경로가 틀렸다는 뜻이 아니라 채널이 멈췄다는 뜻인데, 내 타임아웃은 서버에 이미 나간
       // 요청을 취소하지 못한다. 그 상태에서 같은 채널에 raw 요청을 또 얹으면 응답 없는 요청이 쌓여
