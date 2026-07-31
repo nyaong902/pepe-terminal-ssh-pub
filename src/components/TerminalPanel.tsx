@@ -1531,31 +1531,84 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
   host.appendChild(canvas);
   const ctx = canvas.getContext('2d');
   if (!ctx) { try { canvas.remove(); } catch {} return () => {}; }
+  // ── 캔버스는 터미널 전체가 아니라 "커서 주변 띠"만 덮는다 ────────────────────────
+  // 측정(작업 관리자 GPU, 같은 강도로 연속 타이핑):  일반 블록 커서 1.5%  vs  불꽃 커서 9.5%.
+  // 렌더러 JS 는 이미 무죄다(트레이스 86초 중 drawImage 38.7ms). 남은 8%p 는 전부 GPU 쪽인데,
+  // Chromium 은 canvas 내용이 바뀌면 그린 영역이 아무리 작아도 **레이어 전체**를 damaged 로
+  // 표시한다. 그래서 앞서 넣은 dirty rect 는 캔버스에 그리는 비용만 줄였고, 컴포지터가 매번
+  // 터미널 크기(약 1860x860 ≈ 1.6M px)의 쿼드를 다시 합성하는 비용은 그대로 남아 있었다.
+  //
+  // 파티클이 실제로 도달하는 세로 거리를 테마별로 계산하면 최대 220px 정도다
+  // (flame: vy -1.5~-4 에 gravity -0.04, fade 0.94 → 약 48프레임 동안 위로 ~200px.
+  //  power: gravity 0.2, fade 0.9 → 28프레임에 ~110px. heart/star: 40~70px).
+  // 그래서 높이만 띠로 줄이면 겉모습은 그대로 두고 합성 면적을 2~3배 줄일 수 있다.
+  // 가로는 줄이지 않는다 — 타이핑하면 커서 x 가 한 줄을 계속 훑고 지나가서 자주 옮겨야 하고,
+  // 옮기는 순간 살아있는 파티클이 잘려 보이기 때문에 이득보다 부작용이 크다.
+  const BAND_ABOVE = 260;   // 커서 위쪽 확보 높이 (최대 도달 220px + 여유)
+  const BAND_BELOW = 60;    // 커서 아래쪽 (heart 처럼 다시 떨어지는 테마용)
+  let hostW = 0, hostH = 0; // 터미널(호스트) CSS 크기
+  let bandY = 0;            // 캔버스의 host 기준 top (CSS px)
+  let bandH = 0;            // 캔버스 높이 (CSS px)
+  let needFullClear = false;
+  // 파티클 좌표는 계속 host 기준으로 다루고, 캔버스는 그 공간을 들여다보는 창으로 쓴다.
+  // canvas.width 대입은 transform 을 초기화하므로 리사이즈 후에도 다시 걸어줘야 한다.
+  const applyBand = () => {
+    canvas.style.top = bandY + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, -bandY);
+    needFullClear = true;
+  };
   const resize = () => {
     const rect = host.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const cw = Math.floor(rect.width), ch = Math.floor(rect.height);
+    hostW = Math.floor(rect.width);
+    hostH = Math.floor(rect.height);
+    const h = Math.min(BAND_ABOVE + BAND_BELOW, hostH);
     // 크기가 그대로면 손대지 않는다 — width/height 대입은 값이 같아도 백킹 스토어를 재할당한다.
-    if (canvas.width === cw && canvas.height === ch) return;
-    canvas.width = cw;
-    canvas.height = ch;
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
+    if (canvas.width !== hostW || canvas.height !== h) {
+      canvas.width = hostW;
+      canvas.height = h;
+      canvas.style.width = hostW + 'px';
+      canvas.style.height = h + 'px';
+      bandH = h;
+      bandY = Math.max(0, Math.min(bandY, hostH - bandH));
+      applyBand();
+    }
   };
   resize();
   const ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(resize) : null;
   ro?.observe(host);
+  // spawn 지점이 띠 안에 편하게 들어오지 않으면 띠를 커서 기준으로 다시 잡는다.
+  // 프롬프트에서 타이핑하는 동안은 커서 행이 그대로여서 한 번도 움직이지 않는다.
+  const ensureBand = (y: number) => {
+    if (!bandH) return;
+    if (y >= bandY + 8 && y <= bandY + bandH - 24) return;
+    const want = Math.max(0, Math.min(hostH - bandH, Math.round(y - BAND_ABOVE)));
+    if (want === bandY) return;
+    bandY = want;
+    applyBand();
+  };
+  let canvasHidden = false;
+  const hideCanvas = () => {
+    if (canvasHidden) return;
+    canvasHidden = true;
+    canvas.style.display = 'none';
+  };
+  const showCanvas = () => {
+    if (!canvasHidden) return;
+    canvasHidden = false;
+    canvas.style.display = '';
+    // 숨기기 직전 프레임의 잔상(alpha < 0.05 로 거의 안 보이던 픽셀)이 다시 드러나지 않게
+    needFullClear = true;
+  };
   // 흔들림 적용 대상 — xterm-screen 의 부모 (커서/뷰포트 함께 흔들림)
   const shakeTarget = host;
   const particles: Particle[] = [];
   let shake = 0;
   let rafId = 0;
   let alive = true;
-  // 지난 프레임에 실제로 그린 영역 — 다음 프레임에 "그만큼만" 지운다.
-  // 전체 clearRect 는 캔버스 전체를 dirty 로 만들어, 터미널 크기(예: 900x480 ≈ 1.7MB)의 텍스처를
-  // 매 프레임 GPU 로 다시 올리게 한다(60fps 면 초당 100MB 규모) — 타이핑 중 GPU 점유가 10%를
-  // 넘던 남은 원인. 캔버스를 매 프레임 리사이즈하는 방식은 백킹 스토어가 재할당돼 오히려 더
-  // 비싸므로, 크기는 그대로 두고 갱신 영역만 좁힌다.
+  // 지난 프레임에 실제로 그린 영역(host 좌표) — 다음 프레임에 "그만큼만" 지운다.
+  // 캔버스에 그리는 비용을 줄인다. 컴포지터 합성 면적은 이걸로 줄지 않으므로(위 띠 주석 참고)
+  // 둘이 서로 보완 관계다.
   let dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
   // 파티클 애니메이션은 30fps 로 제한 — 장식 효과라 60fps 가 필요하지 않고, 프레임당 텍스처
   // 업로드가 그대로 절반이 된다.
@@ -1575,8 +1628,14 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     const steps = lastDraw ? Math.min(3, Math.max(1, (now - lastDraw) / 16.7)) : 1;
     const fadeF = steps === 1 ? theme.fade : Math.pow(theme.fade, steps);
     lastDraw = now;
-    const w = canvas.width, h = canvas.height;
-    if (dirty) {
+    // 좌표는 모두 host 기준. 캔버스가 덮는 세로 구간은 [bandY, bandY + bandH).
+    const yTop = bandY, yBot = bandY + bandH;
+    if (needFullClear) {
+      // 띠가 옮겨졌거나(transform 변경) 숨김에서 돌아온 직후 — 잔상 제거를 위해 띠 전체를 지운다.
+      ctx.clearRect(0, yTop, hostW, bandH);
+      needFullClear = false;
+      dirty = null;
+    } else if (dirty) {
       ctx.clearRect(dirty.x0, dirty.y0, dirty.x1 - dirty.x0, dirty.y1 - dirty.y0);
       dirty = null;
     }
@@ -1593,7 +1652,8 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
       p.y += p.vy * steps;
       p.vy += theme.gravity * steps;
       p.alpha *= fadeF;
-      if (p.alpha < 0.05 || p.y > h + 30 || p.y < -30) continue;
+      // 띠 밖으로 나간 파티클은 어차피 보이지 않으므로 여기서 버린다.
+      if (p.alpha < 0.05 || p.y > yBot + 30 || p.y < yTop - 30) continue;
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
       let ext = p.size;
@@ -1616,10 +1676,10 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     }
     particles.length = writeIdx;
     if (writeIdx > 0) {
-      // 여유 1px — 안티에일리어싱 잔상 방지
+      // 여유 1px — 안티에일리어싱 잔상 방지. 띠 범위로 clamp.
       dirty = {
-        x0: Math.max(0, Math.floor(nx0) - 1), y0: Math.max(0, Math.floor(ny0) - 1),
-        x1: Math.min(w, Math.ceil(nx1) + 1), y1: Math.min(h, Math.ceil(ny1) + 1),
+        x0: Math.max(0, Math.floor(nx0) - 1), y0: Math.max(yTop, Math.floor(ny0) - 1),
+        x1: Math.min(hostW, Math.ceil(nx1) + 1), y1: Math.min(yBot, Math.ceil(ny1) + 1),
       };
     }
     ctx.globalAlpha = 1;
@@ -1635,7 +1695,13 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
       shakeTarget.style.transform = '';
     }
     if (particles.length > 0 || shake > 0) rafId = requestAnimationFrame(loop);
-    else rafId = 0;
+    else {
+      rafId = 0;
+      // 파티클이 다 사라지면 레이어를 아예 빼버린다 — 투명해도 남아 있으면 터미널이 출력으로
+      // 프레임을 만들 때마다 함께 합성된다. 타이핑을 쉬는 사이(대부분의 시간)의 비용이 0 이 된다.
+      // display 전환은 idle 진입 시 한 번뿐이고, position:absolute 라 주변 레이아웃에 영향 없다.
+      hideCanvas();
+    }
   };
   const spawn = (x: number, y: number) => {
     // 동시 생존 파티클 상한.
@@ -1645,6 +1711,9 @@ function setupParticleMode(term: any, elem: HTMLElement, theme: ParticleTheme): 
     // 가 렌더러 busy 시간의 87%를 차지하며 앱 전체가 버벅인 이유. 정상적인 타이핑 속도(초당
     // 10키 내외 → 약 53개)에는 걸리지 않는 값으로 상한만 둔다.
     const MAX_PARTICLES = 90;
+    showCanvas();
+    // 커서 행이 띠 밖으로 나갔으면 띠를 다시 잡는다 (프롬프트 타이핑 중엔 움직이지 않는다)
+    ensureBand(y);
     if (particles.length >= MAX_PARTICLES) {
       shake = Math.min(theme.shakeMax, shake + theme.shakePerKey);
       if (!rafId) rafId = requestAnimationFrame(loop);
