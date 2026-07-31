@@ -435,6 +435,34 @@ function cancelCompaction(termId: string) {
   if (t) { clearTimeout(t); termCompactTimer.delete(termId); }
 }
 
+// ── 대체화면(alt screen) 이탈 시 SGR 누출 보정 ──────────────────────────────────
+// 증상: 원격에서 vimdiff 를 빠져나오면 그 뒤 셸 출력 전체가 초록 배경으로 칠린 채 남는다.
+//       그 초록은 테마의 전경색과 정확히 같은 값 — 즉 vim 기본 StatusLine 의 reverse video(SGR 7)
+//       속성이 셸로 새어나온 것이고, `\x1b[0m` 을 뱉는 출력(ls --color 등)이 나올 때까지 계속된다.
+// 원인: xterm.js 는 DECRST 1049 에서만 저장해둔 fg/bg 를 복원한다(restoreCursor). 47/1047 은
+//       버퍼만 정상화면으로 되돌리고 속성은 건드리지 않는다. 이건 xterm 스펙 그대로라 xterm.js
+//       버그가 아니고, 제대로 된 terminfo 면 rmcup 이 \E8(DECRC)나 SGR 리셋을 함께 보낸다.
+//       이 개발서버의 vim 은 그걸 보내지 않아서 속성이 그대로 남는다.
+// 검증: xterm.js 5.3 격리 테스트 — 47l / 1047l 은 이탈 후 inverse=true 가 남고, 1049l 은 남지 않음.
+// 대책: alt screen 이탈 시퀀스 바로 뒤에 SGR 리셋을 끼워 넣는다. CSI 핸들러에서 term.write() 로
+//       넣는 방법은 같은 청크의 뒤쪽 바이트에는 이미 늦다(rmcup 과 셸 프롬프트가 한 SSH 패킷에
+//       실려오는 경우 — 같은 테스트에서 재현됨). 그래서 스트림 자체를 고쳐서 넣는다.
+//       1049 는 이미 정상이지만 함께 처리한다 — 복원되는 값은 풀스크린 앱 진입 직전 속성이고,
+//       그 시점은 실질적으로 항상 기본값이라 결과가 같고, 서버가 어느 변형을 쓰든 덮인다.
+const ALT_EXIT_PREFILTER = /\x1b\[\?[\d;]*(?:47|1049)[\d;]*l/;
+const PRIV_MODE_RESET_RE = /\x1b\[\?([\d;]*)l/g;
+function patchAltScreenExit(data: string): string {
+  // 대부분의 청크에는 해당 시퀀스가 없다 — 값싼 사전 검사로 replace 자체를 피한다.
+  // (\x1b[?25l 처럼 흔한 사설 모드는 prefilter 에서 걸러진다)
+  if (!data || !ALT_EXIT_PREFILTER.test(data)) return data;
+  return data.replace(PRIV_MODE_RESET_RE, (m, params: string) => {
+    for (const p of params.split(';')) {
+      if (p === '47' || p === '1047' || p === '1049') return m + '\x1b[m';
+    }
+    return m;
+  });
+}
+
 // 안 보이는 탭이 tail -f 처럼 아주 오래 heavy 출력을 계속 내면 청크가 무한정 쌓일 수 있어서
 // (백그라운드 방치 = 메모리 무한 증가) 총 길이 상한을 두고, 넘으면 오래된 청크부터 버린다 —
 // 어차피 scrollback 한도 때문에 다시 볼 때도 다 안 보일 내용이라 안전. 청크 단위 제거라 O(k).
@@ -2291,6 +2319,9 @@ function ensureSSHSetup(termId: string) {
 
   sshDataHandlers.set(termId, (p: any) => {
     try {
+      // alt screen 이탈 시 SGR 누출 보정 (patchAltScreenExit 주석 참고).
+      // 백그라운드 누적 경로도 나중에 그대로 write 되므로 분기 전에 한 번만 고친다.
+      if (p && typeof p.data === 'string') p.data = patchAltScreenExit(p.data);
       // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면(다른 세션
       // 탭이 활성 상태) 굳이 실시간으로 파싱/렌더할 필요가 없다 — 문자열로만 모아두고 그 탭을
       // 다시 볼 때 한 번에 반영. 앱 자체의 포커스 유무와는 무관 (그건 항상 실시간 유지).
@@ -2578,6 +2609,9 @@ function ensurePtySetup(termId: string) {
 
   ptyDataHandlers.set(termId, (p: any) => {
     try {
+      // alt screen 이탈 시 SGR 누출 보정 (patchAltScreenExit 주석 참고).
+      // 아래 ConPTY repaint 시그니처 판정은 \x1b[?25l 로 시작하는 패턴이라 영향 없다.
+      if (p && typeof p.data === 'string') p.data = patchAltScreenExit(p.data);
       // 앱 창 포커스와 무관하게, 이 탭이 지금 패널 안에서 실제로 보이는 탭이 아니면 실시간
       // 파싱/렌더 없이 문자열로만 모아두고 다시 볼 때 반영.
       if (!visibleTermIds.has(termId)) {
