@@ -188,6 +188,28 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     targetPanelId: initialState?.targetPanelId || '',
   }]);
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
+  // 탭 스트립이 넘칠 때만 ‹ › 버튼을 노출한다 — 파일전송 패널 탭바(.fe-panel-tabs)/워크스페이스
+  // 탭바(TabBar.tsx)와 같은 UX. 예전엔 컨테이너에 overflow-x:auto 만 걸어서, 탭이 많아지면
+  // 전역 ::-webkit-scrollbar-button(index.css) 이 붙은 굵은 가로 스크롤바가 그대로 드러났다.
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  const [tabsOverflow, setTabsOverflow] = useState(false);
+  const measureTabsOverflow = useCallback(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    const next = el.scrollWidth > el.clientWidth + 1;
+    setTabsOverflow(prev => (prev === next ? prev : next));
+  }, []);
+  useEffect(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => measureTabsOverflow());
+    try { ro.observe(el); } catch {}
+    window.addEventListener('resize', measureTabsOverflow);
+    return () => { ro.disconnect(); window.removeEventListener('resize', measureTabsOverflow); };
+  }, [measureTabsOverflow]);
+  // 탭 추가/삭제/제목 변경은 컨테이너 크기를 안 바꿔서 ResizeObserver 가 안 뜬다 — 직접 다시 잰다.
+  useEffect(() => { measureTabsOverflow(); }, [tabs, measureTabsOverflow]);
+  const scrollTabs = (dx: number) => { tabScrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' }); };
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
   const activeTargetSessionId = activeTab?.targetSessionId || '';
   const activeTargetPanelId = activeTab?.targetPanelId || '';
@@ -1634,35 +1656,40 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   return (
     <div ref={browserPaneRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, height: '100%', background: '#1a1a1a', overflow: 'hidden' }}>
       {/* 탭 바 — 링크가 새 창을 요청하면 새 탭으로 열림. + 로 빈 탭 추가. chromeless 면 렌더하지 않음. */}
-      {!chromeless && <div style={{ display: 'flex', alignItems: 'stretch', background: '#1e1e1e', borderBottom: '1px solid #333', overflowX: 'auto', minHeight: 28 }}>
-        {tabs.map(tab => {
-          const isActive = tab.id === activeTabId;
-          const label = (tab.title || tab.url || '새 탭').slice(0, 32);
-          return (
-            <div key={tab.id}
-              onClick={() => setActiveTabId(tab.id)}
-              onAuxClick={e => { if (e.button === 1) closeTab(tab.id); }}
-              title={tab.url}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-                fontSize: 11, color: isActive ? '#ddd' : '#888',
-                background: isActive ? '#2a2a2a' : 'transparent',
-                borderRight: '1px solid #333', cursor: 'pointer', maxWidth: 220, minWidth: 80,
-                borderTop: isActive ? '2px solid #0e639c' : '2px solid transparent',
-              }}>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-              {tabs.length > 1 && (
-                <span onClick={e => { e.stopPropagation(); closeTab(tab.id); }}
-                  style={{ color: '#888', padding: '0 4px', borderRadius: 2, cursor: 'pointer' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#444')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>×</span>
-              )}
-            </div>
-          );
-        })}
-        <button onClick={() => openInNewTab('about:blank')}
-          title="새 탭"
-          style={{ background: 'transparent', color: '#888', border: 'none', padding: '0 12px', cursor: 'pointer', fontSize: 14 }}>+</button>
+      {!chromeless && <div className="bp-tabs">
+        {/* 탭 목록만 스크롤 영역에 넣고 ‹ › + 는 밖에 고정 — 파일전송 패널 탭바와 동일 구조.
+            스크롤바는 CSS 에서 완전히 숨기고, 세로 휠을 가로 스크롤로 바꿔준다. */}
+        <div
+          className="bp-tabs-scroll"
+          ref={tabScrollRef}
+          onWheel={e => { e.currentTarget.scrollLeft += e.deltaY > 0 ? 60 : -60; }}
+        >
+          {tabs.map(tab => {
+            const isActive = tab.id === activeTabId;
+            const label = (tab.title || tab.url || '새 탭').slice(0, 32);
+            return (
+              <div key={tab.id}
+                className={`bp-tab ${isActive ? 'active' : ''}`}
+                onClick={() => setActiveTabId(tab.id)}
+                onAuxClick={e => { if (e.button === 1) closeTab(tab.id); }}
+                title={tab.url}>
+                <span className="bp-tab-label">{label}</span>
+                {tabs.length > 1 && (
+                  <span className="bp-tab-close"
+                    onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>×</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {tabsOverflow && (
+          <div className="bp-tab-scroll-group">
+            <button className="bp-tab-scroll-btn" onClick={() => scrollTabs(-150)} title={t('scrollPrev', { defaultValue: '이전' })}>‹</button>
+            <button className="bp-tab-scroll-btn" onClick={() => scrollTabs(150)} title={t('scrollNext', { defaultValue: '다음' })}>›</button>
+          </div>
+        )}
+        <button className="bp-tab-add" onClick={() => openInNewTab('about:blank')}
+          title={t('newTab', { defaultValue: '새 탭' })}>+</button>
       </div>}
       {!chromeless && <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', background: '#222', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
         <button className="panel-btn" disabled={!canBack} onClick={() => webviewRef.current?.goBack()} title={t('back')}>◀</button>

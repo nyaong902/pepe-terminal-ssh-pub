@@ -25,5 +25,8 @@
   "testFailed": "Failed: {{reason}}",
   "unknownError": "Unknown error",
   "remoteExec": " (remote exec)",
-  "testSuccess": "Success{{via}}: {{detail}}"
+  "testSuccess": "Success{{via}}: {{detail}}",
+  "newTab": "New tab",
+  "scrollPrev": "Previous",
+  "scrollNext": "Next"
 }

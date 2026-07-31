@@ -3592,6 +3592,97 @@ body.popout-options .session-editor h3:first-child {
   z-index: 5;
 }
 
+/* ── 브라우저 워크스페이스 하위 탭바 (BrowserPane) ────────────────────────────
+   구조는 위 파일전송 패널 탭바(.fe-panel-tabs)와 동일하다 — 바깥은 스크롤하지 않고 탭 목록만
+   안쪽(.bp-tabs-scroll)에서 스크롤, ‹ › 와 + 는 오른쪽에 고정. 예전엔 컨테이너에 인라인으로
+   overflow-x:auto 만 걸려 있어서 탭이 많아지면 전역 `::-webkit-scrollbar-button`(index.css)
+   때문에 16px 화살표가 붙은 굵고 지저분한 가로 바가 그대로 드러났다.
+   색은 바로 아래 주소창 툴바와 어긋나지 않도록 기존 브라우저 크롬 값을 그대로 유지한다. */
+.bp-tabs {
+  display: flex;
+  align-items: stretch;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+  min-height: 28px;
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.bp-tabs-scroll {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.bp-tabs-scroll::-webkit-scrollbar,
+.bp-tabs-scroll::-webkit-scrollbar-button,
+.bp-tabs-scroll::-webkit-scrollbar-track,
+.bp-tabs-scroll::-webkit-scrollbar-thumb,
+.bp-tabs-scroll::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
+.bp-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #888;
+  background: transparent;
+  border-right: 1px solid #333;
+  border-top: 2px solid transparent;
+  cursor: pointer;
+  max-width: 220px;
+  min-width: 80px;
+  box-sizing: border-box;
+  user-select: none;
+  white-space: nowrap;
+  /* 탭이 줄어들지 않고 넘쳐야 스크롤이 성립한다 (.fe-panel-tab / .tab-item 과 동일).
+     예전엔 min-width 80px 까지 찌그러진 뒤에야 넘쳤다 — 스크린샷의 "about…" 무더기가 그것. */
+  flex-shrink: 0;
+}
+.bp-tab:hover { background: rgba(255,255,255,0.06); color: #bbb; }
+.bp-tab.active { color: #ddd; background: #2a2a2a; border-top-color: #0e639c; }
+.bp-tab-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tab-close { color: #888; padding: 0 4px; border-radius: 2px; cursor: pointer; }
+.bp-tab-close:hover { background: #444; color: #ddd; }
+.bp-tab-scroll-group, .bp-tab-add { flex-shrink: 0; }
+.bp-tab-scroll-group {
+  display: flex;
+  align-self: center;
+  border: 1px solid #333;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 3px;
+}
+.bp-tab-scroll-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 12px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bp-tab-scroll-btn + .bp-tab-scroll-btn { border-left: 1px solid #333; }
+.bp-tab-scroll-btn:hover { background: var(--win-accent, #2b6b9b); color: #fff; }
+.bp-tab-add {
+  background: transparent;
+  color: #888;
+  border: none;
+  padding: 0 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.bp-tab-add:hover { background: rgba(255,255,255,0.06); color: #ddd; }
+
 .fe-panel {
   flex: 1;
   display: flex;

@@ -25,5 +25,8 @@
   "testFailed": "실패: {{reason}}",
   "unknownError": "알 수 없는 오류",
   "remoteExec": " (원격 실행)",
-  "testSuccess": "성공{{via}}: {{detail}}"
+  "testSuccess": "성공{{via}}: {{detail}}",
+  "newTab": "새 탭",
+  "scrollPrev": "이전",
+  "scrollNext": "다음"
 }
