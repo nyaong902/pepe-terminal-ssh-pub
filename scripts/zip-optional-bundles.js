@@ -44,6 +44,7 @@ const BUNDLES = [
   { name: 'office-editor', srcDir: path.join(projectRoot, 'resources', 'office-editor') },
   { name: 'rhwp-studio', srcDir: path.join(projectRoot, 'resources', 'rhwp-studio') },
   { name: 'flowchart-editor', srcDir: path.join(projectRoot, 'resources', 'flowchart-editor') },
+  { name: 'calllog-cdr-tool', srcDir: path.join(projectRoot, 'resources', 'calllog-cdr-tool') },
   // JRE(JDBC 사이드카용) — 체크박스 없이 항상 설치되지만 Temurin 배포본이 300개+ 개별 파일이라
   // (bin/lib/conf/legal 등) X11 서버와 같은 이유로 NSIS 기본 File-by-file 복사가 느리다.
   // x11-server 와 동일한 zip+tar 패턴 적용 — package.json 의 win.extraResources 도 loose 폴더

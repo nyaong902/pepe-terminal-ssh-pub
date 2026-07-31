@@ -294,6 +294,12 @@ export const DriverManagerModal: React.FC<Props> = ({ open, onClose }) => {
   return (
     <div
       onClick={onClose}
+      // 이 모달은 세션 편집기(SqlSessionEditor) 의 배경 div 안에 렌더된다. 그 배경은
+      // onMouseDown={onCancel} 로 "바깥 클릭 시 닫기"를 하는데, 여기서 mousedown 을 막지
+      // 않으면 드라이버 관리자 안을 눌러도 그 mousedown 이 배경까지 버블링해 편집기가 닫히고,
+      // 자식인 이 모달까지 같이 사라졌다(사용자 증상: "드라이버관리자 창을 누르면 꺼짐").
+      // 배경 자체를 눌러 닫는 동작은 위의 onClick 이 그대로 담당한다.
+      onMouseDown={e => e.stopPropagation()}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 5000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
     >
       <div

@@ -101,6 +101,8 @@ Var OfficeCheckbox
 Var OfficeChecked
 Var SswPhoneCheckbox
 Var SswPhoneChecked
+Var CdrToolCheckbox
+Var CdrToolChecked
 
 Function nsShowFeaturesPage
   ; 삭제 확인 페이지와 달리, 이 페이지는 자동 업데이트 중에도 항상 보여준다(사용자 요청) —
@@ -130,7 +132,12 @@ Function nsShowFeaturesPage
   ${NSD_CreateCheckBox} 0 96u 100% 12u "SSW 소프트폰 (MicroSIP과 독립된 프로세스로 동작, 같은 설치 파일을 써서 추가 용량 없음)"
   Pop $SswPhoneCheckbox
   ${NSD_SetState} $SswPhoneCheckbox $SswPhoneChecked
-  ${NSD_CreateLabel} 0 114u 100% 30u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
+  ${NSD_CreateCheckBox} 0 110u 100% 12u "SSW CDR 로그 분석 (Clog/CDR 파서, 약 1MB)"
+  Pop $CdrToolCheckbox
+  ${NSD_SetState} $CdrToolCheckbox $CdrToolChecked
+  ; 체크박스가 110u 까지 내려왔다 — nsDialogs 페이지 영역(약 140u)을 넘기지 않도록 안내 라벨
+  ; 높이를 30u → 18u 로 줄인다(2줄이면 충분). 안 줄이면 마지막 줄이 잘린다.
+  ${NSD_CreateLabel} 0 124u 100% 18u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
   nsDialogs::Show
 FunctionEnd
 
@@ -141,6 +148,7 @@ Function nsLeaveFeaturesPage
   ${NSD_GetState} $MediaCheckbox $MediaChecked
   ${NSD_GetState} $OfficeCheckbox $OfficeChecked
   ${NSD_GetState} $SswPhoneCheckbox $SswPhoneChecked
+  ${NSD_GetState} $CdrToolCheckbox $CdrToolChecked
 FunctionEnd
 !endif
 
@@ -187,6 +195,7 @@ FunctionEnd
     StrCpy $MediaChecked "1"
     StrCpy $OfficeChecked "1"
     StrCpy $SswPhoneChecked "1"
+    StrCpy $CdrToolChecked "1"
     ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
     ${IfNot} $R2 == ""
       StrCpy $VpnChecked $R2
@@ -210,6 +219,10 @@ FunctionEnd
     ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "SswPhone"
     ${IfNot} $R2 == ""
       StrCpy $SswPhoneChecked $R2
+    ${EndIf}
+    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "CdrTool"
+    ${IfNot} $R2 == ""
+      StrCpy $CdrToolChecked $R2
     ${EndIf}
 
   !endif
@@ -262,7 +275,7 @@ FunctionEnd
 !macro customInstall
   ; nsLeaveFeaturesPage 에서 이미 사용자의 최종 체크 상태를 $VpnChecked 등에 읽어뒀다
   ; (nsDialogs 체크박스라 Section 플래그를 거칠 필요가 없다).
-  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked"
+  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked CdrToolChecked=$CdrToolChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
   SetAutoClose false
@@ -284,6 +297,7 @@ FunctionEnd
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Media" "$MediaChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "SswPhone" "$SswPhoneChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "CdrTool" "$CdrToolChecked"
 
   ; SSW 소프트폰은 MicroSIP과 완전히 같은 sip-sidecar(sipd.exe) 엔진을 쓴다(별도 바이너리 없음) —
   ; 둘 중 하나라도 체크됐으면 엔진을 풀어야 한다. UI 노출 여부는 앱이 레지스트리의 SswPhone 값을
@@ -305,6 +319,7 @@ FunctionEnd
   !insertmacro ExtractOrSkipBundle $OfficeChecked "office-editor" "office-editor" "오피스 — 한글/워드/엑셀/파워포인트"
   !insertmacro ExtractOrSkipBundle $OfficeChecked "rhwp-studio" "rhwp-studio" "오피스 — 한글(rhwp-studio)"
   !insertmacro ExtractOrSkipBundle $OfficeChecked "flowchart-editor" "flowchart-editor" "오피스 — FlowChart 편집기"
+  !insertmacro ExtractOrSkipBundle $CdrToolChecked "calllog-cdr-tool" "calllog-cdr-tool" "SSW CDR 로그 분석"
 
   DetailPrint "─────────────────────────────────────────"
   DetailPrint "✓ 1단계 완료: PePe Terminal 본체 파일 복사"
@@ -438,6 +453,9 @@ FunctionEnd
   ${endif}
   ${if} ${FileExists} "$INSTDIR\resources\flowchart-editor\*"
     nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\flowchart-editor"'
+  ${endif}
+  ${if} ${FileExists} "$INSTDIR\resources\calllog-cdr-tool\*"
+    nsExec::Exec 'cmd /c rmdir /S /Q "$INSTDIR\resources\calllog-cdr-tool"'
   ${endif}
   ${if} ${FileExists} "$INSTDIR\resources\jre\*"
     DetailPrint "JRE 폴더 삭제 중 (한 번에 처리)..."

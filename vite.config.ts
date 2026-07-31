@@ -5,12 +5,12 @@ import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
 
-// office-editor/rhwp-studio/flowchart-editor 는 설치 시 선택 해제될 수 있는 대용량 번들이라
+// office-editor/rhwp-studio/flowchart-editor/calllog-cdr-tool 은 설치 시 선택 해제될 수 있는 번들이라
 // public/ 에서 resources/ 로 옮기고(electron-builder extraResources 로만 패키징됨), 패키지된
 // 앱에서는 electron/main.ts 의 pepeapp:// 핸들러가 resourcesPath 에서 직접 서빙한다. 개발 서버에서는
 // public/ 밖이라 자동 서빙되지 않으므로, 같은 URL 프리픽스로 정적 파일을 서빙하는 미들웨어가 필요하다
 // (같은 origin 이어야 iframe 내부의 File System Access API 등이 cross-origin 취급받지 않는다).
-const EXTERNAL_STATIC_DIRS = ['office-editor', 'rhwp-studio', 'flowchart-editor'];
+const EXTERNAL_STATIC_DIRS = ['office-editor', 'rhwp-studio', 'flowchart-editor', 'calllog-cdr-tool'];
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.wasm': 'application/wasm',

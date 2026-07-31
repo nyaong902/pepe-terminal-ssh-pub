@@ -64,7 +64,7 @@ type Props = {
   onThemeChange?: (name: string) => void;
   availableShells?: ShellInfo[];
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp) 의 "+" 워크스페이스 메뉴 표시 여부
-  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean };
+  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean };
 };
 
 export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCdrToolTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onMergeFileExplorerTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
@@ -372,7 +372,7 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() }] : []),
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📡 SSW 소프트폰', onClick: () => onAddSswPhoneTab?.() }] : []),
                 ...((availableFeatures?.sipp ?? true) ? [{ label: '📶 SIPp', onClick: () => onAddSippTab?.() }] : []),
-                { label: '📡 CDR 도구', onClick: () => onAddCdrToolTab?.() },
+                ...((availableFeatures?.cdrTool ?? true) ? [{ label: '🧾 SSW CDR 로그 분석', onClick: () => onAddCdrToolTab?.() }] : []),
                 ...((availableFeatures?.office ?? true) ? [{ label: '📄 오피스', onClick: () => onAddOfficeTab?.() }] : []),
                 ...((availableFeatures?.media ?? true) ? [{ label: '🎵 미디어', onClick: () => onAddMediaTab?.() }] : []),
               ],

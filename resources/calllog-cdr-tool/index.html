@@ -206,7 +206,9 @@ th.has-cdr-link .fi-name::after,th.has-cdr-link span:first-child::after{content:
 .tip-icon.f{background:rgba(86,211,100,.15);border-color:rgba(86,211,100,.4);color:var(--fc);}
 .tip-icon.d{background:rgba(210,168,255,.15);border-color:rgba(210,168,255,.4);color:var(--accent4);}
 .tip-icon.v{background:rgba(88,166,255,.12);border-color:rgba(88,166,255,.3);color:var(--accent);}
-.tooltip-box{display:none;position:fixed;z-index:9999;background:#1a2233;border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text);line-height:1.75;white-space:pre-wrap;max-width:680px;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.55);pointer-events:none;}
+/* max-height 로 툴팁이 화면보다 커지는 것 자체를 막는다 — posTip 의 clamp 와 함께 동작해서
+   아무리 값 목록이 긴 필드라도 툴팁이 화면 밖으로 벗어나지 않는다(넘치면 아래가 잘림). */
+.tooltip-box{display:none;position:fixed;z-index:9999;background:#1a2233;border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text);line-height:1.75;white-space:pre-wrap;max-width:680px;min-width:220px;max-height:calc(100vh - 16px);overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.55);pointer-events:none;}
 .tbox-label{font-size:9.5px;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:5px;border-bottom:1px solid var(--border);padding-bottom:4px;}
 .tbox-val{color:var(--accent5);font-weight:600;margin-top:4px;}
 
@@ -318,7 +320,7 @@ th.has-cdr-link .fi-name::after,th.has-cdr-link span:first-child::after{content:
   <div class="input-label">📋 데이터 입력 — 쉼표(,) 또는 공백/탭 구분, 여러 줄 가능</div>
   <div class="input-row">
     <div class="ta-wrap">
-      <textarea id="inputData" rows="3" placeholder="CallID 값부터 시작하여 붙여넣기 하세요. 쉼표(,) 또는 공백으로 구분된 데이터를 지원합니다.&#10;여러 줄 입력 시 줄마다 별도 레코드로 처리됩니다."></textarea>
+      <textarea id="inputData" rows="3" placeholder="CallID 값부터 시작하여 붙여넣기 하세요. 쉼표(,) 또는 공백으로 구분된 데이터를 지원합니다.&#10;여러 줄 입력 시 줄마다 별도 레코드로 처리됩니다." oninput="clearSourceText('clog')"></textarea>
     </div>
     <button class="btn btn-run" onclick="parseData()">▶ 변환</button>
     <button class="btn btn-clr" onclick="clearAll()">✕</button>
@@ -395,7 +397,7 @@ th.has-cdr-link .fi-name::after,th.has-cdr-link span:first-child::after{content:
   <div class="input-label">📡 CDR(C5) 원문 입력 — 238 bytes 고정폭 문자열</div>
   <div class="input-row">
     <div class="ta-wrap">
-      <textarea id="cdrRawInput" rows="3" placeholder="CDR 원문 데이터를 붙여넣으세요. 여러 줄 입력 시 줄마다 별도 레코드로 처리됩니다.&#10;예: SLIPTL2  11359540 100    07076008310     07076008313 ..." oninput="updateCdrLen()"></textarea>
+      <textarea id="cdrRawInput" rows="3" placeholder="CDR 원문 데이터를 붙여넣으세요. 여러 줄 입력 시 줄마다 별도 레코드로 처리됩니다.&#10;예: SLIPTL2  11359540 100    07076008310     07076008313 ..." oninput="clearSourceText('cdr');updateCdrLen()"></textarea>
     </div>
     <button class="btn btn-run" onclick="parseCDRMulti()">▶ 분석</button>
     <button class="btn btn-clr" onclick="clearCDR()">✕</button>
@@ -533,6 +535,9 @@ function requestReadFile(termId, path){
   });
 }
 
+// 호출부가 넘기는 textarea id 로 어느 탭인지 구분한다(둘뿐이라 1:1 매핑).
+function srcKind(textareaId){ return textareaId === 'cdrRawInput' ? 'cdr' : 'clog'; }
+
 async function fetchFromSsh(selectId, pathId, statusId, textareaId, parseFn){
   const termId = document.getElementById(selectId).value;
   const path = document.getElementById(pathId).value.trim();
@@ -542,8 +547,9 @@ async function fetchFromSsh(selectId, pathId, statusId, textareaId, parseFn){
   statusEl.textContent = '불러오는 중...';
   const r = await requestReadFile(termId, path);
   if(!r.success){ statusEl.textContent = ''; showToast('불러오기 실패: ' + (r.error || '?')); return; }
-  document.getElementById(textareaId).value = r.text || '';
-  statusEl.textContent = `${(r.text || '').length.toLocaleString()}자 로드됨 (${new Date().toLocaleTimeString()})`;
+  // 입력창에는 앞부분 미리보기만 — 원문은 보관해두고 그걸로 파싱한다(파일 로드와 동일).
+  const n = setSourceText(srcKind(textareaId), r.text || '', 'SSH');
+  statusEl.textContent = `${n.toLocaleString()}줄 로드됨 (${new Date().toLocaleTimeString()})`;
   parseFn();
 }
 
@@ -575,9 +581,9 @@ function toggleLiveTail(selectId, pathId, statusId, btnId, textareaId, parseFn){
     if(!r.success){ statusEl.textContent = '실시간 갱신 실패: ' + (r.error || '?'); return; }
     if(r.text === st.lastText){ statusEl.textContent = `변경 없음 (${new Date().toLocaleTimeString()})`; return; }
     st.lastText = r.text;
-    document.getElementById(textareaId).value = r.text || '';
+    const n = setSourceText(srcKind(textareaId), r.text || '', 'SSH 실시간');
     parseFn();
-    statusEl.textContent = `갱신됨 — ${(r.text || '').length.toLocaleString()}자 (${new Date().toLocaleTimeString()})`;
+    statusEl.textContent = `갱신됨 — ${n.toLocaleString()}줄 (${new Date().toLocaleTimeString()})`;
   };
   tick();
   st.timer = setInterval(tick, 5000);
@@ -736,8 +742,38 @@ let CDR_ALL_RECS = [];
 let CDR_PAGE = 0;
 const CDR_PAGE_SIZE = 200;
 
+// ── 파일/SSH 로 가져온 원본 보관 ─────────────────────────────────────────
+// 수백~수만 줄을 입력창에 그대로 넣으면 화면만 차지하고 편집도 무거워서, 입력창에는 앞부분
+// 미리보기만 보여주고 실제 파싱/길이 계산은 여기 보관한 원문을 쓴다(Clog 의 파일 로드가 쓰던
+// 방식을 CDR/SSH 가져오기까지 확장). 사용자가 입력창에 직접 타이핑하면 null 로 되돌려
+// 입력창 내용이 다시 원본이 된다.
+let CLOG_SRC_TEXT = null;
+let CDR_SRC_TEXT = null;
+const SRC_PREVIEW_LINES = 5;
+
+function sourceText(which){
+  const held = which === 'cdr' ? CDR_SRC_TEXT : CLOG_SRC_TEXT;
+  if(held != null) return held;
+  return document.getElementById(which === 'cdr' ? 'cdrRawInput' : 'inputData').value || '';
+}
+function clearSourceText(which){
+  if(which === 'cdr') CDR_SRC_TEXT = null; else CLOG_SRC_TEXT = null;
+}
+// 원본을 보관하고 입력창에는 앞 몇 줄 + 요약만 표시한다.
+function setSourceText(which, text, originLabel){
+  const t = String(text ?? '');
+  const lines = t.split(/\r?\n/).filter(l => l.trim());
+  if(which === 'cdr') CDR_SRC_TEXT = t; else CLOG_SRC_TEXT = t;
+  const ta = document.getElementById(which === 'cdr' ? 'cdrRawInput' : 'inputData');
+  ta.value = lines.slice(0, SRC_PREVIEW_LINES).join('\n') +
+    (lines.length > SRC_PREVIEW_LINES
+      ? `\n... (총 ${lines.length.toLocaleString()}줄 — ${originLabel}에서 직접 파싱됨)`
+      : '');
+  return lines.length;
+}
+
 function updateCdrLen(){
-  const raw = (document.getElementById('cdrRawInput').value||'').split('\n').filter(l=>l.trim());
+  const raw = sourceText('cdr').split('\n').filter(l=>l.trim());
   const badge = document.getElementById('cdrLenBadge');
   if(!raw.length){ badge.textContent='입력 대기중...'; badge.className='cdr-len-badge'; return; }
   const lens = raw.map(l=>l.length);
@@ -1194,8 +1230,8 @@ function buildCdrTable(recs){
 }
 
 function parseCDRMulti(){
-  const raw = document.getElementById('cdrRawInput').value||'';
-  const lines = raw.split('\n').map(l=>l).filter(l=>l.trim());
+  const raw = sourceText('cdr');
+  const lines = raw.split(/\r?\n/).filter(l=>l.trim());
   if(!lines.length){ showToast('CDR 데이터를 입력하세요.'); return; }
 
   CDR_ALL_RECS = lines.map(l=>parseCDRLine(l));
@@ -1342,6 +1378,7 @@ function clearCDR(){
   ra.style.cssText='display:none;';
   ra.innerHTML='';
   CDR_ALL_RECS=[]; CDR_PAGE=0; window._cdrWrap=null;
+  clearSourceText('cdr');
   Object.keys(CDR_GRID_FLT).forEach(k=>delete CDR_GRID_FLT[k]);
   CDR_PIN.clear(); CDR_SORT=null; updatePinInfo('cdr');
   document.getElementById('cdrResultCount').textContent='0건';
@@ -1373,7 +1410,8 @@ function loadCdrFile(input){
       }
       const lines = raw.split(/\r?\n/).filter(l => l.trim());
       nameEl.textContent = `✔ ${file.name} — ${lines.length.toLocaleString()}줄 로드됨 (${sizeMB} MB)`;
-      document.getElementById('cdrRawInput').value = lines.join('\n');
+      // 입력창에는 앞 몇 줄만 — 원문은 보관해두고 그걸로 분석한다.
+      setSourceText('cdr', lines.join('\n'), '파일');
       updateCdrLen();
       parseCDRMulti();
     } catch(err) {
@@ -1737,10 +1775,19 @@ function showTip(el, label, content, valMeaning) {
 function hideTip(){ tipEl.style.display='none'; tipOn=false; }
 function posTip(e){
   if(!e||!tipOn) return;
-  let x=e.clientX+16, y=e.clientY-10;
-  if(x+tipEl.offsetWidth>window.innerWidth-8) x=e.clientX-tipEl.offsetWidth-16;
-  if(y+tipEl.offsetHeight>window.innerHeight-8) y=e.clientY-tipEl.offsetHeight-10;
-  tipEl.style.left=x+'px'; tipEl.style.top=y+'px';
+  const w=tipEl.offsetWidth, h=tipEl.offsetHeight;
+  const maxX=window.innerWidth-w-8, maxY=window.innerHeight-h-8;
+  // 기본은 커서 오른쪽·살짝 위. 오른쪽/아래로 넘치면 반대쪽으로 뒤집는다.
+  let x=e.clientX+16;
+  if(x>maxX) x=e.clientX-w-16;
+  let y=e.clientY-10;
+  if(y>maxY) y=e.clientY-h-10;
+  // ★ 마지막에 화면 안으로 clamp — 예전엔 뒤집기만 하고 끝냈다. 필드 값 목록이 긴 툴팁
+  // (예: Call Type 10개)은 높이가 커서 뒤집은 y 가 음수가 되고, 그러면 툴팁 위쪽이 화면
+  // 밖으로 잘려 라벨과 앞부분이 안 보였다(왼쪽도 같은 이유로 잘릴 수 있었다).
+  // 아래를 잘리게 두는 편이 낫다 — 라벨과 앞부분이 남으므로.
+  tipEl.style.left=Math.max(8,Math.min(x,Math.max(8,maxX)))+'px';
+  tipEl.style.top=Math.max(8,Math.min(y,Math.max(8,maxY)))+'px';
 }
 document.addEventListener('mousemove', e=>{ if(tipOn) posTip(e); });
 function bindTip(el, label, comment, valMeaning){
@@ -1781,13 +1828,12 @@ const PAGE_SIZE = 200;
 // (globals declared above)
 
 function parseData(){
-  const raw = document.getElementById('inputData').value.trim();
+  // 파일/SSH 로 가져온 경우엔 입력창에 미리보기만 있으므로 보관해둔 원문을 쓴다.
+  // (예전엔 미리보기 문구를 감지해 "새 파일을 선택하세요"라며 변환을 거부했는데, 이제
+  //  원문을 들고 있으니 그냥 다시 파싱하면 된다.)
+  const raw = sourceText('clog').trim();
   if(!raw){ showToast('데이터를 입력해주세요.'); return; }
-  if(raw.includes('파일에서 직접 파싱됨)')){
-    showToast('파일 로드 결과가 이미 표시되어 있습니다.\n새 파일을 선택하거나 직접 데이터를 붙여넣으세요.');
-    return;
-  }
-  const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
+  const lines = raw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
   parseLines(lines);
 }
 
@@ -2380,10 +2426,9 @@ function loadFile(input){
         ? `⚠ ${file.name} — ${total.toLocaleString()}줄 중 앞 ${MAX_LINES.toLocaleString()}줄만 처리 (${sizeMB} MB)`
         : `✔ ${file.name} — ${validLines.length.toLocaleString()}줄 로드됨 (${sizeMB} MB)`;
 
-      // textarea에는 미리보기만 (처음 5줄)
-      document.getElementById('inputData').value =
-        validLines.slice(0, 5).join('\n') +
-        (validLines.length > 5 ? `\n... (총 ${validLines.length.toLocaleString()}줄, 파일에서 직접 파싱됨)` : '');
+      // textarea 에는 미리보기만 — 원문(MAX_LINES 로 자른 것과 동일한 집합)은 보관해두므로
+      // 나중에 "변환"을 다시 눌러도 미리보기가 아니라 이 원문이 파싱된다.
+      setSourceText('clog', validLines.join('\n'), '파일');
 
       // 직접 파싱 실행
       parseLines(validLines);
@@ -2414,6 +2459,7 @@ function clearAll(){
   clearSearch();
   window._htableWrap=null; window._theadWrap=null;
   G_ALL_RECS=[]; G_GROUPS=[]; G_PAGE=0; G_FILTERED_RECS=[];
+  clearSourceText('clog');
   Object.keys(CLOG_GRID_FLT).forEach(k=>delete CLOG_GRID_FLT[k]);
   CLOG_PIN.clear(); CLOG_SORT=null; updatePinInfo('clog');
 }

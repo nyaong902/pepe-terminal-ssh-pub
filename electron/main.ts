@@ -1193,7 +1193,7 @@ app.whenReady().then(() => {
   // 선택 해제될 수 있는 대용량 번들(build/installer.nsh 참고)이라 dist(app.asar) 밖의
   // resources/<name>(패키지) 또는 repo resources/<name>(dev) 에서 별도로 서빙한다 — asar 안에 있으면
   // 설치 후 부분 삭제가 불가능하기 때문.
-  const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor']);
+  const EXTERNAL_STATIC_DIRS = new Set(['office-editor', 'rhwp-studio', 'flowchart-editor', 'calllog-cdr-tool']);
   protocol.handle(PEPE_PROTOCOL, async (request) => {
     const requestUrl = new URL(request.url);
     const { pathname } = requestUrl;
@@ -1244,7 +1244,7 @@ app.whenReady().then(() => {
     const isExternal = !!topSeg && EXTERNAL_STATIC_DIRS.has(topSeg);
     if (isExternal && app.isPackaged) {
       // 포터블 빌드는 customInstall 을 안 거쳐서 zip 이 안 풀려있을 수 있다 — 처음 요청이 올 때 풀어준다.
-      const marker: Record<string, string> = { 'office-editor': '_headers', 'rhwp-studio': 'favicon.ico', 'flowchart-editor': 'clear.html' };
+      const marker: Record<string, string> = { 'office-editor': '_headers', 'rhwp-studio': 'favicon.ico', 'flowchart-editor': 'clear.html', 'calllog-cdr-tool': 'index.html' };
       ensureBundleExtracted(topSeg as string, topSeg as string, marker[topSeg as string] || '');
     }
     const baseDir = isExternal
@@ -8266,6 +8266,18 @@ function officeBundleAvailable(): boolean {
   } catch { return false; }
 }
 
+// SSW CDR 로그 분석 — 선택 설치 번들(resources/calllog-cdr-tool). 설치 시 체크 해제했으면
+// 폴더가 없다(zip 만 남거나 그것도 삭제됨) → 메뉴에서 아예 숨긴다.
+// 포터블 빌드는 NSIS 를 안 거치므로 zip 이 남아있을 수 있는데, 그 경우는 실제로 열 때
+// pepeapp 프로토콜 핸들러의 ensureBundleExtracted 가 풀어주므로 zip 존재도 "사용 가능"으로 본다.
+function cdrToolBundleAvailable(): boolean {
+  try {
+    const base = app.isPackaged ? process.resourcesPath : path.join(process.cwd(), 'resources');
+    if (fs.existsSync(path.join(base, 'calllog-cdr-tool', 'index.html'))) return true;
+    return app.isPackaged && fs.existsSync(path.join(base, 'calllog-cdr-tool.zip'));
+  } catch { return false; }
+}
+
 // 설치 시 선택 해제한 기능(build/installer.nsh 참고 — 각 사이드카/번들 폴더가 통째로 빠질 수
 // 있다)의 메뉴 항목을 렌더러에서 숨기기 위한 가용성 체크. 파일 존재 여부만 실시간으로 보고,
 // 설치 시점 값을 어딘가 저장해두지 않는다 — 나중에 사용자가 폴더를 수동으로 넣거나 빼도 항상
@@ -8295,6 +8307,7 @@ ipcMain.handle('features:get-available', () => ({
   sipp: !!resolveSippBinary(),
   office: officeBundleAvailable(),
   media: !!resolveGstreamerBinary(),
+  cdrTool: cdrToolBundleAvailable(),
 }));
 
 // ── OpenVPN ──
