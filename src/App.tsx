@@ -753,7 +753,7 @@ function App() {
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
   // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
   // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
-  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, cdrTool: true, pepeBox: true });
+  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, cdrTool: true, chatArchive: true, pepeThing: true, pepeBox: true });
   useEffect(() => {
     (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
   }, []);
@@ -2873,8 +2873,8 @@ function App() {
     ...(availableFeatures.office ? [{ id: 'cmd-office', label: '오피스 워크스페이스', icon: '📄', keywords: ['office', 'hwp', 'hwpx', '한글', '한글문서', '문서편집'], run: () => addOfficeTab() }] : []),
     ...(availableFeatures.media ? [{ id: 'cmd-media', label: '미디어 워크스페이스', icon: '🎵', keywords: ['media', 'player', 'audio', '음원', '재생', 'evs', 'amr', 'opus'], run: () => addMediaTab() }] : []),
     { id: 'cmd-i18n', label: '다국어 지원 워크스페이스', icon: '🌐', keywords: ['i18n', 'translation', '번역'], run: () => addI18nEditorTab() },
-    { id: 'cmd-chatArchiveSearch', label: '대화 아카이브 검색', icon: '🗄', keywords: ['chat archive', 'messenger search', '메신저 검색', '대화 검색', 'naver works'], run: () => addChatArchiveSearchTab() },
-    { id: 'cmd-pepeThing', label: 'Pepe-Thing (파일 검색)', icon: '🔎', keywords: ['everything', 'file search', '파일 검색', '빠른 검색', 'pepe-thing'], run: () => addPepeThingTab() },
+    ...(availableFeatures.chatArchive ? [{ id: 'cmd-chatArchiveSearch', label: '대화 아카이브 검색', icon: '🗄', keywords: ['chat archive', 'messenger search', '메신저 검색', '대화 검색', 'naver works'], run: () => addChatArchiveSearchTab() }] : []),
+    ...(availableFeatures.pepeThing ? [{ id: 'cmd-pepeThing', label: 'Pepe-Thing (파일 검색)', icon: '🔎', keywords: ['everything', 'file search', '파일 검색', '빠른 검색', 'pepe-thing'], run: () => addPepeThingTab() }] : []),
     { id: 'cmd-customWorkspaceAdd', label: '커스텀 워크스페이스 추가', icon: '➕', keywords: ['custom workspace', '커스텀'], run: () => openCustomWorkspaceCreator() },
     ...customWorkspaces.map((ws, i) => ({
       id: `cmd-customWorkspace-${ws.id}`,
@@ -4578,8 +4578,8 @@ function App() {
         ...(availableFeatures.sipp ? [{ label: '📶 SIPp', action: addSippTab }] : []),
         ...(availableFeatures.cdrTool ? [{ label: '🧾 SSW CDR 로그 분석', action: addCdrToolTab }] : []),
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
-        { label: '🗄 대화 아카이브 검색', action: addChatArchiveSearchTab },
-        { label: tMenu('tools.pepeThingWs'), action: addPepeThingTab },
+        ...(availableFeatures.chatArchive ? [{ label: '🗄 대화 아카이브 검색', action: addChatArchiveSearchTab }] : []),
+        ...(availableFeatures.pepeThing ? [{ label: tMenu('tools.pepeThingWs'), action: addPepeThingTab }] : []),
         { separator: true, label: '' },
         { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
         { separator: true, label: '' },
@@ -5380,8 +5380,8 @@ function App() {
               >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
               <button className="tool-btn" title="SQL Tool" onClick={openSqlToolPicker}>🗄️</button>
-              <button className="tool-btn" title={tApp('toolbar.chatArchiveSearchTooltip')} onClick={() => addChatArchiveSearchTab()}>🗄</button>
-              <button className="tool-btn" title={tApp('toolbar.pepeThingTooltip')} onClick={() => addPepeThingTab()}>🔎</button>
+              {availableFeatures.chatArchive && <button className="tool-btn" title={tApp('toolbar.chatArchiveSearchTooltip')} onClick={() => addChatArchiveSearchTab()}>🗄</button>}
+              {availableFeatures.pepeThing && <button className="tool-btn" title={tApp('toolbar.pepeThingTooltip')} onClick={() => addPepeThingTab()}>🔎</button>}
           <button
             className="tool-btn"
             title={tApp('toolbar.resetSplitTooltip')}

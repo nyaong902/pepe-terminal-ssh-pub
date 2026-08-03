@@ -301,7 +301,7 @@ contextBridge.exposeInMainWorld('api', {
   mediaDecodeLocal: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-local', { filePath, codec }),
   mediaDecodeGstreamer: (filePath: string, codec: string) => ipcRenderer.invoke('media:decode-gstreamer', { filePath, codec }),
   mediaReadVideo: (filePath: string) => ipcRenderer.invoke('media:read-video', { filePath }),
-  getAvailableFeatures: (): Promise<{ vpn: boolean; microsip: boolean; sswPhone: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean }> => ipcRenderer.invoke('features:get-available'),
+  getAvailableFeatures: (): Promise<{ vpn: boolean; microsip: boolean; sswPhone: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean; chatArchive: boolean; pepeThing: boolean; pepeBox: boolean }> => ipcRenderer.invoke('features:get-available'),
   mediaRecentsGet: () => ipcRenderer.invoke('media-recents:get'),
   mediaRecentsAdd: (doc: { filePath: string; fileName: string; durationSec?: number; codec?: string }) => ipcRenderer.invoke('media-recents:add', { doc }),
   mediaRecentsRemove: (filePath: string) => ipcRenderer.invoke('media-recents:remove', { filePath }),

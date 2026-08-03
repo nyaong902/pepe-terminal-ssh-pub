@@ -67,7 +67,7 @@ type Props = {
   onThemeChange?: (name: string) => void;
   availableShells?: ShellInfo[];
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp) 의 "+" 워크스페이스 메뉴 표시 여부
-  availableFeatures?: { vpn: boolean; microsip: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean; pepeBox?: boolean };
+  availableFeatures?: { vpn: boolean; microsip: boolean; sswPhone?: boolean; sipp: boolean; office: boolean; media: boolean; cdrTool: boolean; chatArchive?: boolean; pepeThing?: boolean; pepeBox?: boolean };
 };
 
 export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab, onAddBrowserTab, onAddCompareTab, onAddLogAnalyzerTab, onAddVpnTab, onAddMicroSipTab, onAddSswPhoneTab, onAddSippTab, onAddOfficeTab, onAddMediaTab, onAddCdrToolTab, onAddPepeThingTab, onAddPepeBoxTab, onAddChatArchiveSearchTab, onAddCustomWorkspace, customWorkspaces, onCloseTab, onRenameTab, onReorderTabs, onMergeFileExplorerTabs, onDetachTab, onSetTabColor, hasSession, themeName, themeList, onThemeChange, availableShells, availableFeatures, splitRightTabId, onSplitRight, onUnsplitRight, canSplitType }) => {
@@ -373,14 +373,14 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
                 { label: t('logAnalyzerWorkspace'), onClick: () => onAddLogAnalyzerTab?.() },
                 ...((availableFeatures?.vpn ?? true) ? [{ label: t('vpnWorkspace'), onClick: () => onAddVpnTab?.() }] : []),
                 ...((availableFeatures?.microsip ?? true) ? [{ label: '📞 MicroSIP', onClick: () => onAddMicroSipTab?.() }] : []),
-                ...((availableFeatures?.microsip ?? true) ? [{ label: '📡 SSW 소프트폰', onClick: () => onAddSswPhoneTab?.() }] : []),
+                ...((availableFeatures?.sswPhone ?? true) ? [{ label: '📡 SSW 소프트폰', onClick: () => onAddSswPhoneTab?.() }] : []),
                 ...((availableFeatures?.sipp ?? true) ? [{ label: '📶 SIPp', onClick: () => onAddSippTab?.() }] : []),
                 ...((availableFeatures?.cdrTool ?? true) ? [{ label: '🧾 SSW CDR 로그 분석', onClick: () => onAddCdrToolTab?.() }] : []),
                 ...((availableFeatures?.office ?? true) ? [{ label: '📄 오피스', onClick: () => onAddOfficeTab?.() }] : []),
                 ...((availableFeatures?.media ?? true) ? [{ label: '🎵 미디어', onClick: () => onAddMediaTab?.() }] : []),
                 ...((availableFeatures?.pepeBox ?? true) ? [{ label: '📦 Pepe-Box', onClick: () => onAddPepeBoxTab?.() }] : []),
-                { label: '🔎 Pepe-Thing', onClick: () => onAddPepeThingTab?.() },
-                { label: '🗄 대화 아카이브 검색', onClick: () => onAddChatArchiveSearchTab?.() },
+                ...((availableFeatures?.pepeThing ?? true) ? [{ label: '🔎 Pepe-Thing', onClick: () => onAddPepeThingTab?.() }] : []),
+                ...((availableFeatures?.chatArchive ?? true) ? [{ label: '🗄 대화 아카이브 검색', onClick: () => onAddChatArchiveSearchTab?.() }] : []),
               ],
             },
             {

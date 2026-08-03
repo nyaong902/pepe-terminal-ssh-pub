@@ -6,7 +6,9 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { pathToFileURL } from 'url';
 import { app, safeStorage } from 'electron';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
 
 export type ChatChunk = { ts: number; sender: string; text: string };
 export type ContextMessage = { ts: number; sender: string; text: string; isHit: boolean };
@@ -44,15 +46,49 @@ function dedupKey(roomId: string, ts: number, sender: string): string {
 
 // ---- 임베딩 파이프라인 — 순수 JS/WASM(@xenova/transformers), 네이티브 컴파일 불필요.
 // ESM 전용 패키지라 CJS(electron/main.ts 빌드 결과)에서는 동적 import 로 불러온다.
+//
+// AI 런타임(@xenova/transformers 50MB + onnxruntime-node 92MB + web/common)은 설치본에서
+// 가장 큰 선택 항목이라 선택 설치 번들(chat-archive-ai.zip)로 분리했다 — package.json 의
+// build.files 에서 asar 대상에서 빼두었으므로, 패키지된 앱에서는 bare specifier 로 못 찾는다.
+// 번들이 풀리는 위치가 resources/app.asar.unpacked/node_modules 인 이유:
+// transformers 는 sharp / onnxruntime-node / onnxruntime-web 를 모두 **정적** ESM import 하고,
+// 그 중 sharp 와 @img(합쳐 20MB)는 앱 본체가 이미 써서 항상 그 폴더에 있다. 같은 node_modules
+// 안에 풀어두면 Node 의 상위 탐색으로 그대로 찾으므로 번들에 중복으로 넣지 않아도 된다.
 let embedderPromise: Promise<any> | null = null;
+
+// 개발 모드에선 프로젝트 node_modules 를 그대로 쓰고(bare specifier), 패키지된 앱에서는
+// 풀린 번들의 엔트리 파일을 file:// URL 로 직접 가리킨다.
+function resolveTransformersSpecifier(): string {
+  if (!app.isPackaged) return '@xenova/transformers';
+  // 포터블 빌드는 NSIS customInstall 을 거치지 않아 zip 이 그대로 남아 있다 — 첫 사용 시 여기서 푼다.
+  ensureBundleExtracted(
+    'chat-archive-ai',
+    path.join('app.asar.unpacked', 'node_modules'),
+    path.join('@xenova', 'transformers', 'package.json'),
+    (m) => console.log(m),
+  );
+  const entry = path.join(
+    process.resourcesPath, 'app.asar.unpacked', 'node_modules',
+    '@xenova', 'transformers', 'src', 'transformers.js',
+  );
+  if (!fs.existsSync(entry)) {
+    throw new Error('대화 아카이브 검색의 AI 런타임이 설치되지 않았습니다 — 설치 프로그램에서 "대화 아카이브 검색"을 선택해 다시 설치하세요.');
+  }
+  return pathToFileURL(entry).href;
+}
+
 async function getEmbedder(): Promise<any> {
   if (!embedderPromise) {
     embedderPromise = (async () => {
-      const mod: any = await import('@xenova/transformers');
+      // 변수 specifier 라 번들러가 정적 분석으로 끌어안지 않고 실제 동적 import 로 남는다.
+      const spec = resolveTransformersSpecifier();
+      const mod: any = await import(spec);
       try { mod.env.cacheDir = path.join(app.getPath('userData'), 'models'); } catch {}
       // 다국어(한국어 포함) 지원 모델 — 사내 대화가 한국어 위주라 다국어 모델을 기본으로 사용.
       return mod.pipeline('feature-extraction', 'Xenova/paraphrase-multilingual-MiniLM-L12-v2');
     })();
+    // 실패한 promise 를 캐시해두면 이후 모든 호출이 같은 에러로 죽는다 — 다음 시도에 재평가되도록.
+    embedderPromise.catch(() => { embedderPromise = null; });
   }
   return embedderPromise;
 }

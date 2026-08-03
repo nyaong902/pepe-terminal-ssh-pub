@@ -8343,10 +8343,17 @@ function cdrToolBundleAvailable(): boolean {
 // 설치 시 사용자의 SSW 체크박스 선택을 레지스트리(HKCU\Software\PePeTerminal\Features\SswPhone)에
 // 별도로 저장해두므로, 그 값을 읽어 UI 노출 여부를 독립적으로 판단한다.
 function readSswPhoneFeatureFlag(): boolean {
+  return readInstallerFeatureFlag('SswPhone');
+}
+
+// 위 SswPhone 과 같은 방식의 일반화 — installer.nsh 가 저장한 체크박스 선택값을 읽는다.
+// 추가 용량이 없어(렌더러 번들에 컴파일되어 들어감) 파일 존재로는 선택 여부를 알 수 없는
+// 기능들(Pepe-Thing / Pepe-Box)이 이걸 쓴다. 값이 없으면(구버전 설치, 포터블) 노출이 기본.
+function readInstallerFeatureFlag(name: string): boolean {
   if (process.platform !== 'win32') return true;
   try {
-    const out = execSync('reg query "HKCU\\Software\\PePeTerminal\\Features" /v SswPhone', { stdio: 'pipe' }).toString();
-    const m = out.match(/SswPhone\s+REG_SZ\s+(\S+)/);
+    const out = execSync(`reg query "HKCU\\Software\\PePeTerminal\\Features" /v ${name}`, { stdio: 'pipe' }).toString();
+    const m = out.match(new RegExp(`${name}\\s+REG_SZ\\s+(\\S+)`));
     if (!m) return true;
     return m[1] === '1';
   } catch {
@@ -8354,14 +8361,46 @@ function readSswPhoneFeatureFlag(): boolean {
   }
 }
 
+// 대화 아카이브 검색 — AI 런타임(약 142MB)이 선택 설치 번들(chat-archive-ai)로 분리돼 있다.
+// 풀린 폴더가 있으면 사용 가능. 포터블 빌드는 NSIS 를 안 거쳐 zip 만 남아있을 수 있는데, 그 경우
+// 실제로 쓸 때 chatArchiveStore 의 ensureBundleExtracted 가 풀어주므로 zip 존재도 가용으로 본다.
+function chatArchiveBundleAvailable(): boolean {
+  try {
+    if (!app.isPackaged) return true; // 개발 모드 — 프로젝트 node_modules 를 그대로 쓴다
+    const base = process.resourcesPath;
+    const pkg = path.join(base, 'app.asar.unpacked', 'node_modules', '@xenova', 'transformers', 'package.json');
+    if (fs.existsSync(pkg)) return true;
+    return fs.existsSync(path.join(base, 'chat-archive-ai.zip'));
+  } catch { return false; }
+}
+
+// Pepe-Thing — voidtools Everything 의 로컬 인덱스를 조회한다. 동봉하는 건 SDK DLL 2개(180KB)뿐이라
+// 용량 절감 목적은 없고, 설치 시 체크 해제하면 메뉴에서 숨기는 용도로만 레지스트리 값을 본다.
+// (DLL 이 없거나 Everything 이 안 떠 있는 경우는 워크스페이스 안에서 안내 화면을 따로 보여준다.)
+function pepeThingFeatureAvailable(): boolean {
+  return readInstallerFeatureFlag('PepeThing');
+}
+
+// Pepe-Box — 클라우드 저장소 연동. 별도 동봉 파일이 없어 레지스트리 값만으로 판단한다.
+function pepeBoxFeatureAvailable(): boolean {
+  return readInstallerFeatureFlag('PepeBox');
+}
+
 ipcMain.handle('features:get-available', () => ({
   vpn: !!getVpnService().binaryPath(),
-  microsip: !!resolveSipdBinary(),
+  // MicroSIP 과 SSW 소프트폰은 같은 sip-sidecar(sipd.exe) 엔진을 공유한다 — 둘 중 하나만
+  // 체크해도 엔진이 풀리므로, 파일 존재만으로 판단하면 해제한 쪽까지 메뉴에 나온다.
+  // (실제로 MicroSip=0 인데 SSW 를 켜둔 설치에서 MicroSIP 이 그대로 보이는 문제로 확인됐다.)
+  // 그래서 양쪽 모두 설치 시 선택값을 레지스트리에서 따로 읽어 독립적으로 판단한다.
+  microsip: !!resolveSipdBinary() && readInstallerFeatureFlag('MicroSip'),
   sswPhone: !!resolveSipdBinary() && readSswPhoneFeatureFlag(),
   sipp: !!resolveSippBinary(),
   office: officeBundleAvailable(),
   media: !!resolveGstreamerBinary(),
   cdrTool: cdrToolBundleAvailable(),
+  chatArchive: chatArchiveBundleAvailable(),
+  pepeThing: pepeThingFeatureAvailable(),
+  pepeBox: pepeBoxFeatureAvailable(),
 }));
 
 // ── OpenVPN ──

@@ -1,6 +1,11 @@
 ﻿!include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+; 기능 선택 페이지를 NSIS 내장 MUI_PAGE_COMPONENTS 로 쓰기 위해 직접 include 한다.
+; 우리 파일이 electron-builder 자체 스크립트보다 먼저 include 돼서, 이 시점엔 MUI2.nsh 매크로가
+; 아직 정의돼 있지 않다("macro named ... not found" 컴파일 에러) — MUI2.nsh 는 중복 include
+; 가드가 있어 여기서 먼저 불러도 안전하다.
+!include "MUI2.nsh"
 
 ; 진단용 파일 로그 — 자동 업데이트 중 설치 창이 안 뜨는 문제의 실제 발생 지점을 확인하기 위함.
 ; 앱 쪽 update-debug.log 는 앱이 이미 종료된 뒤(설치 프로그램 실행 중)엔 아무것도 못 남기므로,
@@ -77,79 +82,104 @@ Function nsLeaveDeleteDataPage
   ${NSD_GetState} $DeleteDataCheckbox $DeleteDataChecked
 FunctionEnd
 
-; 선택 설치(용량 큰 기능만) — VPN/MicroSIP/SIPp/미디어 재생/오피스는 각각 전용 번들
-; 바이너리·정적 파일을 쓰고 서로 공유하지 않아서 필요 없으면 통째로 뺄 수 있다(브라우저/파일
-; 비교/로그 분석은 별도 번들이 없는 순수 JS 기능이라 선택 설치 대상이 아님 — 항상 설치됨).
+; 선택 설치 — NSIS 내장 MUI_PAGE_COMPONENTS(체크박스 + 스크롤 + 항목별 설명 기본 제공).
 ;
-; v2.2.24~33 에서 "nsDialogs 가 설치 창 안 뜨는 문제의 원인일 수 있다"는 가설로 NSIS 내장
-; MUI_PAGE_COMPONENTS(실제 Section 5개 선언)로 바꿨었는데, 그 문제의 진짜 원인은 이후
-; electron-updater 의 elevate.exe 자체 실패 → sudo-prompt 의 Node.util.isObject 미존재로 인한
-; 즉시 예외 → PowerShell 자식 프로세스를 detached:true 로 spawn 했을 때 스크립트 실행 자체가
-; 시작되지 않던 문제로 최종 확정됐다(nsDialogs 는 관계 없었음). 반면 실제 Section 을 5개 추가로
-; 선언한 뒤로 설치(파일 복사) 자체가 눈에 띄게 느려졌다는 현장 보고가 있어, 원인이 사라진 지금
-; nsDialogs 방식(v2.2.1 과 동일 — 실제 Section 없이 체크박스만)으로 되돌린다. 삭제 로직
-; (customInstall 에서 체크 해제된 번들 폴더만 지우는 방식)은 그대로 유지.
-Var VpnCheckbox
+; 이력: v2.2.24~33 에서 이 방식을 썼다가 v2.2.34 에서 nsDialogs 커스텀 페이지로 되돌렸다.
+; 되돌린 이유로 "실제 Section 을 5개 추가로 선언한 뒤로 설치(파일 복사)가 눈에 띄게 느려졌다는
+; 현장 보고"가 적혀 있었는데, 그때 git 이력을 보면 그 Section 들은 본문이 AddSize 한 줄뿐이었다
+; (파일 복사를 전혀 하지 않는다). 즉 Section 선언과 복사 속도는 인과관계가 없었다 —
+; 실제 압축 해제는 예전에도 지금처럼 customInstall 의 zip+tar 가 담당한다.
+; 항목이 10개로 늘어 nsDialogs 로는 페이지 영역(약 140u)에 다 들어가지 않으므로 다시 이 방식으로
+; 온다. 스크롤이 기본 제공돼 앞으로 항목이 더 늘어도 레이아웃을 다시 손볼 필요가 없다.
+;
+; Section 본문은 AddSize 뿐이다 — 선택 상태만 전달하고, 실제 설치/압축 해제는 전부 customInstall.
+; AddSize 는 "압축 해제 후" 실측값이다(du 기준). 예전 라벨에 적혀 있던 값은 실제와 크게 달랐다 —
+; MicroSIP 104MB(실제 52MB: sipd.exe 하나만 담는다), 미디어 49MB(실제 14MB). 값을 바꿀 때는
+; 라벨을 베끼지 말고 resources/ 아래 원본 폴더 크기를 다시 재서 넣을 것.
 Var VpnChecked
-Var MicroSipCheckbox
 Var MicroSipChecked
-Var SippCheckbox
 Var SippChecked
-Var MediaCheckbox
 Var MediaChecked
-Var OfficeCheckbox
 Var OfficeChecked
-Var SswPhoneCheckbox
 Var SswPhoneChecked
-Var CdrToolCheckbox
 Var CdrToolChecked
+Var ChatArchiveChecked
+Var PepeThingChecked
+Var PepeBoxChecked
 
-Function nsShowFeaturesPage
-  ; 삭제 확인 페이지와 달리, 이 페이지는 자동 업데이트 중에도 항상 보여준다(사용자 요청) —
-  ; IsUpdateRun 체크 없음. customInit 에서 레지스트리 이전 선택값을 이미 기본 체크 상태로
-  ; 채워뒀으므로, 조용히 넘어가고 싶으면 그냥 다음으로 누르면 된다.
-  nsDialogs::Create 1018
-  Pop $0
-  ${If} $0 == error
-    Abort
+Section "VPN - OpenVPN (약 9MB)" SEC_VPN
+  AddSize 9000
+SectionEnd
+Section "MicroSIP - SIP 소프트폰 (약 52MB)" SEC_MICROSIP
+  AddSize 52000
+SectionEnd
+Section "SIPp - SIP 부하테스트 (약 14MB)" SEC_SIPP
+  AddSize 14000
+SectionEnd
+Section "미디어 재생 - EVS/AMR/OPUS 코덱 (약 14MB)" SEC_MEDIA
+  AddSize 14000
+SectionEnd
+Section "오피스 - 한글/워드/엑셀/PPT/FlowChart (약 220MB)" SEC_OFFICE
+  AddSize 220000
+SectionEnd
+Section "대화 아카이브 검색 - AI 검색 런타임 (약 158MB)" SEC_CHATARCHIVE
+  AddSize 158000
+SectionEnd
+Section "SSW CDR 로그 분석 - Clog/CDR 파서 (약 1MB)" SEC_CDRTOOL
+  AddSize 1000
+SectionEnd
+Section "SSW 소프트폰 (추가 용량 없음)" SEC_SSWPHONE
+SectionEnd
+Section "Pepe-Thing - 파일 검색 (추가 용량 없음)" SEC_PEPETHING
+SectionEnd
+Section "Pepe-Box - 클라우드 저장소 (추가 용량 없음)" SEC_PEPEBOX
+SectionEnd
+
+; MUI_FUNCTION_DESCRIPTION_BEGIN/TEXT 는 $mui.ComponentsPage.DescriptionText 변수를 참조하는데,
+; 이 변수는 원래 MUI_PAGE_COMPONENTS 매크로가 삽입될 때(customPageAfterChangeDir, 더 뒤에서 실행)
+; 선언된다. 우리 파일은 그보다 먼저 top-level 로 include 돼서 참조 시점에 변수가 없어
+; "unknown variable" 경고(=치명적 에러)가 났다 — MUI_COMPONENTSPAGE_INTERFACE 를 여기서 먼저
+; 호출해 변수만 미리 선언해둔다(내부적으로 !ifndef 가드가 있어 나중에 MUI_PAGE_COMPONENTS 가
+; 다시 호출해도 중복 선언 에러는 나지 않는다).
+!insertmacro MUI_COMPONENTSPAGE_INTERFACE
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  ; PePe 본체(electron-builder 의 install 섹션)에는 설명을 달지 않는다 — 그 섹션 ID
+  ; (INSTALL_SECTION_ID) 는 우리 파일이 include 되는 시점엔 아직 정의되지 않았다.
+  ; 이름만 customInit 에서 런타임에 바꿔준다(아래 참고).
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_VPN} "OpenVPN 클라이언트 — 회사망 VPN 접속이 필요 없으면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MICROSIP} "SIP 소프트폰 — MicroSIP 워크스페이스를 안 쓰면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SIPP} "SIP 부하테스트 도구 — SIPp 워크스페이스를 안 쓰면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MEDIA} "EVS/AMR/OPUS 코덱 재생 — 미디어 워크스페이스의 일반 영상/WAV 재생은 이 옵션과 무관하게 계속 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_OFFICE} "한글/워드/엑셀/파워포인트/FlowChart 편집기 — 오피스 워크스페이스를 안 쓰면 해제해도 됩니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CHATARCHIVE} "지난 메신저 대화를 자연어로 검색하는 기능과 그 AI 런타임. 이 설치본에서 가장 큰 항목입니다 — 해제하면 설치 용량이 약 158MB 줄어듭니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CDRTOOL} "SKB SSW 의 Clog/CDR 원문을 필드별로 풀어보는 워크스페이스."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SSWPHONE} "MicroSIP 과 독립된 프로세스로 동작하지만 같은 설치 파일을 씁니다 — 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_PEPETHING} "voidtools Everything 의 로컬 인덱스로 파일을 찾는 워크스페이스(Everything 별도 설치 필요). 화면이 앱 본체에 포함돼 있어 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_PEPEBOX} "Dropbox/Google Drive/OneDrive/네이버/카카오 연동 워크스페이스(작업 중인 기능). 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; 레지스트리에 저장된 이전 선택값(없으면 전체 선택)을 컴포넌트 페이지의 기본 체크 상태로 반영.
+; $R2 = 레지스트리 값, $R4 = 섹션 플래그 임시.
+!macro ApplySectionDefault SecId RegName
+  ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "${RegName}"
+  ${If} $R2 == "0"
+    SectionGetFlags ${SecId} $R4
+    IntOp $R4 $R4 & ${SECTION_OFF}
+    SectionSetFlags ${SecId} $R4
   ${EndIf}
-  ${NSD_CreateLabel} 0 0 100% 20u "설치할 기능을 선택하세요 (기본: 전체 설치). 용량이 큰 기능만 선택 해제할 수 있습니다."
-  ${NSD_CreateCheckBox} 0 26u 100% 12u "VPN (OpenVPN, 약 9MB)"
-  Pop $VpnCheckbox
-  ${NSD_SetState} $VpnCheckbox $VpnChecked
-  ${NSD_CreateCheckBox} 0 40u 100% 12u "MicroSIP (SIP 소프트폰, 약 104MB)"
-  Pop $MicroSipCheckbox
-  ${NSD_SetState} $MicroSipCheckbox $MicroSipChecked
-  ${NSD_CreateCheckBox} 0 54u 100% 12u "SIPp (SIP 부하테스트, 약 15MB)"
-  Pop $SippCheckbox
-  ${NSD_SetState} $SippCheckbox $SippChecked
-  ${NSD_CreateCheckBox} 0 68u 100% 12u "미디어 재생 — EVS/AMR/OPUS 코덱 (약 49MB)"
-  Pop $MediaCheckbox
-  ${NSD_SetState} $MediaCheckbox $MediaChecked
-  ${NSD_CreateCheckBox} 0 82u 100% 12u "오피스 — 한글/워드/엑셀/파워포인트/FlowChart 편집기 (약 220MB)"
-  Pop $OfficeCheckbox
-  ${NSD_SetState} $OfficeCheckbox $OfficeChecked
-  ${NSD_CreateCheckBox} 0 96u 100% 12u "SSW 소프트폰 (MicroSIP과 독립된 프로세스로 동작, 같은 설치 파일을 써서 추가 용량 없음)"
-  Pop $SswPhoneCheckbox
-  ${NSD_SetState} $SswPhoneCheckbox $SswPhoneChecked
-  ${NSD_CreateCheckBox} 0 110u 100% 12u "SSW CDR 로그 분석 (Clog/CDR 파서, 약 1MB)"
-  Pop $CdrToolCheckbox
-  ${NSD_SetState} $CdrToolCheckbox $CdrToolChecked
-  ; 체크박스가 110u 까지 내려왔다 — nsDialogs 페이지 영역(약 140u)을 넘기지 않도록 안내 라벨
-  ; 높이를 30u → 18u 로 줄인다(2줄이면 충분). 안 줄이면 마지막 줄이 잘린다.
-  ${NSD_CreateLabel} 0 124u 100% 18u "터미널/브라우저/파일 비교/로그 분석/SQL Tool 등 나머지는 별도 용량이 없어 항상 설치됩니다.$\r$\n선택은 다음 업데이트에도 유지됩니다 — 바꾸려면 재설치하세요."
-  nsDialogs::Show
-FunctionEnd
+!macroend
 
-Function nsLeaveFeaturesPage
-  ${NSD_GetState} $VpnCheckbox $VpnChecked
-  ${NSD_GetState} $MicroSipCheckbox $MicroSipChecked
-  ${NSD_GetState} $SippCheckbox $SippChecked
-  ${NSD_GetState} $MediaCheckbox $MediaChecked
-  ${NSD_GetState} $OfficeCheckbox $OfficeChecked
-  ${NSD_GetState} $SswPhoneCheckbox $SswPhoneChecked
-  ${NSD_GetState} $CdrToolCheckbox $CdrToolChecked
-FunctionEnd
+; 선택 상태를 $XxxChecked (1/0) 로 읽어온다 — customInstall 의 기존 로직이 이 변수들을 쓴다.
+!macro ReadSectionChecked SecId OutVar
+  SectionGetFlags ${SecId} $R3
+  IntOp $R3 $R3 & ${SF_SELECTED}
+  ${If} $R3 == ${SF_SELECTED}
+    StrCpy ${OutVar} "1"
+  ${Else}
+    StrCpy ${OutVar} "0"
+  ${EndIf}
+!macroend
 !endif
 
 ; preInit — electron-builder .onInit 의 가장 첫 훅. 외부(비승격)·내부(승격) 인스턴스 모두 여기부터 실행된다.
@@ -187,43 +217,49 @@ FunctionEnd
     ClearErrors
     !insertmacro DbgLog "customInit: IsUpdateRun=$IsUpdateRun params=$R0"
 
-    ; 선택 설치 기본값 = 전체 설치. 앱 또는 이전 설치가 저장한 선택값이 있으면,
-    ; 일반 설치와 자동 업데이트 모두 컴포넌트 선택 페이지의 기본 체크 상태로 반영한다.
-    StrCpy $VpnChecked "1"
-    StrCpy $MicroSipChecked "1"
-    StrCpy $SippChecked "1"
-    StrCpy $MediaChecked "1"
-    StrCpy $OfficeChecked "1"
-    StrCpy $SswPhoneChecked "1"
-    StrCpy $CdrToolChecked "1"
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Vpn"
-    ${IfNot} $R2 == ""
-      StrCpy $VpnChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "MicroSip"
-    ${IfNot} $R2 == ""
-      StrCpy $MicroSipChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Sipp"
-    ${IfNot} $R2 == ""
-      StrCpy $SippChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Media"
-    ${IfNot} $R2 == ""
-      StrCpy $MediaChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "Office"
-    ${IfNot} $R2 == ""
-      StrCpy $OfficeChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "SswPhone"
-    ${IfNot} $R2 == ""
-      StrCpy $SswPhoneChecked $R2
-    ${EndIf}
-    ReadRegStr $R2 HKCU "Software\PePeTerminal\Features" "CdrTool"
-    ${IfNot} $R2 == ""
-      StrCpy $CdrToolChecked $R2
-    ${EndIf}
+    ; 선택 설치 기본값 = 전체 선택(Section 선언 시 기본 SF_SELECTED). 이전 설치나 앱이 저장한
+    ; 선택값이 "0" 인 항목만 체크를 풀어, 일반 설치와 자동 업데이트 모두 같은 선택으로 시작한다.
+    !insertmacro ApplySectionDefault ${SEC_VPN} "Vpn"
+    !insertmacro ApplySectionDefault ${SEC_MICROSIP} "MicroSip"
+    !insertmacro ApplySectionDefault ${SEC_SIPP} "Sipp"
+    !insertmacro ApplySectionDefault ${SEC_MEDIA} "Media"
+    !insertmacro ApplySectionDefault ${SEC_OFFICE} "Office"
+    !insertmacro ApplySectionDefault ${SEC_CHATARCHIVE} "ChatArchive"
+    !insertmacro ApplySectionDefault ${SEC_CDRTOOL} "CdrTool"
+    !insertmacro ApplySectionDefault ${SEC_SSWPHONE} "SswPhone"
+    !insertmacro ApplySectionDefault ${SEC_PEPETHING} "PepeThing"
+    !insertmacro ApplySectionDefault ${SEC_PEPEBOX} "PepeBox"
+
+    ; PePe 본체(electron-builder 의 install 섹션)는 필수 — 컴포넌트 페이지에서 해제할 수 없게
+    ; 읽기 전용(SF_RO)으로 고정하고, 이름도 "install" 대신 알아볼 수 있게 바꾼다.
+    ;
+    ; INSTALL_SECTION_ID 를 쓸 수 없다 — 이 파일은 electron-builder 스크립트보다 먼저 include
+    ; 되고 customInit 도 그 Section 선언(installer.nsi 의 `Section "install" INSTALL_SECTION_ID`,
+    ; 파일 기준 customInit 삽입 지점보다 뒤)보다 앞에서 확장돼서, 그 시점엔 정의가 없어
+    ; "unknown variable/constant" 경고(=빌드 실패)가 났다.
+    ; 섹션 인덱스 자체는 런타임엔 전부 유효하므로 템플릿의 원래 표시 이름("install")으로 찾는다.
+    StrCpy $R5 0
+    lbl_core_sec_loop:
+      ClearErrors
+      SectionGetText $R5 $R6
+      ${If} ${Errors}
+        Goto lbl_core_sec_done
+      ${EndIf}
+      ${If} $R6 == "install"
+        SectionGetFlags $R5 $R4
+        IntOp $R4 $R4 | ${SF_SELECTED}
+        IntOp $R4 $R4 | ${SF_RO}
+        SectionSetFlags $R5 $R4
+        SectionSetText $R5 "PePe Terminal 본체 (필수)"
+        !insertmacro DbgLog "customInit: core section found at index=$R5 -> RO"
+        Goto lbl_core_sec_done
+      ${EndIf}
+      IntOp $R5 $R5 + 1
+      ${If} $R5 < 40
+        Goto lbl_core_sec_loop
+      ${EndIf}
+      !insertmacro DbgLog "customInit: core section NOT found (install 섹션 이름 변경?)"
+    lbl_core_sec_done:
 
   !endif
 !macroend
@@ -238,7 +274,7 @@ FunctionEnd
 ; MUI_PAGE_INSTFILES 이전에 customPageAfterChangeDir 훅을 삽입한다.
 !macro customPageAfterChangeDir
   Page custom nsShowDeleteDataPage nsLeaveDeleteDataPage
-  Page custom nsShowFeaturesPage nsLeaveFeaturesPage
+  !insertmacro MUI_PAGE_COMPONENTS
 !macroend
 
 ; 부드러운 진행 바 — 퍼센티지 갱신 부드럽게
@@ -273,9 +309,18 @@ FunctionEnd
 !macroend
 
 !macro customInstall
-  ; nsLeaveFeaturesPage 에서 이미 사용자의 최종 체크 상태를 $VpnChecked 등에 읽어뒀다
-  ; (nsDialogs 체크박스라 Section 플래그를 거칠 필요가 없다).
-  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked CdrToolChecked=$CdrToolChecked"
+  ; 컴포넌트 페이지의 최종 선택 상태를 $XxxChecked (1/0) 로 읽어온다 — 아래 로직은 그대로 쓴다.
+  !insertmacro ReadSectionChecked ${SEC_VPN} $VpnChecked
+  !insertmacro ReadSectionChecked ${SEC_MICROSIP} $MicroSipChecked
+  !insertmacro ReadSectionChecked ${SEC_SIPP} $SippChecked
+  !insertmacro ReadSectionChecked ${SEC_MEDIA} $MediaChecked
+  !insertmacro ReadSectionChecked ${SEC_OFFICE} $OfficeChecked
+  !insertmacro ReadSectionChecked ${SEC_CHATARCHIVE} $ChatArchiveChecked
+  !insertmacro ReadSectionChecked ${SEC_CDRTOOL} $CdrToolChecked
+  !insertmacro ReadSectionChecked ${SEC_SSWPHONE} $SswPhoneChecked
+  !insertmacro ReadSectionChecked ${SEC_PEPETHING} $PepeThingChecked
+  !insertmacro ReadSectionChecked ${SEC_PEPEBOX} $PepeBoxChecked
+  !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked CdrToolChecked=$CdrToolChecked ChatArchiveChecked=$ChatArchiveChecked PepeThingChecked=$PepeThingChecked PepeBoxChecked=$PepeBoxChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
   SetAutoClose false
@@ -298,6 +343,11 @@ FunctionEnd
   WriteRegStr HKCU "Software\PePeTerminal\Features" "Office" "$OfficeChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "SswPhone" "$SswPhoneChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "CdrTool" "$CdrToolChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "ChatArchive" "$ChatArchiveChecked"
+  ; Pepe-Thing / Pepe-Box 는 동봉 파일이 없어 파일 존재로 선택 여부를 알 수 없다 — 앱이
+  ; features:get-available 에서 이 레지스트리 값을 읽어 메뉴 노출을 결정한다(SswPhone 과 동일).
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "PepeThing" "$PepeThingChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "PepeBox" "$PepeBoxChecked"
 
   ; SSW 소프트폰은 MicroSIP과 완전히 같은 sip-sidecar(sipd.exe) 엔진을 쓴다(별도 바이너리 없음) —
   ; 둘 중 하나라도 체크됐으면 엔진을 풀어야 한다. UI 노출 여부는 앱이 레지스트리의 SswPhone 값을
@@ -320,6 +370,12 @@ FunctionEnd
   !insertmacro ExtractOrSkipBundle $OfficeChecked "rhwp-studio" "rhwp-studio" "오피스 — 한글(rhwp-studio)"
   !insertmacro ExtractOrSkipBundle $OfficeChecked "flowchart-editor" "flowchart-editor" "오피스 — FlowChart 편집기"
   !insertmacro ExtractOrSkipBundle $CdrToolChecked "calllog-cdr-tool" "calllog-cdr-tool" "SSW CDR 로그 분석"
+  ; 대화 아카이브 검색의 AI 런타임 — 다른 번들과 달리 resources/ 아래 전용 폴더가 아니라
+  ; app.asar.unpacked\node_modules 로 푼다. transformers 가 정적 import 하는 sharp / @img 가
+  ; 이미 그 폴더에 있어서(앱 본체가 써서 항상 설치됨) 같은 node_modules 안에 있어야 Node 가
+  ; 상위 탐색으로 찾는다 — 다른 위치로 풀면 그 20MB 를 번들에 중복으로 넣어야 한다.
+  ; 자세한 배경은 electron/chatArchiveStore.ts 의 resolveTransformersSpecifier 주석 참고.
+  !insertmacro ExtractOrSkipBundle $ChatArchiveChecked "chat-archive-ai" "app.asar.unpacked\node_modules" "대화 아카이브 검색(AI 런타임)"
 
   DetailPrint "─────────────────────────────────────────"
   DetailPrint "✓ 1단계 완료: PePe Terminal 본체 파일 복사"

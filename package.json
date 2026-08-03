@@ -15,7 +15,7 @@
     "download:jdbc": "node scripts/download-jdbc-drivers.js",
     "download:rg": "node scripts/download-ripgrep.js",
     "check:rg": "node scripts/download-ripgrep.js --check",
-    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win",
+    "build": "node scripts/verify-openvpn-bundle.js && node scripts/verify-sidecar-bin.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && node --max-old-space-size=8192 ./node_modules/vite/bin/vite.js build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win",
     "build:skip-vpn": "node scripts/verify-openvpn-bundle.js --skip && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win",
     "build:win:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
     "build:skip-sign": "node scripts/verify-openvpn-bundle.js && node scripts/build-sidecar.js && node scripts/download-jre.js && node scripts/download-jdbc-drivers.js && node scripts/download-ripgrep.js && tsc && vite build && node -e \"require('fs').copyFileSync('electron/mcpSshServer.cjs','dist-electron/mcpSshServer.cjs');require('fs').copyFileSync('electron/sftpTransferWorker.cjs','dist-electron/sftpTransferWorker.cjs');require('fs').copyFileSync('electron/sshTerminalWorker.cjs','dist-electron/sshTerminalWorker.cjs')\" && node scripts/patch-nsis-template.js && node scripts/zip-optional-bundles.js && node scripts/run-electron-builder.js --win --config.win.sign=false",
@@ -34,7 +34,7 @@
     "koffi": "^3.1.4",
     "marked": "^18.0.2",
     "mermaid": "^11.14.0",
-    "monaco-editor": "^0.53.0",
+    "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.1.200",
     "qrcode": "^1.5.4",
@@ -99,7 +99,22 @@
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
       "!dist/**/*.map",
-      "!dist-electron/**/*.map"
+      "!dist-electron/**/*.map",
+      "!node_modules/@xenova/**/*",
+      "!node_modules/onnxruntime-node/**/*",
+      "!node_modules/onnxruntime-web/**/*",
+      "!node_modules/onnxruntime-common/**/*",
+      "!node_modules/monaco-editor/**/*",
+      "!node_modules/@monaco-editor/**/*",
+      "!node_modules/mermaid/**/*",
+      "!node_modules/@mermaid-js/**/*",
+      "!node_modules/cytoscape/**/*",
+      "!node_modules/cytoscape-*/**/*",
+      "!node_modules/pdfjs-dist/**/*",
+      "!node_modules/@napi-rs/**/*",
+      "!node_modules/katex/**/*",
+      "!node_modules/sql-formatter/**/*",
+      "!node_modules/@rhwp/**/*"
     ],
     "extraResources": [
       {
@@ -207,6 +222,10 @@
         {
           "from": "resources/optional-bundles/calllog-cdr-tool.zip",
           "to": "calllog-cdr-tool.zip"
+        },
+        {
+          "from": "resources/optional-bundles/chat-archive-ai.zip",
+          "to": "chat-archive-ai.zip"
         }
       ]
     },
