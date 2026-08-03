@@ -1404,17 +1404,59 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           };
           setTimeout(attempt, 150);
         };
+        // 자동으로 값을 채우지 않고, 포커스된 입력 옆에 클릭 가능한 후보 배지만 띄운다 —
+        // 사용자가 그 배지를 직접 클릭해야만 실제로 채워진다. (chromeless 임베드는 예외적으로
+        // 기존처럼 자동 채움 + 자동 제출을 유지 — 사내 고정 로그인 화면이라 사용자가 매번
+        // 클릭할 필요가 없어야 한다.)
+        let badgeEl = null;
+        const removeBadge = () => { try { badgeEl?.remove(); } catch {} badgeEl = null; };
+        const showSuggestion = (anchorEl, user, pass) => {
+          removeBadge();
+          if (!cred.username && !cred.password) return;
+          const rect = anchorEl.getBoundingClientRect();
+          const badge = document.createElement('div');
+          badge.textContent = (cred.username || '(no id)') + ' — 클릭하여 자동입력';
+          badge.setAttribute('style', [
+            'position:fixed', 'z-index:2147483647', 'cursor:pointer',
+            'top:' + (rect.bottom + 4) + 'px', 'left:' + rect.left + 'px',
+            'background:#1f2937', 'color:#fff', 'font-size:12px', 'font-family:sans-serif',
+            'padding:6px 10px', 'border-radius:6px', 'box-shadow:0 2px 8px rgba(0,0,0,.3)',
+            'max-width:280px', 'overflow:hidden', 'text-overflow:ellipsis', 'white-space:nowrap',
+          ].join(';'));
+          badge.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (cred.username && user && !String(user.value || '').trim()) setValue(user, cred.username);
+            if (cred.password && pass && !String(pass.value || '').trim()) setValue(pass, cred.password);
+            removeBadge();
+          });
+          document.documentElement.appendChild(badge);
+          badgeEl = badge;
+        };
         const fill = () => {
           const inputs = getInputs();
           const pass = pickBest(inputs, scorePass);
           // 로그인 폼에는 반드시 password 타입 입력칸이 있다 — 이게 없는 페이지(로그인 후
           // 넘어간 실제 서비스 화면의 검색창 등 일반 텍스트 입력창)까지 아이디로 오인해 채우는
           // 사고를 막기 위해, 비밀번호 필드가 있는 페이지에서만 채운다.
-          if (!pass) return;
+          if (!pass) { removeBadge(); return; }
           const user = pickBest(inputs, scoreText);
-          if (cred.username && user && !String(user.value || '').trim()) setValue(user, cred.username);
-          if (cred.password && !String(pass.value || '').trim()) setValue(pass, cred.password);
-          autoSubmitIfReady();
+          if (cred.autoSubmit) {
+            // chromeless 고정 임베드: 기존 동작 유지 — 조용히 자동 채움 + 자동 제출.
+            if (cred.username && user && !String(user.value || '').trim()) setValue(user, cred.username);
+            if (cred.password && !String(pass.value || '').trim()) setValue(pass, cred.password);
+            autoSubmitIfReady();
+            return;
+          }
+          const active = document.activeElement;
+          const targetEl = (active === user || active === pass) ? active : null;
+          if (!targetEl) { removeBadge(); return; }
+          const alreadyFilled = (targetEl === user && String(user?.value || '').trim())
+            || (targetEl === pass && String(pass?.value || '').trim());
+          if (alreadyFilled) { removeBadge(); return; }
+          if (badgeEl && badgeEl.__pepeAnchor === targetEl) return; // 이미 같은 입력칸에 떠 있으면 재생성하지 않음(깜빡임 방지)
+          showSuggestion(targetEl, user, pass);
+          if (badgeEl) badgeEl.__pepeAnchor = targetEl;
         };
         const capture = () => {
           const inputs = getInputs();
@@ -1442,6 +1484,11 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           if (!isTextLike(el) && !isPassLike(el)) return;
           fill();
         };
+        const onFocusOut = (e) => {
+          // 배지를 클릭하는 순간에도 그 직전에 focusout 이 먼저 발생할 수 있어, 배지 자체의
+          // mousedown 리스너가 먼저 처리되도록 살짝 지연 후 제거한다.
+          setTimeout(() => { if (document.activeElement !== e.target) removeBadge(); }, 150);
+        };
         const onSubmit = () => setTimeout(capture, 0);
         const onKeydown = (e) => {
           const el = e.target;
@@ -1449,15 +1496,18 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
           if (e.key === 'Enter' && isPassLike(el)) setTimeout(capture, 0);
         };
         document.addEventListener('focusin', onFocusIn, true);
+        document.addEventListener('focusout', onFocusOut, true);
         document.addEventListener('submit', onSubmit, true);
         document.addEventListener('keydown', onKeydown, true);
         const mo = new MutationObserver(() => fill());
         mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
         window.__pepeBrowserCredTeardown = () => {
           document.removeEventListener('focusin', onFocusIn, true);
+          document.removeEventListener('focusout', onFocusOut, true);
           document.removeEventListener('submit', onSubmit, true);
           document.removeEventListener('keydown', onKeydown, true);
           try { mo.disconnect(); } catch {}
+          removeBadge();
         };
         window.addEventListener('beforeunload', () => { try { window.__pepeBrowserCredTeardown?.(); } catch {} }, { once: true });
         fill();
