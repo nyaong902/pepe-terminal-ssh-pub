@@ -1983,14 +1983,17 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     seqCounterRef.current = maxSeq;
   };
 
-  // 이력 로드
+  // 이력 로드 — chatHistory.json 에서 읽는다(예전에는 config.json 의 uiPrefs 에 있었다).
+  // 메인이 첫 읽기에서 레거시 기록을 새 파일로 이관하므로 여기서는 신경 쓸 것이 없다.
   useEffect(() => {
     (async () => {
       try {
-        const prefs = await (window as any).api?.getUIPrefs?.();
-        if (prefs && Array.isArray(prefs.claudeChatHistory)) {
-          setChatHistory(prefs.claudeChatHistory);
-        }
+        const api = (window as any).api;
+        const list = api?.getChatHistory
+          ? await api.getChatHistory()
+          // 구 preload(= 앱을 업데이트했는데 preload 가 아직 옛것인 경우)를 위한 폴백.
+          : (await api?.getUIPrefs?.())?.claudeChatHistory;
+        if (Array.isArray(list)) setChatHistory(list);
       } catch {}
       chatHistoryLoadedRef.current = true;
     })();
@@ -1998,10 +2001,14 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // 이력 저장
   useEffect(() => {
     if (!chatHistoryLoadedRef.current) return;
-    // chatHistory 는 스트리밍 중 매 chunk 마다 업데이트됨 → setUIPrefs 가 매 chunk 마다 직렬화/IPC/디스크 write 를 유발.
+    // chatHistory 는 스트리밍 중 매 chunk 마다 업데이트됨 → 매 chunk 마다 직렬화/IPC/디스크 write 를 유발.
     // 1.5s 디바운스로 쓰기 빈도 제한. 마지막 변경만 보존되면 충분.
     const t = setTimeout(() => {
-      try { (window as any).api?.setUIPrefs?.({ claudeChatHistory: chatHistory }); } catch {}
+      try {
+        const api = (window as any).api;
+        if (api?.setChatHistory) api.setChatHistory(chatHistory);
+        else api?.setUIPrefs?.({ claudeChatHistory: chatHistory });   // 구 preload 폴백
+      } catch {}
     }, 1500);
     return () => clearTimeout(t);
   }, [chatHistory]);

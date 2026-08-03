@@ -97,7 +97,84 @@ export function loadUIPrefs(): Record<string, any> {
   } catch { return {}; }
 }
 
+// ── AI 채팅 기록 저장소 ──────────────────────────────────────────────────────────
+// 예전에는 config.json 의 uiPrefs.claudeChatHistory 에 넣었는데, 그 파일이 3.4MB 까지 커졌고
+// (대화 47개 = 2.46MB) saveUIPrefs 는 파일 전체를 동기로 읽고-파싱하고-쓰기 때문에 UI 설정을
+// 하나 바꿀 때마다 약 14MB 를 주 스레드에서 처리했다. 호출 지점이 41곳이라 사이드바 토글,
+// 패널 고정, 워크스페이스 전환마다 그 비용이 들었고, AI 스트리밍 중에는 1.5s 마다 반복됐다.
+// 주 스레드가 막히면 SSH 데이터 처리까지 멈춘다.
+// 그래서 채팅 기록만 별도 파일로 분리한다 — config.json 은 약 90KB 로 줄어든다.
+function getChatHistoryPath(): string {
+  try { return path.join(app.getPath('userData'), 'chatHistory.json'); }
+  catch { return path.join(process.cwd(), 'chatHistory.json'); }
+}
+
+function readJsonSafe(file: string): any {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+// 임시 파일에 쓰고 rename — 쓰는 도중 죽어도 원본이 깨지지 않는다(2.5MB 를 다루므로 특히 중요).
+function writeJsonAtomic(file: string, data: any, indent?: number): void {
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, indent), 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+const CHAT_HISTORY_KEY = 'claudeChatHistory';
+
+// 채팅 기록을 읽는다. config.json 에 남아 있는 레거시 기록이 있으면 새 파일로 이관한다.
+// 다른 PC 에서 업데이트할 때 기록이 사라지지 않는 것이 이 함수의 핵심 요구사항이라, 어느 쪽도
+// 버리지 않고 id 기준으로 합친다(같은 id 면 updatedAt 이 큰 쪽). 새 파일에 쓰고 다시 읽어
+// 개수까지 확인한 뒤에만 config 에서 제거하므로, 중간에 실패하면 레거시가 그대로 남아 다음
+// 실행에서 재시도된다.
+export function loadChatHistory(): any[] {
+  const fromFile = readJsonSafe(getChatHistoryPath());
+  const current: any[] = Array.isArray(fromFile) ? fromFile : [];
+
+  const cfgPath = getConfigPath();
+  const cfg = readJsonSafe(cfgPath);
+  const legacy: any[] = Array.isArray(cfg?.uiPrefs?.[CHAT_HISTORY_KEY]) ? cfg.uiPrefs[CHAT_HISTORY_KEY] : [];
+  if (legacy.length === 0) return current;
+
+  const byId = new Map<string, any>();
+  for (const e of current) if (e && e.id) byId.set(e.id, e);
+  for (const e of legacy) {
+    if (!e || !e.id) continue;
+    const cur = byId.get(e.id);
+    if (!cur || (Number(e.updatedAt) || 0) > (Number(cur.updatedAt) || 0)) byId.set(e.id, e);
+  }
+  const merged = Array.from(byId.values());
+
+  try {
+    writeJsonAtomic(getChatHistoryPath(), merged);
+    const verify = readJsonSafe(getChatHistoryPath());
+    if (Array.isArray(verify) && verify.length === merged.length) {
+      delete cfg.uiPrefs[CHAT_HISTORY_KEY];
+      writeJsonAtomic(cfgPath, cfg, 2);
+      console.log(`[chat-history] config.json 에서 ${legacy.length}개 이관 완료 -> chatHistory.json (총 ${merged.length}개)`);
+    } else {
+      console.error('[chat-history] 이관 검증 실패 — config.json 의 레거시 기록을 그대로 둔다');
+    }
+  } catch (e) {
+    console.error('[chat-history] 이관 실패 — config.json 의 레거시 기록을 그대로 둔다:', e);
+  }
+  return merged;
+}
+
+export function saveChatHistory(entries: any[]): void {
+  writeJsonAtomic(getChatHistoryPath(), Array.isArray(entries) ? entries : []);
+}
+
 export function saveUIPrefs(prefs: Record<string, any>) {
+  // 채팅 기록은 별도 파일로 돌린다 — 예전 호출 경로가 남아 있어도 config.json 이 다시 커지지 않는다.
+  if (prefs && Object.prototype.hasOwnProperty.call(prefs, CHAT_HISTORY_KEY)) {
+    const { [CHAT_HISTORY_KEY]: history, ...rest } = prefs;
+    try { saveChatHistory(history as any[]); } catch {}
+    if (Object.keys(rest).length === 0) return;
+    prefs = rest;
+  }
   const cfgPath = getConfigPath();
   let cfg: any = {};
   try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch {}

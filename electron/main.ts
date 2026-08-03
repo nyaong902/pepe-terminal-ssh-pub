@@ -38,7 +38,7 @@ import os from 'os';
 import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
-import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, Session, Folder, SessionsData } from './sessionsStore';
+import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, loadChatHistory, saveChatHistory, Session, Folder, SessionsData } from './sessionsStore';
 import * as chatArchiveStore from './chatArchiveStore';
 import * as everythingService from './everythingService';
 import { loadSqlSessionsData, saveSqlSessionsData, SqlSession, SqlFolder, SqlSessionsData } from './sqlSessionsStore';
@@ -1637,6 +1637,9 @@ ipcMain.handle('sessions:open-editor', () => {
 
 ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
+// AI 채팅 기록은 config.json 이 아니라 chatHistory.json 에 따로 저장한다(sessionsStore 주석 참고).
+ipcMain.handle('chat-history:get', () => { try { return loadChatHistory(); } catch { return []; } });
+ipcMain.handle('chat-history:set', (_e, entries: any[]) => { try { saveChatHistory(entries); } catch {} return true; });
 // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소.
 ipcMain.handle('worklog:get-all', () => loadWorklog());
 function emitWorklogState() {

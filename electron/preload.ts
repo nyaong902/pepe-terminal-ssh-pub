@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('api', {
   // UI Prefs (config.json 에 저장 — sessionData 멀티인스턴스 분리와 무관하게 영속)
   getUIPrefs: () => ipcRenderer.invoke('ui-prefs:get'),
   setUIPrefs: (prefs: Record<string, any>) => ipcRenderer.invoke('ui-prefs:set', prefs),
+  // AI 채팅 기록 — config.json 이 커지지 않게 별도 파일에 저장한다.
+  getChatHistory: () => ipcRenderer.invoke('chat-history:get'),
+  setChatHistory: (entries: any[]) => ipcRenderer.invoke('chat-history:set', entries),
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)
   worklogGetAll: () => ipcRenderer.invoke('worklog:get-all'),
   worklogSaveDay: (date: string, day: { todos: any[] }) => ipcRenderer.invoke('worklog:save-day', { date, day }),
