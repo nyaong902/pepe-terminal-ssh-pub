@@ -129,14 +129,17 @@ const CHAT_HISTORY_KEY = 'claudeChatHistory';
 // 버리지 않고 id 기준으로 합친다(같은 id 면 updatedAt 이 큰 쪽). 새 파일에 쓰고 다시 읽어
 // 개수까지 확인한 뒤에만 config 에서 제거하므로, 중간에 실패하면 레거시가 그대로 남아 다음
 // 실행에서 재시도된다.
-export function loadChatHistory(): any[] {
-  const fromFile = readJsonSafe(getChatHistoryPath());
-  const current: any[] = Array.isArray(fromFile) ? fromFile : [];
-
+// 이관만 수행한다(읽기와 분리). 앱 시작 시 한 번 부르기 위한 것 — 예전에는 loadChatHistory 안에만
+// 있어서 AI 패널을 열지 않으면 이관이 안 되고 config.json 이 계속 3.4MB 로 남았다.
+// 레거시 기록이 없으면 config 만 읽고 즉시 반환하므로(채팅 파일은 건드리지 않는다) 상시 호출해도 싸다.
+export function migrateChatHistoryIfNeeded(): void {
   const cfgPath = getConfigPath();
   const cfg = readJsonSafe(cfgPath);
   const legacy: any[] = Array.isArray(cfg?.uiPrefs?.[CHAT_HISTORY_KEY]) ? cfg.uiPrefs[CHAT_HISTORY_KEY] : [];
-  if (legacy.length === 0) return current;
+  if (legacy.length === 0) return;
+
+  const fromFile = readJsonSafe(getChatHistoryPath());
+  const current: any[] = Array.isArray(fromFile) ? fromFile : [];
 
   const byId = new Map<string, any>();
   for (const e of current) if (e && e.id) byId.set(e.id, e);
@@ -160,7 +163,12 @@ export function loadChatHistory(): any[] {
   } catch (e) {
     console.error('[chat-history] 이관 실패 — config.json 의 레거시 기록을 그대로 둔다:', e);
   }
-  return merged;
+}
+
+export function loadChatHistory(): any[] {
+  migrateChatHistoryIfNeeded();
+  const fromFile = readJsonSafe(getChatHistoryPath());
+  return Array.isArray(fromFile) ? fromFile : [];
 }
 
 export function saveChatHistory(entries: any[]): void {

@@ -38,7 +38,7 @@ import os from 'os';
 import { execSync } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
-import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, loadChatHistory, saveChatHistory, Session, Folder, SessionsData } from './sessionsStore';
+import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, loadChatHistory, saveChatHistory, migrateChatHistoryIfNeeded, Session, Folder, SessionsData } from './sessionsStore';
 import * as chatArchiveStore from './chatArchiveStore';
 import * as everythingService from './everythingService';
 import { loadSqlSessionsData, saveSqlSessionsData, SqlSession, SqlFolder, SqlSessionsData } from './sqlSessionsStore';
@@ -1410,6 +1410,9 @@ app.whenReady().then(() => {
   cleanupStaleTempFiles();
   cleanupAiMirrorTempRoots(false);
   registerPepeInstance();
+  // AI 채팅 기록이 config.json 에 남아 있으면 별도 파일로 옮긴다. 창을 띄우기 전에 한 번만 —
+  // AI 패널을 열지 않는 PC 에서도 config.json 이 커진 채로 남지 않게 한다(UI 설정 저장 비용).
+  try { migrateChatHistoryIfNeeded(); } catch {}
   createWindow();
   startProcessCpuProbe();   // dev 전용 프로세스별 CPU 진단
   if (loadUIPrefs().stickyNoteAutoShow !== false) restoreStickyNotes();
