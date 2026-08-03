@@ -2,7 +2,8 @@
 // SQL Tool — JDBC 사이드카(Java) 를 통한 다중 DBMS 지원. 결과/히스토리/스키마 트리/PK 편집/객체 상세.
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import Editor, { OnMount } from '@monaco-editor/react';
+import { Editor } from './LazyMonaco';
+import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { format as sqlFormat } from 'sql-formatter';
 import { DriverManagerModal } from './DriverManagerModal';

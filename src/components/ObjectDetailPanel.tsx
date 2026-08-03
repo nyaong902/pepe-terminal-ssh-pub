@@ -12,7 +12,7 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import Editor from '@monaco-editor/react';
+import { Editor } from './LazyMonaco';
 import type { JdbcBackend, ColumnInfo } from './jdbcBackend';
 import type { EditorTab, ObjectKind } from './SqlToolWorkspace';
 

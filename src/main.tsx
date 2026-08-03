@@ -12,8 +12,6 @@ import PanelHost from './components/PanelHost'
 import StickyNotePopout from './components/StickyNotePopout'
 import ClockWidget from './components/ClockWidget'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
-// monaco 를 CDN 대신 로컬 번들로 쓰게 하는 설정 (side-effect import — Editor 마운트 전에 실행)
-import './utils/monacoSetup'
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
 import { initScrollbarHoverTracking } from './utils/scrollbarHover'

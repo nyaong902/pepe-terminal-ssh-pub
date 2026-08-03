@@ -1,6 +1,7 @@
 // src/components/FileEditor.tsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Editor, { OnMount } from '@monaco-editor/react';
+import { Editor } from './LazyMonaco';
+import type { OnMount } from '@monaco-editor/react';
 import { useTranslation } from 'react-i18next';
 
 // Electron 환경에서 Monaco 우클릭 메뉴의 Paste 가 동작하지 않는 문제 수정.

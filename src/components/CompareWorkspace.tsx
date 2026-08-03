@@ -6,7 +6,8 @@ import React, { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffe
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
-import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
+import { DiffEditor } from './LazyMonaco';
+import type { DiffOnMount } from '@monaco-editor/react';
 import type { PanelSession } from '../utils/layoutUtils';
 import { matchKeybinding, getKeybinding, formatKeyComboForOS } from '../utils/keybindings';
 import { RemotePathPicker } from './RemotePathPicker';
