@@ -162,6 +162,13 @@ const DATA_BATCH_MS_HIDDEN = 300;
 // 상한을 둬서, 아무리 밀렸어도 한 번의 write() 가 처리할 양은 항상 작게 유지한다.
 const DATA_CHUNK_MAX_CHARS = 32_768;
 
+// 투명 창 사용 여부. 한때 로그 폭주 시 CPU(약 20%)의 원인으로 의심해 false 로 바꿔
+// 비교했지만 true/false 가 CPU 에 아무 차이가 없었다(2026-08-03 실측). 같은 로그로 잰
+// Wave(투명 창 안 씀) 7~8% 와의 차이는 투명도로 설명되지 않는다 — 가설 배제.
+// 창 모양(App.css 의 border-radius 10px 로 둥글린 모서리)에 필요하므로 true 로 둔다.
+// false 로 두면 모서리 자리에 검은 사각이 보인다.
+const WINDOW_TRANSPARENT = true;
+
 // ── 출력 속도 제한을 시도했고, 걷어낸 기록 ──────────────────────────────────────
 // tail -f 폭주 시 CPU 가 튀는 문제로 여러 방식을 넣어봤다: 토큰 버킷 속도 제한, ack 기반
 // 슬라이딩 윈도, ssh2 스트림 pause/resume, 따라갈 수 없는 분량 버리기. 전부 걷어냈다.
@@ -778,10 +785,10 @@ function createWindow() {
     // 기본 아이콘이 뜨고 있었다(v1.0.0 부터의 잠재 버그, exe 자체 리소스 아이콘은 별도 경로로 정상).
     icon: path.join(__dirname, '../dist/icon.ico'),
     frame: false,
-    transparent: true,
+    transparent: WINDOW_TRANSPARENT,
     // transparent + drag-drop 의 Chromium 합성 이슈 우회 — 명시적 backgroundColor
     // 지정 시 일부 케이스에서 drop 이벤트가 렌더러로 정상 라우팅됨.
-    backgroundColor: '#00000000',
+    backgroundColor: WINDOW_TRANSPARENT ? '#00000000' : '#111111',
     hasShadow: false,
     show: false, // 준비 완료 후 표시
     webPreferences: {
@@ -974,6 +981,73 @@ function onMainWindowClosed() {
   }
   setTimeout(() => { try { process.exit(0); } catch {} }, 100);
   setImmediate(() => { try { process.exit(0); } catch {} });
+}
+
+// 프로세스별 CPU 진단 (dev 전용). 로그 폭주 시 CPU 가 어느 프로세스에서 나는지 알아야
+// 다음 조사를 할 수 있는데, 작업 관리자를 읽어 옮기는 과정이 계속 병목이었다. Electron 의
+// app.getAppMetrics() 가 프로세스별 CPU 를 그대로 주므로 앱이 직접 찍게 한다.
+// 2초마다 한 줄씩, 5% 이상 쓰는 프로세스만 출력한다.
+// 주 프로세스가 바빠지면 자동으로 10초 CPU 프로파일을 떠서 파일로 남긴다(dev 전용).
+// 프로세스별 측정으로 비용이 주 프로세스에 있다는 것까지는 확인했는데(폭주 시 Browser 6~14%,
+// 렌더러는 5% 미만), 그 안의 어느 함수인지는 알 수 없었다. 주 프로세스에는 SSH worker 스레드가
+// 들어 있어 ssh2 의 복호화·패킷 처리와 우리 코드가 섞여 있다.
+// 렌더러는 DevTools 로 프로파일할 수 있지만 주 프로세스는 그럴 수 없으므로, inspector 를
+// 직접 붙여 .cpuprofile 을 남긴다. 결과는 Chrome DevTools 나 speedscope 로 열어 볼 수 있다.
+let cpuProfileTaken = 0;
+// CPU 진단 도구 스위치. 켜는 방법: PEPE_CPU_PROBE=1 npm run dev
+// 평소에는 꺼둔다 — 켜면 2초마다 프로세스별 CPU 가 찍히고, 주 프로세스가 바빠질 때
+// Downloads 에 .cpuprofile 을 남기므로 상시 켜둘 것은 아니다.
+//
+// 이 도구가 필요했던 이유: 로그 폭주 시 CPU 원인을 좁히는 데 추측이 반복적으로 실패했다.
+// 렌더러는 DevTools 로 프로파일할 수 있지만 주 프로세스는 그럴 수 없어서, 어느 프로세스가
+// 바쁜지조차 알기 어려웠다. 이 두 도구(프로세스별 CPU + 주 프로세스 자동 프로파일)를 넣고 나서
+// 비로소 원인이 특정됐다.
+const CPU_PROBE_ON = !app.isPackaged && process.env.PEPE_CPU_PROBE === '1';
+
+function maybeProfileMainProcess(cpu: number) {
+  if (!CPU_PROBE_ON || cpu < 8 || cpuProfileTaken >= 2) return;   // 폭주 중일 때만, 최대 2회
+  cpuProfileTaken++;
+  const seq = cpuProfileTaken;
+  void (async () => {
+    try {
+      const inspector = await import('node:inspector');
+      const session = new inspector.Session();
+      session.connect();
+      const post = (method: string, params?: any) => new Promise<any>((res, rej) => {
+        (session as any).post(method, params, (err: any, r: any) => (err ? rej(err) : res(r)));
+      });
+      await post('Profiler.enable');
+      await post('Profiler.setSamplingInterval', { interval: 200 });
+      await post('Profiler.start');
+      console.log(`[prof] 주 프로세스 프로파일 ${seq} 시작 — 10초`);
+      await new Promise((r) => setTimeout(r, 10000));
+      const { profile } = await post('Profiler.stop');
+      session.disconnect();
+      const out = path.join(app.getPath('downloads'), `pepe-main-${seq}.cpuprofile`);
+      fs.writeFileSync(out, JSON.stringify(profile));
+      console.log(`[prof] 저장됨 -> ${out}`);
+    } catch (e) {
+      console.error('[prof] 프로파일 실패:', e);
+    }
+  })();
+}
+
+function startProcessCpuProbe() {
+  if (!CPU_PROBE_ON) return;
+  setInterval(() => {
+    try {
+      const rows = app.getAppMetrics()
+        .map((m) => ({ pid: m.pid, type: m.type, name: (m as any).name || (m as any).serviceName || '', cpu: m.cpu?.percentCPUUsage ?? 0 }))
+        .filter((r) => r.cpu >= 5)
+        .sort((a, b) => b.cpu - a.cpu);
+      if (rows.length === 0) return;
+      const total = rows.reduce((s2, r) => s2 + r.cpu, 0);
+      console.log('[cpu] 합계 ' + total.toFixed(0) + '% | ' +
+        rows.map((r) => `${r.type}${r.name ? '(' + r.name + ')' : ''} pid${r.pid} ${r.cpu.toFixed(0)}%`).join('  '));
+      const browser = rows.find((r) => r.type === 'Browser');
+      if (browser) maybeProfileMainProcess(browser.cpu);
+    } catch {}
+  }, 2000);
 }
 
 // ── App lifecycle ──
@@ -1337,6 +1411,7 @@ app.whenReady().then(() => {
   cleanupAiMirrorTempRoots(false);
   registerPepeInstance();
   createWindow();
+  startProcessCpuProbe();   // dev 전용 프로세스별 CPU 진단
   if (loadUIPrefs().stickyNoteAutoShow !== false) restoreStickyNotes();
   // 시계 위젯 — 마지막에 켜져 있었으면(진행 중이던 타이머 포함) 그대로 복원.
   { const clockState = loadClockWidgetState(); if (clockState.visible) createClockWidgetWindow(clockState); }

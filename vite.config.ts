@@ -41,6 +41,45 @@ function serveExternalStaticDirs(): Plugin {
   };
 }
 
+// 런타임에 경로로 로드되는 .cjs 들(worker_threads / child_process)을 dist-electron/ 으로 복사한다.
+// vite 는 electron/main.ts 만 번들하고 이 파일들은 번들 그래프에 없어서 손대지 않는데,
+// sshBridge 는 path.join(__dirname, 'sshTerminalWorker.cjs') 로 dist-electron/ 의 사본을 로드한다.
+// 예전에는 이 복사가 package.json 의 build 스크립트에만 있어서, dev 에서 worker 를 고쳐도
+// 앱은 마지막 풀빌드 시점의 사본을 계속 썼다 — 수정이 조용히 무시되는 함정이었다(실제로 하루치
+// worker 최적화가 전부 실행되지 않았고, 그걸 알아내는 데 오래 걸렸다).
+// 그래서 dev 서버 시작 시 한 번 복사하고, 이후 파일이 바뀌면 다시 복사한다.
+const RUNTIME_CJS = ['sshTerminalWorker.cjs', 'sftpTransferWorker.cjs', 'mcpSshServer.cjs'];
+function copyRuntimeCjs(): Plugin {
+  const copyOne = (name: string) => {
+    const from = path.join(__dirname, 'electron', name);
+    const to = path.join(__dirname, 'dist-electron', name);
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    name: 'copy-runtime-cjs',
+    buildStart() {
+      for (const name of RUNTIME_CJS) copyOne(name);
+    },
+    configureServer(server) {
+      for (const name of RUNTIME_CJS) copyOne(name);
+      // 변경 감시 — 저장하면 즉시 사본을 갱신한다(앱 재시작만 하면 반영됨).
+      for (const name of RUNTIME_CJS) server.watcher.add(path.join(__dirname, 'electron', name));
+      server.watcher.on('change', (file) => {
+        const name = path.basename(file);
+        if (RUNTIME_CJS.includes(name) && copyOne(name)) {
+          server.config.logger.info(`[copy-runtime-cjs] ${name} -> dist-electron/ (앱 재시작 필요)`);
+        }
+      });
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   // CPU 진단용 — 프로덕션 빌드에도 sourcemap 을 남겨서, 문제 PC에서 뜬 DevTools Performance
@@ -54,6 +93,7 @@ export default defineConfig({
   plugins: [
     react(),
     serveExternalStaticDirs(),
+    copyRuntimeCjs(),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.

@@ -368,9 +368,20 @@ const termWebglPendingRecovery: Set<string> = new Set();
 // 기본값 true(WebGL 비활성) — xterm-addon-webgl 0.16.0(레거시 xterm 5.3 계열, @xterm/* 로 개명되기
 // 전 마지막 배포판)에서 background-color-erase 렌더링이 깨져 SGR 배경색을 지워야 할 영역에
 // 엉뚱하게 칠해진 채로 남는 버그를 확인했다(예: ClearCase vdiff 출력에서 초록 배경이 화면 전체에
-// 번짐 — 다른 터미널 클라이언트에선 재현 안 됨, DOM 렌더러로 전환하면 사라짐). @xterm/xterm 6.x +
-// @xterm/addon-webgl 0.19.x 로 옮기면 고쳐졌을 수 있으나 core 메이저 버전업이라 별도 마이그레이션
-// 작업으로 미루고, 우선 안전한 DOM 렌더러를 기본으로 쓴다. 콘솔에서
+// 번짐 — 다른 터미널 클라이언트에선 재현 안 됨, DOM 렌더러로 전환하면 사라짐).
+//
+// 2026-08-03: @xterm/xterm 6.0 + @xterm/addon-webgl 0.19 로 실제 마이그레이션해서 확인했다.
+// 결과는 둘 다 실패 — (1) tail 폭주 시 CPU 가 전혀 줄지 않았고, (2) 투명 창(main.ts 의
+// transparent: true)이 불투명해져 PePe 밖 윈도우가 보이지 않았다. 레거시 0.16 과 같은 증상이므로
+// 애드온 버전 문제가 아니라 Electron 의 투명 창 + WebGL 합성 자체의 한계로 보인다. 그래서 xterm 6
+// 마이그레이션까지 전부 되돌렸다(이득이 없고 메이저 버전업 위험만 남으므로).
+//
+// 참고 — 같은 로그(초당 약 16,000줄)로 실측한 CPU: Tabby(@xterm/xterm 5.4 + WebGL 끔, SSH 는
+// Rust russh) 20%, PePe 20%, Wave(@xterm/xterm 6.0 + addon-webgl 0.19 켬, Go 백엔드) 7~8%.
+// Tabby 가 네이티브 SSH 를 쓰면서도 우리와 같으므로 SSH 계층은 원인이 아니다(russh 이관 불필요).
+// Wave 와의 차이는 WebGL 로 설명되는 듯했으나 우리 환경에서는 재현되지 않았다 — 투명 창이 변수일
+// 수 있다(Wave 는 투명 창을 쓰지 않는다). 다시 시도할 사람은 그 점을 먼저 확인할 것.
+// 우선 안전한 DOM 렌더러를 기본으로 쓴다. 콘솔에서
 // window.__pepeSetWebglDisabled(false) 로 다시 켜서 비교 테스트 가능.
 // WebGL 을 기본으로 켜봤다가 되돌렸다(2026-08-03). 두 가지가 확인됐다:
 //  (1) CPU 가 줄지 않았다 — tail 폭주 시 20%+ 그대로였다. 즉 DOM 렌더러의 행 갱신

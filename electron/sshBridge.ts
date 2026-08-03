@@ -112,6 +112,9 @@ interface BridgeMessage {
   enabled?: boolean;
 }
 
+const PROMPT_TAIL_MAX = 4096;                  // 프롬프트 탐지에 유지하는 꼬리 길이
+const PROMPT_ESC = String.fromCharCode(27);   // 소스에 원시 제어문자를 넣지 않는다
+
 class SSHBridge extends EventEmitter {
   private clients: Map<string, ClientRecord> = new Map();
   // 연결 중(아직 ready 안 된) Client — handleDisconnect 가 찾을 수 있도록 별도 추적.
@@ -1113,11 +1116,25 @@ class SSHBridge extends EventEmitter {
   // 지원 패턴: "(viewtag):/path " (ClearCase) 및 일반 ":/path " / "/path $" / "/path #" 등 프롬프트 말미 경로.
   private _parsePromptCwd(panelId: string, chunk: string): void {
     // 버퍼는 자동추적 on/off 와 무관하게 항상 갱신 (꺼진 동안 이동한 경로도 보존 → 재활성화 시 즉시 반영).
-    // ANSI escape 제거 + tail 버퍼 누적 (마지막 2KB만 유지)
+    // ANSI escape 제거 + tail 버퍼 누적 (마지막 4KB만 유지)
+    //
+    // 프롬프트는 버퍼 끝에서만 찾으므로 청크 전체를 훑을 필요가 없다. 주 프로세스 CPU 프로파일에서
+    // 이 함수가 JS 자기시간 1위였다(2.9%) — 로그 폭주 시 청크마다 정규식 두 개를 청크 전체에
+    // 돌리고 있었다. 그래서 (1) 스캔 범위를 유지 분량(4096)으로 제한하고, (2) ESC 가 없으면 정규식을
+    // 아예 건너뛰고, (3) 꼬리가 이미 찬 경우 이전 버퍼와의 연결을 생략한다.
+    // 스캔 범위는 유지 분량과 같은 4096 — 그보다 앞은 어차피 버려진다.
+    const src = chunk.length > PROMPT_TAIL_MAX ? chunk.slice(-PROMPT_TAIL_MAX) : chunk;
     // eslint-disable-next-line no-control-regex
-    const clean = chunk.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
-    let buf = (this.promptTail.get(panelId) || '') + clean;
-    if (buf.length > 4096) buf = buf.slice(-4096);
+    const clean = src.indexOf(PROMPT_ESC) === -1 ? src : src.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
+    // clean 이 이미 유지 분량을 채우면 이전 버퍼를 붙일 필요가 없다 — 결과가 어차피 clean 의 꼬리다.
+    // 폭주 시에는 이 경로만 타므로 청크마다 있던 큰 문자열 연결이 사라진다.
+    let buf: string;
+    if (clean.length >= PROMPT_TAIL_MAX) {
+      buf = clean.length === PROMPT_TAIL_MAX ? clean : clean.slice(-PROMPT_TAIL_MAX);
+    } else {
+      const merged = (this.promptTail.get(panelId) || '') + clean;
+      buf = merged.length > PROMPT_TAIL_MAX ? merged.slice(-PROMPT_TAIL_MAX) : merged;
+    }
     this.promptTail.set(panelId, buf);
     // emit 은 자동추적이 켜진 경우에만 — 그리고 매 청크 즉시가 아니라 디바운스해서 스캔.
     if (!this.autoTrackOn.has(panelId)) return;

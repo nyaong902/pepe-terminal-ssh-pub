@@ -50,9 +50,23 @@ function stripAnsi(s) {
   return s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '');
 }
 
+// 프롬프트는 버퍼 끝에서만 찾으므로(promptTail 은 4096자만 유지) 청크 전체를 훑을 필요가 없다.
+// 프로파일에서 이 함수가 주 프로세스 JS 자기시간 1위였다(2.9%) — 로그 폭주 시 청크마다
+// ANSI 제거 정규식 두 개를 청크 전체에 돌리고 있었다.
+//  (1) 스캔 범위를 끝 8192자로 제한한다(ANSI 제거로 짧아지는 것까지 감안한 여유값).
+//  (2) ESC 가 아예 없으면 정규식을 건너뛴다 — 일반 로그 출력이 대부분 이 경로다.
+const PROMPT_TAIL_MAX = 4096;                  // 프롬프트 탐지에 유지하는 꼬리 길이
+const ESC = String.fromCharCode(27);
 function parsePromptCwd(chunk) {
-  const clean = stripAnsi(chunk);
-  promptTail = (promptTail + clean).slice(-4096);
+  const src = chunk.length > PROMPT_TAIL_MAX ? chunk.slice(-PROMPT_TAIL_MAX) : chunk;
+  const clean = src.indexOf(ESC) === -1 ? src : stripAnsi(src);
+  // 꼬리가 이미 찼으면 이전 버퍼와 연결하지 않는다 — 결과가 어차피 clean 의 꼬리다.
+  if (clean.length >= PROMPT_TAIL_MAX) {
+    promptTail = clean.length === PROMPT_TAIL_MAX ? clean : clean.slice(-PROMPT_TAIL_MAX);
+  } else {
+    const merged = promptTail + clean;
+    promptTail = merged.length > PROMPT_TAIL_MAX ? merged.slice(-PROMPT_TAIL_MAX) : merged;
+  }
   if (!autoTrackOn) return;
   if (promptCwdDebounceTimer) clearTimeout(promptCwdDebounceTimer);
   promptCwdDebounceTimer = setTimeout(() => {
@@ -238,7 +252,13 @@ function connectSimple(session, cols, rows, x11Display) {
       // 버릴 때는 줄 경계에서 자른다 — 바이트 중간에서 자르면 UTF-8 문자나 이스케이프
       // 시퀀스가 쪼개져 화면이 깨진다.
       const LF_CH = String.fromCharCode(10);   // 소스에 원시 제어문자를 넣지 않는다
-      const OUT_FLUSH_MS = 16;
+      // 방출 주기를 상황에 따라 나눈다. 프로파일에서 폭주 시 주 프로세스 비용의 상위가
+      // 스레드 간 메시지 처리(worker L333 2.2~3.0%)와 그에 딸린 native/타이머 비용이었다.
+      // 16ms 고정이면 초당 62개 메시지가 오가는데, 폭주 중에는 어차피 화면 한 장씩만 보내므로
+      // 주기를 늘려도 보이는 차이가 없다. 반대로 대화형(타이핑 에코)에서는 지연이 그대로 체감되니
+      // 짧게 유지해야 한다 — 그래서 버리기가 발동한 동안만 늘린다.
+      const OUT_FLUSH_MS_IDLE = 8;      // 대화형 — 예전 16ms 보다 오히려 빠르다
+      const OUT_FLUSH_MS_FLOOD = 32;    // 폭주 — 메시지 수를 1/4 로
       // 화면 한 장 분량. 2KB(약 20줄)까지 줄여 실험해봤지만 CPU 는 전혀 내려가지 않았다 —
       // 렌더러로 가는 양이 원인이 아니라는 증거다. 그래서 보여주는 양이 더 많은 6KB 로 둔다.
       // 남은 비용은 이 지점보다 앞단(ssh2 의 JS 프로토콜 처리와 초당 수천 건의 소켓 이벤트)
@@ -248,6 +268,7 @@ function connectSimple(session, cols, rows, x11Display) {
       let outLen = 0;
       let outDropped = false;
       let outTimer = null;
+      let outFlood = false;   // 최근 flush 에서 버렸는가(= 화면이 못 따라가는 상태)
 
       const flushOut = () => {
         outTimer = null;
@@ -255,6 +276,7 @@ function connectSimple(session, cols, rows, x11Display) {
         const buf = outChunks.length === 1 ? outChunks[0] : Buffer.concat(outChunks, outLen);
         const dropped = outDropped;
         outChunks = []; outLen = 0; outDropped = false;
+        outFlood = dropped;   // 버릴 게 없어지면 즉시 대화형 주기로 복귀
         let str;
         try {
           str = (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'utf8')
@@ -274,14 +296,32 @@ function connectSimple(session, cols, rows, x11Display) {
       };
 
       const pushOut = (data) => {
-        outChunks.push(data);
-        outLen += data.length;
-        // 상한을 넘으면 오래된 조각부터 버린다(조각 단위라 O(k), 복사 없음).
-        while (outLen > OUT_KEEP_BYTES && outChunks.length > 1) {
-          outLen -= outChunks.shift().length;
+        // 조각 하나가 이미 유지 분량을 넘는 경우를 반드시 따로 처리해야 한다. ssh2 는 채널 패킷을
+        // 최대 32KB 로 주므로 이런 일이 흔한데, 예전 구현은 "조각이 2개 이상일 때만 버린다"는
+        // 조건 때문에 32KB 조각을 통째로 올려보냈다 — 상한이 사실상 무력화돼 의도한 375KB/s 대신
+        // 약 2MB/s 를 렌더러로 보내고 있었다. OUT_KEEP_BYTES 를 6KB/2KB 로 바꿔도 CPU 가 변하지
+        // 않았던 이유가 이것이다.
+        if (data.length >= OUT_KEEP_BYTES) {
+          outChunks = [data.subarray(data.length - OUT_KEEP_BYTES)];
+          outLen = OUT_KEEP_BYTES;
           outDropped = true;
+        } else {
+          outChunks.push(data);
+          outLen += data.length;
+          // 오래된 조각부터 버린다(조각 단위라 복사 없음).
+          while (outLen > OUT_KEEP_BYTES && outChunks.length > 1) {
+            outLen -= outChunks.shift().length;
+            outDropped = true;
+          }
+          // 조각 단위로 버려도 남으면 맨 앞 조각 자체를 잘라 상한을 반드시 지킨다.
+          if (outLen > OUT_KEEP_BYTES) {
+            const cut = outLen - OUT_KEEP_BYTES;
+            outChunks[0] = outChunks[0].subarray(cut);
+            outLen -= cut;
+            outDropped = true;
+          }
         }
-        if (!outTimer) outTimer = setTimeout(flushOut, OUT_FLUSH_MS);
+        if (!outTimer) outTimer = setTimeout(flushOut, outFlood ? OUT_FLUSH_MS_FLOOD : OUT_FLUSH_MS_IDLE);
       };
 
       s.on('data', pushOut);
