@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { ContextMenu } from './ContextMenu';
 import { ChmodDialog } from './ChmodDialog';
+import { PepeTransferDialog } from './PepeTransferDialog';
 import { notifyConfirm, notifyError } from './Notify';
 import type { OfficeFormat } from './OfficeLauncher';
 import { isMediaExtension, getOfficeFormatForFile } from '../utils/openableFileTypes';
@@ -16,6 +17,10 @@ type FileClipboard = {
   files: string[];
   operation: 'copy' | 'cut';
 };
+// electron/main.ts 의 MAX_FILE_BYTES_PEPE_TRANSFER 및 decimen-optical-transfer 의
+// shared/protocol.ts MAX_FILE_BYTES 와 동일한 값 — 세 곳 다 64MB 로 고정이라 상수 공유 모듈은
+// 두지 않았다(vendored 소스 vs 우리 앱 두 빌드 시스템에 걸쳐 import 하기보다 값 자체를 복제).
+const PEPE_TRANSFER_MAX_BYTES = 64 * 1024 * 1024;
 let _fileClipboard: FileClipboard | null = null;
 const getFileClipboard = () => _fileClipboard;
 const setFileClipboard = (c: FileClipboard | null) => { _fileClipboard = c; };
@@ -252,6 +257,7 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file?: FileInfo } | null>(null);
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [chmodDialog, setChmodDialog] = useState<{ paths: string[]; initialMode?: number; hasDir: boolean } | null>(null);
+  const [pepeTransferTarget, setPepeTransferTarget] = useState<{ localPath: string; fileName: string } | null>(null);
   // 컬럼 폭 (px) — localStorage 영속화
   const [colWidths, setColWidths] = useState<{ name: number; size: number; type: number; date: number; mode: number; owner: number }>(() => {
     try {
@@ -699,6 +705,35 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
     }
     if (isMedia) onOpenInMedia!(localPath, file.name);
     else onOpenInOffice!(officeFormat!, localPath, file.name);
+  };
+
+  // "QR로 전송" — PepeTransferDialog(메인 창 내 모달)를 연다. tryOpenInAppWorkspace 와 동일하게
+  // remote 는 sftp:download-to-temp 로 먼저 로컬에 받은 뒤, 그 로컬 경로를 다이얼로그에 넘긴다.
+  const handleSendViaPepeTransfer = async (file: FileInfo) => {
+    if (source.mode !== 'local' && source.mode !== 'remote') return;
+    // 원격 파일은 목록 조회 시 이미 받아둔 file.size 로 여기서 먼저 차단한다 — 안 그러면
+    // 대용량 파일을 SFTP 로 통째로 임시폴더까지 받은 뒤에야(다이얼로그 진입 시 재확인) 64MB
+    // 초과를 알게 되어 대역폭/시간을 낭비한다.
+    if (file.size > PEPE_TRANSFER_MAX_BYTES) {
+      notifyError('pepe-transfer', `${file.name} 은(는) ${(file.size / 1024 / 1024).toFixed(1)}MB 로 pepe-transfer 한도(64MB)를 초과합니다.`);
+      return;
+    }
+    const remoteOrLocalPath = file.realPath || (currentPath.endsWith(sep) ? currentPath + file.name : currentPath + sep + file.name);
+    let localPath = remoteOrLocalPath;
+    if (source.mode === 'remote') {
+      try {
+        const r = await api.sftpDownloadToTemp?.(source.termId, remoteOrLocalPath);
+        if (!r?.success) {
+          notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), r?.error || t('unknownError', { defaultValue: '알 수 없는 오류' }));
+          return;
+        }
+        localPath = r.localPath;
+      } catch (err: any) {
+        notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
+        return;
+      }
+    }
+    setPepeTransferTarget({ localPath, fileName: file.name });
   };
 
   // 선택 키 — 동명 객체 (shell library aggregator 등) 구분 위해 realPath/shellPath 우선
@@ -1519,6 +1554,10 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
             { separator: true } as const,
             { label: t('rename'), onClick: () => { setRenamingFile(contextMenu.file!.name); setRenameValue(contextMenu.file!.name); } },
             { label: t('deleteFile'), onClick: () => handleDelete(fileKey(contextMenu.file!)) },
+            ...(!contextMenu.file!.isDir && (source.mode === 'local' || source.mode === 'remote') ? [
+              { separator: true } as const,
+              { label: '📶 QR로 전송 (pepe-transfer)', onClick: () => handleSendViaPepeTransfer(contextMenu.file!) },
+            ] : []),
             ...(source.mode === 'remote' ? [
               { separator: true } as const,
               { label: t('chmodMenu'), onClick: () => handleChmod(fileKey(contextMenu.file!)) },
@@ -1544,6 +1583,13 @@ export const FilePanel: React.FC<Props> = ({ source, sources, onSourceChange, se
           hasDir={chmodDialog.hasDir}
           onClose={() => setChmodDialog(null)}
           onApplied={() => loadDir(currentPath)}
+        />
+      )}
+      {pepeTransferTarget && (
+        <PepeTransferDialog
+          localPath={pepeTransferTarget.localPath}
+          fileName={pepeTransferTarget.fileName}
+          onClose={() => setPepeTransferTarget(null)}
         />
       )}
       {/* rename 은 인라인 input 으로 처리 — 행 안에서 직접 편집 */}

@@ -4,10 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { FixedSizeList as VList, ListChildComponentProps } from 'react-window';
 import { subscribePwdChange, isTermPty, subscribeConnectedChange, getCurrentPwdForTerm } from './TerminalPanel';
 import { notifyError, notifyConfirm, notifyOk } from './Notify';
+import { PepeTransferDialog } from './PepeTransferDialog';
 import type { OfficeFormat } from './OfficeLauncher';
 import { isMediaExtension, getOfficeFormatForFile } from '../utils/openableFileTypes';
 
 const ROW_HEIGHT = 22; // App.css 의 .remote-file-item height 와 동기
+
+// electron/main.ts 의 MAX_FILE_BYTES_PEPE_TRANSFER, FilePanel.tsx 의 PEPE_TRANSFER_MAX_BYTES 와 동일한 값.
+const PEPE_TRANSFER_MAX_BYTES = 64 * 1024 * 1024;
 
 // 확장자 → 카테고리. CSS 에서 data-cat 으로 색상 매칭.
 const EXT_CAT: Record<string, string> = {
@@ -67,6 +71,7 @@ type TreeNode = {
   name: string;
   path: string;
   isDir: boolean;
+  size?: number;
   children?: TreeNode[];
   loaded?: boolean;
   loading?: boolean;
@@ -161,6 +166,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
   const [pathInput, setPathInput] = useState<string>(cached?.pathInput || '');
   const [promptModal, setPromptModal] = useState<{ title: string; value: string; onSubmit: (v: string) => void } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
+  const [pepeTransferTarget, setPepeTransferTarget] = useState<{ localPath: string; fileName: string } | null>(null);
   // 다중 선택 (ctrl/cmd+click, shift+click). 파일만 선택 대상.
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   // 범위 선택용 anchor
@@ -226,6 +232,7 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             name: f.name,
             path: childPath,
             isDir: f.isDir,
+            size: f.size,
           };
         });
       return nodes;
@@ -568,6 +575,32 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
     return true;
   };
 
+  // "QR로 전송" — FilePanel.tsx 의 handleSendViaPepeTransfer 와 동일한 로직. 여기 트리는
+  // node.size 가 있으면(SFTP list-dir 응답에서 옴) 다운로드 전에 먼저 차단하고, 없으면(구버전
+  // 캐시된 트리 등) PepeTransferDialog 진입 시 재확인으로 폴백된다.
+  const sendViaPepeTransfer = async (node: TreeNode) => {
+    if (node.isDir) return;
+    if (typeof node.size === 'number' && node.size > PEPE_TRANSFER_MAX_BYTES) {
+      notifyError('pepe-transfer', `${node.name} 은(는) ${(node.size / 1024 / 1024).toFixed(1)}MB 로 pepe-transfer 한도(64MB)를 초과합니다.`);
+      return;
+    }
+    let localPath = node.path;
+    if (mode === 'remote') {
+      try {
+        const r = await (window as any).api?.sftpDownloadToTemp?.(termId, node.path);
+        if (!r?.success) {
+          notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), r?.error || t('unknownError'));
+          return;
+        }
+        localPath = r.localPath;
+      } catch (err: any) {
+        notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
+        return;
+      }
+    }
+    setPepeTransferTarget({ localPath, fileName: node.name });
+  };
+
   const quickShareItems = async (items: { path: string; isDir: boolean }[]) => {
     if (!items.length) return;
     try {
@@ -755,6 +788,13 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
               notifyError(t('downloadFail', { defaultValue: '다운로드 실패' }), String(err?.message || err));
             }
           }}>{t('downloadMenu')}{ctxMenu.node.isDir ? t('downloadRecursive') : ''}</div>
+          {!ctxMenu.node.isDir && (
+            <div className="remote-file-ctx-item" onClick={async () => {
+              const node = ctxMenu.node;
+              setCtxMenu(null);
+              await sendViaPepeTransfer(node);
+            }}>📶 QR로 전송 (pepe-transfer)</div>
+          )}
           {ctxMenu.node.isDir && (
             <>
               <div className="remote-file-ctx-item" onClick={async () => {
@@ -845,6 +885,13 @@ export const RemoteFileTree: React.FC<Props> = ({ termId, sessionName, sessionId
             </div>
           </div>
         </div>
+      )}
+      {pepeTransferTarget && (
+        <PepeTransferDialog
+          localPath={pepeTransferTarget.localPath}
+          fileName={pepeTransferTarget.fileName}
+          onClose={() => setPepeTransferTarget(null)}
+        />
       )}
     </div>
   );
