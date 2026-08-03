@@ -380,6 +380,7 @@ contextBridge.exposeInMainWorld('api', {
   sftpDownloadMulti: (panelId: string, items: { path: string; isDir: boolean }[]) => ipcRenderer.invoke('sftp:download-multi', { panelId, items }),
   sftpQuickShare: (panelId: string, items: { path: string; isDir: boolean }[]) => ipcRenderer.invoke('sftp:quick-share', { panelId, items }),
   sftpDownloadToTemp: (panelId: string, remotePath: string) => ipcRenderer.invoke('sftp:download-to-temp', { panelId, remotePath }),
+  pepeTransferReadFile: (localPath: string, fileName: string) => ipcRenderer.invoke('pepe-transfer:read-file', { localPath, fileName }),
   sftpUpload: (panelId: string, remotePath: string, kind?: 'file' | 'folder' | 'multi-file') => ipcRenderer.invoke('sftp:upload', { panelId, remotePath, kind }),
   sftpListDir: (panelId: string, remotePath: string) => ipcRenderer.invoke('sftp:list-dir', { panelId, remotePath }),
   sftpReadFile: (panelId: string, remotePath: string, encoding?: string) => ipcRenderer.invoke('sftp:read-file', { panelId, remotePath, encoding }),

@@ -6800,6 +6800,32 @@ ipcMain.handle('sftp:download-to-temp', async (_e, { panelId, remotePath }: { pa
   }
 });
 
+// pepe-transfer — 파일전송 패널의 "QR로 전송" 메뉴(src/components/PepeTransferDialog.tsx,
+// PePe 자체 UI, decimen-optical-transfer 의 순수 로직만 vendoring — src/pepe-transfer/*,
+// MIT license 원문은 src/pepe-transfer/LICENSE-decimen-optical-transfer.txt).
+// 팝업 창 없이 메인 창 안 모달이라, 여기서는 파일을 읽어 base64 로 돌려주기만 하면 된다.
+// 원격(SFTP) 파일은 렌더러가 기존 sftp:download-to-temp 로 먼저 로컬 임시경로를 받은 뒤
+// 그 경로로 이 IPC 를 호출하므로, 여기서는 항상 로컬 파일시스템 경로만 다룬다.
+const MAX_FILE_BYTES_PEPE_TRANSFER = 64 * 1024 * 1024; // decimen-optical-transfer 의 shared/protocol.ts MAX_FILE_BYTES 와 동일
+const PEPE_TRANSFER_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.pdf': 'application/pdf', '.txt': 'text/plain', '.json': 'application/json',
+  '.zip': 'application/zip', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg',
+};
+ipcMain.handle('pepe-transfer:read-file', async (_e, { localPath, fileName }: { localPath: string; fileName: string }) => {
+  try {
+    const stat = await fs.promises.stat(localPath);
+    if (stat.size > MAX_FILE_BYTES_PEPE_TRANSFER) {
+      return { success: false, error: `${fileName} 은(는) ${(stat.size / 1024 / 1024).toFixed(1)}MB 로 pepe-transfer 한도(64MB)를 초과합니다.` };
+    }
+    const buf = await fs.promises.readFile(localPath);
+    const mime = PEPE_TRANSFER_MIME[path.extname(fileName).toLowerCase()] || 'application/octet-stream';
+    return { success: true, base64: buf.toString('base64'), mime, size: buf.length };
+  } catch (err: any) {
+    return { success: false, error: String(err?.message || err) };
+  }
+});
+
 ipcMain.handle('sftp:quick-share', async (_e, { panelId, items }: { panelId: string; items: { path: string; isDir: boolean }[] }) => {
   if (!mainWindow || !items || items.length === 0) return { success: false, error: '공유할 파일이 없습니다.' };
   const { tempDir, results, localPaths } = await downloadRemoteItemsToTemp(panelId, items, 'pepe-quick-share-');
