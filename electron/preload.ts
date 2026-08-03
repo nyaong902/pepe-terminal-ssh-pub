@@ -640,7 +640,6 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('pty:exit', handler);
   },
 
-  // SSH events
   onSSHData: (cb: (p: any) => void) => {
     const handler = (_: any, p: any) => cb(p);
     ipcRenderer.on('ssh:data', handler);

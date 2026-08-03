@@ -23,13 +23,15 @@ let pendingY = 0;
 function computeHot(x: number, y: number): Element | null {
   let el: Element | null = document.elementFromPoint(x, y);
   while (el && el !== document.documentElement) {
+    // 좌표 검사를 먼저 하고, 가장자리 근처일 때만 getComputedStyle 을 읽는다.
+    // 순서가 반대였을 때는 조상 요소마다 getComputedStyle 이 불려 스타일 재계산이 강제됐다 —
+    // 터미널처럼 DOM 이 깊은 곳에서 마우스를 움직이면 조상 수만큼 쌓였고, 트레이스에서 우리
+    // 코드 중 강제 레이아웃 1위(161건, 0.10초)로 잡혔다. 가장자리 근처인 요소는 보통 0~1개다.
     const rect = el.getBoundingClientRect();
-    if (isVScrollable(el) && x >= rect.right - EDGE_PX && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-      return el;
-    }
-    if (isHScrollable(el) && y >= rect.bottom - EDGE_PX && y <= rect.bottom && x >= rect.left && x <= rect.right) {
-      return el;
-    }
+    const nearRight = x >= rect.right - EDGE_PX && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    const nearBottom = y >= rect.bottom - EDGE_PX && y <= rect.bottom && x >= rect.left && x <= rect.right;
+    if (nearRight && isVScrollable(el)) return el;
+    if (nearBottom && isHScrollable(el)) return el;
     el = el.parentElement;
   }
   return null;

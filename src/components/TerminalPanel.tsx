@@ -372,8 +372,38 @@ const termWebglPendingRecovery: Set<string> = new Set();
 // @xterm/addon-webgl 0.19.x 로 옮기면 고쳐졌을 수 있으나 core 메이저 버전업이라 별도 마이그레이션
 // 작업으로 미루고, 우선 안전한 DOM 렌더러를 기본으로 쓴다. 콘솔에서
 // window.__pepeSetWebglDisabled(false) 로 다시 켜서 비교 테스트 가능.
+// WebGL 을 기본으로 켜봤다가 되돌렸다(2026-08-03). 두 가지가 확인됐다:
+//  (1) CPU 가 줄지 않았다 — tail 폭주 시 20%+ 그대로였다. 즉 DOM 렌더러의 행 갱신
+//      (_innerRefresh / replaceChildren / Paint / Layout)이 비용의 주범이 아니다.
+//      애초에 계산이 맞지 않았다: 초당 500줄 x 100자 = 50KB/s 로, xterm 파싱 능력의
+//      1% 도 안 되는 양이다. 줄 수나 바이트가 아니라 프레임당 무언가가 비싸다
+//      (트레이스의 FireAnimationFrame 초당 80회 / PageAnimator 5.3% 가 단서).
+//  (2) 투명 창(main.ts 의 transparent: true)에서 WebGL 캔버스가 합성되면 창이 불투명해져
+//      PePe 밖의 다른 윈도우가 보이지 않았다. 이것만으로도 켤 수 없다.
+// 아래 background-color-erase 버그와 별개로, 위 두 이유 때문에 DOM 렌더러를 유지한다.
 let webglDisabledForTesting = true;
 export function setWebglDisabledForTesting(disabled: boolean) { webglDisabledForTesting = disabled; }
+// xterm 은 커서가 움직일 때마다(onCursorMove) 숨은 textarea 의 위치를 맞춘다(_syncTextArea).
+// IME 조합용 textarea 라서 위치 자체는 필요하지만, 로그가 쏟아질 때는 줄마다 호출돼 스타일
+// 6개를 초당 3000번 쓴다 — 트레이스에서 자기시간 3.3% + 그로 인한 스타일/레이아웃 재계산.
+// 행 렌더러와 무관한 경로라 WebGL 로 바꿔도 그대로 남는다(실제로 그랬다).
+// 프레임당 1회로 묶는다. 조합 중에는 원본이 즉시 반환하므로 IME 동작에 영향이 없고, 조합 시작
+// 직전 위치는 이미 반영돼 있다(커서가 움직이지 않았으므로).
+function coalesceSyncTextArea(term: any) {
+  try {
+    const core = term?._core;
+    if (!core || typeof core._syncTextArea !== 'function' || core.__syncTaCoalesced) return;
+    core.__syncTaCoalesced = true;
+    const orig = core._syncTextArea.bind(core);
+    let scheduled = false;
+    core._syncTextArea = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => { scheduled = false; try { orig(); } catch {} });
+    };
+  } catch {}
+}
+
 function attachWebglAddon(termId: string) {
   if (webglDisabledForTesting) return;
   const entry = termStore.get(termId);
@@ -390,7 +420,12 @@ function attachWebglAddon(termId: string) {
     term.loadAddon(webgl);
     term.__webglAddon = webgl;
     termWebglPendingRecovery.delete(termId);
-  } catch {}
+    console.info('[xterm] WebGL 렌더러 부착됨', termId);
+  } catch (e) {
+    // 조용히 삼키면 WebGL 이 왜 안 붙는지 알 수 없다 — 실제로 그 때문에 진단이 막혔다.
+    // 유력한 원인: 메인 창이 transparent: true 라서 GPU 컨텍스트 생성이 거부되는 경우.
+    console.error('[xterm] WebGL 렌더러 부착 실패 — DOM 렌더러로 진행:', e);
+  }
 }
 function tryRecoverWebgl(termId: string) {
   if (!termWebglPendingRecovery.has(termId)) return;
@@ -2454,35 +2489,20 @@ function ensureSSHSetup(termId: string) {
       // 다시 볼 때 한 번에 반영. 앱 자체의 포커스 유무와는 무관 (그건 항상 실시간 유지).
       if (!visibleTermIds.has(termId)) {
         appendCompactedBuffer(termId, p.data || '');
+        // 여기서 ack 를 빼먹으면 숨은 탭의 창이 영구히 막혀 출력이 멈춘다.
+        // 방치된다(= 세션 먹통). 문자열 버퍼에 담은 것도 소화 완료로 본다 — 어차피
+        // appendCompactedBuffer 가 상한을 넘으면 오래된 것부터 버리므로 역압이 불필요하다.
         return;
       }
       // 백그라운드 압축 상태에서 새 출력이 왔으면, 순서 보존을 위해 압축 해제(복원)부터.
       flushCompactedBuffer(termId);
-      // 사용자가 스크롤 위로 올렸을 때 새 출력으로 scrollback 증가하면서 viewport 가 따라 움직이지
-      // 않도록 ydisp 를 안정화. write 전후로 끝에서부터의 라인 offset 을 보존.
-      const core = (term as any)._core;
-      const buf = core?.buffer;
-      const wasScrolledUp = buf && buf.ydisp < buf.ybase;
-      const offsetFromEnd = wasScrolledUp ? (buf.lines.length - buf.ydisp) : -1;
+      // xterm 은 스크롤을 위로 올린 상태에서는 새 출력이 와도 뷰를 그대로 둔다(scroll() 이
+      // ydisp 를 ybase 에 붙어 있을 때만 따라 올린다). 예전에 여기 있던 "안정화" 코드는
+      // **끝에서부터의 offset** 을 보존했는데, 그러면 새 출력마다 뷰가 최신 줄과 같은 거리를
+      // 유지하며 함께 내려간다 — 고정이 아니라 추종이라, 스크롤을 올려도 로그가 계속 흐르는
+      // 원인이었다. 게다가 매 청크마다 refreshRows(0, rows-1) 로 뷰포트 전체를 강제 갱신했다.
+      // xterm 기본 동작에 맡긴다.
       term.write(p.data);
-      if (wasScrolledUp && offsetFromEnd > 0) {
-        try {
-          const buf2 = core?.buffer;
-          if (buf2 && buf2.lines) {
-            const newYdisp = Math.max(0, Math.min(buf2.ybase, buf2.lines.length - offsetFromEnd));
-            if (buf2.ydisp !== newYdisp) {
-              buf2.ydisp = newYdisp;
-              const vp = (term as any).element?.querySelector?.('.xterm-viewport') as HTMLElement | null;
-              if (vp) {
-                const cellH = core?._renderService?.dimensions?.css?.cell?.height || 17;
-                vp.scrollTop = newYdisp * cellH;
-              }
-              try { core?._onScroll?.fire?.(newYdisp); } catch {}
-              try { core?._renderService?.refreshRows?.(0, (term as any).rows - 1); } catch {}
-            }
-          }
-        } catch {}
-      }
     } catch {}
   });
 
@@ -2766,30 +2786,10 @@ function ensurePtySetup(termId: string) {
         const sigClear = /^\x1b\[H\x1b\[2J/.test(data) || /^\x1b\[2J\x1b\[H/.test(data);
         if (sigHideHome || sigClear) { return; }
       }
-      // 스크롤 위로 올린 상태에서 빠른 출력 (tail -F 등) 시 viewport drift 방지
-      const core = (term as any)._core;
-      const bufBefore = core?.buffer;
-      const wasScrolledUp = bufBefore && bufBefore.ydisp < bufBefore.ybase;
-      const offsetFromEnd = wasScrolledUp ? (bufBefore.lines.length - bufBefore.ydisp) : -1;
+      // 뷰포트 추종 코드 제거 — SSH 핸들러와 같은 이유다(그쪽 주석 참고). 끝에서부터의
+      // offset 을 보존하면 스크롤을 올려둬도 뷰가 최신 줄을 따라 내려간다. xterm 은 이미
+      // 스크롤을 올린 상태에서 뷰를 유지하므로 기본 동작에 맡긴다.
       term.write(data);
-      if (wasScrolledUp && offsetFromEnd > 0) {
-        try {
-          const buf2 = core?.buffer;
-          if (buf2 && buf2.lines) {
-            const newYdisp = Math.max(0, Math.min(buf2.ybase, buf2.lines.length - offsetFromEnd));
-            if (buf2.ydisp !== newYdisp) {
-              buf2.ydisp = newYdisp;
-              const vp = (term as any).element?.querySelector?.('.xterm-viewport') as HTMLElement | null;
-              if (vp) {
-                const cellH = core?._renderService?.dimensions?.css?.cell?.height || 17;
-                vp.scrollTop = newYdisp * cellH;
-              }
-              try { core?._onScroll?.fire?.(newYdisp); } catch {}
-              try { core?._renderService?.refreshRows?.(0, (term as any).rows - 1); } catch {}
-            }
-          }
-        } catch {}
-      }
     } catch {}
   });
 
@@ -3514,6 +3514,7 @@ export const TerminalPanel: React.FC<Props> = ({
       containerRef.current.innerHTML = '';
       term.open(containerRef.current);
       attachWebglAddon(activeTermId);
+      coalesceSyncTextArea(term);
     }
     applyTermOpacity(activeTermId, containerRef.current);
 

@@ -1108,7 +1108,21 @@ function App() {
     const t1 = setTimeout(measure, 100);
     const t2 = setTimeout(measure, 500);
     window.addEventListener('resize', scheduleMeasure);
-    const mo = new MutationObserver(scheduleMeasure);
+    // rAF 코얼레싱만으로는 부족했다. measure() 는 프레임당 1회로 묶였지만, 그 1회가
+    // getBoundingClientRect 를 5번 불러 강제 동기 레이아웃을 5번 일으킨다. 로그가 쏟아지면
+    // 매 프레임 그 비용을 다 물게 되어, 트레이스에서 tail 16.5초 중 강제 레이아웃 426건
+    // 0.605초(전체 강제 레이아웃의 81%)가 이 경로에서 나왔다.
+    // measure() 가 보는 것은 세션 사이드바 · 탭바 · 파일트리뿐이고 터미널 내부 DOM 변화는
+    // 아무 의미가 없으므로, xterm 안에서 온 변화는 아예 무시한다.
+    const mo = new MutationObserver(records => {
+      for (let i = 0; i < records.length; i++) {
+        const t = records[i].target as Node | null;
+        const el = t ? (t.nodeType === 1 ? (t as Element) : t.parentElement) : null;
+        if (el && el.closest('.xterm')) continue;   // 터미널 출력 — 레이아웃과 무관
+        scheduleMeasure();
+        return;
+      }
+    });
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
     return () => {
       clearTimeout(t1); clearTimeout(t2);

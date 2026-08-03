@@ -152,6 +152,7 @@ const visiblePanelIds = new Set<string>();
 const dataBatchBuf = new Map<string, string>();
 const dataBatchScheduled = new Set<string>();
 const DATA_BATCH_MS_VISIBLE = 8;
+// 안 보이는 패널은 배치 주기를 훨씬 길게 — IPC wake-up 빈도 자체를 줄인다(위 주석 참고).
 const DATA_BATCH_MS_HIDDEN = 300;
 // SSH 연결이 여러 개 동시에 활발하면 메인 프로세스 이벤트 루프가 그 사이를 오가면서 타이밍이
 // 밀리고, 그 결과 배치 타이머가 늦게 발동해 한 번에 훨씬 큰 덩어리가 쌓일 수 있다. xterm.js 는
@@ -160,26 +161,83 @@ const DATA_BATCH_MS_HIDDEN = 300;
 // 확인됨: xterm 내부 _innerWrite 가 self time 대부분을 차지). IPC 로 보내는 조각 크기 자체에
 // 상한을 둬서, 아무리 밀렸어도 한 번의 write() 가 처리할 양은 항상 작게 유지한다.
 const DATA_CHUNK_MAX_CHARS = 32_768;
+
+// ── 출력 속도 제한을 시도했고, 걷어낸 기록 ──────────────────────────────────────
+// tail -f 폭주 시 CPU 가 튀는 문제로 여러 방식을 넣어봤다: 토큰 버킷 속도 제한, ack 기반
+// 슬라이딩 윈도, ssh2 스트림 pause/resume, 따라갈 수 없는 분량 버리기. 전부 걷어냈다.
+//
+// 걷어낸 이유는 측정 결과다:
+//  - 쌓아두고 천천히 보여주면 화면이 과거를 보여준다. ssh2 채널 윈도가 2MB 라서 표시가
+//    초당 62줄이면 화면은 수 분 전 데이터를 그린다 — 실시간 감시에 쓸 수 없다.
+//  - 버리는 방식은 화면은 현재로 유지되지만, 받아서 버리는 비용(도착마다 문자열 연결 +
+//    64KB slice = 초당 수십 MB 복사)이 main 을 잡아먹어 방출 타이머가 밀렸다. 목표 62줄/초가
+//    실제로는 10줄/초로 떨어졌고 CPU 는 여전히 높았다.
+//  - 무엇보다 제한이 필요하지 않았다. 화면 녹화를 프레임 단위로 재보니 이 로그의 자연 속도는
+//    초당 400~600줄이고, XShell 은 그걸 전부 보여주면서 CPU 3.5% 였다. 즉 폭주가 아니라
+//    렌더러 비용 차이다 — xterm 의 DOM 렌더러는 1 줄만 스크롤해도 보이는 행 전부를 다시 쓴다
+//    (트레이스에서 _innerRefresh + replaceChildren + Paint/Layout 이 렌더러 시간의 대부분).
+//
+// 그래서 여기서는 도착한 것을 그대로 보내고, CPU 는 렌더러 쪽에서 줄인다.
+// 되살릴 일이 있다면 반드시 지켜야 할 것: (1) 쌓아두면 화면이 과거를 보여준다, (2) 스트림을
+// 멈추면 그만큼이 SSH 윈도에 과거로 고인다, (3) 받아서 버리는 비용도 만만치 않다.
+
+// 인터럽트(Ctrl+C)가 입력에 들어 있는지. 렌더러는 평문(data) 또는 base64(b64) 로 보낸다.
+function containsInterrupt(data?: string, b64?: string): boolean {
+  try {
+    if (typeof data === 'string' && data.indexOf(String.fromCharCode(3)) !== -1) return true;
+    if (typeof b64 === 'string' && b64) return Buffer.from(b64, 'base64').includes(0x03);
+  } catch {}
+  return false;
+}
+
+// Ctrl+C 직후 대기 중인 배치를 즉시 내보낸다(8ms 분량이라 사실상 즉시다).
+function releaseTermFlowNow(panelId: string) {
+  for (const channel of ['ssh:data', 'pty:data'] as const) {
+    const key = `${channel}:${panelId}`;
+    if (!dataBatchBuf.get(key)) continue;
+    dataBatchScheduled.delete(key);
+    try { flushTermData(channel, panelId, key); } catch {}
+  }
+}
+
+// 세션이 끊기면 남은 배치 버퍼를 비운다 — 안 하면 다음 연결 화면 앞에 이전 잔재가 붙는다.
+function resetTermBuffers(panelId: string) {
+  for (const channel of ['ssh:data', 'pty:data'] as const) {
+    const key = `${channel}:${panelId}`;
+    dataBatchBuf.delete(key);
+    dataBatchScheduled.delete(key);
+  }
+}
+
+function scheduleTermFlush(channel: 'ssh:data' | 'pty:data', panelId: string, key: string, delay: number) {
+  if (dataBatchScheduled.has(key)) return;
+  dataBatchScheduled.add(key);
+  setTimeout(() => flushTermData(channel, panelId, key), delay);
+}
+
+function flushTermData(channel: 'ssh:data' | 'pty:data', panelId: string, key: string) {
+  dataBatchScheduled.delete(key);
+  const buf = dataBatchBuf.get(key);
+  if (!buf) return;
+  dataBatchBuf.delete(key);
+  // 한 번의 xterm.write() 가 처리할 양에 상한을 둔다 — 큰 덩어리는 xterm 자체 12ms 양보
+  // 로직을 건너뛰고 통째로 파싱하며 멈칫거린다.
+  if (buf.length <= DATA_CHUNK_MAX_CHARS) {
+    termBroadcast(channel, { panelId, data: buf });
+  } else {
+    for (let i = 0; i < buf.length; i += DATA_CHUNK_MAX_CHARS) {
+      termBroadcast(channel, { panelId, data: buf.slice(i, i + DATA_CHUNK_MAX_CHARS) });
+    }
+  }
+}
+
 function queueTermData(channel: 'ssh:data' | 'pty:data', panelId: string, data: string) {
   const key = `${channel}:${panelId}`;
   dataBatchBuf.set(key, (dataBatchBuf.get(key) || '') + data);
-  if (dataBatchScheduled.has(key)) return;
-  dataBatchScheduled.add(key);
   const delay = visiblePanelIds.has(panelId) ? DATA_BATCH_MS_VISIBLE : DATA_BATCH_MS_HIDDEN;
-  setTimeout(() => {
-    dataBatchScheduled.delete(key);
-    const merged = dataBatchBuf.get(key);
-    dataBatchBuf.delete(key);
-    if (!merged) return;
-    if (merged.length <= DATA_CHUNK_MAX_CHARS) {
-      termBroadcast(channel, { panelId, data: merged });
-      return;
-    }
-    for (let i = 0; i < merged.length; i += DATA_CHUNK_MAX_CHARS) {
-      termBroadcast(channel, { panelId, data: merged.slice(i, i + DATA_CHUNK_MAX_CHARS) });
-    }
-  }, delay);
+  scheduleTermFlush(channel, panelId, key, delay);
 }
+
 // ── 탭별 프로세스 분리(Wave Terminal 방식) 준비 — 제네릭 relay ──────────────────
 // 실제 WebContentsView 는 아직 만들지 않는다(그건 tab lifecycle 단계에서 추가).
 // 지금은 모든 termId 를 'host' 탭(=mainWindow 자신)에 매핑해두어, 탭 프로세스가
@@ -1323,6 +1381,7 @@ app.whenReady().then(() => {
         connectingPanels.delete(msg.panelId);
         connectedPanels.delete(msg.panelId);
         telnetPanels.delete(msg.panelId);
+        resetTermBuffers(msg.panelId);
         termBroadcast('ssh:closed', { panelId: msg.panelId });
         break;
       case 'error':
@@ -1348,6 +1407,7 @@ app.whenReady().then(() => {
       case 'closed':
         connectingPanels.delete(msg.panelId);
         connectedPanels.delete(msg.panelId);
+        resetTermBuffers(msg.panelId);
         termBroadcast('ssh:closed', { panelId: msg.panelId });
         break;
       case 'error':
@@ -7955,6 +8015,11 @@ ipcMain.on('term:set-visibility', (_e, { panelId, visible }: { panelId: string; 
 
 ipcMain.on('ssh:input', (_e, { panelId, data, b64 }) => {
   if (telnetPanels.has(panelId)) { getTelnetBridge().input(panelId, data, b64); return; }
+  // Ctrl+C(0x03) 를 보냈다면 pacing 때문에 대기 중인 출력을 즉시 다 흘려보낸다.
+  // 그러지 않으면 서버는 이미 멈췄는데 우리 큐에 남은 것이 초당 512KB 로 계속 나와서
+  // "Ctrl+C 를 눌렀는데 바로 안 멈춘다"로 보인다. 버리지 않고 즉시 방출하므로
+  // 스크롤백에서 빠지는 내용은 없다.
+  if (containsInterrupt(data, b64)) releaseTermFlowNow(panelId);
   getSSHBridge().handleInput(panelId, data, b64);
 });
 

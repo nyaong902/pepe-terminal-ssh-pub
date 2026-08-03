@@ -431,6 +431,9 @@ class SSHBridge extends EventEmitter {
     streamProxy.setWindow = (rowsArg: number, colsArg: number) => {
       worker.postMessage({ type: 'resize', cols: colsArg, rows: rowsArg });
     };
+    // 흐름 제어 — 실제 ssh2 스트림은 worker 안에 있으므로 메시지로 위임한다.
+    streamProxy.pause = () => { try { worker.postMessage({ type: 'flow', pause: true }); } catch {} };
+    streamProxy.resume = () => { try { worker.postMessage({ type: 'flow', pause: false }); } catch {} };
 
     const connProxy = new EventEmitter() as any;
     connProxy.__isWorkerConnProxy = true;
@@ -940,6 +943,18 @@ class SSHBridge extends EventEmitter {
   getEncoding(panelId: string): string | null {
     const rec = this.clients.get(panelId);
     return rec?.encoding || null;
+  }
+
+  // 흐름 제어 — 대기 버퍼가 상한을 넘으면 이 스트림을 멈춰 서버를 늦춘다. worker 경로는
+  // streamProxy 가 위임하고, 비-worker 경로는 진짜 ssh2 스트림이라 그대로 동작한다.
+  setFlowPaused(panelId: string, paused: boolean): boolean {
+    const st: any = this.clients.get(panelId)?.stream;
+    if (!st) return false;
+    try {
+      if (paused) { if (typeof st.pause !== 'function') return false; st.pause(); }
+      else { if (typeof st.resume !== 'function') return false; st.resume(); }
+      return true;
+    } catch { return false; }
   }
 
   // 검출된 shell path 캐시 (런타임 토글 시 hook 재설치/제거용)

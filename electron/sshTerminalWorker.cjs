@@ -225,22 +225,73 @@ function connectSimple(session, cols, rows, x11Display) {
         return;
       }
       stream = s;
-      s.on('data', (data) => {
+      // ── 화면이 따라갈 수 없는 분량은 여기서 버린다 ────────────────────────────
+      // 실측: 이 로그는 초당 5.7MB / 71,000 줄이 온다. 화면은 초당 500줄쯤 보여주므로
+      // 터미널은 142배 뒤처져 있었고, 그 전량을 디코딩 -> postMessage -> IPC -> xterm 파싱까지
+      // 처리한 뒤 화면 밖으로 흘려보내고 있었다. 그게 CPU 였다(주 프로세스는 그 구조적 복제로
+      // 생긴 ArrayBuffer GC 에 9%, 렌더러는 파싱·레이아웃에).
+      //
+      // 그래서 가장 이른 지점에서 버린다. 한 프레임에 화면 한 장(약 60줄)보다 많이 보내는 것은
+      // 어차피 낭비이므로, 16ms 마다 최신 KEEP 바이트만 올려보낸다. 디코딩도 남긴 만큼만 한다
+      // (예전에는 버릴 것까지 전부 문자열로 만들었다).
+      //
+      // 버릴 때는 줄 경계에서 자른다 — 바이트 중간에서 자르면 UTF-8 문자나 이스케이프
+      // 시퀀스가 쪼개져 화면이 깨진다.
+      const LF_CH = String.fromCharCode(10);   // 소스에 원시 제어문자를 넣지 않는다
+      const OUT_FLUSH_MS = 16;
+      // 화면 한 장 분량. 2KB(약 20줄)까지 줄여 실험해봤지만 CPU 는 전혀 내려가지 않았다 —
+      // 렌더러로 가는 양이 원인이 아니라는 증거다. 그래서 보여주는 양이 더 많은 6KB 로 둔다.
+      // 남은 비용은 이 지점보다 앞단(ssh2 의 JS 프로토콜 처리와 초당 수천 건의 소켓 이벤트)
+      // 이고, 그건 여기서 버려도 피할 수 없다. 줄이려면 데이터를 덜 받아야 한다.
+      const OUT_KEEP_BYTES = 6 * 1024;
+      let outChunks = [];
+      let outLen = 0;
+      let outDropped = false;
+      let outTimer = null;
+
+      const flushOut = () => {
+        outTimer = null;
+        if (outChunks.length === 0) return;
+        const buf = outChunks.length === 1 ? outChunks[0] : Buffer.concat(outChunks, outLen);
+        const dropped = outDropped;
+        outChunks = []; outLen = 0; outDropped = false;
         let str;
         try {
           str = (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'utf8')
-            ? data.toString('utf8')
-            : iconv.decode(data, encoding);
+            ? buf.toString('utf8')
+            : iconv.decode(buf, encoding);
         } catch (_e) {
-          str = data.toString('utf8');
+          str = buf.toString('utf8');
         }
+        // 앞부분을 버렸다면 첫 줄은 잘려 있을 수 있으니 줄 경계까지 더 버린다.
+        if (dropped) {
+          const i = str.indexOf(LF_CH);
+          if (i !== -1) str = str.slice(i + 1);
+        }
+        if (!str) return;
         parentPort.postMessage({ type: 'data', data: str });
         parsePromptCwd(str);
+      };
+
+      const pushOut = (data) => {
+        outChunks.push(data);
+        outLen += data.length;
+        // 상한을 넘으면 오래된 조각부터 버린다(조각 단위라 O(k), 복사 없음).
+        while (outLen > OUT_KEEP_BYTES && outChunks.length > 1) {
+          outLen -= outChunks.shift().length;
+          outDropped = true;
+        }
+        if (!outTimer) outTimer = setTimeout(flushOut, OUT_FLUSH_MS);
+      };
+
+      s.on('data', pushOut);
+      s.stderr?.on('data', pushOut);   // 같은 버퍼로 순서 보존
+      s.on('close', () => {
+        // 배치 잔여분을 먼저 흘린다 — 안 하면 마지막 8ms 분량이 사라진다.
+        if (outTimer) { clearTimeout(outTimer); outTimer = null; }
+        flushOut();
+        parentPort.postMessage({ type: 'closed' });
       });
-      s.stderr?.on('data', (data) => {
-        parentPort.postMessage({ type: 'data', data: data.toString('utf8') });
-      });
-      s.on('close', () => { parentPort.postMessage({ type: 'closed' }); });
       s.on('error', (e) => { parentPort.postMessage({ type: 'log', data: `stream error: ${e?.message || e}` }); });
     });
   });
@@ -267,6 +318,12 @@ let pendingAuthFinish = null;
 
 parentPort.on('message', (msg) => {
   switch (msg.type) {
+    // 흐름 제어 — main 의 대기 버퍼가 상한을 넘으면 pause 를 보낸다. ssh2 채널 스트림을
+    // 멈추면 SSH 윈도가 차고 서버 쪽 tail 이 write 에서 막혀 출력 속도가 떨어진다.
+    // 표시 속도만 제한하면 백로그가 무한히 쌓여 Ctrl+C 도 안 먹고 CPU 도 오른다.
+    case 'flow':
+      try { if (stream) { if (msg.pause) stream.pause(); else stream.resume(); } } catch (_e) {}
+      break;
     case 'connect': {
       const session = msg.session;
       autoTrackOn = !!msg.autoTrack;
