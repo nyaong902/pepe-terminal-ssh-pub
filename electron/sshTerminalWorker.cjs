@@ -11,6 +11,57 @@
 // 받아서 그대로 termBroadcast 등 기존 파이프라인에 흘려보낸다 — 그래서 렌더러/IPC 쪽은
 // 이 세션이 worker 로 처리되는지 전혀 몰라도 된다.
 const { workerData, parentPort } = require('worker_threads');
+const NUL_CH = String.fromCharCode(0);   // 유휴 문자열 기본값 — 화면에 흔적을 남기지 않는다
+
+// 끊김 진단과 유휴 판단에 쓰는 시각들. 워커 하나가 연결 하나를 담당하므로 모듈 스코프에 둔다
+// (헬퍼 함수들이 참조해야 하는데 connectSimple 의 지역 변수면 닿지 않는다).
+let readyAt = 0;
+let lastInboundAt = 0;
+let lastOutboundAt = 0;
+
+// 연결 유지 설정을 ssh2 옵션으로 바꾼다. 미설정 세션은 XShell 기본값(60초)과 같게 동작한다.
+// keepaliveCountMax 3 이므로 허용 시간은 간격의 3배다(60초 -> 180초). 예전에는 10초여서 30초만
+// 응답이 없으면 끊었는데, 출력이 폭주하거나 서버가 잠깐 바쁠 때 성급하게 끊는 원인이었다.
+// 원격 셸에 주기적으로 입력을 보낸다(XShell 의 "네트워크가 유휴 상태일 때 문자열을 보냄").
+// SSH 수준 keepalive 로는 서버의 TMOUT(셸 자동 로그아웃)을 막을 수 없다 — bash 는 자기가 읽은
+// 입력만 세기 때문이다. 그래서 실제 입력을 보내야 하는데, 화면에 흔적을 남기지 않으려고 기본값은
+// NUL 문자를 쓴다. 셸은 이를 읽고 유휴 타이머를 리셋하지만 아무것도 출력하지 않는다.
+// 마지막으로 주고받은 시점에서 간격이 지났을 때만 보낸다(= 유휴 상태일 때만).
+function startIdleStringSender(session, stream) {
+  if (!session || !session.keepAliveSendString) return;
+  const sec = Number(session.keepAliveStringIntervalSec);
+  if (!Number.isFinite(sec) || sec <= 0) return;
+  const payload = session.keepAliveString ? String(session.keepAliveString) : NUL_CH;
+  const timer = setInterval(() => {
+    try {
+      if (!stream || stream.destroyed) { clearInterval(timer); return; }
+      const idleMs = Date.now() - Math.max(lastInboundAt || 0, lastOutboundAt || 0);
+      if (idleMs < sec * 1000) return;
+      stream.write(payload);
+      lastOutboundAt = Date.now();
+    } catch (_e) { clearInterval(timer); }
+  }, Math.max(1000, Math.round(sec * 1000 / 2)));
+  try { stream.on('close', () => clearInterval(timer)); } catch (_e) {}
+}
+
+// TCP 수준 keepalive. 중간 장비가 SSH 트래픽이 아니라 TCP 만 보고 세션을 정리할 때 쓸모가 있다.
+// ssh2 는 소켓을 내부에 두므로 비공개 필드로 접근한다 — 실패하면 조용히 넘어간다.
+function applyTcpKeepAlive(conn, session) {
+  if (!session || !session.keepAliveTcp) return;
+  try {
+    const sock = conn._sock || (conn._protocol && conn._protocol._sock);
+    if (sock && typeof sock.setKeepAlive === 'function') sock.setKeepAlive(true, 30000);
+  } catch (_e) {}
+}
+
+function keepAliveCfg(session) {
+  const on = session.keepAliveEnabled !== false;
+  const sec = Number(session.keepAliveIntervalSec);
+  // 0 도 유효한 값이다 — 사용자가 간격을 0 으로 두면 keepalive 를 보내지 않는다(ssh2 는 0 이면 끔).
+  // 값이 비었거나 숫자가 아닐 때만 기본 60초를 쓴다.
+  const interval = on ? (Number.isFinite(sec) && sec >= 0 ? Math.round(sec * 1000) : 60000) : 0;
+  return { keepaliveInterval: interval, keepaliveCountMax: 3 };
+}
 const { Client } = require('ssh2');
 const iconv = require('iconv-lite');
 const net = require('net');
@@ -222,7 +273,23 @@ function connectSimple(session, cols, rows, x11Display) {
   const x11Enabled = typeof x11Display === 'number';
   if (x11Enabled) setupX11Forwarding(conn, x11Display);
 
+  // 끊김 진단용 — 연결이 얼마나 유지됐는지 사유와 함께 남긴다. "2시간쯤 뒤에 끊긴다" 는
+  // 증상이 정확히 몇 초인지(방화벽/VPN 의 고정 수명이면 7200초처럼 일정하다), 그리고 끊기기
+  // 직전까지 keepalive 응답이 오고 있었는지를 구분하기 위한 것이다.
+  readyAt = 0;
+  lastInboundAt = 0;
+  lastOutboundAt = 0;
+  const upFor = () => {
+    if (!readyAt) return 'not-connected';
+    const sec = Math.round((Date.now() - readyAt) / 1000);
+    const quiet = lastInboundAt ? Math.round((Date.now() - lastInboundAt) / 1000) : -1;
+    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m ${sec % 60}s (${sec}초)`
+      + (quiet >= 0 ? `, 마지막 수신 ${quiet}초 전` : '');
+  };
+
   conn.on('ready', () => {
+    readyAt = Date.now();
+    applyTcpKeepAlive(conn, cfg.__session);
     // 일반(non-worker) 경로의 logInline('92', '[SSH 연결 완료]\r\n') 과 동일 — 이 줄바꿈이
     // 없으면 handshake/banner 인라인 메시지 바로 뒤에 첫 셸 프롬프트가 같은 줄에 붙어버림.
     parentPort.postMessage({ type: 'log-inline-green', data: '[SSH 연결 완료]\r\n' });
@@ -239,6 +306,7 @@ function connectSimple(session, cols, rows, x11Display) {
         return;
       }
       stream = s;
+      startIdleStringSender(session, s);
       // ── 화면이 따라갈 수 없는 분량은 여기서 버린다 ────────────────────────────
       // 실측: 이 로그는 초당 5.7MB / 71,000 줄이 온다. 화면은 초당 500줄쯤 보여주므로
       // 터미널은 142배 뒤처져 있었고, 그 전량을 디코딩 -> postMessage -> IPC -> xterm 파싱까지
@@ -296,6 +364,7 @@ function connectSimple(session, cols, rows, x11Display) {
       };
 
       const pushOut = (data) => {
+        lastInboundAt = Date.now();   // 끊김 진단용 — 마지막으로 서버에서 뭔가 온 시점
         // 조각 하나가 이미 유지 분량을 넘는 경우를 반드시 따로 처리해야 한다. ssh2 는 채널 패킷을
         // 최대 32KB 로 주므로 이런 일이 흔한데, 예전 구현은 "조각이 2개 이상일 때만 버린다"는
         // 조건 때문에 32KB 조각을 통째로 올려보냈다 — 상한이 사실상 무력화돼 의도한 375KB/s 대신
@@ -337,7 +406,20 @@ function connectSimple(session, cols, rows, x11Display) {
   });
 
   conn.on('error', (err) => {
-    parentPort.postMessage({ type: 'error', error: String(err && err.message || err) });
+    const msg = String(err && err.message || err);
+    parentPort.postMessage({ type: 'log', data: `[ssh-drop] error=${msg} | 유지 ${upFor()}` });
+    parentPort.postMessage({ type: 'error', error: msg });
+  });
+
+  // 연결이 닫히면 사유 없이도 유지 시간을 남긴다(error 없이 close 만 오는 경우가 있다).
+  // 연결이 닫히면 반드시 closed 를 올려보낸다. 예전에는 셸 스트림의 close 에서만 보냈는데,
+  // TCP 가 리셋되면(read ECONNRESET) 그 스트림 close 가 오지 않거나 늦어서 렌더러가 끊김을
+  // 모른 채 남아 있었다. 그래서 자동 재접속 카운트다운이 시작되지 않고, 사용자가 다른 탭을
+  // 갔다 와야(= 재마운트 시 연결 상태를 다시 확인) 비로소 재연결됐다.
+  // 같은 세션에서 stream close 와 겹쳐 두 번 올 수 있는데, 렌더러 핸들러가 중복을 무시한다.
+  conn.on('close', () => {
+    parentPort.postMessage({ type: 'log', data: `[ssh-drop] close | 유지 ${upFor()}` });
+    parentPort.postMessage({ type: 'closed' });
   });
 
   conn.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => {
@@ -373,9 +455,11 @@ parentPort.on('message', (msg) => {
         username: session.username,
         tryKeyboard: true,
         readyTimeout: 15000,
-        keepaliveInterval: 10000,
-        keepaliveCountMax: 3,
+        // 연결 유지 — 세션 설정을 따른다(기본은 XShell 기본값과 같은 60초).
+        // 자세한 배경은 sessionsStore.ts 의 Session.keepAlive* 주석 참고.
+        ...keepAliveCfg(session),
       };
+      cfg.__session = session;   // ready 시점에 TCP keepalive 를 적용하려면 세션 설정이 필요하다
       if (session.auth && session.auth.type === 'password' && session.auth.password) {
         cfg.password = session.auth.password;
         cfgPassword = session.auth.password;

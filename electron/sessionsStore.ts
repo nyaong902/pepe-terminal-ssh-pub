@@ -47,6 +47,35 @@ export type Session = {
   // 비어 있으면 primary 직접 연결. 각 홉의 password 가 비어 있으면 직전 홉의 ~/.ssh/ 키를 자동 재사용.
   // (이전 단일/2단 필드 jumpTargetHost·jump2TargetHost 는 이 배열로 대체됨.)
   jumps?: JumpHop[];
+  // 연결 유지 — XShell 의 "연결 유지" 탭과 같은 세 가지. 미설정이면 아래 기본값.
+  //
+  // 왜 세션별로 두는가: 2시간쯤 붙여두면 read ECONNRESET 으로 끊기는 서버가 있는데, 같은 서버에
+  // XShell 로 붙어두면 끊기지 않았다. 확인된 차이는 keepalive 간격뿐이었다(XShell 60초, 예전 PePe
+  // 10초). 서버·방화벽마다 사정이 달라 하나의 값으로 맞출 수 없으므로 세션마다 조절하게 한다.
+  //
+  // 세 가지가 각각 다른 계층이라는 점이 중요하다:
+  //  - keepAliveEnabled: SSH 프로토콜 수준(global request). TCP·SSH 연결은 살리지만 원격 셸은
+  //    "입력이 없다"고 보므로 서버의 TMOUT(셸 자동 로그아웃)은 막지 못한다.
+  //  - keepAliveSendString: 원격 셸에 실제 입력을 보낸다. TMOUT 을 리셋할 수 있는 유일한 방법.
+  //    화면에 흔적이 남지 않게 기본 문자열은 NUL(\0) 을 쓴다. 서버 정책을 우회하는 동작이라 기본 꺼짐.
+  //  - keepAliveTcp: TCP 수준 keepalive 패킷. 중간 장비가 SSH 트래픽을 안 보고 TCP 만 볼 때 쓴다.
+  keepAliveEnabled?: boolean;      // 기본 true
+  keepAliveIntervalSec?: number;   // 기본 60 (XShell 기본값과 동일)
+  keepAliveSendString?: boolean;   // 기본 false
+  keepAliveStringIntervalSec?: number; // 기본 0(= 사용 안 함)
+  keepAliveString?: string;        // 기본 '' → NUL 문자를 보냄
+  keepAliveTcp?: boolean;          // 기본 false
+
+  // 스크롤 동작 — XShell 의 터미널 > 고급 옵션과 같다.
+  //  - scrollOnOutput: 출력이 올 때마다 맨 아래로 내린다. 기본 꺼짐(= xterm 기본 동작으로,
+  //    스크롤을 올려두면 새 출력이 와도 그 자리에 머문다). 예전에 이 동작이 의도치 않게
+  //    항상 켜져 있어서 지난 내용을 보려고 올려도 계속 끌려 내려갔다 — 그래서 옵션으로 분리했다.
+  //  - scrollOnOutputPauseOnScrollLock: 위 동작을 ScrollLock 이 켜진 동안만 잠시 멈춘다.
+  //    로그가 흐르는 중에 잠깐 멈춰 읽을 때 쓴다.
+  //  - scrollOnKeyPress: 키를 누르면 맨 아래로 내린다. xterm 의 scrollOnUserInput 이라 기본 켜짐.
+  scrollOnOutput?: boolean;                    // 기본 false
+  scrollOnOutputPauseOnScrollLock?: boolean;   // 기본 false
+  scrollOnKeyPress?: boolean;                  // 기본 true
   // dbms 필드는 더 이상 여기 없음 — SQL Tool DB 연결 프로필은 sqlSessionsStore.ts(sql-sessions.json)
   // 로 완전히 독립됐다. 과거 데이터 마이그레이션(sqlSessionsStore.migrateFromSshSessions)에서만
   // (s as any).dbms 로 과거 값을 읽어 옮기고 지운다.

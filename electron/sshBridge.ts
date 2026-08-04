@@ -112,6 +112,41 @@ interface BridgeMessage {
   enabled?: boolean;
 }
 
+// 세션의 연결 유지 설정을 ssh2 옵션으로 바꾼다. 미설정 세션은 XShell 기본값(60초)과 같게 동작한다.
+// keepaliveCountMax 3 이므로 허용 시간은 간격의 3배다(60초 -> 180초). 예전에는 10초 고정이라
+// 30초만 응답이 없으면 끊었는데, 출력이 폭주하거나 서버가 잠깐 바쁠 때 성급하게 끊는 원인이었다.
+// 배경은 sessionsStore.ts 의 Session.keepAlive* 주석 참고.
+// 원격 셸에 주기적으로 입력을 보낸다(XShell 의 "네트워크가 유휴 상태일 때 문자열을 보냄").
+// SSH 수준 keepalive 로는 서버의 TMOUT(셸 자동 로그아웃)을 막을 수 없다 — bash 는 자기가 읽은
+// 입력만 세기 때문이다. 화면에 흔적을 남기지 않으려고 기본 문자열은 NUL 을 쓴다.
+// 마지막으로 주고받은 시점에서 간격이 지났을 때만 보낸다(= 유휴 상태일 때만).
+// worker 경로(sshTerminalWorker.cjs)에도 같은 동작이 있다 — 세션이 점프/로그인스크립트를 쓰면
+// 이쪽 경로를 타므로, 한쪽에만 넣으면 설정이 조용히 무시된다.
+function startIdleStringSender(session: any, stream: any, isIdle: () => number, onSent: () => void): void {
+  if (!session?.keepAliveSendString) return;
+  const sec = Number(session.keepAliveStringIntervalSec);
+  if (!Number.isFinite(sec) || sec <= 0) return;
+  const payload = session.keepAliveString ? String(session.keepAliveString) : String.fromCharCode(0);
+  const timer = setInterval(() => {
+    try {
+      if (!stream || stream.destroyed) { clearInterval(timer); return; }
+      if (isIdle() < sec * 1000) return;
+      stream.write(payload);
+      onSent();
+    } catch { clearInterval(timer); }
+  }, Math.max(1000, Math.round(sec * 1000 / 2)));
+  try { stream.on('close', () => clearInterval(timer)); } catch {}
+}
+
+function keepAliveCfg(session: any): { keepaliveInterval: number; keepaliveCountMax: number } {
+  const on = session?.keepAliveEnabled !== false;
+  const sec = Number(session?.keepAliveIntervalSec);
+  // 0 도 유효한 값이다 — 사용자가 간격을 0 으로 두면 keepalive 를 보내지 않는다(ssh2 는 0 이면 끔).
+  // 값이 비었거나 숫자가 아닐 때만 기본 60초를 쓴다.
+  const interval = on ? (Number.isFinite(sec) && sec >= 0 ? Math.round(sec * 1000) : 60000) : 0;
+  return { keepaliveInterval: interval, keepaliveCountMax: 3 };
+}
+
 const PROMPT_TAIL_MAX = 4096;                  // 프롬프트 탐지에 유지하는 꼬리 길이
 const PROMPT_ESC = String.fromCharCode(27);   // 소스에 원시 제어문자를 넣지 않는다
 
@@ -343,14 +378,24 @@ class SSHBridge extends EventEmitter {
       this.emit('message', { type: 'error', panelId, error: String(err) });
     });
 
+    // 연결이 닫히면 반드시 closed 를 올려보낸다. 예전에는 셸 스트림의 close 에서만 보냈는데,
+    // TCP 가 리셋되면(read ECONNRESET) 그 스트림 close 가 오지 않거나 늦어서 렌더러가 끊김을
+    // 모른 채 남아 있었다. 그래서 자동 재접속 카운트다운이 시작되지 않고, 사용자가 다른 탭을
+    // 갔다 와야 비로소 재연결됐다. stream close 와 겹쳐 두 번 올 수 있는데 렌더러가 중복을 무시한다.
+    conn.on('close', () => {
+      this.clients.delete(panelId);
+      this.emit('message', { type: 'closed', panelId });
+    });
+
     const cfg: any = {
       host: session.host,
       port: session.port || 22,
       username: session.username,
       tryKeyboard: true,
       readyTimeout: 15000,
-      keepaliveInterval: 10000,
-      keepaliveCountMax: 3,
+      // 연결 유지 — 세션 설정을 따른다(기본은 XShell 기본값과 같은 60초).
+      // 자세한 배경은 sessionsStore.ts 의 Session.keepAlive* 주석 참고.
+      ...keepAliveCfg(session),
       ...LEGACY_ALGO_OPT,
     } as any;
 
@@ -669,8 +714,8 @@ class SSHBridge extends EventEmitter {
         algorithms: LEGACY_ALGORITHMS,
         tryKeyboard: !!hop.password,
         readyTimeout: 30000,
-        keepaliveInterval: 10000,
-        keepaliveCountMax: 3,
+        // 중간 홉도 같은 설정을 쓴다 — 최종 홉만 살아 있어도 중간이 끊기면 전체가 끊긴다.
+        ...keepAliveCfg(session),
         debug: x11Debug,
       } as any);
     });
@@ -811,6 +856,13 @@ class SSHBridge extends EventEmitter {
       }
 
       const initialEncoding = session?.encoding || 'utf-8';
+
+      // 유휴 문자열 전송 — 마지막으로 주고받은 시점을 여기서 추적한다.
+      let lastTrafficAt = Date.now();
+      stream.on('data', () => { lastTrafficAt = Date.now(); });
+      startIdleStringSender(session, stream,
+        () => Date.now() - lastTrafficAt,
+        () => { lastTrafficAt = Date.now(); });
 
       // Expect/Send 로그인 스크립트 설정
       if (session.loginScript && session.loginScript.length > 0) {
@@ -3730,7 +3782,7 @@ probe_curl || probe_wget || probe_python
                 sock, username: hop.user, ...authCfg,
                 algorithms: LEGACY_ALGORITHMS,
                 tryKeyboard: !!hop.password,
-                readyTimeout: 30000, keepaliveInterval: 10000, keepaliveCountMax: 3,
+                readyTimeout: 30000, keepaliveInterval: 60000, keepaliveCountMax: 3,
               } as any);
             });
             log(`hop${i + 1} ready (${hop.host})`);
@@ -3749,7 +3801,7 @@ probe_curl || probe_wget || probe_python
       // tryKeyboard: true 로 확장 — 비밀번호 모저장 세션 등 대비
       // keepalive — SQL Tool 등 장시간 idle 후 다시 명령 보낼 때 끊김 방지
       const cfg: any = {
-        host, port, username, tryKeyboard: true, readyTimeout: 15000, keepaliveInterval: 10000, keepaliveCountMax: 3,
+        host, port, username, tryKeyboard: true, readyTimeout: 15000, keepaliveInterval: 60000, keepaliveCountMax: 3,
         ...LEGACY_ALGO_OPT,
       };
       if (auth?.type === 'password') {
