@@ -33,7 +33,8 @@
     "diffPrevHunk": "文件比较：上一处差异",
     "diffNextHunk": "文件比较：下一处差异",
     "diffApplyLeft": "文件比较：应用目标 → 源",
-    "diffApplyRight": "文件比较：应用源 → 目标"
+    "diffApplyRight": "文件比较：应用源 → 目标",
+    "inputKillLine": "在输入框中删除光标前内容"
   },
   "fixed": {
     "minitabSwitch": "切换迷你标签页",

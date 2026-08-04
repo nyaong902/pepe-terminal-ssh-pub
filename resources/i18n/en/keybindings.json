@@ -34,7 +34,8 @@
     "diffPrevHunk": "File compare: previous hunk",
     "diffNextHunk": "File compare: next hunk",
     "diffApplyLeft": "File compare: apply target → source",
-    "diffApplyRight": "File compare: apply source → target"
+    "diffApplyRight": "File compare: apply source → target",
+    "inputKillLine": "Delete before cursor in input fields"
   },
   "fixed": {
     "minitabSwitch": "Switch minitab",

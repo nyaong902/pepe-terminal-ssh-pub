@@ -34,7 +34,8 @@
     "diffPrevHunk": "파일 비교: 이전 변경",
     "diffNextHunk": "파일 비교: 다음 변경",
     "diffApplyLeft": "파일 비교: 타겟 → 소스 적용",
-    "diffApplyRight": "파일 비교: 소스 → 타겟 적용"
+    "diffApplyRight": "파일 비교: 소스 → 타겟 적용",
+    "inputKillLine": "입력창에서 커서 앞 지우기"
   },
   "fixed": {
     "minitabSwitch": "미니탭 전환",

@@ -33,7 +33,8 @@
     "diffPrevHunk": "Comparaison de fichiers : bloc précédent",
     "diffNextHunk": "Comparaison de fichiers : bloc suivant",
     "diffApplyLeft": "Comparaison de fichiers : appliquer cible → source",
-    "diffApplyRight": "Comparaison de fichiers : appliquer source → cible"
+    "diffApplyRight": "Comparaison de fichiers : appliquer source → cible",
+    "inputKillLine": "Supprimer avant le curseur dans les champs"
   },
   "fixed": {
     "minitabSwitch": "Changer de minitab",

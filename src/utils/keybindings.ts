@@ -38,6 +38,9 @@ export function formatKeyTextForOS(text: string): string {
 // Default keybindings map
 export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   'fullscreen': 'Alt+Enter',
+  // 입력창에서 커서 앞을 지운다 — 셸(readline)의 unix-line-discard 와 같은 동작.
+  // 터미널에서는 이 키를 가로채지 않고 셸로 그대로 보낸다(utils/inputLineKill.ts).
+  'inputKillLine': 'Ctrl+U',
   // 'V' 액션 ID = row 방향(좌/우 분할). 옵션 화면에서 가로 → 세로 순서로 노출되도록 V 를 먼저 둠.
   'splitSessionV': 'Alt+Shift+V',
   'splitSessionH': 'Alt+Shift+H',
@@ -80,6 +83,7 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
 // Action labels for UI
 export const KEYBINDING_LABELS: Record<string, string> = {
   'fullscreen': '전체화면 토글',
+  'inputKillLine': '입력창에서 커서 앞 지우기',
   // 'V' 액션 ID = row 방향(좌/우 분할) = "가로 분할". 빈 패널 분할(local shell) 이므로 "빈세션"
   // 'H' 액션 ID = column 방향(상/하 분할) = "세로 분할"
   'splitSessionV': '빈세션 가로 분할 (좌/우)',

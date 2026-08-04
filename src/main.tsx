@@ -13,6 +13,10 @@ import StickyNotePopout from './components/StickyNotePopout'
 import ClockWidget from './components/ClockWidget'
 import './i18n'  // i18next 초기화 (side-effect import — App 렌더 전에 lng 셋팅)
 import { initWindowTheme, applyWindowTheme } from './utils/windowThemes'
+import { installCtrlULineKill } from './utils/inputLineKill'
+
+// 입력창 Ctrl+U — 셸처럼 커서 앞을 지운다. 모든 창에 적용되도록 진입점에서 한 번 설치한다.
+installCtrlULineKill()
 import { setWebglDisabledForTesting } from './components/TerminalPanel'
 import { initScrollbarHoverTracking } from './utils/scrollbarHover'
 import { setDebugLogEnabled } from './utils/debugLog'
