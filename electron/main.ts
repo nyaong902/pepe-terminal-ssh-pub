@@ -1740,6 +1740,39 @@ ipcMain.handle('text-editor:open', async (_e, payload: { text: string; name?: st
 //  2) 파티션 이름을 재사용한다(BrowserPane 의 파티션 풀) — 그래야 세션 개수 자체가 안 늘어난다.
 // 세션 객체는 못 없애지만, 이 둘로 여닫기를 반복해도 메모리가 누적되지 않는다.
 // persist: 파티션(사내 고정 임베드 등)은 사용자가 로그인 상태를 유지하려고 쓰는 것이므로 건드리지 않는다.
+// 브라우저 워크스페이스가 닫힐 때, 쓸모가 없어진 오디오 서비스 프로세스를 정리한다.
+//
+// 페이지가 오디오/미디어를 만지면 Chromium 이 Utility(Audio Service) 프로세스를 띄운다(100MB 대).
+// 페이지가 닫혀도 재사용을 위해 남겨두기 때문에, 브라우저 워크스페이스를 다 닫아도 프로세스가
+// 하나 더 남아 보였다. Electron 에 이 서비스를 내리는 API 는 없고, 유휴 종료 타임아웃 스위치
+// (--audio-service-quit-timeout-ms)도 이 Electron 빌드에는 없다(바이너리에서 확인).
+//
+// disable-features=AudioServiceOutOfProcess 로 아예 프로세스를 안 만들 수도 있지만 택하지 않았다:
+// 오디오가 메인 프로세스로 들어가는데 메인은 수명 내내 안 줄어들어서, 정작 목적인 "닫으면 메모리가
+// 돌아온다" 에 역행한다. 오디오 드라이버 문제가 앱 전체를 죽이게 되는 것도 손해다.
+//
+// 그래서 프로세스는 그대로 두고, 아무도 소리를 내지 않을 때만 내린다. isCurrentlyAudible() 로
+// 살아 있는 모든 webContents 를 확인하므로, 다른 창이나 사내 메신저가 소리를 내는 중이면 건드리지
+// 않는다. 서비스가 필요해지면 Chromium 이 다시 띄운다(오디오 서비스 crash 복구는 원래 지원된다 —
+// 응답이 없을 때 Chromium 이 직접 죽이는 기능도 있다).
+function releaseIdleAudioService(reason: string) {
+  try {
+    const audible = webContents.getAllWebContents().some((wc) => {
+      try { return !wc.isDestroyed() && wc.isCurrentlyAudible(); } catch { return false; }
+    });
+    if (audible) return;
+    for (const m of app.getAppMetrics()) {
+      const name = String((m as any).name || (m as any).serviceName || '');
+      if (m.type !== 'Utility' || !/audio/i.test(name)) continue;
+      const mb = Math.round(((m.memory as any)?.workingSetSize || 0) / 1024);
+      try {
+        process.kill(m.pid);
+        console.log(`[browser] audio service released: pid${m.pid} ${mb}MB (${reason})`);
+      } catch {}
+    }
+  } catch {}
+}
+
 ipcMain.handle('browser:release-partition', async (_e, partition: string) => {
   const name = String(partition || '').trim();
   if (!name || name.startsWith('persist:')) return false;
@@ -1756,6 +1789,8 @@ ipcMain.handle('browser:release-partition', async (_e, partition: string) => {
     // 프록시를 걸어둔 세션이 그대로 재사용되면 다음 워크스페이스가 남의 프록시를 타므로 되돌린다.
     try { await ses.setProxy({ mode: 'direct' }); } catch {}
     console.log(`[browser] partition released: ${name}`);
+    // 게스트가 완전히 사라진 뒤에 판단해야 isCurrentlyAudible 이 정확하다.
+    setTimeout(() => releaseIdleAudioService(`partition ${name}`), 2000);
     return true;
   } catch {
     return false;
