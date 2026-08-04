@@ -41,7 +41,12 @@
     "arrowUpTooltip": "إرسال السهم لأعلى (الأمر السابق)",
     "arrowDownTooltip": "إرسال السهم لأسفل (الأمر التالي)",
     "sigintTooltip": "إرسال Ctrl+C (SIGINT)",
-    "eofTooltip": "إرسال Ctrl+D (EOF)"
+    "eofTooltip": "إرسال Ctrl+D (EOF)",
+    "scopeSelected": "الجلسات المحددة ({{count}})",
+    "pick": "اختيار الجلسات",
+    "pickTooltip": "اختر الجلسات المستهدفة",
+    "selectAll": "تحديد الكل",
+    "noConnected": "لا توجد جلسات متصلة"
   },
   "ai": {
     "serviceRequiredTitle": "خدمة الذكاء الاصطناعي مطلوبة",

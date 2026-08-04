@@ -41,7 +41,12 @@
     "arrowUpTooltip": "위 방향키 (이전 명령) 전송",
     "arrowDownTooltip": "아래 방향키 (다음 명령) 전송",
     "sigintTooltip": "Ctrl+C (SIGINT) 전송",
-    "eofTooltip": "Ctrl+D (EOF) 전송"
+    "eofTooltip": "Ctrl+D (EOF) 전송",
+    "scopeSelected": "선택한 세션 ({{count}})",
+    "pick": "세션 선택",
+    "pickTooltip": "전송할 세션을 골라주세요",
+    "selectAll": "전체 선택",
+    "noConnected": "연결된 세션이 없습니다"
   },
   "ai": {
     "serviceRequiredTitle": "AI 서비스 필요",

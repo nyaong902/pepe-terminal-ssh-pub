@@ -109,7 +109,8 @@
     "autoTrackOff": "Activer le suivi auto PWD (synchroniser l'arborescence sur cd)",
     "pinPin": "Épingler le panneau (développer la sortie)",
     "pinUnpin": "Désépingler le panneau (réduire la sortie)",
-    "resizeHandle": "Glisser pour redimensionner la largeur (double-clic : par défaut 240)"
+    "resizeHandle": "Glisser pour redimensionner la largeur (double-clic : par défaut 240)",
+    "broadcastPick": "Inclure dans la diffusion"
   },
   "dialogs": {
     "scrollbackTitle": "Modifier la taille du défilement",

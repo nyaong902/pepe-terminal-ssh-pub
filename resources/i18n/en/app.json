@@ -41,7 +41,12 @@
     "arrowUpTooltip": "Send Up arrow (previous command)",
     "arrowDownTooltip": "Send Down arrow (next command)",
     "sigintTooltip": "Send Ctrl+C (SIGINT)",
-    "eofTooltip": "Send Ctrl+D (EOF)"
+    "eofTooltip": "Send Ctrl+D (EOF)",
+    "scopeSelected": "Selected sessions ({{count}})",
+    "pick": "Pick sessions",
+    "pickTooltip": "Choose which sessions to send to",
+    "selectAll": "Select all",
+    "noConnected": "No connected sessions"
   },
   "ai": {
     "serviceRequiredTitle": "AI service required",

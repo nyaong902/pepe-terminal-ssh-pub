@@ -110,7 +110,8 @@
     "autoTrackOff": "Enable PWD auto-track (sync file tree on cd)",
     "pinPin": "Pin panel (expand output)",
     "pinUnpin": "Unpin panel (collapse output)",
-    "resizeHandle": "Drag to resize width (double-click: default 240)"
+    "resizeHandle": "Drag to resize width (double-click: default 240)",
+    "broadcastPick": "Include in broadcast"
   },
   "dialogs": {
     "scrollbackTitle": "Change scrollback size",

@@ -41,7 +41,7 @@ import { RemoteFileTree } from './components/RemoteFileTree';
 import { QuickConnectBar, QuickConnectResult } from './components/QuickConnectDialog';
 import { StatusBar } from './components/StatusBar';
 import { RemoteShareDialog } from './components/RemoteShareDialog';
-import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle, waitForTermMount } from './components/TerminalPanel';
+import { resetTermConnectState, clearScrollbackInTerm, clearScreenInTerm, clearAllInTerm, applyThemeToAll, applyThemeToTerm, applyFontToTerm, applyFontToAll, getCurrentThemeName, registerTermSession, getTermSessionInfo, getWordSeparator, setWordSeparator, refitAllTerms, applyScrollbackToAll, applyScrollbackToTerm, cloneTermStyle, isTermConnected, isTermConnecting, isTermPty, subscribeConnectedChange, focusTerm, pasteToTerm, getSelectionFromTerm, selectAllInTerm, promptPasswordAndConnect, startInitialConnectWatchdog, getCurrentPwdForTerm, refitTerm, applyCursorStyleToTerm, markQuickConnectPending, clearQuickConnectPending, writeToTerm, termStore, setTermFocusBlocked, setTermBackspaceMode, setTermDeleteMode, setTermScrollBehavior, notifyUserInputToTerm, subscribeBroadcastPick, setBroadcastPickMode, isBroadcastPicked, toggleBroadcastPick, disposeTermFully, markTermConnected, markTermSnapshotOnly, markSuppressAutoConnect, clearSuppressAutoConnect, serializeTermBuffer, setPendingRestoreBuffer, getTermStyle, setPendingRestoreStyle, waitForTermMount } from './components/TerminalPanel';
 import { marked } from 'marked';
 // @ts-ignore — vite ?raw 로 docs/MANUAL.md 를 번들 문자열로 임베드
 import manualMd from '../docs/MANUAL.md?raw';
@@ -254,6 +254,45 @@ function App() {
   const commandPaletteOrderLoadedRef = useRef(false);
   // 비밀번호 저장 권유 모달 — 'ssh-fresh-password-success' 이벤트로 트리거됨
   const [savePwdPrompt, setSavePwdPrompt] = useState<{ termId: string; sessionId: string; password: string; hostHint?: string } | null>(null);
+
+  // 비밀번호 저장 확인 대화상자 — 버튼과 키보드가 같은 동작을 쓰도록 함수로 뽑았다.
+  // 예전에는 onClick 안에 로직이 인라인으로 있어서 Enter 로는 아무것도 할 수 없었다.
+  const savePwdBtnRef = useRef<HTMLButtonElement | null>(null);
+  const dismissSavePwd = () => {
+    const tid = savePwdPrompt?.termId;
+    setSavePwdPrompt(null);
+    if (tid) setTimeout(() => focusTerm(tid), 0);
+  };
+  const confirmSavePwd = async () => {
+    if (!savePwdPrompt) return;
+    const { sessionId, password, termId } = savePwdPrompt;
+    setSavePwdPrompt(null);
+    try {
+      const data: any = await (window as any).api?.listSessions?.();
+      const list: any[] = Array.isArray(data) ? data : (data?.sessions || []);
+      const sess = list.find((s: any) => s.id === sessionId);
+      if (sess) {
+        const updated = { ...sess, auth: { ...(sess.auth || {}), type: 'password', password } };
+        await (window as any).api?.saveSession?.(updated);
+        try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
+        showToast(tApp('savePwd.savedToast'));
+      }
+    } catch {}
+    setTimeout(() => focusTerm(termId), 0);
+  };
+  // Enter = 저장, Esc = 저장 안 함. 터미널이 포커스를 강하게 붙잡고 있어서 모달에 onKeyDown 을
+  // 달아도 키가 오지 않는다 — 그래서 capture 단계에서 문서 전체를 듣고 터미널로 넘어가지 않게 막는다.
+  useEffect(() => {
+    if (!savePwdPrompt) return;
+    // 어느 버튼이 기본인지 보이게 포커스도 옮긴다.
+    setTimeout(() => { try { savePwdBtnRef.current?.focus(); } catch {} }, 0);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); void confirmSavePwd(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); dismissSavePwd(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [savePwdPrompt]);
   // 비밀번호 입력 모달들 — 동시에 여러 세션 비밀번호 입력 가능 (단일 모달이 다른 세션
   // 더블클릭을 막지 않도록). 배경은 pointer-events:none 으로 통과시킴.
   type AskPwdItem = { termId: string; sessionId: string; hostHint?: string; userHint?: string; needUsername?: boolean; resolve: (result: any) => void; input: string; userInput: string };
@@ -715,7 +754,15 @@ function App() {
   }, [customWorkspaces]);
   const [broadcastText, setBroadcastText] = useState('');
   const [broadcastAppendNewline, setBroadcastAppendNewline] = useState(true);
-  const [broadcastScope, setBroadcastScope] = useState<'current' | 'visible' | 'connected'>('visible');
+  const [broadcastScope, setBroadcastScope] = useState<'current' | 'visible' | 'connected' | 'selected'>('visible');
+  // 'selected' 범위의 대상 목록은 TerminalPanel 의 공유 스토어가 갖는다 — 미니탭 체크박스와
+  // 이 바의 선택 목록이 같은 상태를 봐야 하기 때문이다. 여기서는 변경 알림만 받아 다시 그린다.
+  const [broadcastPickTick, setBroadcastPickTick] = useState(0);
+  useEffect(() => subscribeBroadcastPick(() => setBroadcastPickTick(v => v + 1)), []);
+  void broadcastPickTick;   // 값 자체는 쓰지 않는다 — 스토어가 바뀔 때 다시 그리기 위한 트리거
+  // 범위가 'selected' 일 때만 미니탭에 체크박스를 띄운다. 벗어나면 스토어가 선택을 비운다.
+  useEffect(() => { setBroadcastPickMode(broadcastScope === 'selected'); }, [broadcastScope]);
+  const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false);
   const [broadcastShowHistory, setBroadcastShowHistory] = useState(false);
   // 빠른 명령 버튼 — 사용자가 미리 정의한 명령을 원클릭으로 전송. UI prefs 에 영속.
   type QuickCmd = { id: string; label: string; cmd: string; icon?: string };
@@ -1902,6 +1949,7 @@ function App() {
       applyCursorStyleToTerm(termId, s.cursorStyle || 'block', !!s.cursorBlink);
       setTermBackspaceMode(termId, s.backspaceKeyMode);
       setTermDeleteMode(termId, s.deleteKeyMode);
+      setTermScrollBehavior(termId, s);
     } catch (e) { console.error('[applySessionToTerm]', e); }
   };
 
@@ -1967,8 +2015,18 @@ function App() {
   }, [activeTabId, tabs, fullscreenTermId]);
 
   // 텍스트 일괄 전송 대상 termId 수집
-  const collectBroadcastTargets = (scope: 'current' | 'visible' | 'connected'): string[] => {
+  const collectBroadcastTargets = (scope: 'current' | 'visible' | 'connected' | 'selected'): string[] => {
     const ids: string[] = [];
+    if (scope === 'selected') {
+      // 선택 목록 중 지금 연결된 것만. 순서는 목록에 보이는 순서(= 워크스페이스/미니탭 순서)를 따른다.
+      for (const t of tabs) {
+        if (t.type === 'fileExplorer') continue;
+        for (const sess of collectAllSessions(t.layout)) {
+          if (isBroadcastPicked(sess.termId) && isTermConnected(sess.termId)) ids.push(sess.termId);
+        }
+      }
+      return ids;
+    }
     if (scope === 'current') {
       const tid = getActiveTermId();
       if (tid && isTermConnected(tid)) ids.push(tid);
@@ -2001,7 +2059,7 @@ function App() {
     if (broadcastNoticeTimer.current) clearTimeout(broadcastNoticeTimer.current);
     broadcastNoticeTimer.current = setTimeout(() => setBroadcastNotice(null), 2500);
   };
-  const sendBroadcast = (scope: 'current' | 'visible' | 'connected', override?: { raw: string; label?: string }, opts?: { keepFocusOnInput?: boolean }) => {
+  const sendBroadcast = (scope: 'current' | 'visible' | 'connected' | 'selected', override?: { raw: string; label?: string }, opts?: { keepFocusOnInput?: boolean }) => {
     let text: string;
     let label: string;
     if (override) {
@@ -2025,6 +2083,9 @@ function App() {
         } else {
           (window as any).api?.sendSSHInput?.(tid, text);
         }
+        // "키를 누르면 맨 아래로 스크롤" 을 이 경로에도 적용 — 직접 보내는 입력이라 xterm 이
+        // 사용자 입력으로 보지 않는다.
+        notifyUserInputToTerm(tid);
       } catch {}
     }
     flashBroadcastNotice(tApp('broadcast.sentToast', { label, count: targets.length }), 'ok');
@@ -3973,6 +4034,7 @@ function App() {
           if (session.scrollback) applyScrollbackToTerm(emptySess.termId, session.scrollback);
           setTermBackspaceMode(emptySess.termId, session.backspaceKeyMode);
           setTermDeleteMode(emptySess.termId, session.deleteKeyMode);
+          setTermScrollBehavior(emptySess.termId, session);
           registerTermSession(emptySess.termId, sessionId, displayName, session.host ?? '');
         } else {
           // 빈 미니탭 없으면 기존 흐름
@@ -4185,6 +4247,7 @@ function App() {
           if (s) {
             setTermBackspaceMode(termId, s.backspaceKeyMode);
             setTermDeleteMode(termId, s.deleteKeyMode);
+            setTermScrollBehavior(termId, s);
           }
         } catch {}
       })();
@@ -4203,6 +4266,7 @@ function App() {
             if (s) {
               setTermBackspaceMode(termId, s.backspaceKeyMode);
               setTermDeleteMode(termId, s.deleteKeyMode);
+              setTermScrollBehavior(termId, s);
             }
           } catch {}
         })();
@@ -6325,7 +6389,65 @@ function App() {
             <option value="visible">{tApp('broadcast.scopeVisible', { count: collectBroadcastTargets('visible').length })}</option>
             <option value="current">{tApp('broadcast.scopeCurrent', { count: collectBroadcastTargets('current').length })}</option>
             <option value="connected">{tApp('broadcast.scopeConnected', { count: collectBroadcastTargets('connected').length })}</option>
+            <option value="selected">{tApp('broadcast.scopeSelected', { count: collectBroadcastTargets('selected').length })}</option>
           </select>
+          {broadcastScope === 'selected' && (
+            <div className="broadcast-picker-wrap">
+              <button
+                className="broadcast-btn"
+                onClick={() => setBroadcastPickerOpen(v => !v)}
+                title={tApp('broadcast.pickTooltip')}
+              >{tApp('broadcast.pick')} ▾</button>
+              {broadcastPickerOpen && (
+                <>
+                  {/* 바깥을 누르면 닫힌다 */}
+                  <div className="broadcast-picker-backdrop" onClick={() => setBroadcastPickerOpen(false)} />
+                  <div className="broadcast-picker">
+                    {(() => {
+                      // 연결된 터미널만 나열한다 — 끊긴 것에 보내봐야 의미가 없다.
+                      const rows: { termId: string; tabTitle: string; name: string }[] = [];
+                      for (const t of tabs) {
+                        if (t.type === 'fileExplorer') continue;
+                        for (const sess of collectAllSessions(t.layout)) {
+                          if (isTermConnected(sess.termId)) {
+                            rows.push({ termId: sess.termId, tabTitle: t.title, name: sess.sessionName || sess.termId });
+                          }
+                        }
+                      }
+                      if (rows.length === 0) {
+                        return <div className="broadcast-picker-empty">{tApp('broadcast.noConnected')}</div>;
+                      }
+                      const allOn = rows.every(r => isBroadcastPicked(r.termId));
+                      return (
+                        <>
+                          <label className="broadcast-picker-row broadcast-picker-all">
+                            <input
+                              type="checkbox"
+                              checked={allOn}
+                              onChange={() => {
+                                // 이미 전부 켜져 있으면 전부 끄고, 아니면 전부 켠다.
+                                for (const r of rows) {
+                                  if (allOn === isBroadcastPicked(r.termId)) toggleBroadcastPick(r.termId);
+                                }
+                              }}
+                            />
+                            <span>{tApp('broadcast.selectAll')}</span>
+                          </label>
+                          {rows.map(r => (
+                            <label key={r.termId} className="broadcast-picker-row">
+                              <input type="checkbox" checked={isBroadcastPicked(r.termId)} onChange={() => toggleBroadcastPick(r.termId)} />
+                              <span className="broadcast-picker-name">{r.name}</span>
+                              <span className="broadcast-picker-tab">{r.tabTitle}</span>
+                            </label>
+                          ))}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
             <input
               className="broadcast-input"
@@ -8476,37 +8598,17 @@ function App() {
       })()}
       {/* 비밀번호 저장 권유 모달 */}
       {savePwdPrompt && (
-        <div className="save-pwd-backdrop" onClick={() => { setSavePwdPrompt(null); setTimeout(() => focusTerm(savePwdPrompt.termId), 0); }}>
+        <div className="save-pwd-backdrop" onClick={dismissSavePwd}>
           <div className="save-pwd-modal" onClick={e => e.stopPropagation()}>
             <div className="save-pwd-icon">🔑</div>
             <div className="save-pwd-title">{tApp('savePwd.title')}</div>
             <div className="save-pwd-desc">{tApp('savePwd.desc')}</div>
             <div className="save-pwd-actions">
-              <button
-                onClick={() => {
-                  const tid = savePwdPrompt.termId;
-                  setSavePwdPrompt(null);
-                  setTimeout(() => focusTerm(tid), 0);
-                }}
-              >{tApp('savePwd.dontSave')}</button>
+              <button onClick={dismissSavePwd}>{tApp('savePwd.dontSave')}</button>
               <button
                 className="primary"
-                onClick={async () => {
-                  const { sessionId, password, termId } = savePwdPrompt;
-                  setSavePwdPrompt(null);
-                  try {
-                    const data: any = await (window as any).api?.listSessions?.();
-                    const list: any[] = Array.isArray(data) ? data : (data?.sessions || []);
-                    const sess = list.find((s: any) => s.id === sessionId);
-                    if (sess) {
-                      const updated = { ...sess, auth: { ...(sess.auth || {}), type: 'password', password } };
-                      await (window as any).api?.saveSession?.(updated);
-                      try { window.dispatchEvent(new Event('sessions-reload')); } catch {}
-                      showToast(tApp('savePwd.savedToast'));
-                    }
-                  } catch {}
-                  setTimeout(() => focusTerm(termId), 0);
-                }}
+                ref={savePwdBtnRef}
+                onClick={confirmSavePwd}
               >{tApp('savePwd.save')}</button>
             </div>
           </div>

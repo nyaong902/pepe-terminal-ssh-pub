@@ -898,6 +898,8 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
       customGlyphs: true,
       wordSeparator: currentWordSeparator,
       scrollback: initScrollback,
+      // 키를 누르면 맨 아래로 — xterm 자체 옵션. 세션 설정이 아직 없으면 xterm 기본(켬)과 같다.
+      scrollOnUserInput: (termScrollBehavior.get(termId) ?? DEFAULT_SCROLL_BEHAVIOR).onKeyPress,
     });
     // REC tap — term.write 를 monkey-patch 해서 모든 출력 데이터를 녹화 stream 으로 흘림.
     // PTY/SSH bridge 가 보낸 raw 데이터 + 앱 자체가 합성한 메시지(연결됨/끊김 등) 모두 캡처.
@@ -910,7 +912,14 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
             recAppend(termId, s, 'out');
           } catch {}
         }
-        return origWrite(data as any, cb);
+        const ret = origWrite(data as any, cb);
+        // 출력 시 맨 아래로 — 켜져 있을 때만. ScrollLock 일시 정지 옵션이 함께 켜져 있으면
+        // ScrollLock 이 눌린 동안은 내리지 않는다(흐르는 로그를 잠깐 멈춰 읽는 용도).
+        const b = termScrollBehavior.get(termId);
+        if (b?.onOutput && !(b.pauseOnScrollLock && scrollLockOn)) {
+          try { term.scrollToBottom(); } catch {}
+        }
+        return ret;
       };
     } catch {}
     if (!termFontSizes.has(termId)) termFontSizes.set(termId, defaultFontSize);
@@ -1029,6 +1038,7 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
           try {
             if (ptyConnected.has(termId)) (window as any).api?.ptyInput?.(termId, seq);
             else (window as any).api?.sendSSHInput?.(termId, seq);
+            notifyUserInputToTerm(termId);
           } catch {}
         };
         const plain = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
@@ -1287,6 +1297,74 @@ export function applyScrollbackToAll(scrollback: number) {
 // 특정 터미널에 스크롤백을 실시간으로 반영. 터미널이 아직 생성되지 않았다면
 // 맵에 기록해 두고 getOrCreateTerm이 생성 시점에 참조하도록 한다.
 const termScrollbackOverride: Map<string, number> = new Map();
+
+// ── 스크롤 동작 (XShell 의 터미널 > 고급) ────────────────────────────────────────
+// scrollOnOutput: 출력이 올 때마다 맨 아래로 내린다. 기본 꺼짐이며, 꺼져 있으면 xterm 기본
+// 동작대로 스크롤을 올려둔 자리에 머문다. 예전에는 이 동작이 항상 켜진 셈이어서 지난 내용을
+// 보려고 올려도 새 출력마다 끌려 내려갔다.
+// pauseOnScrollLock: ScrollLock 이 켜진 동안만 위 동작을 멈춘다(로그가 흐르는 중 잠깐 읽을 때).
+type TermScrollBehavior = { onOutput: boolean; pauseOnScrollLock: boolean; onKeyPress: boolean };
+const termScrollBehavior: Map<string, TermScrollBehavior> = new Map();
+const DEFAULT_SCROLL_BEHAVIOR: TermScrollBehavior = { onOutput: false, pauseOnScrollLock: false, onKeyPress: true };
+
+// ScrollLock 상태. KeyboardEvent.getModifierState 로만 알 수 있어서 키 이벤트에서 갱신한다.
+// ScrollLock 자체를 누른 순간의 keydown 은 토글 전 상태를 보고할 수 있으므로 keyup 도 함께 듣는다.
+let scrollLockOn = false;
+try {
+  const track = (e: KeyboardEvent) => { try { scrollLockOn = e.getModifierState('ScrollLock'); } catch {} };
+  window.addEventListener('keydown', track, true);
+  window.addEventListener('keyup', track, true);
+} catch {}
+
+// 프로그램이 대신 입력을 보낸 경우(일괄전송 바, 빠른 명령 등) 사용자 입력과 같게 취급한다.
+// xterm 의 scrollOnUserInput 은 xterm 자체 입력 경로(textarea)만 대상이라, SSH·PTY 로 직접
+// 보내는 이 경로에서는 발동하지 않는다. 그래서 같은 설정을 보고 여기서 직접 내려준다.
+// ── 일괄전송 대상 선택 ──────────────────────────────────────────────────────────
+// 범위를 "선택한 세션" 으로 두면 미니탭마다 체크박스가 나타나고, 체크한 것에만 보낸다.
+// 선택 상태는 App(일괄전송 바)과 TerminalPanel(미니탭) 양쪽이 봐야 해서 모듈 스토어로 둔다.
+// 예전에는 일괄전송 바 안의 드롭다운 목록으로 골랐는데, 실제 탭을 보면서 고르는 편이 직관적이다.
+const bcastSelected = new Set<string>();
+let bcastPickMode = false;
+const bcastListeners = new Set<() => void>();
+const bcastNotify = () => { for (const fn of bcastListeners) { try { fn(); } catch {} } };
+
+export function subscribeBroadcastPick(fn: () => void): () => void {
+  bcastListeners.add(fn);
+  return () => { bcastListeners.delete(fn); };
+}
+export function isBroadcastPickMode(): boolean { return bcastPickMode; }
+export function setBroadcastPickMode(on: boolean) {
+  if (bcastPickMode === on) return;
+  bcastPickMode = on;
+  // 범위를 벗어나면 선택을 비운다 — 다시 켰을 때 예전 선택이 남아 있으면 헷갈린다.
+  if (!on) bcastSelected.clear();
+  bcastNotify();
+}
+export function isBroadcastPicked(termId: string): boolean { return bcastSelected.has(termId); }
+export function toggleBroadcastPick(termId: string) {
+  if (bcastSelected.has(termId)) bcastSelected.delete(termId); else bcastSelected.add(termId);
+  bcastNotify();
+}
+export function getBroadcastPicked(): string[] { return Array.from(bcastSelected); }
+
+export function notifyUserInputToTerm(termId: string) {
+  const b = termScrollBehavior.get(termId) ?? DEFAULT_SCROLL_BEHAVIOR;
+  if (!b.onKeyPress) return;
+  const entry = termStore.get(termId);
+  if (entry) { try { entry.term.scrollToBottom(); } catch {} }
+}
+
+export function setTermScrollBehavior(termId: string, s: any) {
+  const b: TermScrollBehavior = {
+    onOutput: !!s?.scrollOnOutput,
+    pauseOnScrollLock: !!s?.scrollOnOutputPauseOnScrollLock,
+    onKeyPress: s?.scrollOnKeyPress !== false,
+  };
+  termScrollBehavior.set(termId, b);
+  const entry = termStore.get(termId);
+  if (entry) { try { entry.term.options.scrollOnUserInput = b.onKeyPress; } catch {} }
+}
+
 export function applyScrollbackToTerm(termId: string, scrollback: number) {
   if (!scrollback) return;
   termScrollbackOverride.set(termId, scrollback);
@@ -2224,6 +2302,7 @@ export function disposeTermFully(termId: string) {
   termJustComposed.delete(termId);
   recordingState.delete(termId);
   termScrollbackOverride.delete(termId);
+  termScrollBehavior.delete(termId);
   termCursorStyleCache.delete(termId);
   termCursorBlinkCache.delete(termId);
   termBackspaceMode.delete(termId);
@@ -2941,6 +3020,7 @@ export function pasteToTerm(termId: string, text: string) {
   try {
     if (ptyConnected.has(termId)) (window as any).api?.ptyInput?.(termId, text);
     else (window as any).api?.sendSSHInput?.(termId, text);
+    notifyUserInputToTerm(termId);
   } catch {}
 }
 
@@ -3550,6 +3630,7 @@ export const TerminalPanel: React.FC<Props> = ({
                 ? Buffer.from(bytes).toString('base64')
                 : btoa(String.fromCharCode(...bytes));
               window.api?.sendSSHInput?.(tid, finalText, b64);
+              notifyUserInputToTerm(tid);
               termJustComposed.set(tid, { text: finalText, at: Date.now() });
             } catch {}
           }
@@ -3891,6 +3972,13 @@ export const TerminalPanel: React.FC<Props> = ({
 
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
   const [miniCtx, setMiniCtx] = useState<{ x: number; y: number; termId: string; name: string } | null>(null);
+  // 일괄전송 대상 선택 모드/선택 상태 — 모듈 스토어라 변경 알림을 받아 다시 그린다.
+  const [bcastPick, setBcastPick] = useState(isBroadcastPickMode());
+  const [, setBcastPickTick] = useState(0);
+  useEffect(() => subscribeBroadcastPick(() => {
+    setBcastPick(isBroadcastPickMode());
+    setBcastPickTick(v => v + 1);
+  }), []);
   const [moveWorkspaceCtx, setMoveWorkspaceCtx] = useState<{ x: number; y: number; termId: string } | null>(null);
   const [termCtx, setTermCtx] = useState<{ x: number; y: number } | null>(null);
   const [encodingCtx, setEncodingCtx] = useState<{ x: number; y: number; current: string } | null>(null);
@@ -4082,6 +4170,19 @@ export const TerminalPanel: React.FC<Props> = ({
                   onAuxClick={e => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); window.api?.disconnectSSH?.(sess.termId); onCloseSession?.(nodeId, sess.termId); } }}
                   onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMiniCtx({ x: e.clientX, y: e.clientY, termId: sess.termId, name: sess.sessionName }); }}
                 >
+                  {bcastPick && globalConnected.has(sess.termId) && (
+                    // 일괄전송 대상 선택 — 탭 자체를 보면서 고를 수 있게 미니탭에 둔다.
+                    // 탭 전환/드래그와 겹치지 않도록 클릭을 여기서 멈춘다.
+                    <input
+                      type="checkbox"
+                      className="panel-session-tab-pick"
+                      checked={isBroadcastPicked(sess.termId)}
+                      onClick={e => e.stopPropagation()}
+                      onMouseDown={e => e.stopPropagation()}
+                      onChange={e => { e.stopPropagation(); toggleBroadcastPick(sess.termId); }}
+                      title={t('ui.broadcastPick')}
+                    />
+                  )}
                   <span className={`panel-status-dot ${globalConnected.has(sess.termId) ? 'connected' : 'disconnected'}`} />
                   {renamingTermId === sess.termId ? (
                     <input

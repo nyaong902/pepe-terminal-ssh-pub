@@ -41,7 +41,12 @@
     "arrowUpTooltip": "发送上方向键（上一条命令）",
     "arrowDownTooltip": "发送下方向键（下一条命令）",
     "sigintTooltip": "发送 Ctrl+C（SIGINT）",
-    "eofTooltip": "发送 Ctrl+D（EOF）"
+    "eofTooltip": "发送 Ctrl+D（EOF）",
+    "scopeSelected": "已选会话 ({{count}})",
+    "pick": "选择会话",
+    "pickTooltip": "选择要发送到的会话",
+    "selectAll": "全选",
+    "noConnected": "没有已连接的会话"
   },
   "ai": {
     "serviceRequiredTitle": "需要 AI 服务",

@@ -41,7 +41,12 @@
     "arrowUpTooltip": "Envoyer flèche Haut (commande précédente)",
     "arrowDownTooltip": "Envoyer flèche Bas (commande suivante)",
     "sigintTooltip": "Envoyer Ctrl+C (SIGINT)",
-    "eofTooltip": "Envoyer Ctrl+D (EOF)"
+    "eofTooltip": "Envoyer Ctrl+D (EOF)",
+    "scopeSelected": "Sessions sélectionnées ({{count}})",
+    "pick": "Choisir les sessions",
+    "pickTooltip": "Choisissez les sessions destinataires",
+    "selectAll": "Tout sélectionner",
+    "noConnected": "Aucune session connectée"
   },
   "ai": {
     "serviceRequiredTitle": "Service IA requis",
