@@ -17,11 +17,7 @@ type DocKind = 'docx' | 'xlsx' | 'pptx';
 
 const KIND_LABEL: Record<DocKind, string> = { docx: '워드 (Word)', xlsx: '엑셀 (Excel)', pptx: '파워포인트 (PowerPoint)' };
 const KIND_ICON: Record<DocKind, string> = { docx: '📝', xlsx: '📊', pptx: '📽️' };
-const KIND_MIME: Record<DocKind, string> = {
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-};
+// KIND_MIME 은 blob 을 만들 때만 필요했고, URL 방식으로 바꾸면서 쓰이지 않는다.
 
 const toolbarBtn: React.CSSProperties = {
   padding: '4px 12px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)',
@@ -68,24 +64,25 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
     if (kind === 'pptx') {
       // office-editor 자체 ?new=pptx 숏컷이 빈 화면만 나오는 버그가 있어, 미리 준비해둔 blank.pptx 를
       // 실제 파일 열기와 동일한(검증된) 변환 경로로 대신 연다.
-      try {
-        const resp = await fetch(`${window.location.origin}/office-templates/blank.pptx`);
-        const data = await resp.arrayBuffer();
-        openBytes(data, `${title}.pptx`);
-      } catch (e: any) {
-        setError(`새 문서 생성 실패: ${e?.message || e}`);
-      }
+      // 템플릿도 URL 을 그대로 넘긴다 — 바이트를 읽어 blob 을 만들 필요가 없어졌다.
+      openUrl(`${window.location.origin}/office-templates/blank.pptx`, `${title}.pptx`);
       return;
     }
     addDoc(title, `${window.location.origin}/office-editor/editor.html?new=${kind}`, null);
   };
 
-  const openBytes = (data: ArrayBuffer, fileName: string) => {
-    const blob = new Blob([data], { type: KIND_MIME[kind] });
-    const blobUrl = URL.createObjectURL(blob);
-    const src = `${window.location.origin}/office-editor/editor.html?url=${encodeURIComponent(blobUrl)}&fileType=${kind}&fileName=${encodeURIComponent(fileName)}`;
-    addDoc(fileName, src, blobUrl);
+  // 편집기에 넘길 "파일을 가져갈 수 있는 URL" 로 문서를 연다.
+  // 예전에는 파일 바이트로 blob: URL 을 만들어 넘겼는데, blob: 은 만든 컨텍스트에서만 유효해서
+  // <webview>(별도 프로세스)인 게스트가 열 수 없다. 그래서 파일을 서빙하는 URL 을 준다 —
+  // dev 는 vite 미들웨어(vite.config.ts 의 serveLocalFile), 패키지된 앱은 pepeapp:// 핸들러의
+  // __local-file 이 같은 일을 한다. 임시 파일을 만들 필요도 없다.
+  const openUrl = (fileUrl: string, fileName: string) => {
+    const src = `${window.location.origin}/office-editor/editor.html?url=${encodeURIComponent(fileUrl)}&fileType=${kind}&fileName=${encodeURIComponent(fileName)}`;
+    addDoc(fileName, src, null);   // blob 을 쓰지 않으므로 해제할 것이 없다
   };
+
+  const openLocalFile = (filePath: string, fileName: string) =>
+    openUrl(`${window.location.origin}/__local-file?path=${encodeURIComponent(filePath)}`, fileName);
 
   const handleOpen = async () => {
     const result = await api().officeDocOpenFile?.(kind);
@@ -95,7 +92,7 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
     }
     setError('');
     setWarning(result.warning || '');
-    openBytes(result.data, result.fileName);
+    openLocalFile(result.filePath, result.fileName);
     addRecent(kind, { filePath: result.filePath, fileName: result.fileName }).then(setRecents);
   };
 
@@ -108,7 +105,7 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
     }
     setError('');
     setWarning(result.warning || '');
-    openBytes(result.data, result.fileName);
+    openLocalFile(doc.filePath, result.fileName);
     addRecent(kind, { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
 
@@ -176,11 +173,19 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
           />
         )}
         {docs.map(d => (
-          <iframe
+          /* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */
+          <webview
             key={d.id}
-            title={d.title}
+            data-doc-id={d.id}
             src={d.src}
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', display: d.id === activeId ? 'block' : 'none' }}
+            /* display 는 반드시 flex 여야 한다 — block/inline-block 이면 내부 게스트가 세로로
+               늘어나지 않고 크롭돼 렌더된다(Electron 문서에 명시된 동작). 브라우저 워크스페이스도
+               같은 이유로 flex 를 쓴다. 숨길 때는 none. */
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              minWidth: 0, minHeight: 0, border: 'none', background: '#ffffff',
+              display: d.id === activeId ? 'flex' : 'none',
+            }}
           />
         ))}
       </div>

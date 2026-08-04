@@ -37,7 +37,7 @@ import path from 'path';
 import os from 'os';
 import { execSync, spawn } from 'child_process';
 import * as pty from 'node-pty';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, loadChatHistory, saveChatHistory, migrateChatHistoryIfNeeded, Session, Folder, SessionsData } from './sessionsStore';
 import * as chatArchiveStore from './chatArchiveStore';
 import * as everythingService from './everythingService';
@@ -1678,6 +1678,14 @@ ipcMain.handle('text-editor:open', async (_e, payload: { text: string; name?: st
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }
+});
+
+// <webview> 에 붙일 preload 의 절대 경로. webview 의 preload 속성은 file:// URL 을 요구하고
+// 렌더러는 자기 preload 가 디스크 어디에 있는지 모르므로 메인이 알려준다.
+// 한글 편집기(rhwp-studio)를 webview 로 띄울 때 브리지를 심는 용도다(preload.ts 주석 참고).
+ipcMain.handle('app:webview-preload-url', () => {
+  try { return pathToFileURL(path.join(__dirname, 'preload.js')).toString(); }
+  catch { return ''; }
 });
 
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });

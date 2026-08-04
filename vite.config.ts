@@ -41,6 +41,38 @@ function serveExternalStaticDirs(): Plugin {
   };
 }
 
+// dev 서버에서 로컬 파일을 서빙한다 — 패키지된 앱의 pepeapp://app/__local-file 핸들러와 짝이다.
+// 오피스 편집기를 <webview>(별도 프로세스)로 띄우면서 필요해졌다: 예전에는 파일 바이트로 blob:
+// URL 을 만들어 넘겼는데, blob: 은 만든 컨텍스트에서만 유효해서 다른 프로세스인 게스트가 열 수
+// 없다. 그래서 편집기에 "파일을 가져갈 수 있는 URL" 을 준다 — 원본 경로를 그대로 서빙하면
+// 임시 파일도 필요 없다.
+// dev 전용이다(vite 개발 서버 미들웨어). 패키지된 앱은 위 프로토콜 핸들러가 같은 일을 한다.
+function serveLocalFile(): Plugin {
+  return {
+    name: 'serve-local-file',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const [urlPath, query] = (req.url || '').split('?');
+        if (urlPath !== '/__local-file') return next();
+        const params = new URLSearchParams(query || '');
+        const raw = (params.get('path') || '').trim();
+        if (!raw) { res.statusCode = 400; res.end('Bad Request'); return; }
+        const filePath = path.resolve(raw);
+        try {
+          const st = fs.statSync(filePath);
+          if (!st.isFile()) throw new Error('not a file');
+          res.setHeader('content-type', MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+          res.setHeader('content-length', String(st.size));
+          fs.createReadStream(filePath).pipe(res);
+        } catch {
+          res.statusCode = 404;
+          res.end('Not Found');
+        }
+      });
+    },
+  };
+}
+
 // 런타임에 경로로 로드되는 .cjs 들(worker_threads / child_process)을 dist-electron/ 으로 복사한다.
 // vite 는 electron/main.ts 만 번들하고 이 파일들은 번들 그래프에 없어서 손대지 않는데,
 // sshBridge 는 path.join(__dirname, 'sshTerminalWorker.cjs') 로 dist-electron/ 의 사본을 로드한다.
@@ -89,11 +121,20 @@ export default defineConfig({
   // 로컬 dist/에만 남아 트레이스 분석용으로 계속 쓸 수 있다.
   build: {
     sourcemap: 'hidden',
+    rollupOptions: {
+      // 진입점 두 개. pdf-host.html 은 <webview> 로 띄우는 PDF 뷰어이고, pdfjs 를 여기서만
+      // import 하므로 앱 본체 청크에서 pdfjs 가 빠진다(메모리를 프로세스째 회수하려는 목적).
+      input: {
+        index: path.resolve(__dirname, 'index.html'),
+        'pdf-host': path.resolve(__dirname, 'pdf-host.html'),
+      },
+    },
   },
   plugins: [
     react(),
     serveExternalStaticDirs(),
     copyRuntimeCjs(),
+    serveLocalFile(),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.

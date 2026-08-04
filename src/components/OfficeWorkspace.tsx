@@ -5,7 +5,7 @@
 // 메뉴(showOpenFilePicker/showSaveFilePicker)로도 처리되지만, 워드/엑셀/파워포인트와 동일하게
 // 상단 "새 문서"/"열기" 버튼 + 미니탭으로 여러 문서를 동시에 열어둘 수 있게 한다.
 import { useEffect, useRef, useState } from 'react';
-import type { RhwpEditor } from '@rhwp/editor';
+import { RhwpWebviewEditor } from '../utils/rhwpWebviewEditor';
 import { OfficeBackBar } from './OfficeBackBar';
 import { OfficeEmptyState } from './OfficeEmptyState';
 import { getRecents, addRecent, removeRecent, type RecentDoc } from '../utils/officeRecents';
@@ -31,7 +31,7 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { 
   useEffect(() => { getRecents('hwp').then(setRecents); }, []);
   const docsRef = useRef<OpenHwp[]>(docs);
   docsRef.current = docs;
-  const editorsRef = useRef<Map<string, RhwpEditor>>(new Map());
+  const editorsRef = useRef<Map<string, RhwpWebviewEditor>>(new Map());
   const mountedRef = useRef<Set<string>>(new Set());
 
   const setStatus = (id: string, s: string) => setStatusById(prev => ({ ...prev, [id]: s }));
@@ -41,25 +41,25 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { 
     mountedRef.current.add(id);
     setStatus(id, '에디터 로딩 중...');
     (async () => {
-      const { createEditor } = await import('@rhwp/editor');
-      const editor = await createEditor(container, { studioUrl: `${window.location.origin}/rhwp-studio/index.html` });
+      // <webview> 로 띄운다 — iframe 이면 같은 렌더러 프로세스라 편집기 WASM 이 앱 본체에 얹히고,
+      // 닫아도 메모리가 OS 로 돌아가지 않는다(자세한 배경은 utils/rhwpWebviewEditor.ts 주석).
+      const preloadUrl = (await (window as any).api?.getWebviewPreloadUrl?.()) || '';
+      const editor = await RhwpWebviewEditor.create(
+        container,
+        `${window.location.origin}/rhwp-studio/index.html`,
+        preloadUrl,
+      );
       editorsRef.current.set(id, editor);
       if (fileData) {
         const result = await editor.loadFile(fileData.data, fileData.fileName);
         setStatus(id, `${fileData.fileName} — ${result?.pageCount ?? '?'}페이지 로드 완료`);
       } else {
-        // createEditor() 직후를 그냥 "빈 문서"라고 가정하면 환경에 따라 캔버스가 비어 보이는
+        // createEditor() 직후를 그냥 "빈 문서" 라고 가정하면 환경에 따라 캔버스가 비어 보이는
         // 문제가 있었다 — "파일 > 새로 만들기" 메뉴 항목은 이 시점에 DOM 상 disabled 상태라
-        // 클릭해도 무시된다. 대신 실제 단축키(Alt+N)를 그대로 시뮬레이션해서 메뉴의 disabled
-        // 여부와 무관하게 내부 커맨드 디스패처(file:new-doc)를 직접 트리거한다.
-        try {
-          const doc = (editor.element as HTMLIFrameElement).contentDocument;
-          if (doc) {
-            const ev = new KeyboardEvent('keydown', { key: 'n', code: 'KeyN', altKey: true, bubbles: true, cancelable: true });
-            doc.dispatchEvent(ev);
-            doc.body?.dispatchEvent(ev);
-          }
-        } catch { /* 실패해도 기존 빈 상태 그대로 둔다 */ }
+        // 클릭해도 무시된다. 그래서 실제 단축키(Alt+N)를 흘려보내 내부 커맨드를 직접 트리거한다.
+        // iframe 시절에는 contentDocument 에 KeyboardEvent 를 dispatch 했는데, webview 는 게스트
+        // 문서에 손댈 수 없으므로 sendInputEvent 로 진짜 키 입력을 보낸다(rhwpWebviewEditor 참고).
+        editor.newDocument();
         setStatus(id, '새 문서');
       }
     })().catch((e) => setStatus(id, `초기화 실패: ${e?.message || e}`));

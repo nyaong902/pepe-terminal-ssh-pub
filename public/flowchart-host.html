@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>flowchart host</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #ffffff; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: none; }
+</style>
+</head>
+<body>
+<!--
+  draw.io(flowchart-editor)를 담는 중계 페이지.
+
+  왜 필요한가: 플로우차트 워크스페이스를 <webview>(별도 프로세스)로 바꿔 메모리가 닫을 때 회수되게
+  했는데, draw.io 를 webview 에 직접 띄우면 아무것도 열리지 않았다. 번들이 임베드 메시지를 보낼 때마다
+      null != window.parent && window.parent != window && window.parent.postMessage(...)
+  로 감싸는데(4곳), webview 게스트에서는 window.parent 가 자기 자신이라 이 조건이 거짓이 되어
+  init 을 포함한 모든 메시지가 전송되지 않는다.
+
+  그래서 webview 안에 이 페이지를 띄우고, 그 안에서 draw.io 를 iframe 으로 연다. iframe 에서는
+  window.parent 가 이 페이지이므로 조건이 성립한다. 같은 origin 이라 iframe 은 webview 와 같은
+  프로세스에 있고, 그 프로세스는 앱 본체와 분리돼 있으므로 메모리 격리는 그대로다.
+
+  메시지 흐름:
+    draw.io --(parent.postMessage)--> 이 페이지 window --(preload 가 감지)--> 호스트
+    호스트 --(webview.send)--> preload --(window.postMessage)--> 이 페이지 --> draw.io iframe
+  이 페이지가 직접 할 일은 아래 한 가지뿐이다: 호스트에서 온 것(action)을 iframe 으로 넣어주기.
+  draw.io 가 부모로 보내는 것은 이 window 에 그대로 도착하므로 preload 가 바로 집어간다.
+-->
+<script>
+  (function () {
+    // 호스트가 준 쿼리를 그대로 draw.io 에 넘긴다(embed=1&proto=json&... 등).
+    var qs = location.search || '';
+    var frame = document.createElement('iframe');
+    frame.src = '/flowchart-editor/index.html' + qs;
+    document.body.appendChild(frame);
+
+    window.addEventListener('message', function (e) {
+      // 이 페이지 자신에게 온 것 중 "호스트 -> draw.io" 방향만 iframe 으로 전달한다.
+      // 방향 구분: draw.io 가 보내는 것에는 event 가 있고, 호스트가 보내는 것에는 action 이 있다.
+      // (구분하지 않으면 draw.io 가 보낸 것을 그대로 되돌려보내 메아리가 된다.)
+      if (typeof e.data !== 'string') return;
+      var d;
+      try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (!d || typeof d.action !== 'string') return;
+      try { frame.contentWindow.postMessage(e.data, '*'); } catch (_) {}
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>PDF</title>
+<!--
+  PDF 뷰어 페이지 — <webview> 로 띄운다.
+
+  왜 별도 페이지인가: 예전에는 앱 본체가 pdfjs-dist 를 직접 import 해서 메인 렌더러에서 PDF 를
+  그렸다. 그러면 pdfjs 와 문서 데이터(문서에 따라 수백 MB)가 앱 본체 프로세스에 얹히고,
+  워크스페이스를 닫아도 그 프로세스가 사는 동안 메모리가 OS 로 돌아가지 않는다.
+  이 페이지를 별도 Vite 진입점으로 두면 pdfjs 가 이 페이지 청크로 들어가므로, 앱 본체 번들에서도
+  빠지고 실행도 webview 프로세스에서 이뤄진다 — 닫으면 프로세스째 회수된다.
+
+  호스트와의 통신은 preload 브리지를 쓴다(electron/preload.ts 의 pdf 브리지):
+    호스트 -> {method:'setMode'|'save'}  /  게스트 -> {event:'ready'|'saved'|'error'}
+-->
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1e1e1e; }
+  /* pdfjs 의 PDFViewer 는 절대 위치로 페이지를 쌓으므로 컨테이너가 position:absolute 여야 한다. */
+  #viewerContainer { position: absolute; inset: 0; overflow: auto; }
+  #viewer.pdfViewer { margin: 0 auto; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+         color: #aaa; font: 13px system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<div id="viewerContainer"><div id="viewer" class="pdfViewer"></div></div>
+<div id="msg">PDF 준비 중…</div>
+<script type="module" src="/src/pdfHost.ts"></script>
+</body>
+</html>

@@ -1,6 +1,76 @@
 // electron/preload.ts — updated with folder support
 import { contextBridge, ipcRenderer } from 'electron';
 
+// ── rhwp-studio 브리지 (webview 게스트에서만 동작) ──────────────────────────────────
+// 한글 편집기는 rhwp-studio 페이지와 postMessage 로 통신한다(@rhwp/editor 가 하던 일).
+// 예전에는 iframe 이라 부모가 contentWindow.postMessage 로 바로 보냈지만, 메모리를 프로세스째
+// 회수하려고 <webview> 로 바꾸면서 그 통로가 끊겼다 — webview 게스트에서 window.parent 는
+// 자기 자신이라, 스튜디오가 보내는 응답이 호스트에 닿지 않는다.
+//
+// 그래서 이 preload 가 양쪽을 잇는다:
+//   호스트 -> webview.send('rhwp-request')  -> window.postMessage  -> 스튜디오
+//   스튜디오 -> window.parent.postMessage(= 자기 window) -> sendToHost('rhwp-response') -> 호스트
+// 이 preload 는 앱 본체에도 쓰이므로, rhwp-studio 페이지일 때만 브리지를 켠다.
+try {
+  if (location.pathname.includes('/rhwp-studio/')) {
+    console.log('[rhwp-bridge] 부착됨', location.pathname);
+    ipcRenderer.on('rhwp-request', (_e, payload) => {
+      try { window.postMessage(payload, '*'); } catch {}
+    });
+    window.addEventListener('message', (e) => {
+      const d: any = e.data;
+      if (d && d.type === 'rhwp-response') {
+        try { ipcRenderer.sendToHost('rhwp-response', d); } catch {}
+      }
+    });
+  }
+} catch {}
+
+// ── draw.io(flowchart-editor) 브리지 (webview 게스트에서만 동작) ──────────────────────
+// rhwp 와 같은 이유로 <webview> 로 바꿨다(iframe 은 같은 프로세스라 닫아도 메모리가 안 돌아온다).
+// draw.io 임베드 프로토콜은 JSON 문자열을 주고받는다:
+//   게스트 -> 부모: {"event":"init"|"autosave"|"save"|"load", ...}
+//   부모 -> 게스트: {"action":"load", ...}
+// webview 에서는 window.parent 가 자기 자신이므로 이 preload 가 양쪽을 잇는다.
+//
+// 주의: 우리가 window.postMessage 로 게스트에 넣은 메시지를 다시 호스트로 되돌리면 메아리가 된다.
+// 방향을 내용으로 구분한다 — 게스트가 보내는 것에는 event 가 있고, 호스트가 보내는 것에는 action 만 있다.
+try {
+  // 중계 페이지(flowchart-host.html)가 webview 의 최상위 문서다 — preload 는 여기서 돈다.
+  if (location.pathname.includes('flowchart-host.html') || location.pathname.includes('/flowchart-editor/')) {
+    console.log('[drawio-bridge] 부착됨', location.pathname);
+    ipcRenderer.on('drawio-to-guest', (_e, payload: string) => {
+      try { window.postMessage(payload, '*'); } catch {}
+    });
+    window.addEventListener('message', (e) => {
+      if (typeof e.data !== 'string') return;
+      let d: any;
+      try { d = JSON.parse(e.data); } catch { return; }
+      if (!d || typeof d.event !== 'string') return;   // 호스트가 보낸 것(action)은 되돌리지 않는다
+      try { ipcRenderer.sendToHost('drawio-to-host', e.data); } catch {}
+    });
+  }
+} catch {}
+
+// ── PDF 뷰어(pdf-host.html) 브리지 (webview 게스트에서만 동작) ────────────────────────
+// draw.io/rhwp 와 같은 이유로 PDF 도 <webview> 에서 그린다. 방향은 내용으로 구분한다 —
+// 게스트가 보내는 것에는 event, 호스트가 보내는 것에는 method 가 있다(서로 되돌리면 메아리).
+try {
+  if (location.pathname.includes('pdf-host')) {
+    console.log('[pdf-bridge] 부착됨', location.pathname);
+    // PDF 는 저장 바이트(ArrayBuffer)를 주고받아야 해서 문자열이 아니라 객체로 넘긴다 —
+    // JSON 으로 직렬화하면 ArrayBuffer 가 {} 가 되어 빈 파일이 저장된다.
+    ipcRenderer.on('pdf-to-guest', (_e, payload: any) => {
+      try { window.postMessage(payload, '*'); } catch {}
+    });
+    window.addEventListener('message', (e) => {
+      const d: any = e.data;
+      if (!d || typeof d !== 'object' || typeof d.event !== 'string') return;
+      try { ipcRenderer.sendToHost('pdf-to-host', d); } catch {}
+    });
+  }
+} catch {}
+
 contextBridge.exposeInMainWorld('api', {
   // Sessions
   getSessionsPath: () => ipcRenderer.invoke('sessions:path'),
@@ -23,6 +93,8 @@ contextBridge.exposeInMainWorld('api', {
   // 터미널 텍스트를 임시 파일로 저장하고 외부 편집기로 열기 (내장 편집기는 렌더러가 자체 처리)
   openInTextEditor: (payload: { text: string; name?: string; target?: 'default' | 'custom'; path?: string; args?: string }) =>
     ipcRenderer.invoke('text-editor:open', payload),
+  // <webview> preload 경로 (한글 편집기 브리지용)
+  getWebviewPreloadUrl: () => ipcRenderer.invoke('app:webview-preload-url'),
   getChatHistory: () => ipcRenderer.invoke('chat-history:get'),
   setChatHistory: (entries: any[]) => ipcRenderer.invoke('chat-history:set', entries),
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)

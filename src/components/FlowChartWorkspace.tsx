@@ -29,31 +29,40 @@ export function FlowChartWorkspace(_props: { instanceId: string }) {
 
   const docsRef = useRef<OpenChart[]>(docs);
   docsRef.current = docs;
-  // 탭 id → iframe DOM 엘리먼트 / 최신 xml 캐시.
-  const iframesRef = useRef<Map<string, HTMLIFrameElement>>(new Map());
+  // 탭 id → webview 엘리먼트 / 최신 xml 캐시.
+  //
+  // <iframe> 에서 <webview> 로 바꿨다: iframe 은 같은 origin 이면 같은 렌더러 프로세스라 draw.io 가
+  // 쓰는 메모리가 앱 본체에 얹히고, 워크스페이스를 닫아도 OS 로 돌아가지 않았다. webview 는 별도
+  // 프로세스라 닫으면 프로세스째 회수된다.
+  //
+  // 그래서 통신 경로도 바뀐다. 예전에는 window 의 message 이벤트를 하나 듣고 evt.source 와
+  // contentWindow 를 비교해 어느 탭인지 찾았는데, webview 에는 contentWindow 가 없다. 대신 각
+  // webview 가 자기 ipc-message 를 내므로 탭마다 리스너를 달면 발신자를 찾을 필요가 없다.
+  // 게스트 쪽 postMessage ↔ ipc 변환은 preload(electron/preload.ts)의 draw.io 브리지가 한다.
+  const webviewsRef = useRef<Map<string, any>>(new Map());
   const latestXmlRef = useRef<Map<string, string>>(new Map());
-
+  const [preloadUrl, setPreloadUrl] = useState('');
   useEffect(() => {
-    const handler = (evt: MessageEvent) => {
-      // 이 메시지가 우리 탭들 중 어느 iframe 에서 온 건지 source 로 찾는다.
-      let ownerId: string | null = null;
-      for (const [id, iframe] of iframesRef.current) {
-        if (iframe.contentWindow === evt.source) { ownerId = id; break; }
-      }
-      if (!ownerId) return;
-      let data: any;
-      try { data = JSON.parse(evt.data); } catch { return; }
-      if (data.event === 'init') {
-        const doc = docsRef.current.find(d => d.id === ownerId);
-        const iframe = iframesRef.current.get(ownerId);
-        iframe?.contentWindow?.postMessage(JSON.stringify({ action: 'load', xml: doc?.initialXml || '', autosave: 1 }), '*');
-      } else if (data.event === 'autosave' || data.event === 'save' || data.event === 'load') {
-        if (typeof data.xml === 'string') latestXmlRef.current.set(ownerId, data.xml);
-      }
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
+    (window as any).api?.getWebviewPreloadUrl?.().then((u: string) => setPreloadUrl(u || '')).catch(() => {});
   }, []);
+
+  const registerWebview = (id: string, el: any) => {
+    if (webviewsRef.current.get(id) === el) return;
+    webviewsRef.current.set(id, el);
+    el.addEventListener('ipc-message', (e: any) => {
+      if (e?.channel !== 'drawio-to-host') return;
+      let data: any;
+      try { data = JSON.parse(e.args?.[0]); } catch { return; }
+      if (data.event === 'init') {
+        const doc = docsRef.current.find(d => d.id === id);
+        try {
+          el.send('drawio-to-guest', JSON.stringify({ action: 'load', xml: doc?.initialXml || '', autosave: 1 }));
+        } catch {}
+      } else if (data.event === 'autosave' || data.event === 'save' || data.event === 'load') {
+        if (typeof data.xml === 'string') latestXmlRef.current.set(id, data.xml);
+      }
+    });
+  };
 
   const addDoc = (title: string, filePath: string | null, initialXml: string) => {
     const id = `chart-${++nextChartId}`;
@@ -62,7 +71,7 @@ export function FlowChartWorkspace(_props: { instanceId: string }) {
   };
 
   const closeDoc = (id: string) => {
-    iframesRef.current.delete(id);
+    webviewsRef.current.delete(id);
     latestXmlRef.current.delete(id);
     setDocs(prev => prev.filter(d => d.id !== id));
     setActiveId(prev => {
@@ -170,13 +179,24 @@ export function FlowChartWorkspace(_props: { instanceId: string }) {
             message='"새 문서" 또는 "열기"를 눌러 플로우차트를 시작하세요.'
           />
         )}
-        {docs.map(d => (
-          <iframe
+        {/* preload 경로를 받기 전에는 만들지 않는다 — webview 는 생성 시점의 preload 만 적용하므로
+            나중에 속성을 채워도 브리지가 붙지 않는다(문서가 열리지 않던 원인). */}
+        {preloadUrl && docs.map(d => (
+          /* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */
+          <webview
             key={d.id}
-            title={d.title}
-            ref={(el) => { if (el) iframesRef.current.set(d.id, el); }}
-            src={`${window.location.origin}/flowchart-editor/index.html?embed=1&proto=json&spin=1&noSaveBtn=1&saveAndExit=0&modified=unsavedChanges`}
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', display: d.id === activeId ? 'block' : 'none' }}
+            ref={(el: any) => { if (el) registerWebview(d.id, el); }}
+            /* draw.io 를 webview 에 직접 띄우면 아무것도 열리지 않는다 — 번들이 임베드 메시지를
+               window.parent != window 로 감싸는데 webview 게스트에서는 그게 거짓이다. 그래서 중계
+               페이지를 띄우고 그 안에서 iframe 으로 연다(public/flowchart-host.html 주석 참고). */
+            src={`${window.location.origin}/flowchart-host.html?embed=1&proto=json&spin=1&noSaveBtn=1&saveAndExit=0&modified=unsavedChanges`}
+            preload={preloadUrl}
+            /* display 는 반드시 flex — block 이면 내부 게스트가 크롭돼 렌더된다(Electron 문서). */
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              minWidth: 0, minHeight: 0, border: 'none', background: '#ffffff',
+              display: d.id === activeId ? 'flex' : 'none',
+            }}
           />
         ))}
       </div>

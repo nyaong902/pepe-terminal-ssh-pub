@@ -4,15 +4,15 @@
 // 지원한다. Electron/Chromium 내장 PDF 뷰어는 iframe 안에 넣으면 주석 툴바가 아예 안 뜨는(읽기
 // 전용) 것으로 확인되어, 대신 pdf.js 를 직접 렌더링 엔진으로 써서 실제 편집 가능한 뷰어를 만든다.
 // 저장은 pdfDocument.saveDocument() 로 주석이 실제 PDF 객체로 구워진 바이트를 받아 그대로 쓴다.
+//
+// 렌더링은 <webview>(pdf-host.html) 에서 한다. 예전에는 이 파일이 pdfjs 를 직접 import 해서 메인
+// 렌더러에서 그렸는데, 그러면 pdfjs 와 문서 데이터가 앱 본체 프로세스에 얹혀 워크스페이스를 닫아도
+// 메모리가 OS 로 돌아가지 않았다. 이제 pdfjs 는 pdf-host 청크에만 있고 별도 프로세스에서 돈다.
+// 주석 모드 전환과 저장은 preload 브리지를 통한 요청/응답으로 처리한다(src/pdfHost.ts 참고).
 import { useEffect, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
-import { PDFViewer, EventBus, PDFLinkService } from 'pdfjs-dist/web/pdf_viewer.mjs';
-import 'pdfjs-dist/web/pdf_viewer.css';
 import { OfficeBackBar } from './OfficeBackBar';
 import { OfficeEmptyState } from './OfficeEmptyState';
 import { getRecents, addRecent, removeRecent, type RecentDoc } from '../utils/officeRecents';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 const api = () => (window as any).api || {};
 
@@ -26,14 +26,8 @@ const modeBtn = (active: boolean): React.CSSProperties => ({
   color: active ? '#fff' : 'var(--win-text, #e6edf3)',
 });
 
-type OpenPdf = { id: string; title: string; filePath: string | null };
+type OpenPdf = { id: string; title: string; filePath: string | null; fileUrl: string };
 type EditorMode = 'none' | 'highlight' | 'freetext' | 'ink' | 'stamp';
-const MODE_TO_TYPE: Record<Exclude<EditorMode, 'none'>, number> = {
-  highlight: pdfjsLib.AnnotationEditorType.HIGHLIGHT,
-  freetext: pdfjsLib.AnnotationEditorType.FREETEXT,
-  ink: pdfjsLib.AnnotationEditorType.INK,
-  stamp: pdfjsLib.AnnotationEditorType.STAMP,
-};
 
 let nextPdfId = 0;
 
@@ -48,12 +42,44 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
   const docsRef = useRef<OpenPdf[]>(docs);
   docsRef.current = docs;
   // 탭 id -> 원본 바이트(뷰어 리마운트용) / pdf.js PDFDocumentProxy(저장용).
-  const dataRef = useRef<Map<string, ArrayBuffer>>(new Map());
-  const pdfDocRef = useRef<Map<string, any>>(new Map());
+  // 탭 id → webview. pdfjs 문서 객체는 게스트가 갖고 있으므로 호스트는 참조하지 않는다.
+  const webviewsRef = useRef<Map<string, any>>(new Map());
+  // 저장 요청의 응답(바이트)을 기다리는 resolver.
+  const savePendingRef = useRef<Map<string, (v: any) => void>>(new Map());
+  const [preloadUrl, setPreloadUrl] = useState('');
+  useEffect(() => {
+    (window as any).api?.getWebviewPreloadUrl?.().then((u: string) => setPreloadUrl(u || '')).catch(() => {});
+  }, []);
+
+  // 주석 모드가 바뀌면 활성 탭의 게스트에 알린다. 예전에는 PDFViewer 세터를 직접 만졌지만
+  // 이제 뷰어가 다른 프로세스에 있으므로 요청으로 보낸다.
+  useEffect(() => {
+    if (!activeId) return;
+    const wv = webviewsRef.current.get(activeId);
+    try { wv?.send('pdf-to-guest', { method: 'setMode', params: { mode } }); } catch {}
+  }, [mode, activeId]);
+
+  const registerWebview = (id: string, el: any) => {
+    if (webviewsRef.current.get(id) === el) return;
+    webviewsRef.current.set(id, el);
+    el.addEventListener('ipc-message', (e: any) => {
+      if (e?.channel !== 'pdf-to-host') return;
+      const d = e.args?.[0];
+      if (!d) return;
+      if (d.event === 'saved') {
+        const resolve = savePendingRef.current.get(id);
+        if (resolve) { savePendingRef.current.delete(id); resolve(d.data); }
+      } else if (d.event === 'error') {
+        const resolve = savePendingRef.current.get(id);
+        if (resolve) { savePendingRef.current.delete(id); resolve(null); }
+        setError(d.message || 'PDF 오류');
+      }
+    });
+  };
 
   const closeDoc = (id: string) => {
-    dataRef.current.delete(id);
-    pdfDocRef.current.delete(id);
+    webviewsRef.current.delete(id);
+    savePendingRef.current.delete(id);
     setDocs(prev => prev.filter(d => d.id !== id));
     setActiveId(prev => {
       if (prev !== id) return prev;
@@ -62,10 +88,13 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
     });
   };
 
-  const openBytes = (data: ArrayBuffer, fileName: string, filePath: string | null) => {
+  // 게스트가 URL 로 가져가므로 바이트를 들고 있지 않는다(메인 렌더러에 문서 데이터가 남지 않는다).
+  const openLocalFile = (filePath: string, fileName: string) => {
     const id = `pdf-${++nextPdfId}`;
-    dataRef.current.set(id, data);
-    setDocs(prev => [...prev, { id, title: fileName, filePath }]);
+    // 게스트(webview)가 이 URL 로 파일을 가져간다 — dev 는 vite 미들웨어, 패키지된 앱은
+    // pepeapp:// 의 __local-file 이 서빙한다.
+    const fileUrl = `${window.location.origin}/__local-file?path=${encodeURIComponent(filePath)}`;
+    setDocs(prev => [...prev, { id, title: fileName, filePath, fileUrl }]);
     setActiveId(id);
   };
 
@@ -76,7 +105,7 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
       return;
     }
     setError('');
-    openBytes(result.data, result.fileName, result.filePath);
+    openLocalFile(result.filePath, result.fileName);
     addRecent('pdf', { filePath: result.filePath, fileName: result.fileName }).then(setRecents);
   };
 
@@ -88,7 +117,7 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
       return;
     }
     setError('');
-    openBytes(result.data, result.fileName, doc.filePath);
+    openLocalFile(doc.filePath, result.fileName);
     addRecent('pdf', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
 
@@ -101,13 +130,21 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
 
   const handleSave = async () => {
     if (!activeId) return;
-    const pdfDocument = pdfDocRef.current.get(activeId);
-    if (!pdfDocument) { setError('저장할 문서가 없습니다.'); return; }
+    const wv = webviewsRef.current.get(activeId);
+    if (!wv) { setError('저장할 문서가 없습니다.'); return; }
     try {
-      const bytes: Uint8Array = await pdfDocument.saveDocument();
+      // 주석이 구워진 바이트는 게스트(pdfjs)가 만든다 — 요청하고 응답을 기다린다.
+      const buf: ArrayBuffer | null = await new Promise((resolve) => {
+        savePendingRef.current.set(activeId, resolve);
+        try { wv.send('pdf-to-guest', { method: 'save' }); } catch { resolve(null); }
+        setTimeout(() => {
+          if (savePendingRef.current.has(activeId)) { savePendingRef.current.delete(activeId); resolve(null); }
+        }, 60000);
+      });
+      if (!buf) { setError('저장 실패: 응답 없음'); return; }
       const doc = docsRef.current.find(d => d.id === activeId);
       const result = await api().officeDocSaveFile?.({
-        data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        data: buf,   // 게스트가 이미 오프셋 없는 ArrayBuffer 로 잘라 보냈다
         defaultName: doc?.title || 'document.pdf',
         filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
       });
@@ -174,78 +211,23 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
             message='"열기"를 눌러 PDF 파일을 선택하세요. 하이라이트/텍스트/손글씨/스탬프 주석을 추가하고 저장할 수 있습니다.'
           />
         )}
-        {docs.map(d => (
-          <div key={d.id} style={{ position: 'absolute', inset: 0, display: d.id === activeId ? 'block' : 'none' }}>
-            <PdfEditorPaneBound
-              id={d.id}
-              data={dataRef.current.get(d.id)!}
-              mode={d.id === activeId ? mode : 'none'}
-              onDocReady={(doc) => pdfDocRef.current.set(d.id, doc)}
-            />
-          </div>
+        {/* preload 경로를 받기 전에는 만들지 않는다 — webview 는 생성 시점의 preload 만 적용한다. */}
+        {preloadUrl && docs.map(d => (
+          /* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */
+          <webview
+            key={d.id}
+            ref={(el: any) => { if (el) registerWebview(d.id, el); }}
+            src={`${window.location.origin}/pdf-host.html?file=${encodeURIComponent(d.fileUrl)}`}
+            preload={preloadUrl}
+            /* display 는 반드시 flex — block 이면 내부 게스트가 크롭돼 렌더된다(Electron 문서). */
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              minWidth: 0, minHeight: 0, border: 'none', background: '#1e1e1e',
+              display: d.id === activeId ? 'flex' : 'none',
+            }}
+          />
         ))}
       </div>
-    </div>
-  );
-}
-
-// PdfEditorPane 은 자기 자신의 PDFDocumentProxy 를 부모(PdfWorkspace)에게 넘겨줘야 저장이 가능하다 —
-// 훅 규칙 위반 없이 onDocReady 콜백을 받는 얇은 래퍼.
-function PdfEditorPaneBound({ id: _id, data, mode, onDocReady }: { id: string; data: ArrayBuffer; mode: EditorMode; onDocReady: (doc: any) => void }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<InstanceType<typeof PDFViewer> | null>(null);
-  const [status, setStatus] = useState('불러오는 중...');
-
-  useEffect(() => {
-    let disposed = false;
-    const eventBus = new EventBus();
-    const linkService = new PDFLinkService({ eventBus });
-    (async () => {
-      const container = containerRef.current;
-      if (!container) return;
-      const viewer = new PDFViewer({ container, eventBus, linkService, annotationEditorMode: pdfjsLib.AnnotationEditorType.NONE });
-      linkService.setViewer(viewer);
-      viewerRef.current = viewer;
-      // cMap/표준폰트 데이터 없이는, 시스템 폰트를 CID(Adobe-Korea1 등) 로 참조하는 비임베드
-      // 한글 폰트를 못 풀어서 페이지 배경/표/테두리는 멀쩡히 그려지는데 글자만 전부 안 보이는
-      // 증상이 생긴다(HWP/한글 변환 PDF 에서 흔함) — public/ 에 복사해둔 pdfjs-dist 리소스를 가리킨다.
-      const loadingTask = pdfjsLib.getDocument({
-        data: data.slice(0),
-        cMapUrl: `${import.meta.env.BASE_URL}pdfjs-cmaps/`,
-        cMapPacked: true,
-        standardFontDataUrl: `${import.meta.env.BASE_URL}pdfjs-standard-fonts/`,
-      });
-      const pdfDocument = await loadingTask.promise;
-      if (disposed) return;
-      onDocReady(pdfDocument);
-      viewer.setDocument(pdfDocument);
-      linkService.setDocument(pdfDocument);
-      setStatus(`${pdfDocument.numPages}페이지`);
-    })().catch((e) => setStatus(`로드 실패: ${e?.message || e}`));
-    return () => {
-      disposed = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    const targetMode = mode === 'none' ? pdfjsLib.AnnotationEditorType.NONE : MODE_TO_TYPE[mode];
-    // pdfjs-dist 6.x 는 이벤트버스 dispatch 가 아니라 PDFViewer.annotationEditorMode 세터로
-    // 모드를 바꾼다 — AnnotationEditorUIManager 가 첫 페이지 렌더 이후 비동기로 생성되므로
-    // 아직 준비 안 됐으면 조용히 무시하고 넘어간다(다음 모드 변경 시 다시 시도됨).
-    try {
-      viewer.annotationEditorMode = { mode: targetMode };
-    } catch { /* UI manager 아직 미준비 — 무시 */ }
-  }, [mode]);
-
-  return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div ref={containerRef} className="pdf-viewer-container" style={{ position: 'absolute', inset: 0, overflow: 'auto', background: '#525659' }}>
-        <div className="pdfViewer" />
-      </div>
-      <div style={{ position: 'absolute', bottom: 6, right: 10, fontSize: 11, color: '#ccc', pointerEvents: 'none' }}>{status}</div>
     </div>
   );
 }
