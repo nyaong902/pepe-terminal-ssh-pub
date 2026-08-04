@@ -14,5 +14,15 @@
   "newConversationTitle": "محدد: بدء محادثة جديدة / غير محدد: المتابعة في المحادثة الحالية",
   "aiAnalyze": "طلب تحليل الذكاء الاصطناعي",
   "analyzeWithAgent": "التحليل باستخدام {{agent}}",
-  "analyzePrompt": "حلّل الملف المرفق `{{name}}`.\n- المسار: {{path}}"
+  "analyzePrompt": "حلّل الملف المرفق `{{name}}`.\n- المسار: {{path}}",
+  "mdPreview": "معاينة",
+  "mdEdit": "تحرير",
+  "mermaidPan": "تبديل وضع التحريك",
+  "mermaidZoomIn": "تكبير",
+  "mermaidZoomOut": "تصغير",
+  "mermaidReset": "إعادة التكبير",
+  "copy": "نسخ",
+  "selectAll": "تحديد الكل",
+  "copyCode": "نسخ الكود",
+  "copied": "تم النسخ"
 }

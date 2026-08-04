@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
+import { attachCodeCopyButtons, highlightCodeBlocks, attachMermaidPanZoom } from '../utils/mdEnhance';
 import mermaid from 'mermaid';
 import { MessengerWorkspace } from './MessengerWorkspace';
 import { PlainAppWorkspace } from './PlainAppWorkspace';
@@ -3107,7 +3108,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           toolbar.appendChild(saveSvgBtn);
           toolbar.appendChild(savePngBtn);
           wrap.appendChild(toolbar);
-          wrap.appendChild(svgHolder);
+          // 잡아 움직이기 / 확대·축소 / 원래 크기로 — 기존 툴바(복사·저장)에 버튼을 덧붙이고
+          // svgHolder 를 뷰포트로 감싼다. svgHolder 는 복사/저장 기능이 계속 참조하므로 그대로 넘긴다.
+          wrap.classList.add('md-mermaid');
+          attachMermaidPanZoom(wrap, svgHolder, {
+            pan: tt('mermaid.pan'), zoomIn: tt('mermaid.zoomIn'),
+            zoomOut: tt('mermaid.zoomOut'), reset: tt('mermaid.reset'),
+          }, toolbar);
           // 우클릭 컨텍스트 메뉴
           wrap.oncontextmenu = (e) => {
             e.preventDefault();
@@ -3170,6 +3177,25 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     }, 250);
     return () => clearTimeout(__mermaidTimer);
   }, [messages, toolTimeline, pendingPlan, currentAgent, activeHistoryId, installed, mermaidEnabled, streaming]);
+
+  // 코드블록에 복사 버튼과 색칠 — mermaid 와 별개로, mermaid 블록이 없는 대화에서도 돌아야 한다.
+  // 스트리밍 중에는 내용이 계속 바뀌므로 끝난 뒤에 색칠한다(중간에 색칠하면 곧 덮어써져 낭비다).
+  useEffect(() => {
+    const roots: HTMLElement[] = [];
+    if (scrollRef.current) roots.push(scrollRef.current);
+    document.querySelectorAll<HTMLElement>('.claude-chat-plan-body').forEach(el => roots.push(el));
+    if (roots.length === 0) return;
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    (async () => {
+      for (const r of roots) {
+        if (cancelled) return;
+        attachCodeCopyButtons(r, { copy: tt('code.copy'), copied: tt('code.copied') }, isCancelled);
+        if (!streaming) await highlightCodeBlocks(r, undefined, isCancelled);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [messages, toolTimeline, pendingPlan, activeHistoryId, streaming]);
 
   // 메시지/세션ID 변경 시 활성 이력 항목에 동기화
   // 단, 활성 이력이 막 전환되었을 때(loadHistory 직후) 의 첫 실행은 스킵 — 그렇지 않으면
@@ -6445,6 +6471,13 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
           }
           setMsgCtxMenu(null);
         };
+        // 드래그로 고른 부분만 복사. 메시지 전체 복사와 별개로 필요하다 — 긴 답변에서 코드 한 줄만
+        // 가져가고 싶을 때가 많다. 선택이 없으면 항목을 아예 띄우지 않는다.
+        const selectedText = (window.getSelection()?.toString() || '').trim();
+        const copySelection = () => {
+          if (selectedText) navigator.clipboard.writeText(selectedText).catch(() => {});
+          setMsgCtxMenu(null);
+        };
         const copyMarkdown = () => {
           navigator.clipboard.writeText(msgCtxMenu.content);
           setMsgCtxMenu(null);
@@ -6496,6 +6529,9 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             onContextMenu={e => e.preventDefault()}
             onClick={e => e.stopPropagation()}
           >
+            {selectedText && (
+              <div className="claude-chat-msg-ctx-item" onClick={copySelection}>{tt('msgCtx.copySelection')}</div>
+            )}
             <div className="claude-chat-msg-ctx-item" onClick={copyPlain}>{tt('msgCtx.copy')}</div>
             <div className="claude-chat-msg-ctx-item" onClick={copyMarkdown}>{tt('msgCtx.copyMarkdown')}</div>
             <div className="claude-chat-msg-ctx-item" onClick={attachAsContext}>{tt('msgCtx.attachAsContext')}</div>

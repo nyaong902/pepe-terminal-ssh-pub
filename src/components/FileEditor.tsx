@@ -1,6 +1,10 @@
 // src/components/FileEditor.tsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Editor } from './LazyMonaco';
+import { marked } from 'marked';
+import mermaid from 'mermaid';
+import { ContextMenu } from './ContextMenu';
+import { attachCodeCopyButtons, highlightCodeBlocks, attachMermaidPanZoom } from '../utils/mdEnhance';
 import type { OnMount } from '@monaco-editor/react';
 import { useTranslation } from 'react-i18next';
 
@@ -80,6 +84,24 @@ const CustomLLMIcon = () => (
 );
 
 // 확장자 → Monaco 언어
+// 마크다운 미리보기용 렌더. ClaudeChat 과 같은 marked 를 쓰고 breaks:true 로 줄바꿈을 살린다.
+// 원격 파일 내용을 HTML 로 넣는 것이므로 스크립트/이벤트 속성은 제거한다 — 신뢰할 수 없는
+// 파일을 열어도 코드가 실행되지 않아야 한다(marked 자체는 살균해주지 않는다).
+function renderMarkdown(src: string): string {
+  let html = '';
+  try {
+    html = marked.parse(src || '', { breaks: true }) as string;
+  } catch {
+    return '';
+  }
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
 function detectLanguage(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
@@ -120,6 +142,64 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
   const [notice, setNotice] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [aiAgentMenuOpen, setAiAgentMenuOpen] = useState(false);
   const [aiNewConversation, setAiNewConversation] = useState(true);
+  // 마크다운 미리보기 — VS Code 처럼 버튼으로 편집/미리보기를 전환한다.
+  // .md 파일일 때만 버튼이 보인다.
+  const isMarkdown = /\.(md|markdown|mdown|mkd)$/i.test(fileName || '');
+  const [mdPreview, setMdPreview] = useState(false);
+  // 파일이 바뀌면 미리보기를 끈다 — 다른 파일을 열었는데 미리보기 상태가 남으면 헷갈린다.
+  useEffect(() => { setMdPreview(false); }, [remotePath]);
+  // mermaid 코드블록을 SVG 로 바꾼다. marked 는 ```mermaid 를 그냥 코드블록으로 남기므로
+  // 렌더 뒤에 직접 찾아 그려야 한다(ClaudeChat 과 같은 방식).
+  const mdRef = useRef<HTMLDivElement | null>(null);
+  const monacoRef = useRef<any>(null);
+  // 미리보기 우클릭 메뉴 — 읽기 전용이라 복사/전체 선택만 둔다(붙여넣기는 편집 모드에서 monaco 가 제공).
+  const [mdCtx, setMdCtx] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!mdPreview) return;
+    const root = mdRef.current;
+    if (!root) return;
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    const cleanups: Array<() => void> = [];
+    (async () => {
+      // 순서가 중요하다: 색칠이 원본 코드를 기억해두므로 복사 버튼보다 먼저 돌려도 되지만,
+      // 복사 버튼을 먼저 붙여야 색칠이 느린 파일에서도 버튼이 바로 보인다.
+      attachCodeCopyButtons(root, { copy: t('copyCode'), copied: t('copied') }, isCancelled);
+      await highlightCodeBlocks(root, monacoRef.current, isCancelled);
+      if (cancelled) return;
+      // mermaid: marked 는 ```mermaid 를 그냥 코드블록으로 남기므로 직접 찾아 SVG 로 바꾼다.
+      const blocks = Array.from(root.querySelectorAll<HTMLElement>('pre > code.language-mermaid'));
+      for (let i = 0; i < blocks.length; i++) {
+        const codeEl = blocks[i];
+        if (cancelled) return;
+        if (codeEl.getAttribute('data-mermaid-done')) continue;
+        codeEl.setAttribute('data-mermaid-done', '1');
+        const pre = codeEl.parentElement;
+        if (!pre) continue;
+        // marked 가 HTML 로 이스케이프한 문자를 되돌린다 — mermaid 는 원본 텍스트를 받아야 한다.
+        const src = (codeEl.textContent || '')
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        try {
+          const id = 'fe-mermaid-' + Date.now() + '-' + i;
+          const { svg } = await mermaid.render(id, src);
+          if (cancelled) return;
+          const wrap = document.createElement('div');
+          wrap.className = 'md-mermaid';
+          cleanups.push(attachMermaidPanZoom(wrap, svg, {
+            pan: t('mermaidPan'), zoomIn: t('mermaidZoomIn'),
+            zoomOut: t('mermaidZoomOut'), reset: t('mermaidReset'),
+          }));
+          pre.replaceWith(wrap);
+        } catch {
+          // 그리지 못하면 코드블록을 그대로 둔다 — 원본을 볼 수 있는 게 빈 화면보다 낫다.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      for (const fn of cleanups) { try { fn(); } catch {} }
+    };
+  }, [mdPreview, content]);
   useEffect(() => {
     if (!aiAgentMenuOpen) return;
     const close = () => setAiAgentMenuOpen(false);
@@ -221,6 +301,8 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    // 미리보기의 코드블록 색칠에 쓴다 — monaco.editor.colorize 로 편집기와 같은 테마 색을 쓴다.
+    monacoRef.current = monaco;
     // Ctrl+S 저장
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { save(); });
     // Electron 우클릭 Paste 동작 수정 (전역 1회 설치)
@@ -340,12 +422,32 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
           </div>
           </>
         )}
+        {isMarkdown && (
+          <button
+            className={`file-editor-mdpreview ${mdPreview ? 'on' : ''}`}
+            onClick={() => setMdPreview(v => !v)}
+            title={mdPreview ? t('mdEdit') : t('mdPreview')}
+          >
+            {mdPreview ? '✎ ' + t('mdEdit') : '👁 ' + t('mdPreview')}
+          </button>
+        )}
         <button className="file-editor-save" onClick={save} disabled={!dirty || saving}>
           {saving ? t('saving') : t('saveBtn')}
         </button>
         {notice && <span className={`file-editor-notice ${notice.kind}`}>{notice.text}</span>}
       </div>
       <div className="file-editor-body" ref={bodyRef}>
+        {/* 미리보기일 때도 Editor 를 언마운트하지 않는다 — 다시 편집으로 돌아올 때 커서/스크롤
+            위치와 undo 기록이 살아 있어야 한다. 그래서 감싸는 div 를 숨기기만 한다. */}
+        {mdPreview && (
+          <div
+            className="file-editor-md"
+            ref={mdRef}
+            onContextMenu={e => { e.preventDefault(); setMdCtx({ x: e.clientX, y: e.clientY }); }}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+          />
+        )}
+        <div style={{ height: '100%', display: mdPreview ? 'none' : 'block' }}>
         <Editor
           height="100%"
           theme="vs-dark"
@@ -361,7 +463,38 @@ export const FileEditor: React.FC<Props> = ({ termId, remotePath, fileName, onDi
             wordWrap: 'on',
           }}
         />
+        </div>
       </div>
+      {mdCtx && (
+        <ContextMenu
+          x={mdCtx.x}
+          y={mdCtx.y}
+          onClose={() => setMdCtx(null)}
+          items={[
+            {
+              label: t('copy'), icon: '📋',
+              disabled: !(window.getSelection()?.toString()),
+              onClick: () => {
+                const sel = window.getSelection()?.toString() || '';
+                if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+              },
+            },
+            {
+              label: t('selectAll'), icon: '☰',
+              onClick: () => {
+                // 미리보기 본문만 선택한다 — 페이지 전체를 잡으면 툴바 글자까지 들어간다.
+                const el = mdRef.current;
+                if (!el) return;
+                const r = document.createRange();
+                r.selectNodeContents(el);
+                const sel = window.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(r);
+              },
+            },
+          ]}
+        />
+      )}
     </div>
   );
 };

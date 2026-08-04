@@ -92,7 +92,8 @@
     "copy": "메시지 복사",
     "copyMarkdown": "마크다운으로 복사",
     "attachAsContext": "메시지를 컨텍스트로 첨부",
-    "forkHere": "여기서 포크하기"
+    "forkHere": "여기서 포크하기",
+    "copySelection": "선택 영역 복사"
   },
   "started": "🚀 시작",
   "analyzeFilePrompt": "이 파일을 분석해주세요.",
@@ -158,7 +159,11 @@
     "ctxCopySvg": "📋 SVG 코드 복사",
     "ctxSavePng": "💾 PNG 으로 저장",
     "ctxSaveSvg": "💾 SVG 으로 저장",
-    "renderFailed": "[Mermaid 렌더 실패] {{msg}}"
+    "renderFailed": "[Mermaid 렌더 실패] {{msg}}",
+    "pan": "잡아 움직이기 (켜고 끄기)",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "reset": "원래 크기로"
   },
   "palette": {
     "attachFileDesc": "로컬 파일 첨부",
@@ -336,5 +341,9 @@
   "paletteEffortLowCodex": "추론 강도: 낮음",
   "paletteEffortMediumCodex": "추론 강도: 중간",
   "paletteEffortHighCodex": "추론 강도: 높음",
-  "paletteEffortMaxCodex": "추론 강도: 매우높음"
+  "paletteEffortMaxCodex": "추론 강도: 매우높음",
+  "code": {
+    "copy": "코드 복사",
+    "copied": "복사됨"
+  }
 }

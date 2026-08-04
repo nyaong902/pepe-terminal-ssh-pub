@@ -14,5 +14,15 @@
   "newConversationTitle": "Checked: start a new conversation / Unchecked: continue in the current conversation",
   "aiAnalyze": "Request AI Analysis",
   "analyzeWithAgent": "Analyze with {{agent}}",
-  "analyzePrompt": "Analyze the attached file `{{name}}`.\n- Path: {{path}}"
+  "analyzePrompt": "Analyze the attached file `{{name}}`.\n- Path: {{path}}",
+  "mdPreview": "Preview",
+  "mdEdit": "Edit",
+  "mermaidPan": "Toggle pan mode",
+  "mermaidZoomIn": "Zoom in",
+  "mermaidZoomOut": "Zoom out",
+  "mermaidReset": "Reset zoom",
+  "copy": "Copy",
+  "selectAll": "Select all",
+  "copyCode": "Copy code",
+  "copied": "Copied"
 }

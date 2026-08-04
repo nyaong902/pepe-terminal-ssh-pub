@@ -89,7 +89,8 @@
     "copy": "复制消息",
     "copyMarkdown": "复制为 Markdown",
     "attachAsContext": "将消息附加为上下文",
-    "forkHere": "从此处分叉"
+    "forkHere": "从此处分叉",
+    "copySelection": "复制选定内容"
   },
   "started": "🚀 已启动",
   "analyzeFilePrompt": "请分析此文件。",
@@ -155,7 +156,11 @@
     "ctxCopySvg": "📋 复制 SVG 代码",
     "ctxSavePng": "💾 另存为 PNG",
     "ctxSaveSvg": "💾 另存为 SVG",
-    "renderFailed": "[Mermaid 渲染失败] {{msg}}"
+    "renderFailed": "[Mermaid 渲染失败] {{msg}}",
+    "pan": "切换拖动模式",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "reset": "重置缩放"
   },
   "palette": {
     "attachFileDesc": "附加本地文件",
@@ -336,5 +341,9 @@
   "paletteEffortLowCodex": "推理强度：低",
   "paletteEffortMediumCodex": "推理强度：中",
   "paletteEffortHighCodex": "推理强度：高",
-  "paletteEffortMaxCodex": "推理强度：极高"
+  "paletteEffortMaxCodex": "推理强度：极高",
+  "code": {
+    "copy": "复制代码",
+    "copied": "已复制"
+  }
 }

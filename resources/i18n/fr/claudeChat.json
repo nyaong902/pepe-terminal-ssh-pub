@@ -89,7 +89,8 @@
     "copy": "Copier le message",
     "copyMarkdown": "Copier en markdown",
     "attachAsContext": "Joindre le message comme contexte",
-    "forkHere": "Bifurquer ici"
+    "forkHere": "Bifurquer ici",
+    "copySelection": "Copier la sélection"
   },
   "started": "🚀 Démarré",
   "analyzeFilePrompt": "Veuillez analyser ce fichier.",
@@ -155,7 +156,11 @@
     "ctxCopySvg": "📋 Copier le code SVG",
     "ctxSavePng": "💾 Enregistrer en PNG",
     "ctxSaveSvg": "💾 Enregistrer en SVG",
-    "renderFailed": "[Échec du rendu Mermaid] {{msg}}"
+    "renderFailed": "[Échec du rendu Mermaid] {{msg}}",
+    "pan": "Mode déplacement",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "reset": "Réinitialiser le zoom"
   },
   "palette": {
     "attachFileDesc": "Joindre un fichier local",
@@ -336,5 +341,9 @@
   "paletteEffortLowCodex": "Effort de raisonnement : Faible",
   "paletteEffortMediumCodex": "Effort de raisonnement : Moyen",
   "paletteEffortHighCodex": "Effort de raisonnement : Élevé",
-  "paletteEffortMaxCodex": "Effort de raisonnement : Très élevé"
+  "paletteEffortMaxCodex": "Effort de raisonnement : Très élevé",
+  "code": {
+    "copy": "Copier le code",
+    "copied": "Copié"
+  }
 }

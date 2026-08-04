@@ -14,5 +14,15 @@
   "newConversationTitle": "체크: 새 대화로 시작 / 해제: 현재 대화창에 이어서",
   "aiAnalyze": "AI 분석 요청",
   "analyzeWithAgent": "{{agent}} 로 분석",
-  "analyzePrompt": "첨부된 파일 `{{name}}` 을 분석해줘.\n- 경로: {{path}}"
+  "analyzePrompt": "첨부된 파일 `{{name}}` 을 분석해줘.\n- 경로: {{path}}",
+  "mdPreview": "미리보기",
+  "mdEdit": "편집",
+  "mermaidPan": "잡아 움직이기 (켜고 끄기)",
+  "mermaidZoomIn": "확대",
+  "mermaidZoomOut": "축소",
+  "mermaidReset": "원래 크기로",
+  "copy": "복사",
+  "selectAll": "전체 선택",
+  "copyCode": "코드 복사",
+  "copied": "복사됨"
 }

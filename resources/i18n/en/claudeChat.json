@@ -92,7 +92,8 @@
     "copy": "Copy message",
     "copyMarkdown": "Copy as markdown",
     "attachAsContext": "Attach message as context",
-    "forkHere": "Fork from here"
+    "forkHere": "Fork from here",
+    "copySelection": "Copy selection"
   },
   "started": "🚀 Started",
   "analyzeFilePrompt": "Please analyze this file.",
@@ -158,7 +159,11 @@
     "ctxCopySvg": "📋 Copy SVG code",
     "ctxSavePng": "💾 Save as PNG",
     "ctxSaveSvg": "💾 Save as SVG",
-    "renderFailed": "[Mermaid render failed] {{msg}}"
+    "renderFailed": "[Mermaid render failed] {{msg}}",
+    "pan": "Toggle pan mode",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "reset": "Reset zoom"
   },
   "palette": {
     "attachFileDesc": "Attach local file",
@@ -336,5 +341,9 @@
   "paletteEffortLowCodex": "Reasoning effort: Low",
   "paletteEffortMediumCodex": "Reasoning effort: Medium",
   "paletteEffortHighCodex": "Reasoning effort: High",
-  "paletteEffortMaxCodex": "Reasoning effort: Very high"
+  "paletteEffortMaxCodex": "Reasoning effort: Very high",
+  "code": {
+    "copy": "Copy code",
+    "copied": "Copied"
+  }
 }

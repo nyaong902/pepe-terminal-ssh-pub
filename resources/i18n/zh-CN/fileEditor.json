@@ -14,5 +14,15 @@
   "newConversationTitle": "选中：开始新对话 / 取消选中：在当前对话中继续",
   "aiAnalyze": "请求 AI 分析",
   "analyzeWithAgent": "使用 {{agent}} 分析",
-  "analyzePrompt": "分析附加的文件 `{{name}}`。\n- 路径：{{path}}"
+  "analyzePrompt": "分析附加的文件 `{{name}}`。\n- 路径：{{path}}",
+  "mdPreview": "预览",
+  "mdEdit": "编辑",
+  "mermaidPan": "切换拖动模式",
+  "mermaidZoomIn": "放大",
+  "mermaidZoomOut": "缩小",
+  "mermaidReset": "重置缩放",
+  "copy": "复制",
+  "selectAll": "全选",
+  "copyCode": "复制代码",
+  "copied": "已复制"
 }

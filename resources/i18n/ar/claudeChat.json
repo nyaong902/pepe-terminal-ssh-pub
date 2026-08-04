@@ -89,7 +89,8 @@
     "copy": "نسخ الرسالة",
     "copyMarkdown": "نسخ كـ markdown",
     "attachAsContext": "إرفاق الرسالة كسياق",
-    "forkHere": "تفرّع من هنا"
+    "forkHere": "تفرّع من هنا",
+    "copySelection": "نسخ التحديد"
   },
   "started": "🚀 بدأ",
   "analyzeFilePrompt": "يرجى تحليل هذا الملف.",
@@ -155,7 +156,11 @@
     "ctxCopySvg": "📋 نسخ كود SVG",
     "ctxSavePng": "💾 حفظ كـ PNG",
     "ctxSaveSvg": "💾 حفظ كـ SVG",
-    "renderFailed": "[فشل عرض Mermaid] {{msg}}"
+    "renderFailed": "[فشل عرض Mermaid] {{msg}}",
+    "pan": "تبديل وضع التحريك",
+    "zoomIn": "تكبير",
+    "zoomOut": "تصغير",
+    "reset": "إعادة التكبير"
   },
   "palette": {
     "attachFileDesc": "إرفاق ملف محلي",
@@ -336,5 +341,9 @@
   "paletteEffortLowCodex": "جهد الاستدلال: منخفض",
   "paletteEffortMediumCodex": "جهد الاستدلال: متوسط",
   "paletteEffortHighCodex": "جهد الاستدلال: عالٍ",
-  "paletteEffortMaxCodex": "جهد الاستدلال: عالٍ جدًا"
+  "paletteEffortMaxCodex": "جهد الاستدلال: عالٍ جدًا",
+  "code": {
+    "copy": "نسخ الكود",
+    "copied": "تم النسخ"
+  }
 }

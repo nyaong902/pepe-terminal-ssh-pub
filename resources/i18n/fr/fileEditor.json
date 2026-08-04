@@ -14,5 +14,15 @@
   "newConversationTitle": "Coché : démarrer une nouvelle conversation / Décoché : continuer dans la conversation actuelle",
   "aiAnalyze": "Demander une analyse IA",
   "analyzeWithAgent": "Analyser avec {{agent}}",
-  "analyzePrompt": "Analysez le fichier joint `{{name}}`.\n- Chemin : {{path}}"
+  "analyzePrompt": "Analysez le fichier joint `{{name}}`.\n- Chemin : {{path}}",
+  "mdPreview": "Aperçu",
+  "mdEdit": "Éditer",
+  "mermaidPan": "Mode déplacement",
+  "mermaidZoomIn": "Zoom avant",
+  "mermaidZoomOut": "Zoom arrière",
+  "mermaidReset": "Réinitialiser le zoom",
+  "copy": "Copier",
+  "selectAll": "Tout sélectionner",
+  "copyCode": "Copier le code",
+  "copied": "Copié"
 }
