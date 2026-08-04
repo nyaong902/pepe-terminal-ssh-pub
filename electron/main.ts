@@ -35,7 +35,7 @@ app.commandLine.appendSwitch('enable-blink-features', 'WebCodecs');
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { fileURLToPath } from 'url';
 import { loadSessionsData, saveSessionsData, getSessionsPath, saveCustomPath, loadUIPrefs, saveUIPrefs, loadChatHistory, saveChatHistory, migrateChatHistoryIfNeeded, Session, Folder, SessionsData } from './sessionsStore';
@@ -1639,6 +1639,47 @@ ipcMain.handle('sessions:open-editor', () => {
 });
 
 ipcMain.handle('ui-prefs:get', () => loadUIPrefs());
+// ── 텍스트를 임시 파일로 저장하고 외부 편집기로 열기 ──────────────────────────────
+// 터미널 우클릭 > 텍스트 편집기로(선택 영역/전체/현재 화면). 내장 편집기(Monaco)로 볼 때는
+// 렌더러가 자체 처리하므로 여기까지 오지 않는다 — 외부 편집기로 열 때만 쓴다.
+// XShell 의 같은 기능과 설정 항목(경로 / 명령줄 옵션 %FILEPATH)을 맞췄다.
+//
+// 임시 파일은 지우지 않는다 — 편집기가 열어둔 동안 지우면 안 되고, 사용자가 저장해 남겨둘 수도
+// 있다. OS 의 임시 폴더 정리에 맡긴다. 파일명에 세션 이름을 넣어 편집기 탭에서 구분되게 한다.
+ipcMain.handle('text-editor:open', async (_e, payload: { text: string; name?: string; target?: 'default' | 'custom'; path?: string; args?: string }) => {
+  try {
+    const text = String(payload?.text ?? '');
+    if (!text) return { ok: false, error: 'empty' };
+    const safe = (String(payload?.name || 'terminal').replace(/[^\w.-]+/g, '_').slice(0, 40)) || 'terminal';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(app.getPath('temp'), 'pepe-' + safe + '-' + stamp + '.txt');
+    // Windows 편집기(메모장 포함)에서 줄바꿈이 제대로 보이게 CRLF 로 저장하고, 한글이 깨지지
+    // 않게 BOM 을 붙인다 — 메모장은 BOM 없는 UTF-8 을 ANSI 로 잘못 읽는 경우가 있다.
+    const body = text.replace(/\r?\n/g, '\r\n');
+    fs.writeFileSync(file, '\ufeff' + body, 'utf8');
+
+    const exe = String(payload?.path || '').trim();
+    if (payload?.target !== 'custom' || !exe) {
+      // OS 기본 연결 프로그램으로 연다 — .txt 연결이 다른 편집기면 그쪽이 열린다.
+      const r = await shell.openPath(file);
+      if (r) return { ok: false, error: r };
+      return { ok: true, file };
+    }
+    if (!fs.existsSync(exe)) return { ok: false, error: 'editor-not-found' };
+    const rawArgs = String(payload?.args || '%FILEPATH');
+    // %FILEPATH 를 임시 파일 경로로 치환. 치환 대상이 없으면 경로를 마지막 인자로 붙인다.
+    const parts = rawArgs.split(/\s+/).filter(Boolean);
+    const args = rawArgs.indexOf('%FILEPATH') !== -1
+      ? parts.map((a) => a.split('%FILEPATH').join(file))
+      : [...parts, file];
+    const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+    return { ok: true, file };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
 ipcMain.handle('ui-prefs:set', (_e, prefs: Record<string, any>) => { saveUIPrefs(prefs); return true; });
 // AI 채팅 기록은 config.json 이 아니라 chatHistory.json 에 따로 저장한다(sessionsStore 주석 참고).
 ipcMain.handle('chat-history:get', () => { try { return loadChatHistory(); } catch { return []; } });

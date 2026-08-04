@@ -287,5 +287,13 @@
     "dateLabel": "{{date}}의 할 일",
     "openWorklog": "작업일지 열기",
     "dismiss": "닫기"
+  },
+  "textViewer": {
+    "copy": "복사",
+    "copied": "복사했습니다",
+    "scopeSelection": "선택 영역",
+    "scopeAll": "전체",
+    "scopeScreen": "현재 화면",
+    "lines": "{{count}}줄"
   }
 }

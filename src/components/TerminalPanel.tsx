@@ -1347,6 +1347,68 @@ export function toggleBroadcastPick(termId: string) {
 }
 export function getBroadcastPicked(): string[] { return Array.from(bcastSelected); }
 
+// ── 터미널 텍스트 추출 (텍스트 편집기로 보내기) ────────────────────────────────────
+// XShell 의 "텍스트 편집기로 > 선택 영역 / 전체 / 현재 화면" 과 같은 세 가지.
+// serialize 애드온은 escape 시퀀스까지 포함하므로 쓰지 않고, 버퍼에서 평문만 읽는다.
+export type TermTextScope = 'selection' | 'all' | 'screen';
+
+export function getTermText(termId: string, scope: TermTextScope): string {
+  const entry = termStore.get(termId);
+  if (!entry) return '';
+  const term: any = entry.term;
+  if (scope === 'selection') {
+    try { return term.getSelection() || ''; } catch { return ''; }
+  }
+  try {
+    const buf = term.buffer.active;
+    // all: 스크롤백 처음부터 마지막 줄까지. screen: 지금 보이는 영역만.
+    const start = scope === 'all' ? 0 : buf.viewportY;
+    const end = scope === 'all' ? buf.length : Math.min(buf.length, buf.viewportY + term.rows);
+    const lines: string[] = [];
+    for (let i = start; i < end; i++) {
+      const line = buf.getLine(i);
+      // translateToString(true) 는 줄 끝 공백을 잘라준다 — 터미널은 빈 셀을 공백으로 채우므로
+      // 이걸 안 하면 모든 줄이 폭만큼 공백으로 늘어난다.
+      lines.push(line ? line.translateToString(true) : '');
+    }
+    // 전체를 뜰 때 위쪽 빈 줄이 잔뜩 붙는 경우가 많아(스크롤백 미사용 영역) 앞뒤 빈 줄을 정리한다.
+    while (lines.length && !lines[0].trim()) lines.shift();
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// 선택 영역이 있는지 — 메뉴에서 "선택 영역" 항목을 비활성화할지 판단한다.
+function hasSelection(termId: string): boolean {
+  try { return !!termStore.get(termId)?.term.getSelection(); } catch { return false; }
+}
+
+// 추출한 텍스트를 설정된 편집기로 보낸다.
+//  - internal: 앱 안에서 Monaco 로 띄운다. 임시 파일을 만들지 않으므로 흔적이 남지 않는다.
+//    창을 띄우는 것은 App 이 하므로 이벤트로 넘긴다.
+//  - default/custom: 메인 프로세스가 임시 파일로 저장하고 편집기를 실행한다.
+export function sendTermTextToEditor(termId: string, scope: TermTextScope) {
+  const text = getTermText(termId, scope);
+  if (!text) return;
+  const st = getTerminalSettings();
+  const name = getTermSessionInfo(termId)?.sessionName || 'terminal';
+  if (st.textEditorTarget === 'internal') {
+    try {
+      window.dispatchEvent(new CustomEvent('open-text-viewer', { detail: { text, name, scope } }));
+    } catch {}
+    return;
+  }
+  void (window as any).api?.openInTextEditor?.({
+    text,
+    name,
+    target: st.textEditorTarget === 'custom' ? 'custom' : 'default',
+    path: st.textEditorPath,
+    args: st.textEditorArgs,
+  });
+}
+
 export function notifyUserInputToTerm(termId: string) {
   const b = termScrollBehavior.get(termId) ?? DEFAULT_SCROLL_BEHAVIOR;
   if (!b.onKeyPress) return;
@@ -4629,6 +4691,13 @@ export const TerminalPanel: React.FC<Props> = ({
               }).catch(() => {});
             }},
             { label: t('menu.selectAll'), icon: '☰', onClick: () => selectAllInTerm(activeTermId) },
+            // 텍스트 편집기로 — XShell 과 같은 3가지. 선택 영역은 선택이 없으면 비활성.
+            { label: t('menu.toTextEditor'), icon: '📝', submenu: [
+              { label: t('menu.toTextEditorSelection'), disabled: !hasSelection(activeTermId),
+                onClick: () => sendTermTextToEditor(activeTermId, 'selection') },
+              { label: t('menu.toTextEditorAll'), onClick: () => sendTermTextToEditor(activeTermId, 'all') },
+              { label: t('menu.toTextEditorScreen'), onClick: () => sendTermTextToEditor(activeTermId, 'screen') },
+            ]},
             { label: t('menu.find'), icon: '🔍', onClick: () => {
               try { window.dispatchEvent(new CustomEvent('open-search')); } catch {}
             }},

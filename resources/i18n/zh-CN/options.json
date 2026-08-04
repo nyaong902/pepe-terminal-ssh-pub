@@ -101,5 +101,19 @@
     "deleteConversations": "删除所有会话",
     "confirmDeleteUsers": "删除所有已发现的用户和会话？",
     "deleteUsers": "删除所有用户"
+  },
+  "textEditor": {
+    "heading": "文本编辑器",
+    "desc": "选择终端右键菜单“发送到文本编辑器”使用的编辑器。",
+    "target": "打开方式",
+    "internal": "内置编辑器",
+    "default": "系统默认程序",
+    "custom": "指定编辑器",
+    "path": "编辑器路径",
+    "browse": "浏览...",
+    "args": "命令行选项",
+    "argsHint": "%FILEPATH 会替换为保存文本的临时文件路径。",
+    "name": "编辑器名称",
+    "internalHint": "不创建临时文件，在应用内以只读方式显示。"
   }
 }

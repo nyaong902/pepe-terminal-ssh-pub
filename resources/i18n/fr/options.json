@@ -101,5 +101,19 @@
     "deleteConversations": "Supprimer toutes les conversations",
     "confirmDeleteUsers": "Supprimer tous les utilisateurs découverts et les conversations ?",
     "deleteUsers": "Supprimer tous les utilisateurs"
+  },
+  "textEditor": {
+    "heading": "Éditeur de texte",
+    "desc": "Choisissez l'éditeur utilisé par le menu contextuel du terminal.",
+    "target": "Ouvrir avec",
+    "internal": "Éditeur intégré",
+    "default": "Programme par défaut",
+    "custom": "Éditeur spécifique",
+    "path": "Chemin de l'éditeur",
+    "browse": "Parcourir...",
+    "args": "Options de ligne de commande",
+    "argsHint": "%FILEPATH est remplacé par le fichier temporaire.",
+    "name": "Nom de l'éditeur",
+    "internalHint": "Affiche le texte en lecture seule dans l'application, sans fichier temporaire."
   }
 }

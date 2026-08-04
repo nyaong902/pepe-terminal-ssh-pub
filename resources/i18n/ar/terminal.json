@@ -48,7 +48,11 @@
     "colorYellow": "أصفر",
     "colorGreen": "أخضر",
     "colorBlue": "أزرق",
-    "colorPurple": "بنفسجي"
+    "colorPurple": "بنفسجي",
+    "toTextEditor": "إلى محرر النصوص",
+    "toTextEditorSelection": "المنطقة المحددة",
+    "toTextEditorAll": "الكل",
+    "toTextEditorScreen": "الشاشة الحالية"
   },
   "float": "تعويم",
   "unfloat": "إلغاء التعويم",

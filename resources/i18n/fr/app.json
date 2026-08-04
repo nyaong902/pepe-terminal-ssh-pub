@@ -283,5 +283,13 @@
     "dateLabel": "Tâche du {{date}}",
     "openWorklog": "Ouvrir le journal de travail",
     "dismiss": "Fermer"
+  },
+  "textViewer": {
+    "copy": "Copier",
+    "copied": "Copié",
+    "scopeSelection": "Sélection",
+    "scopeAll": "Tout",
+    "scopeScreen": "Écran actuel",
+    "lines": "{{count}} lignes"
   }
 }

@@ -287,5 +287,13 @@
     "dateLabel": "To-do for {{date}}",
     "openWorklog": "Open work log",
     "dismiss": "Dismiss"
+  },
+  "textViewer": {
+    "copy": "Copy",
+    "copied": "Copied",
+    "scopeSelection": "Selection",
+    "scopeAll": "All",
+    "scopeScreen": "Current screen",
+    "lines": "{{count}} lines"
   }
 }

@@ -283,5 +283,13 @@
     "dateLabel": "مهمة {{date}}",
     "openWorklog": "فتح سجل العمل",
     "dismiss": "إغلاق"
+  },
+  "textViewer": {
+    "copy": "نسخ",
+    "copied": "تم النسخ",
+    "scopeSelection": "المنطقة المحددة",
+    "scopeAll": "الكل",
+    "scopeScreen": "الشاشة الحالية",
+    "lines": "{{count}} أسطر"
   }
 }

@@ -49,7 +49,11 @@
     "colorYellow": "노랑",
     "colorGreen": "초록",
     "colorBlue": "파랑",
-    "colorPurple": "보라"
+    "colorPurple": "보라",
+    "toTextEditor": "텍스트 편집기로",
+    "toTextEditorSelection": "선택 영역",
+    "toTextEditorAll": "전체",
+    "toTextEditorScreen": "현재 화면"
   },
   "float": "플로팅",
   "unfloat": "플로팅 해제",

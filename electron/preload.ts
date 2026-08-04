@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('api', {
   getUIPrefs: () => ipcRenderer.invoke('ui-prefs:get'),
   setUIPrefs: (prefs: Record<string, any>) => ipcRenderer.invoke('ui-prefs:set', prefs),
   // AI 채팅 기록 — config.json 이 커지지 않게 별도 파일에 저장한다.
+  // 터미널 텍스트를 임시 파일로 저장하고 외부 편집기로 열기 (내장 편집기는 렌더러가 자체 처리)
+  openInTextEditor: (payload: { text: string; name?: string; target?: 'default' | 'custom'; path?: string; args?: string }) =>
+    ipcRenderer.invoke('text-editor:open', payload),
   getChatHistory: () => ipcRenderer.invoke('chat-history:get'),
   setChatHistory: (entries: any[]) => ipcRenderer.invoke('chat-history:set', entries),
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)

@@ -125,5 +125,19 @@
     "prepare": "Preparing",
     "placeholder": "Only the custom workspace menu has been added for now.",
     "empty": "No custom workspaces are registered."
+  },
+  "textEditor": {
+    "heading": "Text editor",
+    "desc": "Choose the editor used by the terminal right-click > To text editor.",
+    "target": "Open with",
+    "internal": "Built-in editor",
+    "default": "OS default program",
+    "custom": "Specific editor",
+    "path": "Editor path",
+    "browse": "Browse...",
+    "args": "Command line options",
+    "argsHint": "%FILEPATH is replaced with the temp file holding the text.",
+    "name": "Editor name",
+    "internalHint": "Shows the text read-only inside the app, without creating a temp file."
   }
 }

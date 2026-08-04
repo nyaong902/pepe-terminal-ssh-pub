@@ -4965,6 +4965,101 @@ body.popout-options .session-editor h3:first-child {
   border-color: #aa3a3a;
 }
 /* 일괄전송 — 보낼 세션 고르기. 범위를 "선택한 세션" 으로 두면 나타난다. */
+/* 터미널 텍스트 보기 — 우클릭 > 텍스트 편집기로, 편집기 설정이 '내장' 일 때 뜬다.
+   Monaco 를 읽기 전용으로 띄운다. 임시 파일을 만들지 않으므로 디스크에 흔적이 남지 않는다. */
+.text-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.text-viewer {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 92vw);
+  height: min(760px, 88vh);
+  background: var(--win-surface, #1a1a1a);
+  border: 1px solid var(--win-border, #333);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.text-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--win-border, #333);
+  background: var(--win-surface-2, #22222e);
+}
+
+.text-viewer-title {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--win-text, #eee);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-viewer-scope,
+.text-viewer-lines {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--win-border, #333);
+  font-size: 11px;
+  color: var(--win-text-dim, #aaa);
+}
+
+.text-viewer-copy {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--win-border, #333);
+  border-radius: 4px;
+  background: var(--win-surface, #1a1a1a);
+  color: var(--win-text, #eee);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.text-viewer-copy:hover {
+  background: var(--win-border, #333);
+}
+
+.text-viewer-close {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--win-text-dim, #aaa);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.text-viewer-close:hover {
+  background: var(--win-border, #333);
+  color: var(--win-text, #eee);
+}
+
+/* Monaco 가 높이를 잡을 수 있게 min-height:0 이 필요하다(flex 자식). */
+.text-viewer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .broadcast-picker-wrap {
   position: relative;
   flex: 0 0 auto;

@@ -48,7 +48,11 @@
     "colorYellow": "黄",
     "colorGreen": "绿",
     "colorBlue": "蓝",
-    "colorPurple": "紫"
+    "colorPurple": "紫",
+    "toTextEditor": "发送到文本编辑器",
+    "toTextEditorSelection": "选定区域",
+    "toTextEditorAll": "全部",
+    "toTextEditorScreen": "当前屏幕"
   },
   "float": "浮动",
   "unfloat": "取消浮动",

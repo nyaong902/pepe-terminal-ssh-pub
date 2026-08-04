@@ -49,7 +49,11 @@
     "colorYellow": "Yellow",
     "colorGreen": "Green",
     "colorBlue": "Blue",
-    "colorPurple": "Purple"
+    "colorPurple": "Purple",
+    "toTextEditor": "To text editor",
+    "toTextEditorSelection": "Selection",
+    "toTextEditorAll": "All",
+    "toTextEditorScreen": "Current screen"
   },
   "float": "Float",
   "unfloat": "Unfloat",

@@ -48,7 +48,11 @@
     "colorYellow": "Jaune",
     "colorGreen": "Vert",
     "colorBlue": "Bleu",
-    "colorPurple": "Violet"
+    "colorPurple": "Violet",
+    "toTextEditor": "Vers l'éditeur de texte",
+    "toTextEditorSelection": "Sélection",
+    "toTextEditorAll": "Tout",
+    "toTextEditorScreen": "Écran actuel"
   },
   "float": "Flottant",
   "unfloat": "Ancrer",

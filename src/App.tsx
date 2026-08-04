@@ -16,6 +16,7 @@ import { ConflictDialogQueue } from './components/ConflictDialog';
 import { NotifyHost, notifyError, notifyOk } from './components/Notify';
 import { playReminderChime } from './utils/reminderChime';
 import { FileEditor } from './components/FileEditor';
+import { Editor as MonacoEditor } from './components/LazyMonaco';
 import { ClaudeChat } from './components/ClaudeChat';
 import { BrowserPane } from './components/BrowserPane';
 import { PlainAppWorkspace } from './components/PlainAppWorkspace';
@@ -763,6 +764,26 @@ function App() {
   // 범위가 'selected' 일 때만 미니탭에 체크박스를 띄운다. 벗어나면 스토어가 선택을 비운다.
   useEffect(() => { setBroadcastPickMode(broadcastScope === 'selected'); }, [broadcastScope]);
   const [broadcastPickerOpen, setBroadcastPickerOpen] = useState(false);
+// 터미널 텍스트 보기 — 우클릭 > 텍스트 편집기로, 편집기 설정이 '내장' 일 때 이 창으로 띄운다.
+// 임시 파일을 만들지 않으므로 디스크에 흔적이 남지 않는다. 읽기 전용이다(터미널 출력을 보는
+// 용도이고, 저장할 곳이 마땅치 않다 — 필요하면 복사하거나 외부 편집기 설정을 쓰면 된다).
+const [textViewer, setTextViewer] = useState<{ text: string; name: string; scope: string } | null>(null);
+useEffect(() => {
+  const onOpen = (e: Event) => {
+    const d = (e as CustomEvent).detail || {};
+    if (d.text) setTextViewer({ text: String(d.text), name: String(d.name || ''), scope: String(d.scope || '') });
+  };
+  window.addEventListener('open-text-viewer', onOpen as any);
+  return () => window.removeEventListener('open-text-viewer', onOpen as any);
+}, []);
+useEffect(() => {
+  if (!textViewer) return;
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); setTextViewer(null); }
+  };
+  document.addEventListener('keydown', onKey, true);
+  return () => document.removeEventListener('keydown', onKey, true);
+}, [textViewer]);
   const [broadcastShowHistory, setBroadcastShowHistory] = useState(false);
   // 빠른 명령 버튼 — 사용자가 미리 정의한 명령을 원클릭으로 전송. UI prefs 에 영속.
   type QuickCmd = { id: string; label: string; cmd: string; icon?: string };
@@ -6937,6 +6958,72 @@ function App() {
                   </div>
                 </div>
                 <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('textEditor.heading')}</div>
+                  <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{tOpt('textEditor.desc')}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 110, color: '#bbb', fontSize: 13 }}>{tOpt('textEditor.target')}</span>
+                      <select
+                        value={termSettings.textEditorTarget}
+                        onChange={e => setTermSettings(st => ({ ...st, textEditorTarget: e.target.value as any }))}
+                        style={{ flex: 1, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px', fontSize: 13, cursor: 'pointer' }}
+                      >
+                        <option value="internal">{tOpt('textEditor.internal')}</option>
+                        <option value="default">{tOpt('textEditor.default')}</option>
+                        <option value="custom">{tOpt('textEditor.custom')}</option>
+                      </select>
+                    </div>
+                    {termSettings.textEditorTarget === 'internal' && (
+                      <div style={{ color: '#888', fontSize: 12, paddingLeft: 118 }}>{tOpt('textEditor.internalHint')}</div>
+                    )}
+                    {termSettings.textEditorTarget === 'custom' && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 110, color: '#bbb', fontSize: 13 }}>{tOpt('textEditor.path')}</span>
+                          <input
+                            type="text"
+                            value={termSettings.textEditorPath}
+                            onChange={e => setTermSettings(st => ({ ...st, textEditorPath: e.target.value }))}
+                            placeholder="C:\Program Files\Notepad++\notepad++.exe"
+                            style={{ flex: 1, minWidth: 0, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px', fontSize: 13 }}
+                          />
+                          <button
+                            className="btn-cancel"
+                            onClick={async () => {
+                              try {
+                                const picked: any = await (window as any).api?.pickFiles?.(false);
+                                const first = Array.isArray(picked) ? picked[0] : (picked?.paths?.[0] ?? picked?.path);
+                                if (first) setTermSettings(st => ({ ...st, textEditorPath: String(first) }));
+                              } catch {}
+                            }}
+                          >{tOpt('textEditor.browse')}</button>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 110, color: '#bbb', fontSize: 13 }}>{tOpt('textEditor.args')}</span>
+                          <input
+                            type="text"
+                            value={termSettings.textEditorArgs}
+                            onChange={e => setTermSettings(st => ({ ...st, textEditorArgs: e.target.value }))}
+                            placeholder="%FILEPATH"
+                            style={{ flex: 1, minWidth: 0, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px', fontSize: 13 }}
+                          />
+                        </div>
+                        <div style={{ color: '#888', fontSize: 12, paddingLeft: 118 }}>{tOpt('textEditor.argsHint')}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 110, color: '#bbb', fontSize: 13 }}>{tOpt('textEditor.name')}</span>
+                          <input
+                            type="text"
+                            value={termSettings.textEditorName}
+                            onChange={e => setTermSettings(st => ({ ...st, textEditorName: e.target.value }))}
+                            placeholder="Notepad++"
+                            style={{ flex: 1, minWidth: 0, background: '#1a1a1a', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px', fontSize: 13 }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div style={{ marginBottom: 16 }}>
                   <div style={{ color: '#ccc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{tOpt('paste.heading')}</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div style={{ color: '#aaa', fontSize: 12, marginBottom: 2 }}>{tOpt('paste.multiLineNote')}</div>
@@ -8597,6 +8684,43 @@ function App() {
         );
       })()}
       {/* 비밀번호 저장 권유 모달 */}
+      {textViewer && (
+        <div className="text-viewer-backdrop" onClick={() => setTextViewer(null)}>
+          <div className="text-viewer" onClick={e => e.stopPropagation()}>
+            <div className="text-viewer-head">
+              <span className="text-viewer-title">
+                {textViewer.name}
+                <span className="text-viewer-scope">
+                  {textViewer.scope === 'selection' ? tApp('textViewer.scopeSelection')
+                    : textViewer.scope === 'screen' ? tApp('textViewer.scopeScreen')
+                    : tApp('textViewer.scopeAll')}
+                </span>
+                <span className="text-viewer-lines">{textViewer.text.split('\n').length}</span>
+              </span>
+              <button className="text-viewer-copy" onClick={() => { navigator.clipboard.writeText(textViewer.text).catch(() => {}); showToast(tApp('textViewer.copied')); }}>
+                {tApp('textViewer.copy')}
+              </button>
+              <button className="text-viewer-close" onClick={() => setTextViewer(null)}>&times;</button>
+            </div>
+            <div className="text-viewer-body">
+              <MonacoEditor
+                height="100%"
+                theme="vs-dark"
+                language="plaintext"
+                value={textViewer.text}
+                options={{
+                  automaticLayout: true,
+                  fontSize: 13,
+                  readOnly: true,
+                  minimap: { enabled: true },
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'on',
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {savePwdPrompt && (
         <div className="save-pwd-backdrop" onClick={dismissSavePwd}>
           <div className="save-pwd-modal" onClick={e => e.stopPropagation()}>
