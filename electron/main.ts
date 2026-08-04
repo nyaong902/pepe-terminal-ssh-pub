@@ -1032,6 +1032,38 @@ function maybeProfileMainProcess(cpu: number) {
   })();
 }
 
+// 메모리 진단용 — PEPE_MEM_PROBE=1 로 dev 를 띄우면 프로세스별 실사용 메모리를 주기적으로 찍는다.
+// 워크스페이스를 여닫을 때 메모리가 실제로 회수되는지는 JS 힙(DevTools 트레이스)으로는 알 수 없다 —
+// 힙은 줄어도 프로세스가 OS 에 페이지를 안 돌려주면 작업 관리자 수치는 그대로다. 그래서 프로세스
+// 단위로 본다. 값이 바뀔 때만 찍어서 로그가 흐르지 않게 한다.
+const MEM_PROBE_ON = !app.isPackaged && process.env.PEPE_MEM_PROBE === '1';
+let lastMemLine = '';
+function startProcessMemoryProbe() {
+  if (!MEM_PROBE_ON) return;
+  setInterval(() => {
+    try {
+      const rows = app.getAppMetrics()
+        .map((m) => ({
+          pid: m.pid,
+          type: m.type,
+          name: (m as any).name || (m as any).serviceName || '',
+          // workingSetSize 는 KB 단위다.
+          mb: Math.round(((m.memory as any)?.workingSetSize || 0) / 1024),
+        }))
+        .sort((a, b) => b.mb - a.mb);
+      const total = rows.reduce((sum, r) => sum + r.mb, 0);
+      // 라벨을 ASCII 로 둔다 — PowerShell 콘솔 코드페이지에서 한글이 깨져 읽을 수 없었다.
+      const line = `[mem] total ${total}MB (${rows.length} procs) | ` +
+        rows.map((r) => `${r.type}${r.name ? '(' + r.name + ')' : ''} pid${r.pid} ${r.mb}MB`).join('  ');
+      // 총량이 5MB 이상 움직였을 때만 남긴다.
+      const prevTotal = Number(/total (\d+)MB/.exec(lastMemLine)?.[1] || 0);
+      if (Math.abs(total - prevTotal) < 5) return;
+      lastMemLine = line;
+      console.log(line);
+    } catch {}
+  }, 3000);
+}
+
 function startProcessCpuProbe() {
   if (!CPU_PROBE_ON) return;
   setInterval(() => {
@@ -1055,8 +1087,20 @@ function startProcessCpuProbe() {
 // 자기서명 인증서 / 사설 CA 서버 접속 허용 — 내부 인프라 (172.x, 10.x, 192.168.x) 가 흔히 self-signed.
 // 브라우저 워크스페이스의 <webview> 와 fetch 모두에 영향. 외부 공용 사이트는 일반적으로 정상 cert 라 영향 없음.
 // 보안 트레이드오프: 이 앱은 신뢰된 내부 도구 환경 가정. 공용 사이트의 MITM 까지 허용되므로 주의.
+// 로그는 origin 단위로 한 번만 남긴다 — 자기서명 서버의 페이지 하나를 열면 문서·청크·이미지마다
+// 이 이벤트가 와서(수십 줄) 정작 봐야 할 로그가 묻혔다. 허용 자체는 매번 그대로 한다.
+const certErrorLogged = new Set<string>();
 app.on('certificate-error', (event, _webContents, url, error, _certificate, callback) => {
-  console.warn('[certificate-error] allowing', { url, error });
+  try {
+    const origin = new URL(url).origin;
+    const key = `${origin}|${error}`;
+    if (!certErrorLogged.has(key)) {
+      certErrorLogged.add(key);
+      console.warn('[certificate-error] allowing', { origin, error });
+    }
+  } catch {
+    console.warn('[certificate-error] allowing', { url, error });
+  }
   event.preventDefault();
   callback(true);
 });
@@ -1415,6 +1459,7 @@ app.whenReady().then(() => {
   try { migrateChatHistoryIfNeeded(); } catch {}
   createWindow();
   startProcessCpuProbe();   // dev 전용 프로세스별 CPU 진단
+  startProcessMemoryProbe();   // dev 전용 프로세스별 메모리 진단
   if (loadUIPrefs().stickyNoteAutoShow !== false) restoreStickyNotes();
   // 시계 위젯 — 마지막에 켜져 있었으면(진행 중이던 타이머 포함) 그대로 복원.
   { const clockState = loadClockWidgetState(); if (clockState.visible) createClockWidgetWindow(clockState); }
@@ -1683,6 +1728,40 @@ ipcMain.handle('text-editor:open', async (_e, payload: { text: string; name?: st
 // <webview> 에 붙일 preload 의 절대 경로. webview 의 preload 속성은 file:// URL 을 요구하고
 // 렌더러는 자기 preload 가 디스크 어디에 있는지 모르므로 메인이 알려준다.
 // 한글 편집기(rhwp-studio)를 webview 로 띄울 때 브리지를 심는 용도다(preload.ts 주석 참고).
+// 브라우저 워크스페이스를 닫을 때 그 <webview> 파티션의 메모리를 비운다.
+//
+// 브라우저 워크스페이스는 이미 <webview>(별도 프로세스)라 닫으면 게스트 프로세스는 죽는다.
+// 그런데도 메모리가 다 돌아오지 않았다: BrowserPane 은 인스턴스마다 새 파티션 이름을 만드는데
+// (browser-<시각>-<난수>), Electron 에는 세션을 파괴하는 API 가 없어서 한 번 만든 세션은 앱이
+// 살아 있는 동안 캐시·쿠키·스토리지를 들고 남는다. 브라우저 탭을 여닫을수록 그것이 쌓인다.
+//
+// 그래서 두 가지를 함께 한다:
+//  1) 닫을 때 그 세션의 캐시/스토리지를 비우고 연결을 끊는다(여기).
+//  2) 파티션 이름을 재사용한다(BrowserPane 의 파티션 풀) — 그래야 세션 개수 자체가 안 늘어난다.
+// 세션 객체는 못 없애지만, 이 둘로 여닫기를 반복해도 메모리가 누적되지 않는다.
+// persist: 파티션(사내 고정 임베드 등)은 사용자가 로그인 상태를 유지하려고 쓰는 것이므로 건드리지 않는다.
+ipcMain.handle('browser:release-partition', async (_e, partition: string) => {
+  const name = String(partition || '').trim();
+  if (!name || name.startsWith('persist:')) return false;
+  try {
+    const ses = session.fromPartition(name);
+    try { await ses.closeAllConnections?.(); } catch {}
+    try { await ses.clearCache(); } catch {}
+    // 서비스 워커까지 지워야 한다 — 등록된 채로 남으면 그 세션에 묶인 렌더러가 계속 살아
+    // 워크스페이스를 닫아도 프로세스 수가 줄지 않는다.
+    try { await ses.clearStorageData(); } catch {}
+    try { await ses.clearCodeCaches?.({ urls: [] }); } catch {}
+    try { ses.clearAuthCache?.(); } catch {}
+    try { await ses.clearHostResolverCache?.(); } catch {}
+    // 프록시를 걸어둔 세션이 그대로 재사용되면 다음 워크스페이스가 남의 프록시를 타므로 되돌린다.
+    try { await ses.setProxy({ mode: 'direct' }); } catch {}
+    console.log(`[browser] partition released: ${name}`);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('app:webview-preload-url', () => {
   try { return pathToFileURL(path.join(__dirname, 'preload.js')).toString(); }
   catch { return ''; }
@@ -8001,6 +8080,30 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
   ipcMain.handle('sipp-scenario:save', (_e, args: { id?: string; name: string; mode: 'blocks' | 'xml'; blocksData?: any; rawXml?: string; targetSettings?: any; injectionCsv?: string }) => saveSippScenario(args));
   ipcMain.handle('sipp-scenario:delete', (_e, args: { id: string }) => { deleteSippScenario(args?.id); return { ok: true }; });
 }
+// <webview> 의 내비게이션을 메인에서 수행한다.
+//
+// 렌더러에서 webview.loadURL() 을 부르면, 그 호출이 취소될 때 Electron 이
+//   Error occurred in handler for 'GUEST_VIEW_MANAGER_CALL': Error: ERR_ABORTED (-3) loading '...'
+// 를 메인 로그에 스택째 남긴다. 렌더러에서 catch 해도 마찬가지다(Electron 내부가 찍는다).
+// 그런데 취소는 흔하다 — 로그인 SPA 처럼 페이지가 스스로 다른 주소로 가버리면 우리가 시작한
+// 내비게이션이 취소된다. 정상적인 흐름인데 로그가 오류로 뒤덮였다.
+// 그래서 메인에서 대신 로드하고 거절을 여기서 흡수한다.
+ipcMain.handle('browser:navigate', async (_e, args: { webContentsId: number; url: string }) => {
+  const wc = webContents.fromId(Number(args?.webContentsId));
+  if (!wc || wc.isDestroyed()) return { success: false, error: 'webContents not found' };
+  const url = String(args?.url || '');
+  if (!url) return { success: false, error: 'empty url' };
+  try {
+    await wc.loadURL(url);
+    return { success: true };
+  } catch (e: any) {
+    const detail = String(e?.code || e?.message || e || '');
+    // 페이지가 스스로 이동해서 취소된 것 — 실패가 아니다.
+    if (/ERR_ABORTED/i.test(detail)) return { success: true, aborted: true };
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+
 // 브라우저 webview 의 프록시 설정 — SSH SOCKS 프록시 경유(점프된 서버에서 같은 로컬망 웹서버 접속) / 직접 연결 전환.
 ipcMain.handle('browser:set-proxy', async (_e, args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => {
   try {

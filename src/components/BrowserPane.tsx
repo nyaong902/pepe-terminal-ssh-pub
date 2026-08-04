@@ -5,6 +5,63 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next';
 import { emitDebugLog, isDebugLogEnabled } from '../utils/debugLog';
 
+// 브라우저 워크스페이스용 session partition 이름 배정.
+//
+// 예전에는 인스턴스마다 `browser-<시각>-<난수>` 로 새 이름을 만들었다. 그런데 Electron 에는 세션을
+// 파괴하는 API 가 없다 — session.fromPartition(name) 으로 한 번 만들어진 세션은 앱이 사는 동안
+// 쿠키 저장소·HTTP 캐시·네트워크 컨텍스트째로 남는다. 이름이 매번 달랐으니 브라우저 워크스페이스를
+// 여닫기만 반복해도 세션이 하나씩 영구히 쌓여 메모리가 계단식으로 올라갔다.
+//
+// 그래서 이름을 재사용한다. 세션 개수는 "동시에 열어둔 브라우저 워크스페이스 최대 개수" 에서 멈춘다.
+//
+// 이름을 하나로 고정하지 않는 이유: 프록시는 세션 단위 설정이라(browser:set-proxy ->
+// session.setProxy) 같은 파티션을 공유하면 한 탭에서 SSH SOCKS 를 켜면 다른 탭까지 그 프록시를 탄다.
+// 동시에 열려 있는 것들은 서로 다른 이름을 받아야 한다.
+//
+// "지금 쓰이는 이름" 을 자체 장부로 관리하려 했지만 틀렸다: StrictMode(개발)에서는 마운트마다
+// 렌더와 이펙트가 두 번 실행돼서, 배정 두 번 / 해제 두 번이 섞이며 장부가 실제와 어긋났다
+// (실제로 이름이 재사용되지 않고 계속 늘어났다). 그래서 장부를 믿지 않고 DOM 을 본다 — 지금 붙어
+// 있는 <webview> 의 partition 속성이 곧 "쓰이는 중" 이다. 버려진 렌더는 DOM 에 붙지 않으니 애초에
+// 셈에 들어오지 않는다.
+//
+// 이름에 렌더러(창)마다 다른 태그를 넣는다 — 창 분리로 렌더러가 여러 개일 때 서로 같은 이름을 쓰면
+// 위의 프록시 문제가 다시 생긴다.
+const PARTITION_WINDOW_TAG = Math.random().toString(36).slice(2, 8);
+// 배정했지만 아직 <webview> 가 DOM 에 붙지 않은 이름 / 메인에서 비우는 중인 이름 — 둘 다 지금
+// 내주면 안 된다. 앞의 것은 같은 커밋에서 두 개가 동시에 마운트될 때 같은 이름을 받는 것을 막고,
+// 뒤의 것은 비우는 중인 세션을 새 페이지가 물려받는 것을 막는다.
+const pendingPartitions = new Map<string, number>();
+const clearingPartitions = new Set<string>();
+const PENDING_TTL_MS = 5000;
+function partitionsInUse(): Set<string> {
+  const used = new Set<string>();
+  try {
+    document.querySelectorAll('webview[partition]').forEach((el) => {
+      const p = el.getAttribute('partition');
+      if (p) used.add(p);
+    });
+  } catch {}
+  const now = performance.now();
+  for (const [name, at] of pendingPartitions) {
+    // 붙지 않은 채 오래된 항목은 버려진 렌더의 것이다 — 회수한다.
+    if (now - at > PENDING_TTL_MS && !used.has(name)) pendingPartitions.delete(name);
+    else used.add(name);
+  }
+  for (const name of clearingPartitions) used.add(name);
+  return used;
+}
+function acquireBrowserPartition(): string {
+  const used = partitionsInUse();
+  for (let i = 0; i < 64; i++) {
+    const name = `browser-${PARTITION_WINDOW_TAG}-${i}`;
+    if (!used.has(name)) {
+      pendingPartitions.set(name, performance.now());
+      return name;
+    }
+  }
+  return `browser-${PARTITION_WINDOW_TAG}-x${Math.random().toString(36).slice(2, 6)}`;
+}
+
 type Props = {
   initialUrl: string;
   onTitleChange?: (title: string) => void;
@@ -166,10 +223,61 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
   }, [autoFitZoom, clearAutoFitRetryTimers, measureAndApplyAutoFitZoom]);
   const onTitleChangeRef = useRef<Props['onTitleChange']>(onTitleChange);
   const urlHistoryKey = 'pepe-browser-url-history';
-  const partitionName = useMemo(
-    () => partitionKey?.trim() || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    [partitionKey],
-  );
+  // 풀에서 받는다(위 주석 참고). partitionKey 가 주어진 특수 워크스페이스는 고정 이름을 그대로 쓴다.
+  const ownedPartitionRef = useRef<string | null>(null);
+  if (!ownedPartitionRef.current) {
+    ownedPartitionRef.current = partitionKey?.trim() || acquireBrowserPartition();
+  }
+  const partitionName = ownedPartitionRef.current;
+  const pooledPartition = !partitionKey?.trim();
+  // 이 이름이 실제로 쓰이고 있다는 표시 — <webview> 가 DOM 에 붙으면 그 자체가 근거가 되므로
+  // pending 항목은 그때 지운다(위 partitionsInUse 참고).
+  useEffect(() => {
+    const t = window.setTimeout(() => { pendingPartitions.delete(partitionName); }, PENDING_TTL_MS);
+    return () => window.clearTimeout(t);
+  }, [partitionName]);
+  // 워크스페이스를 닫을 때(언마운트) 이 파티션의 캐시·스토리지를 비운다.
+  //
+  // <webview> 는 별도 프로세스라 닫으면 게스트 프로세스는 죽는데, 그래도 메모리가 다 돌아오지
+  // 않았다: 파티션 이름을 인스턴스마다 새로 만들고(아래) Electron 에는 세션을 파괴하는 API 가
+  // 없어서, 한 번 만든 세션이 앱 수명 내내 캐시·쿠키를 들고 남는다. 브라우저 탭을 여닫을수록
+  // 그게 쌓인다. 세션 객체 자체는 못 없애지만 내용은 비울 수 있다.
+  // persist: 파티션은 로그인 유지를 위한 것이므로 메인 쪽에서 건드리지 않는다.
+  // StrictMode(개발)에서는 마운트 직후 이펙트가 한 번 정리되고 다시 실행된다 — 그 가짜 정리에서
+  // 세션을 비우면 방금 띄운 페이지가 로그아웃되고, 로그도 두 번 찍힌다. 정리를 다음 틱으로 미뤄서
+  // 그때까지 다시 마운트됐는지(=가짜였는지) 보고 판단한다.
+  const paneAliveRef = useRef(true);
+  useEffect(() => {
+    paneAliveRef.current = true;
+    return () => {
+      paneAliveRef.current = false;
+      window.setTimeout(() => {
+        if (paneAliveRef.current) return;   // 곧바로 다시 마운트됨 — 가짜 정리였다
+        // 가드 하나 더: 진짜 언마운트면 <webview> 엘리먼트가 문서에서 떨어져 있다. 가짜 정리에서는
+        // 붙은 채로 남는다. (타이머만으로는 재마운트 순서에 따라 첫 사이클에서 새는 경우가 있었다.)
+        try { if (webviewRef.current?.isConnected) return; } catch {}
+        // 진행 중인 로드만 멈춘다.
+        //
+        // 한때 여기서 게스트를 about:blank 로 보냈다(서비스 워커·열린 연결을 떼려는 의도). 그러면
+        // 프로세스가 하나 더 남는 일이 생겼다 — src 를 바꾸는 것은 새 내비게이션이라, Chromium 이
+        // about:blank 용 렌더러를 새로 붙이는데 그 직후 우리가 요소를 제거하므로 경합이 된다.
+        // 그리고 그 일은 다른 것들이 이미 한다: 서비스 워커는 아래 clearStorageData(), 열린 연결은
+        // closeAllConnections(), 게스트 프로세스 종료는 요소 제거 자체가 처리한다.
+        try { webviewRef.current?.stop?.(); } catch {}
+        if (!pooledPartition) { void (window as any).api?.releaseBrowserPartition?.(partitionName); return; }
+        // 비우는 동안에는 이 이름을 남에게 내주지 않는다 — 새 페이지가 비워지는 세션을 물려받으면
+        // 자기 쿠키가 지워진다.
+        clearingPartitions.add(partitionName);
+        pendingPartitions.delete(partitionName);
+        const done = () => clearingPartitions.delete(partitionName);
+        try {
+          const r = (window as any).api?.releaseBrowserPartition?.(partitionName);
+          if (r && typeof r.then === 'function') r.then(done, done); else done();
+        } catch { done(); }
+      }, 0);
+    };
+  }, [partitionName, pooledPartition]);
+
   // 복원된 URL 이 있으면 그걸로 시작.
   const startUrl = (initialState?.editUrl && initialState.editUrl.trim()) ? initialState.editUrl : initialUrl;
   const initialSrcRef = useRef(startUrl);
@@ -886,7 +994,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         window.setTimeout(() => {
           if (seq !== proxySeqRef.current) return;
           try {
-            wv?.loadURL?.(currentUrl).catch((err: any) => {
+            navigateWebview(currentUrl).catch((err: any) => {
               const msg = String(err?.message || err || '');
               if (!/aborted/i.test(msg)) {
                 setTestOk(false);
@@ -935,7 +1043,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         window.setTimeout(() => {
           if (seq !== proxySeqRef.current) return;
           try {
-            wv?.loadURL?.(loadUrl).catch((err: any) => {
+            navigateWebview(loadUrl).catch((err: any) => {
               const msg = String(err?.message || err || '');
               if (!/aborted/i.test(msg)) { setTestOk(false); setTestResult(t('browserLoadFailed', { msg })); }
             });
@@ -979,7 +1087,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     lastAutoLoadedRef.current = normalizedTarget;
     const timer = window.setTimeout(() => {
       if (!activeTargetPanelId) return;
-      try { webviewRef.current?.loadURL?.(resolveBrowserUrl(browserUrl)).catch(() => {}); } catch {}
+      navigateWebview(browserUrl).catch(() => {});
     }, 100);
     emitDebugLog('[cw-debug][browser-auto-load]', {
       activeTabId,
@@ -1046,7 +1154,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
     const url = activeTab.url;
     if (!url) return;
     setEditUrl(url);
-    try { wv.loadURL(resolveBrowserUrl(url)).catch(() => {}); } catch {}
+    navigateWebview(url).catch(() => {});
     syncWebviewHeight('active-tab-changed');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, syncWebviewHeight]);
@@ -1208,6 +1316,46 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       t = 'https://' + t;
     }
     return t;
+  };
+
+  // webview 내비게이션은 이 하나를 거친다.
+  //
+  // 같은 주소를 여러 경로가 겹쳐 불러서, 앞의 내비게이션이 취소되고 메인 프로세스 로그에
+  //   Error occurred in handler for 'GUEST_VIEW_MANAGER_CALL': Error: ERR_ABORTED (-3) loading '...'
+  // 가 계속 찍혔다. 세션의 저장된 주소로 자동 로드하는 이펙트(+100ms)와 프록시 적용 후 로드
+  // (+150ms)가 같은 주소를 연달아 부르는 것이 원인이다. 취소된 쪽의 예외는 호출부에서 걸러서
+  // 화면에는 안 보였지만, Electron 이 handler 거절을 그대로 로그에 남기므로 로그가 지저분해졌다.
+  // 그래서 같은 주소로의 중복 요청은 짧은 시간 안에서는 한 번만 실제로 수행한다.
+  const lastNavRef = useRef<{ url: string; at: number } | null>(null);
+  const NAV_DEDUPE_MS = 3000;
+  // force: 사용자가 직접 이동/새로고침을 지시한 경우 — 같은 주소라도 다시 불러야 한다.
+  const navigateWebview = (target: string, opts?: { force?: boolean }): Promise<void> => {
+    const wv: any = webviewRef.current;
+    const url = resolveBrowserUrl(target);
+    if (!wv || !url) return Promise.resolve();
+    const now = performance.now();
+    const last = lastNavRef.current;
+    if (!opts?.force && last && last.url === url && now - last.at < NAV_DEDUPE_MS) return Promise.resolve();
+    lastNavRef.current = { url, at: now };
+    // 메인 프로세스에서 로드한다 — 렌더러에서 webview.loadURL() 을 부르면 취소될 때 Electron 이
+    // GUEST_VIEW_MANAGER_CALL 거절을 메인 로그에 스택째 남긴다(여기서 catch 해도 찍힌다).
+    // 취소는 정상적인 흐름이다: 로그인 SPA 처럼 페이지가 스스로 다른 주소로 가버리면 우리가
+    // 시작한 내비게이션이 취소된다. 메인에서 로드하면 그 거절을 우리 핸들러가 흡수한다.
+    let webContentsId: number | null = null;
+    try { webContentsId = typeof wv.getWebContentsId === 'function' ? wv.getWebContentsId() : null; } catch {}
+    if (webContentsId) {
+      return Promise.resolve((window as any).api?.navigateWebview?.({ webContentsId, url }))
+        .then((r: any) => {
+          if (r && r.success === false) throw new Error(String(r.error || 'navigate failed'));
+        });
+    }
+    // 아직 게스트가 붙지 않았으면(webContentsId 없음) 엘리먼트 쪽 API 로 간다.
+    try {
+      const r = wv.loadURL?.(url);
+      return r && typeof r.then === 'function' ? r : Promise.resolve();
+    } catch (e) {
+      return Promise.reject(e);
+    }
   };
 
   const forceBrowserLightTheme = async () => {
@@ -1549,7 +1697,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
       await clearProxy();
     }
     try {
-      await webviewRef.current?.loadURL(goUrl);
+      await navigateWebview(goUrl, { force: true });
     } catch (err: any) {
       const msg = String(err?.message || err || '');
       if (!/aborted/i.test(msg)) {

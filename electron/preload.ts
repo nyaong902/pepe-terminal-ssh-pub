@@ -95,6 +95,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('text-editor:open', payload),
   // <webview> preload 경로 (한글 편집기 브리지용)
   getWebviewPreloadUrl: () => ipcRenderer.invoke('app:webview-preload-url'),
+  // 브라우저 워크스페이스를 닫을 때 그 파티션의 캐시/스토리지를 비운다(메모리 회수).
+  releaseBrowserPartition: (partition: string) => ipcRenderer.invoke('browser:release-partition', partition),
   getChatHistory: () => ipcRenderer.invoke('chat-history:get'),
   setChatHistory: (entries: any[]) => ipcRenderer.invoke('chat-history:set', entries),
   // 작업일지 — 앱 전체에서 공유되는 일별 todo 저장소 (worklog.json)
@@ -538,6 +540,8 @@ contextBridge.exposeInMainWorld('api', {
   getDetachedInit: () => ipcRenderer.invoke('window:get-detached-init'),
   getConnectedPanels: () => ipcRenderer.invoke('ssh:connected-panels'),
   setWebviewProxy: (args: { webContentsId: number; proxyRules: string | null; proxyBypassRules?: string }) => ipcRenderer.invoke('browser:set-proxy', args),
+  // webview 내비게이션은 메인에서 수행한다 — 취소(ERR_ABORTED)가 메인 로그를 오류로 뒤덮는 것을 막기 위함.
+  navigateWebview: (args: { webContentsId: number; url: string }) => ipcRenderer.invoke('browser:navigate', args),
   resizeBrowserGuest: (args: { webContentsId: number; width: number; height: number }) => ipcRenderer.invoke('browser:resize-guest', args),
   bumpWebviewMaxListeners: (args: { webContentsId: number }) => ipcRenderer.invoke('browser:bump-max-listeners', args),
   agentIsRunning: (args: { sessionId?: string; requestId?: string }) => ipcRenderer.invoke('agent:is-running', args),
