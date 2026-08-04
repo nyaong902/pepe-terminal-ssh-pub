@@ -23,7 +23,9 @@
     "advanced": "Avancé",
     "filetree": "Arborescence",
     "x11": "Redirection X11",
-    "dbms": "SGBD (Outil SQL)"
+    "dbms": "SGBD (Outil SQL)",
+    "keepAlive": "Maintien de connexion",
+    "scroll": "Défilement"
   },
   "fields": {
     "name": "Nom de la session",
@@ -90,7 +92,15 @@
     "dbmsUser": "Utilisateur",
     "dbmsPassword": "Mot de passe",
     "sshTunnel": "Tunnel SSH",
-    "directInput": "Saisie directe"
+    "directInput": "Saisie directe",
+    "keepAliveEnabled": "Envoyer des messages de maintien pendant la session",
+    "keepAliveInterval": "Intervalle (s)",
+    "keepAliveSendString": "Envoyer une chaîne lorsque le réseau est inactif",
+    "keepAliveString": "Chaîne",
+    "keepAliveTcp": "Envoyer des paquets TCP keep alive lorsque le réseau est inactif",
+    "scrollOnOutput": "Défiler vers le bas lors des entrées/sorties du terminal",
+    "scrollOnOutputPauseOnScrollLock": "Suspendre le défilement vers le bas lorsque ScrollLock est actif",
+    "scrollOnKeyPress": "Défiler vers le bas à la frappe"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / domaine",
@@ -104,7 +114,8 @@
     "autoTrackInfo": "Actualiser l'arborescence lors d'un changement de répertoire",
     "x11Info": "Afficher les applis GUI distantes comme fenêtres Windows natives",
     "applyTitle": "Enregistrer et garder la fenêtre ouverte",
-    "connectTitle": "Enregistrer, fermer puis se connecter"
+    "connectTitle": "Enregistrer, fermer puis se connecter",
+    "keepAliveInfo": "Les messages de maintien agissent au niveau du protocole SSH — ils gardent la connexion TCP/SSH active, mais le shell distant ne voit aucune saisie, donc ils n'empêchent pas le TMOUT du serveur (déconnexion automatique). Utilisez la chaîne d'inactivité pour cela. Une chaîne vide envoie un caractère NUL, sans trace à l'écran."
   },
   "cursor": {
     "block": "▮ Bloc",

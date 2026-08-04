@@ -23,7 +23,9 @@
     "advanced": "高级",
     "filetree": "文件树",
     "x11": "X11 转发",
-    "dbms": "DBMS (SQL 工具)"
+    "dbms": "DBMS (SQL 工具)",
+    "keepAlive": "保持连接",
+    "scroll": "滚动"
   },
   "fields": {
     "name": "会话名称",
@@ -90,7 +92,15 @@
     "dbmsUser": "用户",
     "dbmsPassword": "密码",
     "sshTunnel": "SSH 隧道",
-    "directInput": "直接输入"
+    "directInput": "直接输入",
+    "keepAliveEnabled": "会话连接期间发送保持连接消息",
+    "keepAliveInterval": "间隔（秒）",
+    "keepAliveSendString": "网络空闲时发送字符串",
+    "keepAliveString": "字符串",
+    "keepAliveTcp": "网络空闲时发送 TCP 保持连接数据包",
+    "scrollOnOutput": "终端输入/输出时滚动到底部",
+    "scrollOnOutputPauseOnScrollLock": "启用 ScrollLock 时暂停滚动到底部",
+    "scrollOnKeyPress": "按键时滚动到底部"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / 域名",
@@ -104,7 +114,8 @@
     "autoTrackInfo": "在终端切换目录时刷新文件树",
     "x11Info": "将远程 GUI 应用显示为原生 Windows 窗口",
     "applyTitle": "保存设置并保持窗口打开",
-    "connectTitle": "保存、关闭窗口并连接"
+    "connectTitle": "保存、关闭窗口并连接",
+    "keepAliveInfo": "保持连接消息作用于 SSH 协议层 — 它能保持 TCP/SSH 连接，但远程 shell 仍视为无输入，因此无法阻止服务器的 TMOUT（shell 自动注销）。这种情况请使用空闲字符串。字符串留空则发送 NUL 字符，屏幕上不留痕迹。"
   },
   "cursor": {
     "block": "▮ 方块",

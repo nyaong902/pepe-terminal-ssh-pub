@@ -23,7 +23,9 @@
     "advanced": "고급",
     "filetree": "파일 트리",
     "x11": "X11 forwarding",
-    "dbms": "DBMS (SQL Tool)"
+    "dbms": "DBMS (SQL Tool)",
+    "keepAlive": "연결 유지",
+    "scroll": "스크롤"
   },
   "fields": {
     "name": "세션 이름",
@@ -90,7 +92,15 @@
     "dbmsUser": "사용자",
     "dbmsPassword": "비밀번호",
     "sshTunnel": "SSH 터널",
-    "directInput": "직접 입력"
+    "directInput": "직접 입력",
+    "keepAliveEnabled": "세션이 연결되어 있는 동안 연결 유지 메시지를 보냄",
+    "keepAliveInterval": "간격(초)",
+    "keepAliveSendString": "네트워크가 유휴 상태일 때 문자열을 보냄",
+    "keepAliveString": "문자열",
+    "keepAliveTcp": "네트워크가 유휴 상태일 때 TCP 연결 유지 패킷 보냄",
+    "scrollOnOutput": "터미널 입출력 시 맨 아래로 스크롤",
+    "scrollOnOutputPauseOnScrollLock": "ScrollLock 활성화 시 하단 스크롤 기능 일시 정지",
+    "scrollOnKeyPress": "키를 누르면 맨 아래로 스크롤"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / 도메인",
@@ -104,7 +114,8 @@
     "autoTrackInfo": "터미널에서 디렉토리 이동 시 파일트리도 갱신됨",
     "x11Info": "원격 GUI 앱을 Windows 네이티브 창으로 표시",
     "applyTitle": "설정만 저장하고 창 유지",
-    "connectTitle": "저장 후 창 닫고 연결"
+    "connectTitle": "저장 후 창 닫고 연결",
+    "keepAliveInfo": "연결 유지 메시지는 SSH 프로토콜 수준입니다 — TCP·SSH 연결은 살아 있지만 원격 셸은 \"입력이 없다\"고 보므로, 서버의 TMOUT(셸 자동 로그아웃)은 막지 못합니다. 그 경우에는 문자열 보내기를 쓰세요. 문자열을 비워 두면 화면에 흔적을 남기지 않는 NUL 문자를 보냅니다."
   },
   "cursor": {
     "block": "▮ 블록",

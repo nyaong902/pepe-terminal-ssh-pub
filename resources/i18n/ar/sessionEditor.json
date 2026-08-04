@@ -23,7 +23,9 @@
     "advanced": "متقدم",
     "filetree": "شجرة الملفات",
     "x11": "إعادة توجيه X11",
-    "dbms": "DBMS (أداة SQL)"
+    "dbms": "DBMS (أداة SQL)",
+    "keepAlive": "إبقاء الاتصال",
+    "scroll": "التمرير"
   },
   "fields": {
     "name": "اسم الجلسة",
@@ -90,7 +92,15 @@
     "dbmsUser": "المستخدم",
     "dbmsPassword": "كلمة المرور",
     "sshTunnel": "نفق SSH",
-    "directInput": "إدخال مباشر"
+    "directInput": "إدخال مباشر",
+    "keepAliveEnabled": "إرسال رسائل إبقاء الاتصال أثناء الجلسة",
+    "keepAliveInterval": "الفاصل (ثانية)",
+    "keepAliveSendString": "إرسال نص عند خمول الشبكة",
+    "keepAliveString": "النص",
+    "keepAliveTcp": "إرسال حزم TCP لإبقاء الاتصال عند خمول الشبكة",
+    "scrollOnOutput": "التمرير إلى الأسفل عند إدخال/إخراج الطرفية",
+    "scrollOnOutputPauseOnScrollLock": "إيقاف التمرير إلى الأسفل مؤقتًا عند تشغيل ScrollLock",
+    "scrollOnKeyPress": "التمرير إلى الأسفل عند الضغط على مفتاح"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / نطاق",
@@ -104,7 +114,8 @@
     "autoTrackInfo": "تحديث شجرة الملفات عند تغيير المجلد في الطرفية",
     "x11Info": "عرض تطبيقات GUI البعيدة كنوافذ Windows أصلية",
     "applyTitle": "حفظ الإعدادات وإبقاء النافذة مفتوحة",
-    "connectTitle": "حفظ، إغلاق النافذة، ثم الاتصال"
+    "connectTitle": "حفظ، إغلاق النافذة، ثم الاتصال",
+    "keepAliveInfo": "تعمل رسائل إبقاء الاتصال على مستوى بروتوكول SSH — تحافظ على اتصال TCP/SSH، لكن الصدفة البعيدة لا ترى أي إدخال، لذا لا تمنع TMOUT في الخادم (تسجيل الخروج التلقائي). استخدم نص الخمول لذلك. ترك النص فارغًا يرسل حرف NUL بلا أثر على الشاشة."
   },
   "cursor": {
     "block": "▮ كتلة",

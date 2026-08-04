@@ -42,6 +42,15 @@ export type Session = {
   logPath?: string;      // LogAnalyzer 가 이 세션 선택 시 기본 경로
   codePath?: string;     // CompareWorkspace 가 이 세션 선택 시 기본 base 디렉토리
   x11Forward?: boolean;
+  keepAliveEnabled?: boolean;
+  keepAliveIntervalSec?: number;
+  keepAliveSendString?: boolean;
+  keepAliveStringIntervalSec?: number;
+  keepAliveString?: string;
+  keepAliveTcp?: boolean;
+  scrollOnOutput?: boolean;
+  scrollOnOutputPauseOnScrollLock?: boolean;
+  scrollOnKeyPress?: boolean;
   x11Display?: number;
   browserUrl?: string;
   jumps?: JumpHop[];
@@ -64,6 +73,14 @@ type Props = {
   // SQL Tool 쪽 "새 DB 연결 추가"처럼, 열자마자 특정 카테고리 탭(예: 'dbms')을 보여주고 싶을 때.
   initialCategory?: string;
 };
+
+// 초 단위 입력값 보정 — 편집 중에는 문자열(빈 값 포함)을 그대로 두고, 여기서만 숫자로 만든다.
+// 빈 값이나 숫자가 아니면 기본값을 쓴다.
+function clampSec(raw: string, min: number, max: number, fallback: number): number {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
 
 export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, onCancel, onSaveAndConnect, initialCategory }) => {
   const { t } = useTranslation('sessionEditor');
@@ -92,6 +109,19 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
   const [logPath, setLogPath] = useState(session?.logPath ?? '');
   const [codePath, setCodePath] = useState(session?.codePath ?? '');
   const [x11Forward, setX11Forward] = useState<boolean>(!!session?.x11Forward);
+  // 연결 유지 — 기본값은 XShell 기본값과 같다(메시지 60초 켬, 문자열/TCP 끔).
+  const [kaEnabled, setKaEnabled] = useState<boolean>(session?.keepAliveEnabled !== false);
+  // 간격은 편집 중에 빈 문자열이 될 수 있어야 한다 — 숫자 상태로 두면 backspace 로 지운 순간
+  // 기본값이 다시 채워져 다른 숫자를 입력할 수 없다. 보정은 포커스를 벗어날 때와 저장할 때 한다.
+  const [kaInterval, setKaInterval] = useState<string>(String(session?.keepAliveIntervalSec ?? 60));
+  const [kaSendString, setKaSendString] = useState<boolean>(!!session?.keepAliveSendString);
+  const [kaStringInterval, setKaStringInterval] = useState<string>(String(session?.keepAliveStringIntervalSec ?? 0));
+  const [kaString, setKaString] = useState<string>(session?.keepAliveString ?? '');
+  const [kaTcp, setKaTcp] = useState<boolean>(!!session?.keepAliveTcp);
+  // 스크롤 동작 — 기본값은 XShell 기본값과 같다(출력 시 내리기 끔, 키 입력 시 내리기 켬).
+  const [scrollOnOutput, setScrollOnOutput] = useState<boolean>(!!session?.scrollOnOutput);
+  const [scrollPauseOnLock, setScrollPauseOnLock] = useState<boolean>(!!session?.scrollOnOutputPauseOnScrollLock);
+  const [scrollOnKeyPress, setScrollOnKeyPress] = useState<boolean>(session?.scrollOnKeyPress !== false);
   const [x11Display, setX11Display] = useState<number>(session?.x11Display ?? 0);
   const [browserUrl, setBrowserUrl] = useState(session?.browserUrl ?? '');
   // 다단계 점프 — 편집용 행 배열. host/user/password 는 문자열, port 는 number|'' 로 보관.
@@ -132,6 +162,15 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     setLogPath(session?.logPath ?? '');
     setCodePath(session?.codePath ?? '');
     setX11Forward(!!session?.x11Forward);
+    setKaEnabled(session?.keepAliveEnabled !== false);
+    setKaInterval(String(session?.keepAliveIntervalSec ?? 60));
+    setKaSendString(!!session?.keepAliveSendString);
+    setKaStringInterval(String(session?.keepAliveStringIntervalSec ?? 0));
+    setKaString(session?.keepAliveString ?? '');
+    setKaTcp(!!session?.keepAliveTcp);
+    setScrollOnOutput(!!session?.scrollOnOutput);
+    setScrollPauseOnLock(!!session?.scrollOnOutputPauseOnScrollLock);
+    setScrollOnKeyPress(session?.scrollOnKeyPress !== false);
     setX11Display(session?.x11Display ?? 0);
     setBrowserUrl(session?.browserUrl ?? '');
     setJumps(toJumpRows(session));
@@ -184,7 +223,18 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
         password: row.password || undefined,
       });
     }
-    return { id, name, host: normalizeHost(host), port, username, auth, encoding, folderId: folderId || undefined, loginScript: script.length > 0 ? script : undefined, theme: theme || undefined, fontFamily: fontFamily || undefined, fontSize: fontSize || undefined, scrollback: scrollback || undefined, icon: icon || undefined, initialPath: initialPath.trim() || undefined, fileTreeEnabled: fileTreeEnabled || undefined, autoTrackPwd: (fileTreeEnabled && autoTrackPwd) ? true : undefined, backspaceKeyMode, deleteKeyMode, logPath: logPath.trim() || undefined, codePath: codePath.trim() || undefined, x11Forward: x11Forward || undefined, x11Display: x11Forward ? x11Display : undefined, browserUrl: browserUrl.trim() || undefined, jumps: cleanedJumps.length > 0 ? cleanedJumps : undefined, cursorStyle: cursorStyle !== 'block' ? cursorStyle : undefined, cursorBlink: !!cursorBlink } as Session;
+    return { id, name, host: normalizeHost(host), port, username, auth, encoding, folderId: folderId || undefined, loginScript: script.length > 0 ? script : undefined, theme: theme || undefined, fontFamily: fontFamily || undefined, fontSize: fontSize || undefined, scrollback: scrollback || undefined, icon: icon || undefined, initialPath: initialPath.trim() || undefined, fileTreeEnabled: fileTreeEnabled || undefined, autoTrackPwd: (fileTreeEnabled && autoTrackPwd) ? true : undefined, backspaceKeyMode, deleteKeyMode, logPath: logPath.trim() || undefined, codePath: codePath.trim() || undefined, x11Forward: x11Forward || undefined, x11Display: x11Forward ? x11Display : undefined, browserUrl: browserUrl.trim() || undefined, jumps: cleanedJumps.length > 0 ? cleanedJumps : undefined, cursorStyle: cursorStyle !== 'block' ? cursorStyle : undefined, cursorBlink: !!cursorBlink,
+      // 연결 유지 — 기본값(켬/60초/문자열 끔/TCP 끔)과 같으면 저장하지 않는다.
+      keepAliveEnabled: kaEnabled ? undefined : false,
+      keepAliveIntervalSec: (kaEnabled && clampSec(kaInterval, 0, 3600, 60) !== 60) ? clampSec(kaInterval, 0, 3600, 60) : undefined,
+      keepAliveSendString: kaSendString || undefined,
+      keepAliveStringIntervalSec: (kaSendString && clampSec(kaStringInterval, 0, 3600, 0) > 0) ? clampSec(kaStringInterval, 0, 3600, 0) : undefined,
+      keepAliveString: (kaSendString && kaString) ? kaString : undefined,
+      keepAliveTcp: kaTcp || undefined,
+      scrollOnOutput: scrollOnOutput || undefined,
+      scrollOnOutputPauseOnScrollLock: (scrollOnOutput && scrollPauseOnLock) || undefined,
+      scrollOnKeyPress: scrollOnKeyPress ? undefined : false,
+    } as Session;
   };
   // ── 점프 행 조작 ──
   const addJump = () => setJumps(prev => [...prev, { host: '', user: '', port: '', password: '' }]);
@@ -241,12 +291,15 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     { id: 'auth', label: t('categories.auth'), depth: 1 },
     { id: 'jump', label: t('categories.jump'), depth: 1 },
     { id: 'login-script', label: t('categories.loginScript'), depth: 1 },
+    // 연결 유지는 연결 하위 — XShell 도 "연결 > 연결 유지" 에 둔다.
+    { id: 'keep-alive', label: t('categories.keepAlive'), depth: 1 },
     { id: 'terminal', label: t('categories.terminal'), depth: 0 },
     { id: 'appearance', label: t('categories.appearance'), depth: 1 },
     { id: 'keys', label: t('keys.category'), depth: 1 },
     { id: 'advanced', label: t('categories.advanced'), depth: 0 },
     { id: 'filetree', label: t('categories.filetree'), depth: 1 },
     { id: 'x11', label: t('categories.x11'), depth: 1 },
+    { id: 'scroll', label: t('categories.scroll'), depth: 1 },
   ];
 
   return (
@@ -387,6 +440,23 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                 </select>
                 <label>{t('fields.scrollback')}</label>
                 <input type="number" value={scrollback || ''} onChange={e => setScrollback(Number(e.target.value) || 0)} placeholder={t('fields.globalDefault')} min={1000} max={1000000} step={1000} />
+              </div>
+            )}
+            {category === 'scroll' && (
+              <div className="session-editor-checkrows">
+                <label className="check-row">
+                  <input type="checkbox" checked={scrollOnOutput} onChange={e => setScrollOnOutput(e.target.checked)} />
+                  <span>{t('fields.scrollOnOutput')}</span>
+                </label>
+                <label className={`check-row check-sub ${scrollOnOutput ? '' : 'disabled'}`}>
+                  <input type="checkbox" checked={scrollPauseOnLock} disabled={!scrollOnOutput}
+                    onChange={e => setScrollPauseOnLock(e.target.checked)} />
+                  <span>{t('fields.scrollOnOutputPauseOnScrollLock')}</span>
+                </label>
+                <label className="check-row">
+                  <input type="checkbox" checked={scrollOnKeyPress} onChange={e => setScrollOnKeyPress(e.target.checked)} />
+                  <span>{t('fields.scrollOnKeyPress')}</span>
+                </label>
               </div>
             )}
             {category === 'appearance' && (() => {
@@ -594,6 +664,40 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                   )}
                   <span className="autotrack-info-icon" title={t('tooltips.x11Info')}>ⓘ</span>
                 </div>
+              </div>
+            )}
+            {category === 'keep-alive' && (
+              <div className="session-editor-checkrows">
+                <label className="check-row">
+                  <input type="checkbox" checked={kaEnabled} onChange={e => setKaEnabled(e.target.checked)} />
+                  <span>{t('fields.keepAliveEnabled')}</span>
+                  <span className="autotrack-info-icon" title={t('tooltips.keepAliveInfo')}>ⓘ</span>
+                </label>
+                <div className={`check-sub ${kaEnabled ? '' : 'disabled'}`}>
+                  <span>{t('fields.keepAliveInterval')}</span>
+                  <input type="number" min={0} max={3600} value={kaInterval} disabled={!kaEnabled}
+                    onChange={e => setKaInterval(e.target.value.replace(/[^0-9]/g, ''))}
+                    onBlur={() => setKaInterval(String(clampSec(kaInterval, 0, 3600, 60)))} />
+                </div>
+
+                <label className="check-row">
+                  <input type="checkbox" checked={kaSendString} onChange={e => setKaSendString(e.target.checked)} />
+                  <span>{t('fields.keepAliveSendString')}</span>
+                </label>
+                <div className={`check-sub ${kaSendString ? '' : 'disabled'}`}>
+                  <span>{t('fields.keepAliveInterval')}</span>
+                  <input type="number" min={0} max={3600} value={kaStringInterval} disabled={!kaSendString}
+                    onChange={e => setKaStringInterval(e.target.value.replace(/[^0-9]/g, ''))}
+                    onBlur={() => setKaStringInterval(String(clampSec(kaStringInterval, 0, 3600, 0)))} />
+                  <span>{t('fields.keepAliveString')}</span>
+                  <input type="text" value={kaString} disabled={!kaSendString} placeholder="NUL"
+                    onChange={e => setKaString(e.target.value)} />
+                </div>
+
+                <label className="check-row">
+                  <input type="checkbox" checked={kaTcp} onChange={e => setKaTcp(e.target.checked)} />
+                  <span>{t('fields.keepAliveTcp')}</span>
+                </label>
               </div>
             )}
           </div>
