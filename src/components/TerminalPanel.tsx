@@ -1064,7 +1064,12 @@ function getOrCreateTerm(termId: string): { term: Terminal; fit: FitAddon; searc
           return null;
         };
         if ((plain || ctrlOnly) && (e.code === 'Backspace' || e.key === 'Backspace')) {
-          const base = termBackspaceMode.get(termId) ?? 'backspace'; // 기본 Backspace(^H)
+          // 세션 설정이 없을 때의 기본값은 연결 종류에 따라 다르다.
+          //  - 로컬 셸(PowerShell/cmd): ASCII 127(DEL). ^H 를 보내면 PSReadLine 이 "줄 앞까지
+          //    모두 지우기" 로 해석해서, Backspace 한 번에 입력한 줄이 통째로 사라진다.
+          //  - SSH: 기존대로 ^H. 리눅스 서버들에 맞춰 keySeqDefaultsV1 로 정해둔 값이라 유지한다.
+          const base = termBackspaceMode.get(termId)
+            ?? (ptyConnected.has(termId) ? 'ascii127' : 'backspace');
           const mode = ctrlOnly ? flipBs(base) : base;
           const s = seqOf(mode);
           if (s !== null) { send(s); return false; }
