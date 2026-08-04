@@ -46,5 +46,7 @@
   "searchScopeTitle": "نطاق البحث",
   "searchPlaceholder": "بحث {{scope}}",
   "searchClear": "مسح البحث",
-  "ctxDuplicate": "تكرار"
+  "ctxDuplicate": "تكرار",
+  "ctxCopyToFolder": "نسخ إلى مجلد...",
+  "folderPickerCopyTitle": "نسخ إلى مجلد"
 }

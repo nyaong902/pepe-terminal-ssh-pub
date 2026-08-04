@@ -46,5 +46,7 @@
   "ctxTop": "맨 위로",
   "ctxBottom": "맨 아래로",
   "ctxMoveToFolder": "폴더로 이동...",
-  "ctxDuplicate": "복제"
+  "ctxDuplicate": "복제",
+  "ctxCopyToFolder": "폴더로 복사...",
+  "folderPickerCopyTitle": "폴더로 복사"
 }

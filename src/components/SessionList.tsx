@@ -100,7 +100,8 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
   // 다중 선택 시 연결할 워크스페이스 — 'current' / 'new' / 특정 탭 id
   const [multiTargetWs, setMultiTargetWs] = useState<string>('current');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [folderPicker, setFolderPicker] = useState<{ sessionIds: string[] } | null>(null);
+  // mode: 'move' 는 폴더만 바꾸고, 'copy' 는 duplicateSession 으로 사본을 만든다.
+  const [folderPicker, setFolderPicker] = useState<{ sessionIds: string[]; mode: 'move' | 'copy' } | null>(null);
   const [searchValue, setSearchValue] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('name');
   const [pendingSearchFocus, setPendingSearchFocus] = useState(false);
@@ -402,7 +403,9 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     try {
       const res = await (window as any).api?.duplicateSession?.({
         sessionId: source.id,
-        targetFolderId: targetFolderId ?? undefined,
+        // null(루트)과 undefined(지정 안 함 = 원본과 같은 폴더)를 구분해서 그대로 넘긴다.
+        // 예전에는 ?? undefined 로 뭉개서, 루트로 복사를 고르면 원본 폴더에 그대로 만들어졌다.
+        targetFolderId,
         nameSuffix: t('copySuffix'),
       });
       if (res?.success && res?.session?.id) {
@@ -1010,18 +1013,28 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
       {editing && <SessionEditor session={editing} folders={folders} onSave={onSaveSession} onSaveAndConnect={onSaveAndConnect} onCancel={() => setEditing(null)} />}
 
       {folderPicker && (() => {
+        // 이동/복사 공통 처리 — 대상 폴더(루트는 null)를 받아 선택한 세션 전부에 적용한다.
+        const applyTo = (targetFolderId: string | null) => {
+          const { sessionIds, mode } = folderPicker;
+          (async () => {
+            for (const sid of sessionIds) {
+              if (mode === 'copy') {
+                const src = sessions.find(x => x.id === sid);
+                if (src) await duplicateSession(src, targetFolderId);
+              } else {
+                await (window as any).api.moveToFolder(sid, targetFolderId);
+              }
+            }
+            await reload();
+          })();
+          setFolderPicker(null);
+        };
         const renderTree = (parentId?: string, depth = 0): React.ReactNode[] => {
           const children = folders.filter(f => (f.parentId ?? undefined) === parentId);
           const nodes: React.ReactNode[] = [];
           for (const f of children) {
             nodes.push(
-              <div key={f.id} className="folder-picker-item" style={{ paddingLeft: 12 + depth * 16 }} onClick={() => {
-                (async () => {
-                  for (const sid of folderPicker.sessionIds) await (window as any).api.moveToFolder(sid, f.id);
-                  await reload();
-                })();
-                setFolderPicker(null);
-              }}>
+              <div key={f.id} className="folder-picker-item" style={{ paddingLeft: 12 + depth * 16 }} onClick={() => applyTo(f.id)}>
                 📁 {f.name}
               </div>
             );
@@ -1032,15 +1045,9 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
         return (
           <div className="folder-picker-backdrop" onClick={() => setFolderPicker(null)}>
             <div className="folder-picker" onClick={e => e.stopPropagation()}>
-              <div className="folder-picker-title">{t('folderPickerTitle')}</div>
+              <div className="folder-picker-title">{folderPicker.mode === 'copy' ? t('folderPickerCopyTitle') : t('folderPickerTitle')}</div>
               <div className="folder-picker-list">
-                <div className="folder-picker-item" onClick={() => {
-                  (async () => {
-                    for (const sid of folderPicker.sessionIds) await (window as any).api.moveToFolder(sid, null);
-                    await reload();
-                  })();
-                  setFolderPicker(null);
-                }}>
+                <div className="folder-picker-item" onClick={() => applyTo(null)}>
                   {t('folderRoot')}
                 </div>
                 {renderTree(undefined, 0)}
@@ -1112,13 +1119,22 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 );
               })()}
               {folders.length > 0 && (
-                <div className="context-menu-item" onClick={() => {
-                  const sessIds = [...selectedIds].filter(id => sessions.some(s => s.id === id));
-                  if (sessIds.length > 0) setFolderPicker({ sessionIds: sessIds });
-                  setContextMenu(null);
-                }}>
-                  <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
-                </div>
+                <>
+                  <div className="context-menu-item" onClick={() => {
+                    const sessIds = [...selectedIds].filter(id => sessions.some(s => s.id === id));
+                    if (sessIds.length > 0) setFolderPicker({ sessionIds: sessIds, mode: 'move' });
+                    setContextMenu(null);
+                  }}>
+                    <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
+                  </div>
+                  <div className="context-menu-item" onClick={() => {
+                    const sessIds = [...selectedIds].filter(id => sessions.some(s => s.id === id));
+                    if (sessIds.length > 0) setFolderPicker({ sessionIds: sessIds, mode: 'copy' });
+                    setContextMenu(null);
+                  }}>
+                    <MenuIcon>📋</MenuIcon>{t('ctxCopyToFolder')}
+                  </div>
+                </>
               )}
               <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDelete(); }}>
                 <MenuIcon>🗑️</MenuIcon>{t('ctxDeleteSelected')}
@@ -1236,16 +1252,25 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
           {contextMenu.type === 'session' && folders.length > 0 && (
             <>
               <div className="context-menu-separator" />
-              <div className="context-menu-item" onClick={() => {
-                // 우클릭 항목이 다중선택에 포함돼 있으면 선택된 세션 전부, 아니면 그 하나만
-                const ids = selectedIds.has(contextMenu.id) ? [...selectedIds] : [contextMenu.id];
-                // 세션만 필터 (폴더 id 제외)
-                const sessIds = ids.filter(id => sessions.some(s => s.id === id));
-                setFolderPicker({ sessionIds: sessIds.length > 0 ? sessIds : [contextMenu.id] });
-                setContextMenu(null);
-              }}>
-                <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
-              </div>
+              {/* 우클릭 항목이 다중선택에 포함돼 있으면 선택된 세션 전부, 아니면 그 하나만 */}
+              {(() => {
+                const pick = (mode: 'move' | 'copy') => {
+                  const ids = selectedIds.has(contextMenu.id) ? [...selectedIds] : [contextMenu.id];
+                  const sessIds = ids.filter(id => sessions.some(s => s.id === id));   // 세션만 (폴더 id 제외)
+                  setFolderPicker({ sessionIds: sessIds.length > 0 ? sessIds : [contextMenu.id], mode });
+                  setContextMenu(null);
+                };
+                return (
+                  <>
+                    <div className="context-menu-item" onClick={() => pick('move')}>
+                      <MenuIcon>📁</MenuIcon>{t('ctxMoveToFolder')}
+                    </div>
+                    <div className="context-menu-item" onClick={() => pick('copy')}>
+                      <MenuIcon>📋</MenuIcon>{t('ctxCopyToFolder')}
+                    </div>
+                  </>
+                );
+              })()}
             </>
           )}
           </>

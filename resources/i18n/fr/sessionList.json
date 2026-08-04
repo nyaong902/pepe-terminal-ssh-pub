@@ -46,5 +46,7 @@
   "searchScopeTitle": "Portée de recherche",
   "searchPlaceholder": "Rechercher {{scope}}",
   "searchClear": "Effacer la recherche",
-  "ctxDuplicate": "Dupliquer"
+  "ctxDuplicate": "Dupliquer",
+  "ctxCopyToFolder": "Copier vers le dossier...",
+  "folderPickerCopyTitle": "Copier vers le dossier"
 }
