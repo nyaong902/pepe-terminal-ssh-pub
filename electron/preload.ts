@@ -768,8 +768,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Claude Code CLI
   claudeCheck: () => ipcRenderer.invoke('claude:check'),
-  claudeSend: (sessionId: string, prompt: string, addDirs?: string[], disallowBash?: boolean, sshTermId?: string, resumeSessionId?: string | null, permissionMode?: string, model?: string, perToolApproval?: boolean, requestId?: string, effort?: string, sshSessions?: { id: string; label: string }[], localAttachmentRoots?: string[]) =>
-    ipcRenderer.invoke('claude:send', { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots }),
+  claudeSend: (sessionId: string, prompt: string, addDirs?: string[], disallowBash?: boolean, sshTermId?: string, resumeSessionId?: string | null, permissionMode?: string, model?: string, perToolApproval?: boolean, requestId?: string, effort?: string, sshSessions?: { id: string; label: string }[], localAttachmentRoots?: string[], maxThinkingTokens?: number) =>
+    ipcRenderer.invoke('claude:send', { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots, maxThinkingTokens }),
   claudeHookRespond: (approvalId: string, decision: 'allow' | 'deny', reason?: string) =>
     ipcRenderer.invoke('claude:hook-respond', { approvalId, decision, reason }),
   onClaudeHookApprovalRequest: (cb: (p: any) => void) => {

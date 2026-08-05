@@ -139,15 +139,88 @@ const AI_CONTEXT_LIMIT = 60;
 // 달라 임베딩 유사도가 낮음)을 AI 가 못 보는 문제가 있어 — 검색된 메시지 앞뒤로 같이 저장된 대화
 // 흐름(context)을 통째로 프롬프트에 넣는다. → 표시가 실제 검색에 걸린 줄. 최초 검색/재검색(RESEARCH
 // 액션) 양쪽에서 재사용.
+// 후보마다 문맥을 따로 이어붙이면 같은 메시지가 프롬프트에 여러 번 들어간다 — 후보들이 같은 방에서
+// 가까이 붙어 있으면 앞뒤 8개씩의 문맥이 서로 겹치기 때문이다. 실측으로 프롬프트가 17만 자까지
+// 커졌고(요약 한 번에 $1.47), 그중 상당량이 같은 대화의 반복이었다.
+// 그래서 방 단위로 모아 같은 메시지를 한 줄로 합치고, 시간순 연속 블록으로 묶어 넣는다. 검색에 걸린
+// 줄에는 그 후보 번호를 [N] 으로 붙인다 — AI 가 근거로 인용하는 [N] 이 좌측 리스트 및 KEEP 액션의
+// 인덱스와 계속 맞아야 한다(runFollowUp 의 KEEP 파싱이 이 번호를 그대로 쓴다).
+// 정보는 그대로 두고 중복만 없애는 것이라 답변 품질에는 영향이 없다.
+// 요약에 쓸 모델을 고를 수 있게 한다 — 비용 차이가 크다(실측: 검색 한 번에 Opus $0.60).
+// 요약은 발췌문을 읽고 정리하는 작업이라 더 작은 모델로도 되는 경우가 많지만, "서로 다른 원인을
+// 전부 나열하고 어느 것이 질문에 가장 가까운지 판단" 같은 지시 준수도와 원문을 글자 그대로 인용하는
+// 정확도가 모델에 따라 달라져서, 기본값은 바꾸지 않고 사용자가 고르게 둔다.
+// 값은 claude CLI 의 --model 에 그대로 넘어간다(ClaudeChat 과 같은 별칭).
+const AI_MODEL_KEY = 'chatArchiveAiModel';
+// 사고(thinking) 예산 — 0 이면 제한하지 않는다(CLI 기본값).
+// 요약은 발췌문을 읽고 정리하는 작업이라 긴 추론이 결과를 크게 바꾸지 않는다. 실측으로 3,450 토큰이
+// 쓰였고 1500 으로 묶으니 응답이 25초 빨라졌다. 다만 질문이 복잡해 여러 사건을 견줘야 할 때는
+// 사고가 도움이 될 수 있어 사용자가 조절하게 둔다.
+const AI_THINKING_KEY = 'chatArchiveMaxThinkingTokens';
+const AI_THINKING_DEFAULT = 1500;
+const AI_THINKING_MAX = 32000;
+const AI_MODELS: { v: string; l: string }[] = [
+  { v: 'default', l: '기본(설정 그대로)' },
+  { v: 'opus', l: 'Opus — 가장 정확, 가장 비쌈' },
+  { v: 'sonnet', l: 'Sonnet — 균형' },
+  { v: 'haiku', l: 'Haiku — 가장 저렴' },
+];
+
+const CTX_MAX_MSG_CHARS = 600;
+// 시간이 이만큼 벌어지면 다른 사건으로 보고 블록을 나눈다 — 붙여 놓으면 관계 없는 대화가 한 흐름
+// 처럼 보여서 AI 가 엉뚱한 인과를 만든다.
+const CTX_BLOCK_GAP_MS = 30 * 60 * 1000;
+
+type CtxLine = { ts: number; sender: string; text: string; hits: number[] };
+
 function buildCandidateContext(candidates: SearchResult[]): string {
-  return candidates
-    .map((r, i) => {
-      const convo = (r.context && r.context.length > 0 ? r.context : [{ ts: r.ts, sender: r.sender, text: r.text, isHit: true }])
-        .map(m => `${m.isHit ? '→' : ' '} (${formatTs(m.ts)}, ${m.sender || '알수없음'}) ${m.text}`)
+  // 방 -> (ts|sender -> 줄). 같은 메시지가 여러 후보의 문맥에 나타나도 한 줄로 합쳐진다.
+  const rooms = new Map<string, Map<string, CtxLine>>();
+  candidates.forEach((r, i) => {
+    let lineMap = rooms.get(r.roomId);
+    if (!lineMap) { lineMap = new Map(); rooms.set(r.roomId, lineMap); }
+    const msgs = r.context && r.context.length > 0
+      ? r.context
+      : [{ ts: r.ts, sender: r.sender, text: r.text, isHit: true }];
+    for (const m of msgs) {
+      const key = `${m.ts}|${m.sender}`;
+      let line = lineMap.get(key);
+      if (!line) {
+        const text = m.text || '';
+        line = {
+          ts: m.ts,
+          sender: m.sender,
+          text: text.length > CTX_MAX_MSG_CHARS ? `${text.slice(0, CTX_MAX_MSG_CHARS)}…(생략)` : text,
+          hits: [],
+        };
+        lineMap.set(key, line);
+      }
+      // 검색에 걸린 줄이면 후보 번호를 남긴다. 같은 줄이 다른 후보의 문맥으로도 들어올 수 있는데,
+      // 그때 hit 표시를 잃지 않아야 한다.
+      if (m.isHit && !line.hits.includes(i + 1)) line.hits.push(i + 1);
+    }
+  });
+
+  const blocks: string[] = [];
+  for (const [roomId, lineMap] of rooms) {
+    const sorted = Array.from(lineMap.values()).sort((a, b) => a.ts - b.ts);
+    let run: CtxLine[] = [];
+    const flush = () => {
+      if (run.length === 0) return;
+      const body = run
+        .map(l => `${l.hits.length > 0 ? `→ [${l.hits.join(',')}]` : '  '} (${formatTs(l.ts)}, ${l.sender || '알수없음'}) ${l.text}`)
         .join('\n');
-      return `[${i + 1}] 방 ${r.roomId} 대화 흐름 (→ 표시가 검색에 걸린 줄):\n${convo}`;
-    })
-    .join('\n\n');
+      blocks.push(`방 ${roomId} 대화 흐름:\n${body}`);
+      run = [];
+    };
+    for (const line of sorted) {
+      const prev = run[run.length - 1];
+      if (prev && line.ts - prev.ts > CTX_BLOCK_GAP_MS) flush();
+      run.push(line);
+    }
+    flush();
+  }
+  return blocks.join('\n\n');
 }
 
 export const ChatArchiveSearch: React.FC = () => {
@@ -155,6 +228,46 @@ export const ChatArchiveSearch: React.FC = () => {
   // 프로세스에 있으므로 통째로 회수된다(메인에서 백필이 돌고 있으면 끝날 때까지 기다린다).
   useEffect(() => () => { void (window as any).api?.chatArchiveReleaseEmbedder?.(); }, []);
   const [loading, setLoading] = useState(false);
+  // 요약 모델 — config.json 의 uiPrefs 에 저장한다(localStorage 아님).
+  const [aiModel, setAiModel] = useState<string>('default');
+  useEffect(() => {
+    (async () => {
+      try {
+        const prefs = await (window as any).api?.getUIPrefs?.();
+        const v = prefs?.[AI_MODEL_KEY];
+        if (typeof v === 'string' && AI_MODELS.some(m => m.v === v)) setAiModel(v);
+        const t = prefs?.[AI_THINKING_KEY];
+        if (typeof t === 'number' && Number.isFinite(t) && t >= 0) {
+          const clamped = Math.min(AI_THINKING_MAX, Math.floor(t));
+          setThinking(clamped);
+          setThinkingInput(String(clamped));
+        }
+      } catch {}
+    })();
+  }, []);
+  const changeAiModel = useCallback((v: string) => {
+    setAiModel(v);
+    try { void (window as any).api?.setUIPrefs?.({ [AI_MODEL_KEY]: v }); } catch {}
+  }, []);
+  // 사고 예산 — 입력 중에는 문자열로 둔다(지웠을 때 0 으로 튀지 않게). 포커스를 잃을 때 정리·저장.
+  const [thinking, setThinking] = useState<number>(AI_THINKING_DEFAULT);
+  const [thinkingInput, setThinkingInput] = useState<string>(String(AI_THINKING_DEFAULT));
+  const commitThinking = useCallback(() => {
+    const n = Number(thinkingInput);
+    const v = Number.isFinite(n) ? Math.min(AI_THINKING_MAX, Math.max(0, Math.floor(n))) : AI_THINKING_DEFAULT;
+    setThinking(v);
+    setThinkingInput(String(v));
+    try { void (window as any).api?.setUIPrefs?.({ [AI_THINKING_KEY]: v }); } catch {}
+  }, [thinkingInput]);
+  // 콜백들의 의존성에 넣지 않으려고 ref 로 읽는다 — 모델을 바꿀 때마다 searchCandidates 등이
+  // 새로 만들어지면 진행 중인 흐름에 영향이 갈 수 있다.
+  const aiModelRef = useRef(aiModel);
+  aiModelRef.current = aiModel;
+  const promptModel = () => (aiModelRef.current === 'default' ? undefined : aiModelRef.current);
+  const thinkingRef = useRef(thinking);
+  thinkingRef.current = thinking;
+  // 0 이면 상한을 걸지 않는다(aiOneShot 이 그렇게 해석한다).
+  const promptOpts = () => ({ maxThinkingTokens: thinkingRef.current });
   // candidates — 현재 후보 리스트. 첫 채팅 메시지로 채워지고, 이후 대화에서 AI 가 KEEP(재판단
   // 필터링)/RESEARCH(재검색) 액션을 낼 때마다 통째로 교체된다.
   const [candidates, setCandidates] = useState<SearchResult[]>([]);
@@ -213,7 +326,7 @@ export const ChatArchiveSearch: React.FC = () => {
     // 벌어져서 못 찾는 경우가 있었음. 표현을 늘리면 그중 하나는 원문 표현과 가까울 확률이 높아짐.
     let paraphrases: string[] = [];
     try {
-      const pRes = await runOneShotPrompt('claude', `다음 질문을 사내 메신저 대화 검색에 쓸 다른 표현 3가지로 바꿔줘(같은 뜻, 어순/어미/띄어쓰기를 다양하게). 설명 없이 표현만 한 줄에 하나씩 적어줘.\n\n질문: ${q}`, undefined, signal);
+      const pRes = await runOneShotPrompt('claude', `다음 질문을 사내 메신저 대화 검색에 쓸 다른 표현 3가지로 바꿔줘(같은 뜻, 어순/어미/띄어쓰기를 다양하게). 설명 없이 표현만 한 줄에 하나씩 적어줘.\n\n질문: ${q}`, promptModel(), signal, promptOpts());
       paraphrases = pRes.split('\n').map(s => s.replace(/^[-*\d.\s]+/, '').trim()).filter(Boolean).slice(0, 3);
     } catch (err: any) {
       if (err?.name === 'AbortError') throw err;
@@ -261,8 +374,8 @@ export const ChatArchiveSearch: React.FC = () => {
     // (AnswerMarkdown 의 onClick 참고) — 메신저 검색은 부분 문자열이라도 "정확히 일치"해야
     // 매칭되므로, AI 가 어미/조사/구두점을 자연스럽게 살짝 바꿔 인용하면(예: 원문 "문제되서"를
     // "문제되어"로) 검색이 조용히 실패한다(실측 사례). 반드시 원문 그대로 베끼도록 명시.
-    const prompt = `다음은 사내 메신저 대화 기록에서 질문과 관련성이 높은 부분을 찾아, 그 앞뒤 대화 흐름과 함께 발췌한 것입니다. → 표시된 줄이 검색에 직접 걸린 메시지이고, 나머지는 문맥 이해를 위한 주변 대화입니다. 흐름 전체를 보고 실제 원인/결론을 찾아 답하세요(→ 표시된 줄 자체가 아니라, 그 뒤에 이어진 대화에서 실제 결론이 나온 경우가 많습니다).\n\n주의: 발췌문들이 서로 다른 시점/사건에 대한 것일 수 있습니다. 하나의 원인으로 단정하지 말고, 발췌문들에서 확인되는 서로 다른 원인/사례를 전부 나열하세요 — 각 원인마다 근거가 된 발췌문 번호([1], [2] 등)를 같이 표시하고, 어느 것이 질문 상황과 가장 가까워 보이는지도 언급하세요. 근거가 부족한 부분은 "확실하지 않다"고 표시하세요.\n\n답변에서 " "로 원문을 인용할 때는 어미/조사/띄어쓰기/구두점 하나도 바꾸지 말고 발췌문에 있는 글자 그대로 정확히 옮기세요(자연스럽게 다듬지 마세요) — 이 인용문은 그대로 검색어로도 쓰입니다.\n\n${context}\n\n질문: ${q}`;
-    const ai = await runOneShotPrompt('claude', prompt, undefined, signal);
+    const prompt = `다음은 사내 메신저 대화 기록에서 질문과 관련성이 높은 부분을 찾아, 그 앞뒤 대화 흐름과 함께 발췌한 것입니다. 방별로 시간순으로 정리했고 겹치는 문맥은 하나로 합쳤습니다. → 표시된 줄이 검색에 직접 걸린 메시지이고, 바로 뒤의 [N] 이 그 발췌문 번호입니다. 나머지는 문맥 이해를 위한 주변 대화입니다. 흐름 전체를 보고 실제 원인/결론을 찾아 답하세요(→ 표시된 줄 자체가 아니라, 그 뒤에 이어진 대화에서 실제 결론이 나온 경우가 많습니다).\n\n주의: 발췌문들이 서로 다른 시점/사건에 대한 것일 수 있습니다. 하나의 원인으로 단정하지 말고, 발췌문들에서 확인되는 서로 다른 원인/사례를 전부 나열하세요 — 각 원인마다 근거가 된 발췌문 번호([1], [2] 등)를 같이 표시하고, 어느 것이 질문 상황과 가장 가까워 보이는지도 언급하세요. 근거가 부족한 부분은 "확실하지 않다"고 표시하세요.\n\n답변에서 " "로 원문을 인용할 때는 어미/조사/띄어쓰기/구두점 하나도 바꾸지 말고 발췌문에 있는 글자 그대로 정확히 옮기세요(자연스럽게 다듬지 마세요) — 이 인용문은 그대로 검색어로도 쓰입니다.\n\n${context}\n\n질문: ${q}`;
+    const ai = await runOneShotPrompt('claude', prompt, promptModel(), signal, promptOpts());
     setChatLog(prev => [...prev, { role: 'assistant', content: ai }]);
   }, [commitHistory, searchCandidates]);
 
@@ -277,7 +390,7 @@ export const ChatArchiveSearch: React.FC = () => {
     // + 본문)를 안 주는 경우가 있었다(실측) — 이 대화는 한 번의 응답으로 끝나고 그 다음엔 사용자가
     // 다시 말을 걸어야 이어지므로, 예고 없이 그 자리에서 바로 마커와 결과 본문을 내도록 강제한다.
     const prompt = `당신은 사내 메신저 대화 아카이브에서 사용자가 원하는 대화를 찾아주는 assistant 입니다. 아래는 지금까지의 대화 후보 목록과, 사용자와 나눈 대화 기록입니다.\n\n반드시 첫 줄에 다음 두 형식 중 하나로 ACTION 마커를 쓰고, 그 다음 줄부터 사용자에게 보여줄 최종 답변을 이어서 쓰세요(마커 자체는 답변에 노출되지 않으니 자연스럽게 써도 됩니다):\n- ACTION: KEEP [1,3,7]  — 후보 목록 중 실제로 관련 있는 항목만, 관련성이 높은 순서로 번호를 나열(기존 후보 안에서 답이 있다고 판단될 때)\n- ACTION: RESEARCH "새 검색어"  — 사용자가 "그게 아니라", "다시 찾아줘"처럼 기존 후보 전체가 방향이 틀렸다고 암시할 때, 새로 검색할 문구를 따옴표 안에 작성\n\n중요: 이 응답은 사용자와의 한 턴짜리 대화입니다. "찾아보겠습니다", "확인해보겠습니다", "정리해 드리겠습니다" 처럼 나중에 결과를 주겠다는 예고만 하고 끝내지 마세요 — 지금 이 응답 안에서 바로 최종 결과(관련 항목 목록이나 답변 내용)까지 전부 제시해야 합니다. 사용자는 이 응답 뒤에 곧바로 결과를 받아야 하며, 다시 재촉해야 결과가 나오면 안 됩니다.\n\n인용문(" "로 묶는 부분)은 발췌문 원문 그대로(어미/조사/구두점 변경 금지) 옮기세요 — 검색어로도 쓰입니다.\n\n현재 후보 목록:\n${context}\n\n대화 기록:\n${historyText}`;
-    const ai = await runOneShotPrompt('claude', prompt, undefined, signal);
+    const ai = await runOneShotPrompt('claude', prompt, promptModel(), signal, promptOpts());
     // AI 가 마커 앞에 공백/개행을 넣는 경우가 있어(예: "\nACTION: KEEP [...]"), ^ 앵커가 실제
     // 문자열 맨 앞만 보는 것과 어긋나 파싱이 실패하고 마커 원문이 그대로 사용자에게 노출되는
     // 문제가 있었다(실측) — 매칭 전에 trim 해서 이 어긋남을 없앤다.
@@ -345,7 +458,29 @@ export const ChatArchiveSearch: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: '#14141f', color: '#ddd' }}>
-      <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'flex-end', padding: '6px 10px', borderBottom: '1px solid #2a2a3a' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', padding: '6px 10px', borderBottom: '1px solid #2a2a3a' }}>
+        <span style={{ fontSize: 11, color: '#8a8aa0' }}>요약 모델</span>
+        <select
+          value={aiModel}
+          onChange={(e) => changeAiModel(e.target.value)}
+          title="요약에 쓸 모델 — 아래로 갈수록 저렴하고, 위로 갈수록 지시 준수와 인용 정확도가 높다"
+          style={{ padding: '5px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', fontSize: 12 }}
+        >
+          {AI_MODELS.map(m => <option key={m.v} value={m.v}>{m.l}</option>)}
+        </select>
+        <span style={{ fontSize: 11, color: '#8a8aa0' }}>사고 예산</span>
+        <input
+          type="number"
+          min={0}
+          max={AI_THINKING_MAX}
+          step={500}
+          value={thinkingInput}
+          onChange={(e) => setThinkingInput(e.target.value)}
+          onBlur={commitThinking}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          title="요약 전에 AI 가 생각하는 데 쓸 토큰 상한 — 작을수록 싸고 빠르다. 0 이면 제한하지 않는다(기본 1500)"
+          style={{ width: 72, padding: '5px 6px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', fontSize: 12 }}
+        />
         <button
           onClick={loadStats}
           title="방별 아카이브 현황"

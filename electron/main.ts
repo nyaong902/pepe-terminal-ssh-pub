@@ -9895,7 +9895,7 @@ ipcMain.handle('claude:get-mount-path', async (_e, { panelId, remotePath }: { pa
 });
 
 // claude CLI 실행 + 스트리밍 응답 (print 모드)
-ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots }: { sessionId: string; prompt: string; addDirs?: string[]; disallowBash?: boolean; sshTermId?: string; resumeSessionId?: string | null; permissionMode?: string; model?: string; perToolApproval?: boolean; requestId?: string; effort?: string; sshSessions?: { id: string; label: string }[]; localAttachmentRoots?: string[] }) => {
+ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowBash, sshTermId, resumeSessionId, permissionMode, model, perToolApproval, requestId, effort, sshSessions, localAttachmentRoots, maxThinkingTokens }: { sessionId: string; prompt: string; addDirs?: string[]; disallowBash?: boolean; sshTermId?: string; resumeSessionId?: string | null; permissionMode?: string; model?: string; perToolApproval?: boolean; requestId?: string; effort?: string; sshSessions?: { id: string; label: string }[]; localAttachmentRoots?: string[]; maxThinkingTokens?: number }) => {
   try {
     const { spawn } = require('child_process');
     // requestId 가 있으면 그걸 프로세스 키로 사용 — 동일 sessionId 안에서 여러 대화가 동시에 진행될 수 있음.
@@ -9904,7 +9904,7 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
     const os = require('os');
     const path = require('path');
     const fs = require('fs');
-    console.log('[claude] spawn start, prompt length:', prompt.length);
+    console.log('[claude] spawn start, prompt length:', prompt.length, maxThinkingTokens ? `| thinking<=${maxThinkingTokens}` : '');
 
     const isWin = process.platform === 'win32';
 
@@ -9923,6 +9923,13 @@ ipcMain.handle('claude:send', async (_e, { sessionId, prompt, addDirs, disallowB
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
     };
+    // 사고(thinking) 예산 상한 — 호출한 쪽이 지정할 때만 건다.
+    // 대화 아카이브 검색 요약처럼 발췌문을 읽고 정리하는 기계적인 작업은 긴 추론이 결과를 크게
+    // 바꾸지 않는데, 실측으로 사고에만 3,450 토큰이 쓰여 비용의 큰 부분을 차지했다. 대화형 채팅은
+    // 이 값을 안 넘기므로 CLI 기본값 그대로 동작한다.
+    if (typeof maxThinkingTokens === 'number' && maxThinkingTokens > 0) {
+      spawnEnv.MAX_THINKING_TOKENS = String(Math.floor(maxThinkingTokens));
+    }
     try {
       const prefs = loadUIPrefs();
       const ak = (prefs?.apiKeys?.claude || '').toString().trim();

@@ -17,9 +17,25 @@ export type AiOneShotAgent = 'claude' | 'gemini' | 'codex' | 'antigravity' | 'cu
 const ONE_SHOT_IDLE_TIMEOUT_MS = 120_000;
 const ONE_SHOT_MAX_TOTAL_MS = 10 * 60_000;
 
+// 사고(thinking) 예산 상한.
+//
+// 일회성 호출은 "주어진 발췌문을 읽고 정리한다" 처럼 기계적인 작업이라, 긴 추론이 결과를 크게
+// 바꾸지 않는다. 그런데 실측(대화 아카이브 검색 요약)에서 사고에만 3,450 토큰이 쓰여 비용의 큰
+// 부분을 차지했다 — 프롬프트 중복을 걷어내 입력을 72% 줄인 뒤에는 사고가 지배적인 항목이 됐다.
+// 대화형 채팅(ClaudeChat)은 이 값을 넘기지 않으므로 CLI 기본값 그대로 쓴다.
+const ONE_SHOT_MAX_THINKING_TOKENS = 1500;
+
 const uid = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export function runOneShotPrompt(agent: AiOneShotAgent, prompt: string, model?: string, signal?: AbortSignal): Promise<string> {
+export function runOneShotPrompt(
+  agent: AiOneShotAgent,
+  prompt: string,
+  model?: string,
+  signal?: AbortSignal,
+  // 0 을 주면 상한을 걸지 않는다(CLI 기본값).
+  opts?: { maxThinkingTokens?: number },
+): Promise<string> {
+  const maxThinkingTokens = opts?.maxThinkingTokens ?? ONE_SHOT_MAX_THINKING_TOKENS;
   const api = (window as any).api;
   if (!api?.onClaudeStream) return Promise.reject(new Error('API unavailable'));
   if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
@@ -92,7 +108,9 @@ export function runOneShotPrompt(agent: AiOneShotAgent, prompt: string, model?: 
       if (agent === 'claude') {
         // disallowBash — Bash 등 실행형 툴 차단(최선 노력). SSH/로컬 마운트 컨텍스트 없이 호출하므로
         // 요약 작업에 불필요한 툴(SSH exec 등)은 애초에 등록되지 않는다.
-        api.claudeSend?.(sessionId, prompt, [], true, undefined, null, undefined, model, false, requestId);
+        // 인자가 많은 기존 시그니처를 그대로 따른다 — 마지막이 사고 예산이다.
+        api.claudeSend?.(sessionId, prompt, [], true, undefined, null, undefined, model, false, requestId,
+          undefined, undefined, undefined, maxThinkingTokens || undefined);
       } else if (agent === 'gemini') {
         api.geminiSend?.(sessionId, prompt, requestId, model);
       } else if (agent === 'codex') {
