@@ -7979,18 +7979,59 @@ ipcMain.handle('ssh:close-dedicated-socks', (_e, args: { proxyId?: string; connI
 // args.engine('microsip'|'ssw')을 실어 보내고, 이벤트는 payload.engine 을 보고 필터링한다.
 {
   const engineOf = (args: any): 'microsip' | 'ssw' => (args?.engine === 'ssw' ? 'ssw' : 'microsip');
+  // 단말별 마지막 상태를 메인에서 들고 있는다.
+  //
+  // 왜 필요한가: 등록과 통화는 사이드카(별도 프로세스)에 있는데, 상태는 렌더러 컴포넌트에만
+  // 있었다. 그래서 창 분리처럼 컴포넌트가 새 창에서 다시 마운트되면 새 렌더러는 "아무것도
+  // 등록 안 됨" 으로 시작해 자동 등록을 돌렸고, 통화 중에 REGISTER 가 나가 통화가 끊겼다.
+  // 새로 붙은 창이 현재 상태를 물어볼 수 있게 이벤트 스트림에서 누적해 둔다.
+  const sipSnapshots: Record<'microsip' | 'ssw', Map<string, any>> = { microsip: new Map(), ssw: new Map() };
   for (const engine of ['microsip', 'ssw'] as const) {
     const sip = getSipSidecar(engine);
     sip.on('event', (payload: any) => {
+      try {
+        // 엔진이 죽으면 스냅샷을 버린다 — 살아 있다고 잘못 알려주면 새 창이 등록을 건너뛴다.
+        if (payload?.ev === 'ready' && payload.ready === false) sipSnapshots[engine].clear();
+        const id = payload?.endpointId;
+        if (id) {
+          const patch: any = {};
+          if (payload.ev === 'reg' && payload.reg) patch.reg = payload.reg;
+          if (payload.ev === 'call' && payload.call) patch.call = payload.call;
+          if (payload.remote !== undefined) patch.remote = payload.remote;
+          if (payload.ev === 'record') patch.recording = !!payload.recording;
+          if (payload.ev === 'media') patch.mediaPlaying = !!payload.playing;
+          if (payload.ev === 'mwi') patch.mwi = !!payload.waiting;
+          if (Object.keys(patch).length) {
+            sipSnapshots[engine].set(id, { ...(sipSnapshots[engine].get(id) || {}), ...patch });
+          }
+        }
+      } catch {}
       for (const w of BrowserWindow.getAllWindows()) {
         try { if (!w.isDestroyed()) w.webContents.send('sip:event', { ...payload, engine }); } catch {}
       }
     });
   }
+  // 새로 마운트된 워크스페이스가 현재 등록/통화 상태를 받아가는 창구.
+  ipcMain.handle('sip:snapshot', (_e, args: any) => {
+    const m = sipSnapshots[engineOf(args)];
+    return Array.from(m.entries()).map(([endpointId, state]) => ({ endpointId, state }));
+  });
   ipcMain.handle('sip:engine-status', (_e, args: any) => getSipSidecar(engineOf(args)).ensureStarted());
   ipcMain.handle('sip:register', async (_e, args: { endpoint: any; engine?: string }) => getSipSidecar(engineOf(args)).register(args?.endpoint));
   ipcMain.handle('sip:unregister', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).unregister(args?.endpointId));
-  ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string; engine?: string }) => getSipSidecar(engineOf(args)).call(args?.endpointId, args?.target));
+  ipcMain.handle('sip:call', async (_e, args: { endpointId: string; target: string; engine?: string }) => {
+    // 재다이얼용으로 마지막 발신 번호를 스냅샷에 남긴다 — 렌더러의 sessionStorage 는 창마다
+    // 따로라서, 창 분리 후에는 재다이얼 버튼이 비활성으로 보였다.
+    try {
+      const id = args?.endpointId;
+      const target = String(args?.target || '');
+      if (id && target) {
+        const m = sipSnapshots[engineOf(args)];
+        m.set(id, { ...(m.get(id) || {}), lastDialed: target });
+      }
+    } catch {}
+    return getSipSidecar(engineOf(args)).call(args?.endpointId, args?.target);
+  });
   ipcMain.handle('sip:hangup', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).hangup(args?.endpointId));
   ipcMain.handle('sip:answer', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).answer(args?.endpointId));
   ipcMain.handle('sip:reject', async (_e, args: { endpointId: string; engine?: string }) => getSipSidecar(engineOf(args)).reject(args?.endpointId));

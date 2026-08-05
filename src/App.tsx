@@ -3541,6 +3541,16 @@ useEffect(() => {
     // SqlTool 도 마찬가지로 sidecar JDBC connection 보존 → 새 창이 같은 connectionId 로 adopt.
     (window as any).__preserveFileExplorerConns = true;
     (window as any).__preserveSqlConns = true;
+    // 소프트폰(MicroSIP/SSW)은 언마운트될 때 통화를 끊고 등록을 해제한다 — 탭을 닫으면 UI 없이
+    // 계정이 로컬 SIP 포트를 물고 남기 때문이다. 그런데 창 분리도 언마운트라서, 통화 중에 창을
+    // 분리하면 그 정리가 돌아 통화가 전부 끊겼다. 이동하는 동안은 정리를 건너뛰게 알려준다.
+    //
+    // 불리언 + 타이머로 끄지 않고 만료 시각을 쓰는 이유: 위 두 플래그를 끄는 setTimeout 과 React 18
+    // 이 언마운트를 커밋하는 시점 사이에 레이스가 있었다(FileExplorer 에서 실제로 물렸다 — 그래서
+    // connId 단위 보존이 따로 생겼다). 시각으로 두면 그 레이스가 아예 없다.
+    if (tab.type === 'microsip' || tab.type === 'sswPhone') {
+      (window as any).__preserveSipUntil = Date.now() + 5000;
+    }
     try {
       // 워크스페이스가 하나뿐이어도 무조건 막으면 안 된다 — 드롭 지점이 다른 앱 창 위라서
       // 재도킹되는 경우엔 이 창에 탭이 없어져도 문제가 안 된다(재도킹이지 분리가 아니므로).

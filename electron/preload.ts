@@ -306,6 +306,8 @@ contextBridge.exposeInMainWorld('api', {
   // MicroSIP / SSW 소프트폰 — 네이티브 PJSIP 사이드카 제어. 둘은 독립된 sipd.exe 프로세스라
   // 모든 호출에 engine('microsip'|'ssw', 생략 시 'microsip')을 실어 어느 엔진으로 갈지 지정한다.
   sipEngineStatus: (args?: { engine?: 'microsip' | 'ssw' }) => ipcRenderer.invoke('sip:engine-status', args),
+  // 단말별 현재 등록/통화 상태 — 창 분리로 새로 마운트된 워크스페이스가 자기 상태를 복원할 때 쓴다.
+  sipSnapshot: (args?: { engine?: string }) => ipcRenderer.invoke('sip:snapshot', args),
   sipRegister: (args: { endpoint: any; engine?: 'microsip' | 'ssw' }) => ipcRenderer.invoke('sip:register', args),
   sipUnregister: (args: { endpointId: string; engine?: 'microsip' | 'ssw' }) => ipcRenderer.invoke('sip:unregister', args),
   sipCall: (args: { endpointId: string; target: string; engine?: 'microsip' | 'ssw' }) => ipcRenderer.invoke('sip:call', args),

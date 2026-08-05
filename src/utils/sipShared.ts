@@ -92,7 +92,7 @@ export type SipEndpoint = {
 
 export type RegState = 'unregistered' | 'registering' | 'registered' | 'failed' | 'no-engine';
 export type CallState = 'idle' | 'calling' | 'ringing' | 'incoming' | 'connected' | 'held' | 'ended';
-export type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; speakerMuted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string; mediaPlaying?: boolean; ctrActive?: boolean };
+export type EndpointRuntime = { reg: RegState; call: CallState; dialed: string; remote?: string; muted?: boolean; speakerMuted?: boolean; recording?: boolean; mwi?: boolean; error?: string; capturing?: boolean; captureFile?: string; mediaPlaying?: boolean; ctrActive?: boolean; /** 마지막 발신 번호(재다이얼용) — 메인의 sip 스냅샷에서 받아온다. 창 분리로 새 창에서 다시 마운트되면 렌더러의 sessionStorage 는 비어 있어서 재다이얼이 비활성으로 보였다. */ lastDialed?: string };
 
 export type MacroStep =
   | { type: 'key'; key: string }

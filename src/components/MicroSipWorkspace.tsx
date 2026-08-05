@@ -16,7 +16,7 @@ import {
 export type { SipCodec, SipEndpoint };
 export { ALL_CODECS };
 
-export type MicroSipView = 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'log';
+export type MicroSipView = 'phones' | 'settings' | 'macros' | 'contacts' | 'messages' | 'calls' | 'log';
 
 export const MicroSipWorkspace: React.FC<{
   initialView?: MicroSipView;
@@ -324,6 +324,11 @@ export const MicroSipWorkspace: React.FC<{
   // SIP 포트를 계속 점유하고 있어 새 계정이 트랜스포트를 못 잡아 통화가 안 나간다 — 탭을 닫을
   // 때 통화 중인 단말은 끊고, 등록돼 있던 단말은 모두 등록 해제해 포트/계정을 완전히 반납한다.
   useEffect(() => () => {
+    // 창 분리/재도킹으로 이 컴포넌트가 다른 창에서 다시 살아나는 중이면 정리하지 않는다 —
+    // 그 경우 통화와 등록은 사이드카에 그대로 살아 있어야 하고, 새 창이 sip:snapshot 으로
+    // 상태를 이어받는다(App.tsx 의 detachTabToNewWindow 참고).
+    const movingUntil = Number((window as any).__preserveSipUntil || 0);
+    if (movingUntil && Date.now() < movingUntil) return;
     for (const ep of endpointsRef.current) {
       const call = runtimeRef.current[ep.id]?.call;
       if (call && call !== 'idle') { try { api().sipHangup?.({ endpointId: ep.id }); } catch {} }
@@ -544,17 +549,49 @@ export const MicroSipWorkspace: React.FC<{
   };
   const switchViewByDelta = (delta: number) => {
     // 설정/기록 탭 제거(요청에 따라) — 남은 뷰만 순환.
-    const order: Exclude<MicroSipView, 'messages' | 'settings' | 'log'>[] = ['phones', 'macros', 'contacts'];
+    const order: Exclude<MicroSipView, 'messages' | 'settings' | 'log'>[] = ['phones', 'macros', 'contacts', 'calls'];
     const idx = order.indexOf((view === 'messages' || view === 'settings' || view === 'log' ? 'phones' : view) as Exclude<MicroSipView, 'messages' | 'settings' | 'log'>);
     const next = order[(idx + delta + order.length) % order.length];
     setView(next);
   };
 
-  // 엔진 준비 + 단말 로드 완료 후 1회: autoRegister 단말 자동 등록
+  // 엔진 준비 + 단말 로드 완료 후 1회: 사이드카 현재 상태를 먼저 받아온 뒤, 아직 등록되지 않은
+  // autoRegister 단말만 등록한다.
+  //
+  // 스냅샷을 먼저 받는 이유: 등록과 통화는 사이드카(별도 프로세스)에 살아 있는데 상태는 이
+  // 컴포넌트에만 있다. 창 분리/재도킹으로 새 창에서 다시 마운트되면 렌더러는 "아무것도 등록 안 됨"
+  // 으로 시작하므로, 그대로 자동 등록을 돌리면 통화 중에 REGISTER 가 나가 통화가 끊겼다
+  // (실측: 통화하다 창 분리하면 다 끊김). 아래 "설정 변경 → 재등록" 경로는 통화 중이면 15초 뒤로
+  // 미루는 보호가 있었는데, 이 최초 자동 등록 경로에는 없었다 — 통화 중에 실행될 일이 없다고
+  // 보았기 때문이다. 창 분리가 바로 그 경우다.
   useEffect(() => {
     if (autoRegDoneRef.current || !loadedRef.current || engineReady !== true || endpoints.length === 0) return;
     autoRegDoneRef.current = true;
-    endpoints.forEach(e => { if (e.autoRegister !== false && e.server.trim() && e.username.trim()) void register(e); });
+    void (async () => {
+      let snap: Array<{ endpointId: string; state: any }> = [];
+      try { snap = (await api().sipSnapshot?.()) || []; } catch {}
+      const live = new Map(snap.map(s => [s.endpointId, s.state || {}]));
+      // 살아 있는 상태를 화면에 먼저 반영 — 새 창이 통화 중인 단말을 idle 로 보여주지 않게.
+      if (live.size > 0) {
+        setRuntime(prev => {
+          const next = { ...prev };
+          for (const [id, st] of live) {
+            next[id] = { ...(next[id] || { reg: 'unregistered', call: 'idle', dialed: '' }), ...st };
+          }
+          return next;
+        });
+      }
+      endpoints.forEach(e => {
+        if (e.autoRegister === false || !e.server.trim() || !e.username.trim()) return;
+        const st: any = live.get(e.id);
+        if (st && (st.reg === 'registered' || st.reg === 'registering' || isActiveCall(st.call || 'idle'))) {
+          // 이미 사이드카에 등록/통화가 살아 있다 — 건드리지 않고 재등록 기준값만 맞춘다.
+          lastRegCfgRef.current[e.id] = cfgKey(e);
+          return;
+        }
+        void register(e);
+      });
+    })();
     /* eslint-disable-next-line */
   }, [engineReady, endpoints.length]);
 
@@ -764,6 +801,13 @@ export const MicroSipWorkspace: React.FC<{
           </div>
         )}
 
+        {view === 'calls' && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <CallLogView history={callHistory} setHistory={setCallHistory} endpoints={endpoints}
+              contacts={contacts} onDial={redial} />
+          </div>
+        )}
+
         {view === 'messages' && (
           <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
             <MessagesView conversations={conversations} endpoints={endpoints} presence={presence}
@@ -795,6 +839,7 @@ const MicroSipHeader: React.FC<{
       {tab('phones', '☎ 단말')}
       {tab('macros', '⚡ 매크로')}
       {tab('contacts', '👤 주소록')}
+      {tab('calls', '🕒 통화기록')}
       {/* 메시지 탭 숨김 (요청에 따라 비표시) — {tab('messages', '💬 메시지')} */}
       {/* 설정/기록 탭 제거 (요청에 따라) — 설정은 단말 카드 ⚙ 버튼으로 뒤집어서 접근 */}
       <button onClick={p.onRegisterAll} disabled={p.epCount === 0} title="모든 단말 등록"
@@ -819,6 +864,118 @@ const MicroSipHeader: React.FC<{
   );
 };
 const miniBtn = (enabled: boolean): React.CSSProperties => ({ padding: '5px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'var(--win-surface-2, #21262d)', color: 'var(--win-text, #e6edf3)', fontSize: 11, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5 });
+
+// ───────────────────────── 통화기록 ─────────────────────────
+// MicroSIP 의 Logs 탭과 같은 구성: 방향 아이콘 + 이름 / 번호 / 시간.
+// 기록 자체는 예전부터 call 상태 전이에서 모아 저장하고 있었는데(callHistory) 보여주는 화면이
+// 없었다 — 이 뷰가 그것을 표시한다.
+//
+// 열 제목과 행의 칸 폭이 어긋나지 않게 grid 템플릿을 공유한다(주소록과 같은 방식).
+const callLogGrid = '22px minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1.1fr) 30px';
+
+// 오늘이면 시각만, 그 외에는 날짜+시각 — MicroSIP 도 같은 방식이라 목록이 훨씬 읽기 쉽다.
+const fmtCallTs = (ts: number): string => {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${ymd} ${d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
+};
+const fmtDur = (sec: number): string => {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60);
+  const r = sec % 60;
+  return `${m}:${String(r).padStart(2, '0')}`;
+};
+
+const CallLogView: React.FC<{
+  history: CallHistEntry[];
+  setHistory: React.Dispatch<React.SetStateAction<CallHistEntry[]>>;
+  endpoints: SipEndpoint[];
+  contacts: Contact[];
+  onDial: (epId: string, number: string) => void;
+}> = ({ history, setHistory, endpoints, contacts, onDial }) => {
+  const [q, setQ] = useState('');
+  const [onlyMissed, setOnlyMissed] = useState(false);
+  // 이름은 주소록에서 번호로 찾아 붙인다 — 없으면 번호를 그대로 이름 칸에 보여준다(MicroSIP 동일).
+  const nameOf = (remote: string): string => {
+    const peer = normPeer(remote);
+    const hit = contacts.find(c => c.number && normPeer(c.number) === peer);
+    return (hit?.name || '').trim() || remote || '알수없음';
+  };
+  const labelOf = (epId: string): string => endpoints.find(e => e.id === epId)?.label || '';
+  const rows = history.filter(h => {
+    if (onlyMissed && h.result === 'answered') return false;
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return `${h.remote} ${nameOf(h.remote)}`.toLowerCase().includes(needle);
+  });
+  const th: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--win-text-dim, #9aa7b3)', padding: '0 6px' };
+  const td: React.CSSProperties = { fontSize: 12, color: 'var(--win-text, #e6edf3)', padding: '0 6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  return (
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', padding: 12, gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="이름 · 번호 검색"
+          style={{ flex: '0 0 220px', padding: '6px 8px', background: 'var(--win-bg, #0d1117)', color: 'var(--win-text, #e6edf3)', border: '1px solid var(--win-border, #30363d)', borderRadius: 6, fontSize: 12 }} />
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={onlyMissed} onChange={e => setOnlyMissed(e.target.checked)} />
+          부재중만
+        </label>
+        <span style={{ fontSize: 11, color: 'var(--win-text-dim, #9aa7b3)' }}>{rows.length}건</span>
+        <button onClick={() => { if (history.length) setHistory([]); }} disabled={history.length === 0}
+          title="통화기록 전체 삭제"
+          style={{ marginLeft: 'auto', ...miniBtn(history.length > 0) }}>전체 삭제</button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: callLogGrid, alignItems: 'center', gap: 4, padding: '0 2px 4px', borderBottom: '1px solid var(--win-border, #30363d)' }}>
+        <span />
+        <span style={th}>이름</span>
+        <span style={th}>번호</span>
+        <span style={th}>시간</span>
+        <span />
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {rows.length === 0 && (
+          <div style={{ padding: 16, fontSize: 12, color: 'var(--win-text-dim, #9aa7b3)' }}>
+            {history.length === 0 ? '통화기록이 없습니다.' : '조건에 맞는 기록이 없습니다.'}
+          </div>
+        )}
+        {rows.map(h => {
+          const missed = h.result !== 'answered';
+          // 수신 응답=초록, 발신 응답=파랑, 부재중/무응답=빨강 (MicroSIP 의 색 구분과 같은 의미)
+          const color = missed ? '#f85149' : h.dir === 'in' ? '#3fb950' : '#58a6ff';
+          const epGone = !endpoints.some(e => e.id === h.epId);
+          const dur = fmtDur(h.durationSec);
+          return (
+            <div key={h.id}
+              onDoubleClick={() => { if (!epGone) onDial(h.epId, h.remote); }}
+              title={epGone
+                ? '이 기록을 만든 단말이 삭제되어 다시 걸 수 없습니다'
+                : `두 번 클릭하면 ${h.remote} 로 발신${labelOf(h.epId) ? ` (${labelOf(h.epId)})` : ''}`}
+              style={{ display: 'grid', gridTemplateColumns: callLogGrid, alignItems: 'center', gap: 4,
+                padding: '5px 2px', borderBottom: '1px solid var(--win-border-weak, #21262d)',
+                cursor: epGone ? 'default' : 'pointer', opacity: epGone ? 0.55 : 1 }}>
+              <span style={{ color, fontWeight: 700, fontSize: 13, textAlign: 'center' }}>
+                {h.dir === 'in' ? '↙' : '↗'}
+              </span>
+              <span style={{ ...td, color }}>{nameOf(h.remote)}</span>
+              <span style={td}>{h.remote}</span>
+              <span style={{ ...td, color: 'var(--win-text-dim, #9aa7b3)' }}>
+                {fmtCallTs(h.ts)}{dur ? `  ${dur}` : ''}
+              </span>
+              <button onClick={e => { e.stopPropagation(); setHistory(prev => prev.filter(x => x.id !== h.id)); }}
+                title="이 기록 삭제"
+                style={{ border: 'none', background: 'transparent', color: 'var(--win-text-dim, #9aa7b3)', cursor: 'pointer', fontSize: 12 }}>✕</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 
 // ───────────────────────── 주소록 ─────────────────────────
 const presColor: Record<string, string> = { online: '#3fb950', offline: '#8b949e', unknown: '#d29922' };
@@ -1404,6 +1561,16 @@ const PhoneCard: React.FC<{
   const [lastDialed, setLastDialed] = useState<string>(() => {
     try { return sessionStorage.getItem(lastDialedKey) || ''; } catch { return ''; }
   });
+  // sessionStorage 는 창(렌더러)마다 따로다 — 창 분리로 새 창에서 다시 마운트되면 비어 있어서
+  // 재다이얼이 비활성으로 보였다. 메인의 sip 스냅샷이 들고 있는 값으로 보충한다(수명은
+  // sessionStorage 와 같다 — 앱을 끄면 사라진다).
+  useEffect(() => {
+    const fromEngine = (rt.lastDialed || '').trim();
+    if (!fromEngine || lastDialed) return;
+    setLastDialed(fromEngine);
+    try { sessionStorage.setItem(lastDialedKey, fromEngine); } catch {}
+    /* eslint-disable-next-line */
+  }, [rt.lastDialed]);
   const callAndRemember = () => {
     if (rt.dialed && rt.dialed.trim()) {
       try { sessionStorage.setItem(lastDialedKey, rt.dialed.trim()); } catch {}
