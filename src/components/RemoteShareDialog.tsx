@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+type ShareMode = 'webrtc' | 'mjpeg';
+
 type ShareState = {
   running: boolean;
   address: string;
   pin: string;
   pinMode: 'random' | 'fixed';
+  mode: ShareMode;
   port: number;
   clients: number;
   tailscale: {
@@ -18,7 +21,7 @@ type ShareState = {
 
 type RemoteShareApi = {
   remoteShareState?: () => Promise<ShareState>;
-  remoteShareStart?: (options?: { port?: number; pinMode?: 'random' | 'fixed'; fixedPin?: string }) => Promise<ShareState>;
+  remoteShareStart?: (options?: { port?: number; pinMode?: 'random' | 'fixed'; fixedPin?: string; mode?: ShareMode }) => Promise<ShareState>;
   remoteShareStop?: () => Promise<ShareState>;
 };
 
@@ -27,6 +30,7 @@ const EMPTY_STATE: ShareState = {
   address: '',
   pin: '',
   pinMode: 'random',
+  mode: 'webrtc',
   port: 17800,
   clients: 0,
   tailscale: {
@@ -45,6 +49,9 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
     localStorage.getItem('remoteSharePinMode') === 'fixed' ? 'fixed' : 'random'
   ));
   const [fixedPin, setFixedPin] = useState(() => localStorage.getItem('remoteShareFixedPin') || '');
+  const [shareMode, setShareMode] = useState<ShareMode>(() => (
+    localStorage.getItem('remoteShareMode') === 'mjpeg' ? 'mjpeg' : 'webrtc'
+  ));
   const api = window.api as RemoteShareApi | undefined;
 
   useEffect(() => {
@@ -60,8 +67,9 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       localStorage.setItem('remoteSharePinMode', pinMode);
+      localStorage.setItem('remoteShareMode', shareMode);
       if (pinMode === 'fixed') localStorage.setItem('remoteShareFixedPin', fixedPin);
-      const next = await api?.remoteShareStart?.({ port: state.port, pinMode, fixedPin });
+      const next = await api?.remoteShareStart?.({ port: state.port, pinMode, fixedPin, mode: shareMode });
       setState(next || EMPTY_STATE);
       if (next?.running) {
         onClose();
@@ -124,6 +132,10 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
               <div className={`remote-share-pin ${state.pinMode === 'fixed' ? 'fixed' : ''}`}>
                 {state.pinMode === 'fixed' ? t('pin.fixedActive') : state.pin}
               </div>
+              <label>{t('mode.label')}</label>
+              <div className="remote-share-pin">
+                {state.mode === 'mjpeg' ? t('mode.mjpeg') : t('mode.webrtc')}
+              </div>
             </div>
             <p className="remote-share-note">{t('runningHelp')}</p>
             <button className="remote-share-primary stop" disabled={busy} onClick={stop}>{t('stop')}</button>
@@ -152,6 +164,16 @@ export function RemoteShareDialog({ onClose }: { onClose: () => void }) {
             <div className="remote-share-intro">
               <strong>{t('intro.title')}</strong>
               <p>{t('intro.body')}</p>
+            </div>
+            <div className="remote-share-pin-settings">
+              <label className={shareMode === 'webrtc' ? 'selected' : ''}>
+                <input type="radio" name="remote-share-mode" checked={shareMode === 'webrtc'} onChange={() => setShareMode('webrtc')} />
+                <span><strong>{t('mode.webrtc')}</strong><small>{t('mode.webrtcHelp')}</small></span>
+              </label>
+              <label className={shareMode === 'mjpeg' ? 'selected' : ''}>
+                <input type="radio" name="remote-share-mode" checked={shareMode === 'mjpeg'} onChange={() => setShareMode('mjpeg')} />
+                <span><strong>{t('mode.mjpeg')}</strong><small>{t('mode.mjpegHelp')}</small></span>
+              </label>
             </div>
             <div className="remote-share-pin-settings">
               <label className={pinMode === 'random' ? 'selected' : ''}>

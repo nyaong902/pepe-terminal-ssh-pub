@@ -1,17 +1,26 @@
-import { BrowserWindow, type InputEvent } from 'electron';
+import { BrowserWindow, webContents as electronWebContents, type InputEvent, type WebContents } from 'electron';
 import http, { IncomingMessage, ServerResponse } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getCurrentLang } from './i18n';
 import { loadNamespace } from './i18nStore';
+import { RemoteShareHostWindow, type RemoteShareSignal } from './remoteShareHostWindow';
+
+// 'webrtc': RTCPeerConnection 로 화면 전송(저지연, 고화질) — 기본값, Tailscale 등
+// 같은 네트워크 환경에서 STUN/TURN 없이도 대개 연결됨.
+// 'mjpeg': BrowserWindow.capturePage() 를 폴링해 JPEG 스트림으로 전송 — WebRTC 협상이
+// 막히는 네트워크(엄격한 방화벽 등)에서의 폴백. 지연은 더 크지만 항상 동작함.
+export type RemoteShareMode = 'webrtc' | 'mjpeg';
 
 export type RemoteShareState = {
   running: boolean;
   address: string;
   pin: string;
   pinMode: 'random' | 'fixed';
+  mode: RemoteShareMode;
   port: number;
   clients: number;
   tailscale: {
@@ -26,6 +35,7 @@ export type RemoteShareStartOptions = {
   port?: number;
   pinMode?: 'random' | 'fixed';
   fixedPin?: string;
+  mode?: RemoteShareMode;
 };
 
 type RemoteInput =
@@ -39,6 +49,9 @@ type InputModifier = NonNullable<InputEvent['modifiers']>[number];
 const DEFAULT_PORT = 17800;
 const MAX_REQUEST_BYTES = 16 * 1024;
 const FRAME_INTERVAL_MS = 160;
+// 입력(특히 타이핑) 직후 잠시 더 짧은 간격으로 캡처해 화면 반영 지연을 줄인다.
+const FRAME_INTERVAL_BOOST_MS = 60;
+const FRAME_BOOST_DURATION_MS = 1200;
 
 function isTailscaleIpv4(address: string): boolean {
   const parts = address.split('.').map(Number);
@@ -136,9 +149,19 @@ function htmlPage(): string {
     #ended button { margin-top:16px; }
     #viewer { display:none; position:fixed; inset:0; overflow:hidden; background:#020608; touch-action:none; }
     #screenViewport { position:absolute; inset:0; overflow:hidden; background:#020608; touch-action:none; }
-    #screenStage { position:absolute; inset:0; transform-origin:center center; will-change:transform; }
-    #screen { width:100%; height:100%; object-fit:contain; display:block; user-select:none; -webkit-user-drag:none; }
+    #screenViewport.zoomed { overflow:auto; touch-action:pan-x pan-y; }
+    #viewer.mouse-mode #screenViewport { overflow:hidden !important; touch-action:none; }
+    #screenStage { position:relative; width:100%; height:100%; transform-origin:top left; will-change:transform; }
+    #viewer.mouse-mode #screenStage { position:absolute; inset:0; }
+    #screen, #screenImg { width:100%; height:100%; object-fit:contain; user-select:none; -webkit-user-drag:none; display:none; }
+    #screen.active, #screenImg.active { display:block; }
     #bar { position:fixed; top:10px; left:50%; transform:translateX(-50%); display:flex; gap:8px; align-items:center; padding:7px 10px; border-radius:999px; background:#061119d9; border:1px solid #365767; font-size:12px; opacity:.82; z-index:5; }
+    #barBtns { display:flex; gap:4px; margin-left:4px; }
+    #barBtns button { all:unset; cursor:pointer; padding:3px 9px; border-radius:999px; background:#16303c; color:#cfe7f0; font-size:12px; line-height:1.6; }
+    #barBtns button:hover { background:#204457; }
+    #fullscreenToggle { position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:6; width:auto; height:auto; margin:0; padding:8px 16px; border-radius:999px; background:#061119d9; border:1px solid #365767; color:#cfe7f0; font-size:12px; opacity:.82; display:none; }
+    #viewer.can-fullscreen #fullscreenToggle { display:block; }
+    #viewer.can-fullscreen #bar { top:52px; }
     #keyboard { position:fixed; left:-9999px; top:0; opacity:0; }
     #remoteCursor { display:none; position:absolute; width:24px; height:30px; pointer-events:none; z-index:8; transform:translate(-3px,-3px); filter:drop-shadow(0 2px 2px #000b); }
     #remoteCursor svg { display:block; width:100%; height:100%; overflow:visible; }
@@ -186,7 +209,8 @@ function htmlPage(): string {
   <main id="viewer">
     <div id="screenViewport">
       <div id="screenStage">
-        <img id="screen" alt="${html('title')}">
+        <video id="screen" autoplay playsinline muted></video>
+        <img id="screenImg" alt="${html('title')}">
         <div id="remoteCursor" aria-hidden="true">
           <svg viewBox="0 0 28 34">
             <path d="M3 2.5v25.2l6.5-6.2 4.5 10.1 5-2.3-4.4-9.8h9.2L3 2.5Z" fill="#fff" stroke="#111" stroke-width="2.2" stroke-linejoin="round"/>
@@ -194,7 +218,16 @@ function htmlPage(): string {
         </div>
       </div>
     </div>
-    <div id="bar"><span>PePe Remote</span><span>${html('client.directControl')}</span></div>
+    <div id="bar">
+      <span>PePe Remote</span><span>${html('client.directControl')}</span>
+      <div id="barBtns">
+        <button id="scaleDown" title="${html('client.zoomOut')}">-</button>
+        <span id="scaleLabel">100%</span>
+        <button id="scaleUp" title="${html('client.zoomIn')}">+</button>
+        <button id="scaleReset" title="${html('client.fitScreen')}">${html('client.fitScreen')}</button>
+      </div>
+    </div>
+    <button id="fullscreenToggle">${html('client.fullscreenEnter')}</button>
     <button id="mouseToggle">${html('client.virtualMouse')}</button>
     <section id="virtualMouse">
       <div id="mouseHead">
@@ -225,7 +258,9 @@ function htmlPage(): string {
 (() => {
   const messages = {
     pinRequired: ${text('client.pinRequired')},
-    invalidPin: ${text('client.invalidPin')}
+    invalidPin: ${text('client.invalidPin')},
+    fullscreenEnter: ${text('client.fullscreenEnter')},
+    fullscreenExit: ${text('client.fullscreenExit')}
   };
   const login = document.querySelector('#login');
   const ended = document.querySelector('#ended');
@@ -234,13 +269,19 @@ function htmlPage(): string {
   const error = document.querySelector('#error');
   const screenViewport = document.querySelector('#screenViewport');
   const screenStage = document.querySelector('#screenStage');
-  const screen = document.querySelector('#screen');
+  const screenVideo = document.querySelector('#screen');
+  const screenImg = document.querySelector('#screenImg');
+  // 현재 활성 화면 엘리먼트 — WebRTC 모드는 <video>, MJPEG 폴백 모드는 <img>.
+  // videoWidth/naturalWidth 를 모두 시도해 두 모드 공용 크기 계산을 그대로 재사용한다.
+  let screen = screenVideo;
   const keyboard = document.querySelector('#keyboard');
   const remoteCursor = document.querySelector('#remoteCursor');
   const virtualMouse = document.querySelector('#virtualMouse');
   const mouseToggle = document.querySelector('#mouseToggle');
   const touchpad = document.querySelector('#touchpad');
   const zoomLabel = document.querySelector('#zoomLabel');
+  const scaleLabel = document.querySelector('#scaleLabel');
+  const fullscreenToggle = document.querySelector('#fullscreenToggle');
   let pin = '';
   let lastMove = 0;
   let cursor = { x: 0.5, y: 0.5 };
@@ -254,16 +295,40 @@ function htmlPage(): string {
   let statusTimer = null;
   let statusFailures = 0;
   let keyboardComposing = false;
+  let ws = null;
+  let pc = null;
+  let dataChannel = null;
+  let nextRequestId = 1;
+  const pendingReplies = new Map();
+  let shareMode = 'webrtc';
+
+  function closeConnection() {
+    if (dataChannel) { try { dataChannel.close(); } catch {} dataChannel = null; }
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+    if (ws) { try { ws.close(); } catch {} ws = null; }
+    for (const { reject } of pendingReplies.values()) reject(new Error('connection closed'));
+    pendingReplies.clear();
+  }
 
   function showEnded() {
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = null;
+    stopEdgeScroll();
+    closeConnection();
     pin = '';
-    screen.removeAttribute('src');
+    screenVideo.srcObject = null;
+    screenImg.removeAttribute('src');
     screenStage.style.transform = 'none';
     viewer.style.display = 'none';
     login.style.display = 'none';
     ended.style.display = 'block';
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    }
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    saveView();
   }
 
   async function checkShareStatus() {
@@ -285,8 +350,11 @@ function htmlPage(): string {
     }
   }
 
-  async function send(payload) {
-    if (!pin) return;
+  // WebRTC 모드: 입력을 DataChannel(저지연 UDP 기반)로 보낸다. pointer up 처럼 응답(editable
+  // 여부)이 필요한 메시지는 id 를 붙여 보내고, 호스트가 같은 id 로 결과를 돌려줄 때까지 기다린다.
+  // MJPEG 폴백 모드: 기존처럼 HTTP POST /input 으로 보내고 JSON 응답을 그대로 결과로 쓴다.
+  async function sendHttp(payload) {
+    if (!pin) return null;
     try {
       const response = await fetch('/input', {
         method: 'POST',
@@ -301,9 +369,24 @@ function htmlPage(): string {
     return null;
   }
 
+  function send(payload, expectReply = false) {
+    if (shareMode === 'mjpeg') return sendHttp(payload);
+    if (!dataChannel || dataChannel.readyState !== 'open') return Promise.resolve(null);
+    if (!expectReply) {
+      try { dataChannel.send(JSON.stringify(payload)); } catch {}
+      return Promise.resolve(null);
+    }
+    const id = nextRequestId++;
+    try { dataChannel.send(JSON.stringify({ ...payload, id })); } catch { return Promise.resolve(null); }
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { pendingReplies.delete(id); resolve(null); }, 500);
+      pendingReplies.set(id, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: () => { clearTimeout(timer); resolve(null); } });
+    });
+  }
+
   function normalized(ev) {
     const r = screen.getBoundingClientRect();
-    const naturalRatio = (screen.naturalWidth || r.width) / (screen.naturalHeight || r.height);
+    const naturalRatio = (screen.videoWidth || r.width) / (screen.videoHeight || r.height);
     const boxRatio = r.width / r.height;
     let width = r.width, height = r.height, left = r.left, top = r.top;
     if (boxRatio > naturalRatio) {
@@ -322,7 +405,7 @@ function htmlPage(): string {
   function screenBox() {
     const widthBase = screenStage.clientWidth || 1;
     const heightBase = screenStage.clientHeight || 1;
-    const naturalRatio = (screen.naturalWidth || widthBase) / (screen.naturalHeight || heightBase);
+    const naturalRatio = (screen.videoWidth || widthBase) / (screen.videoHeight || heightBase);
     const boxRatio = widthBase / heightBase;
     let width = widthBase, height = heightBase, left = 0, top = 0;
     if (boxRatio > naturalRatio) {
@@ -357,14 +440,27 @@ function htmlPage(): string {
   }
 
   function applyView(save = false) {
-    clampPan();
-    const active = viewer.classList.contains('mouse-mode');
-    screenStage.style.transform = active
-      ? 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')'
-      : 'translate(0,0) scale(1)';
+    const mouseMode = viewer.classList.contains('mouse-mode');
+    if (mouseMode) {
+      clampPan();
+      screenStage.style.width = '';
+      screenStage.style.height = '';
+      screenStage.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+    } else {
+      screenViewport.classList.toggle('zoomed', zoom > 1);
+      screenStage.style.transform = 'none';
+      screenStage.style.width = (zoom * 100) + '%';
+      screenStage.style.height = (zoom * 100) + '%';
+    }
     zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    scaleLabel.textContent = Math.round(zoom * 100) + '%';
     if (save) saveView();
     drawCursor();
+  }
+
+  function setZoom(next) {
+    zoom = Math.max(1, Math.min(4, next));
+    applyView(true);
   }
 
   function resetView() {
@@ -372,6 +468,57 @@ function htmlPage(): string {
     panX = 0;
     panY = 0;
     applyView(true);
+  }
+
+  const EDGE_ZONE = 56;
+  const EDGE_MAX_SPEED = 18;
+  let edgeVX = 0;
+  let edgeVY = 0;
+  let edgeFrame = null;
+  let lastPointerEvent = null;
+
+  function edgeScrollStep() {
+    if (!edgeVX && !edgeVY) { edgeFrame = null; return; }
+    screenViewport.scrollLeft += edgeVX;
+    screenViewport.scrollTop += edgeVY;
+    if (lastPointerEvent) {
+      const p = normalized(lastPointerEvent);
+      cursor = p;
+      drawCursor();
+      send({ type:'pointer', action:'move', ...p });
+    }
+    edgeFrame = requestAnimationFrame(edgeScrollStep);
+  }
+
+  function updateEdgeScroll(e) {
+    if (viewer.classList.contains('mouse-mode') || zoom <= 1 || !screenViewport.classList.contains('zoomed')) {
+      stopEdgeScroll();
+      return;
+    }
+    lastPointerEvent = e;
+    const r = screenViewport.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const factor = d => Math.max(0, Math.min(1, (EDGE_ZONE - d) / EDGE_ZONE));
+    edgeVX = x < EDGE_ZONE ? -factor(x) * EDGE_MAX_SPEED
+      : x > r.width - EDGE_ZONE ? factor(r.width - x) * EDGE_MAX_SPEED
+      : 0;
+    edgeVY = y < EDGE_ZONE ? -factor(y) * EDGE_MAX_SPEED
+      : y > r.height - EDGE_ZONE ? factor(r.height - y) * EDGE_MAX_SPEED
+      : 0;
+    if ((edgeVX || edgeVY) && edgeFrame === null) {
+      edgeFrame = requestAnimationFrame(edgeScrollStep);
+    }
+  }
+
+  function stopEdgeScroll() {
+    edgeVX = 0;
+    edgeVY = 0;
+    lastPointerEvent = null;
+    if (edgeFrame !== null) {
+      cancelAnimationFrame(edgeFrame);
+      edgeFrame = null;
+    }
   }
 
   function moveCursor(dx, dy) {
@@ -388,11 +535,63 @@ function htmlPage(): string {
         const clickCount = i + 1;
         send({ type:'pointer', action:'down', x:cursor.x, y:cursor.y, button, clickCount });
         setTimeout(async () => {
-          const result = await send({ type:'pointer', action:'up', x:cursor.x, y:cursor.y, button, clickCount });
+          const result = await send({ type:'pointer', action:'up', x:cursor.x, y:cursor.y, button, clickCount }, true);
           if (result?.editable) keyboard.focus({ preventScroll:true });
         }, 45);
       }, i * 130);
     }
+  }
+
+  function connectSignalSocket() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const socket = new WebSocket(proto + '://' + location.host + '/signal?pin=' + encodeURIComponent(pin));
+    ws = socket;
+    pc = new RTCPeerConnection({ iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' }
+    ] });
+    pc.addEventListener('track', ev => {
+      console.log('[pepe-remote] track received', ev.track.kind, ev.streams.length);
+      if (ev.streams[0]) {
+        screen.srcObject = ev.streams[0];
+        screen.play?.().catch(err => console.log('[pepe-remote] video play() failed', err));
+      }
+    });
+    pc.addEventListener('connectionstatechange', () => {
+      console.log('[pepe-remote] connectionState', pc.connectionState);
+    });
+    pc.addEventListener('iceconnectionstatechange', () => {
+      console.log('[pepe-remote] iceConnectionState', pc.iceConnectionState);
+    });
+    pc.addEventListener('icecandidate', ev => {
+      if (ev.candidate && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ kind:'ice', candidate: ev.candidate.toJSON() }));
+      }
+    });
+    pc.addEventListener('datachannel', ev => {
+      dataChannel = ev.channel;
+      dataChannel.addEventListener('message', msgEv => {
+        let msg;
+        try { msg = JSON.parse(msgEv.data); } catch { return; }
+        if (msg && typeof msg.id === 'number' && pendingReplies.has(msg.id)) {
+          pendingReplies.get(msg.id).resolve(msg);
+          pendingReplies.delete(msg.id);
+        }
+      });
+    });
+    socket.addEventListener('message', async ev => {
+      let signal;
+      try { signal = JSON.parse(ev.data); } catch { return; }
+      if (signal.kind === 'offer') {
+        await pc.setRemoteDescription({ type:'offer', sdp: signal.sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.send(JSON.stringify({ kind:'answer', sdp: pc.localDescription.sdp }));
+      } else if (signal.kind === 'ice' && signal.candidate) {
+        try { await pc.addIceCandidate(signal.candidate); } catch {}
+      }
+    });
+    socket.addEventListener('close', () => { if (pin) showEnded(); });
+    socket.addEventListener('error', () => {});
   }
 
   async function connect() {
@@ -400,10 +599,20 @@ function htmlPage(): string {
     if (!/^\\d{6}$/.test(pin)) { error.textContent = messages.pinRequired; return; }
     const res = await fetch('/status', { headers: { 'x-pepe-pin': pin }, cache: 'no-store' }).catch(() => null);
     if (!res || !res.ok) { error.textContent = messages.invalidPin; pin = ''; return; }
+    let statusBody = null;
+    try { statusBody = await res.clone().json(); } catch {}
+    shareMode = statusBody && statusBody.mode === 'mjpeg' ? 'mjpeg' : 'webrtc';
+    screen = shareMode === 'mjpeg' ? screenImg : screenVideo;
+    screenVideo.classList.toggle('active', shareMode === 'webrtc');
+    screenImg.classList.toggle('active', shareMode === 'mjpeg');
     login.style.display = 'none';
     viewer.style.display = 'block';
-    screen.src = '/stream?pin=' + encodeURIComponent(pin) + '&t=' + Date.now();
-    drawCursor();
+    if (shareMode === 'mjpeg') {
+      screenImg.src = '/stream?pin=' + encodeURIComponent(pin) + '&t=' + Date.now();
+    } else {
+      connectSignalSocket();
+    }
+    applyView();
     statusFailures = 0;
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = setInterval(checkShareStatus, 1500);
@@ -412,38 +621,52 @@ function htmlPage(): string {
   document.querySelector('#connect').addEventListener('click', connect);
   document.querySelector('#reload').addEventListener('click', () => location.reload());
   pinInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
-  screen.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    screen.setPointerCapture(e.pointerId);
-    const p = normalized(e);
-    cursor = p;
-    drawCursor();
-    send({ type:'pointer', action:'down', ...p, button:e.button === 2 ? 'right' : 'left' });
+  // 두 화면 엘리먼트(webrtc=video, mjpeg 폴백=img) 모두에 동일한 조작 리스너를 건다 —
+  // 실행 시점엔 항상 현재 활성 엘리먼트(전역 screen 변수)를 기준으로 좌표를 계산하므로
+  // 비활성 엘리먼트(display:none)에서는 이벤트 자체가 발생하지 않아 안전하다.
+  [screenVideo, screenImg].forEach(el => {
+    el.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      screen.setPointerCapture(e.pointerId);
+      const p = normalized(e);
+      cursor = p;
+      drawCursor();
+      send({ type:'pointer', action:'down', ...p, button:e.button === 2 ? 'right' : 'left' });
+    });
+    el.addEventListener('pointerup', async e => {
+      e.preventDefault();
+      const p = normalized(e);
+      cursor = p;
+      drawCursor();
+      const result = await send({ type:'pointer', action:'up', ...p, button:e.button === 2 ? 'right' : 'left' }, true);
+      if (result?.editable) keyboard.focus({ preventScroll:true });
+    });
+    el.addEventListener('pointermove', e => {
+      updateEdgeScroll(e);
+      const now = performance.now();
+      if (now - lastMove < 32) return;
+      lastMove = now;
+      const p = normalized(e);
+      cursor = p;
+      drawCursor();
+      send({ type:'pointer', action:'move', ...p });
+    });
+    el.addEventListener('pointerleave', stopEdgeScroll);
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      const p = normalized(e);
+      send({ type:'wheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY });
+    }, { passive:false });
   });
-  screen.addEventListener('pointerup', async e => {
-    e.preventDefault();
-    const p = normalized(e);
-    cursor = p;
-    drawCursor();
-    const result = await send({ type:'pointer', action:'up', ...p, button:e.button === 2 ? 'right' : 'left' });
-    if (result?.editable) keyboard.focus({ preventScroll:true });
-  });
-  screen.addEventListener('pointermove', e => {
-    const now = performance.now();
-    if (now - lastMove < 32) return;
-    lastMove = now;
-    const p = normalized(e);
-    cursor = p;
-    drawCursor();
-    send({ type:'pointer', action:'move', ...p });
-  });
-  screen.addEventListener('wheel', e => {
-    e.preventDefault();
-    const p = normalized(e);
-    send({ type:'wheel', ...p, deltaX:e.deltaX, deltaY:e.deltaY });
-  }, { passive:false });
-  screen.addEventListener('contextmenu', e => e.preventDefault());
+  // 우클릭 시 원격 화면 안의 우클릭(호스트로 전달됨)만 일어나야 하는데, 뷰어 브라우저
+  // 자체의 네이티브 컨텍스트 메뉴도 함께 뜨는 경우가 있었다 — pointerdown 의
+  // preventDefault() 만으로는 일부 브라우저에서 뒤이은 contextmenu 이벤트 발생을 막지
+  // 못하고(캡처 단계까지 내려가기 전에 이미 메뉴가 예약됨), 또한 viewer 엘리먼트에만
+  // 걸면 이벤트가 그 바깥(document/body)까지 올라가 처리되는 경우를 놓칠 수 있어
+  // document 전체에 캡처 단계로 전역 차단을 걸어 확실히 막는다.
+  document.addEventListener('contextmenu', e => e.preventDefault(), true);
   mouseToggle.addEventListener('click', () => {
+    stopEdgeScroll();
     viewer.classList.add('mouse-mode');
     applyView();
   });
@@ -452,6 +675,28 @@ function htmlPage(): string {
     applyView();
   });
   document.querySelector('#zoomReset').addEventListener('click', resetView);
+  document.querySelector('#scaleUp').addEventListener('click', () => setZoom(zoom + 0.25));
+  document.querySelector('#scaleDown').addEventListener('click', () => setZoom(zoom - 0.25));
+  document.querySelector('#scaleReset').addEventListener('click', resetView);
+  if (document.fullscreenEnabled || document.documentElement.webkitRequestFullscreen) {
+    viewer.classList.add('can-fullscreen');
+  }
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+  function updateFullscreenLabel() {
+    fullscreenToggle.textContent = isFullscreen() ? messages.fullscreenExit : messages.fullscreenEnter;
+  }
+  fullscreenToggle.addEventListener('click', () => {
+    if (isFullscreen()) {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    } else {
+      const req = viewer.requestFullscreen || viewer.webkitRequestFullscreen;
+      req?.call(viewer);
+    }
+  });
+  document.addEventListener('fullscreenchange', updateFullscreenLabel);
+  document.addEventListener('webkitfullscreenchange', updateFullscreenLabel);
   screenViewport.addEventListener('pointerdown', e => {
     if (!viewer.classList.contains('mouse-mode') || e.pointerType === 'mouse') return;
     e.preventDefault();
@@ -563,13 +808,23 @@ export class RemoteShareServer {
   private server: http.Server | null = null;
   private pin = '';
   private pinMode: 'random' | 'fixed' = 'random';
+  private mode: RemoteShareMode = 'webrtc';
   private address = '';
   private port = DEFAULT_PORT;
   private streams = new Set<ServerResponse>();
   private frameTimer: NodeJS.Timeout | null = null;
   private captureBusy = false;
+  private lastPointerTarget: WebContents | null = null;
+  private boostUntil = 0;
+  private wss: WebSocketServer | null = null;
+  // 시그널링은 한 번에 뷰어 한 명만 지원 — 여러 명이 동시에 WebRTC 로 붙는 시나리오는
+  // 없다고 가정(원격 "화면 공유"는 원래 단일 조작자 전제).
+  private viewerSocket: WebSocket | null = null;
+  private host: RemoteShareHostWindow;
 
-  constructor(private readonly getWindow: () => BrowserWindow | null) {}
+  constructor(private readonly getWindow: () => BrowserWindow | null) {
+    this.host = new RemoteShareHostWindow(getWindow);
+  }
 
   state(error?: string): RemoteShareState {
     const tailscale = getTailscaleStatus();
@@ -578,6 +833,7 @@ export class RemoteShareServer {
       address: this.server ? `http://${this.address}:${this.port}` : '',
       pin: this.server && this.pinMode === 'random' ? this.pin : '',
       pinMode: this.pinMode,
+      mode: this.mode,
       port: this.port,
       clients: this.streams.size,
       tailscale,
@@ -601,12 +857,22 @@ export class RemoteShareServer {
 
     this.pinMode = options.pinMode === 'fixed' ? 'fixed' : 'random';
     this.pin = this.pinMode === 'fixed' ? fixedPin : makePin();
+    this.mode = options.mode === 'mjpeg' ? 'mjpeg' : 'webrtc';
     this.address = tailscale.address;
     const port = Number(options.port);
     this.port = Number.isFinite(port) && port > 0 && port < 65536 ? Math.floor(port) : DEFAULT_PORT;
 
     const server = http.createServer((req, res) => void this.handleRequest(req, res));
     this.server = server;
+    this.wss = new WebSocketServer({ noServer: true });
+    server.on('upgrade', (req, socket, head) => {
+      const requestUrl = new URL(req.url || '/', `http://${this.address || '127.0.0.1'}`);
+      if (this.mode !== 'webrtc' || requestUrl.pathname !== '/signal' || !this.authorized(req, requestUrl)) {
+        socket.destroy();
+        return;
+      }
+      this.wss?.handleUpgrade(req, socket, head, ws => this.handleSignalSocket(ws));
+    });
     return await new Promise(resolve => {
       server.once('error', err => {
         this.stop();
@@ -614,6 +880,39 @@ export class RemoteShareServer {
       });
       server.listen(this.port, this.address, () => resolve(this.state()));
     });
+  }
+
+  // 뷰어 브라우저가 /signal 로 붙는 시그널링 소켓 — WebRTC offer/answer/ICE candidate 를
+  // 호스트 캡처 창(RemoteShareHostWindow)과 뷰어 사이에서 그대로 중계한다. 이 서버는
+  // media/입력 데이터 자체를 다루지 않고 오직 연결 협상만 중계한다.
+  private handleSignalSocket(ws: WebSocket): void {
+    // 이전 뷰어가 남아있으면 새 접속으로 교체(단일 조작자 전제).
+    if (this.viewerSocket && this.viewerSocket !== ws) {
+      try { this.viewerSocket.close(); } catch { /* already closing */ }
+    }
+    this.viewerSocket = ws;
+    void this.host.startSession({
+      onSignal: signal => {
+        if (this.viewerSocket === ws && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify(signal));
+        }
+      },
+      onInput: (input, reply) => {
+        void this.dispatchInput(input as RemoteInput).then(reply);
+      },
+    });
+    ws.on('message', raw => {
+      let signal: RemoteShareSignal;
+      try { signal = JSON.parse(String(raw)); } catch { return; }
+      this.host.sendRemoteSignal(signal);
+    });
+    ws.on('close', () => {
+      if (this.viewerSocket === ws) {
+        this.viewerSocket = null;
+        this.host.stopSession();
+      }
+    });
+    ws.on('error', () => { /* 'close' 가 이어서 발생해 정리된다 */ });
   }
 
   stop(): RemoteShareState {
@@ -625,12 +924,21 @@ export class RemoteShareServer {
       }
     }
     this.streams.clear();
+    this.host.stopSession();
+    this.host.destroy();
+    if (this.viewerSocket) {
+      try { this.viewerSocket.close(); } catch { /* already closing */ }
+    }
+    this.viewerSocket = null;
+    try { this.wss?.close(); } catch { /* already closed */ }
+    this.wss = null;
     try { this.server?.close(); } catch {
       // Closing an already stopped server is harmless.
     }
     this.server = null;
     this.pin = '';
     this.pinMode = 'random';
+    this.mode = 'webrtc';
     this.address = '';
     return this.state();
   }
@@ -658,7 +966,7 @@ export class RemoteShareServer {
     }
     if (req.method === 'GET' && requestUrl.pathname === '/status') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, clients: this.streams.size }));
+      res.end(JSON.stringify({ ok: true, clients: this.streams.size, mode: this.mode }));
       return;
     }
     if (req.method === 'GET' && requestUrl.pathname === '/stream') {
@@ -716,13 +1024,23 @@ export class RemoteShareServer {
 
   private startFramePump(): void {
     if (this.frameTimer) return;
-    void this.captureFrame();
-    this.frameTimer = setInterval(() => void this.captureFrame(), FRAME_INTERVAL_MS);
+    const tick = () => {
+      void this.captureFrame();
+      const interval = Date.now() < this.boostUntil ? FRAME_INTERVAL_BOOST_MS : FRAME_INTERVAL_MS;
+      this.frameTimer = setTimeout(tick, interval);
+    };
+    tick();
   }
 
   private stopFramePump(): void {
-    if (this.frameTimer) clearInterval(this.frameTimer);
+    if (this.frameTimer) clearTimeout(this.frameTimer);
     this.frameTimer = null;
+  }
+
+  // 입력 직후 이 시각까지는 프레임 캡처 간격을 단축해 타이핑/클릭 결과가 화면에
+  // 더 빨리 반영되도록 한다(체감 지연 완화).
+  private boostFrameRate(): void {
+    this.boostUntil = Date.now() + FRAME_BOOST_DURATION_MS;
   }
 
   private async captureFrame(): Promise<void> {
@@ -752,16 +1070,58 @@ export class RemoteShareServer {
     }
   }
 
+  // 좌표가 <webview>(네이버웍스 메신저 등, 별도 게스트 프로세스) 위에 있으면 host webContents
+  // 로는 그 안의 DOM 에 입력이 전달되지 않는다 — Electron 의 <webview> 는 OOPIF 라 host 쪽
+  // sendInputEvent 는 host 문서 히트테스트만 수행하고 게스트로 라우팅해주지 않는다. 그 결과
+  // 좌표가 우연히 겹치는 다른 host 레이어(예: 메인 패널의 터미널)가 입력을 받아가 버린다.
+  // 이를 피하려면 좌표 위의 <webview> 엘리먼트를 찾아 그 게스트 webContents 로 직접 보낸다.
+  private async resolveTargetContents(host: WebContents, x: number, y: number): Promise<{ contents: WebContents; x: number; y: number }> {
+    try {
+      const webviewId = await host.executeJavaScript(`
+        (() => {
+          const el = document.elementFromPoint(${x}, ${y});
+          const wv = el && el.closest ? el.closest('webview') : null;
+          if (!wv || typeof wv.getWebContentsId !== 'function') {
+            return { debug: { tag: el && el.tagName, hasClosest: !!(el && el.closest), foundWebview: !!wv } };
+          }
+          const rect = wv.getBoundingClientRect();
+          return { id: wv.getWebContentsId(), left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        })()
+      `, true).catch(err => ({ debug: { error: String(err && err.message || err) } }));
+      if (webviewId && typeof webviewId.id === 'number') {
+        const guest = electronWebContents.fromId(webviewId.id);
+        if (guest && !guest.isDestroyed()) {
+          const localX = Math.round(x - webviewId.left);
+          const localY = Math.round(y - webviewId.top);
+          if (localX >= 0 && localY >= 0 && localX <= webviewId.width && localY <= webviewId.height) {
+            console.log(`[pepe-remote-input] resolveTarget -> webview#${webviewId.id} at (${localX},${localY})`);
+            return { contents: guest, x: localX, y: localY };
+          }
+          console.log(`[pepe-remote-input] resolveTarget: webview found but (${localX},${localY}) outside bounds ${webviewId.width}x${webviewId.height}`);
+        } else {
+          console.log(`[pepe-remote-input] resolveTarget: webContents.fromId(${webviewId.id}) missing/destroyed`);
+        }
+      } else {
+        console.log(`[pepe-remote-input] resolveTarget -> host, debug=${JSON.stringify(webviewId)}`);
+      }
+    } catch (err) {
+      console.log('[pepe-remote-input] resolveTarget threw: ' + String((err as Error)?.message || err));
+    }
+    return { contents: host, x, y };
+  }
+
   private async dispatchInput(input: RemoteInput): Promise<{ editable?: boolean }> {
     const win = this.getWindow();
     if (!win || win.isDestroyed()) return {};
-    const contents = win.webContents;
+    const host = win.webContents;
     const bounds = win.getContentBounds();
-    win.focus();
+    if (!win.isFocused()) win.focus();
 
     if (input.type === 'pointer') {
-      const x = Math.round(Math.max(0, Math.min(1, Number(input.x))) * Math.max(1, bounds.width - 1));
-      const y = Math.round(Math.max(0, Math.min(1, Number(input.y))) * Math.max(1, bounds.height - 1));
+      const hostX = Math.round(Math.max(0, Math.min(1, Number(input.x))) * Math.max(1, bounds.width - 1));
+      const hostY = Math.round(Math.max(0, Math.min(1, Number(input.y))) * Math.max(1, bounds.height - 1));
+      const { contents, x, y } = await this.resolveTargetContents(host, hostX, hostY);
+      if (input.action === 'down') this.lastPointerTarget = contents;
       const type = input.action === 'move' ? 'mouseMove' : input.action === 'down' ? 'mouseDown' : 'mouseUp';
       contents.sendInputEvent({
         type,
@@ -789,8 +1149,9 @@ export class RemoteShareServer {
       return {};
     }
     if (input.type === 'wheel') {
-      const x = Math.round(Math.max(0, Math.min(1, Number(input.x))) * Math.max(1, bounds.width - 1));
-      const y = Math.round(Math.max(0, Math.min(1, Number(input.y))) * Math.max(1, bounds.height - 1));
+      const hostX = Math.round(Math.max(0, Math.min(1, Number(input.x))) * Math.max(1, bounds.width - 1));
+      const hostY = Math.round(Math.max(0, Math.min(1, Number(input.y))) * Math.max(1, bounds.height - 1));
+      const { contents, x, y } = await this.resolveTargetContents(host, hostX, hostY);
       contents.sendInputEvent({
         type: 'mouseWheel',
         x,
@@ -802,20 +1163,77 @@ export class RemoteShareServer {
     }
     if (input.type === 'key') {
       if (!input.key || input.key === 'Process' || input.key === 'Dead') return {};
-      contents.sendInputEvent({
+      this.boostFrameRate();
+      const target = this.lastPointerTarget && !this.lastPointerTarget.isDestroyed() ? this.lastPointerTarget : host;
+      console.log(`[pepe-remote-input] key action=${input.action} key=${JSON.stringify(input.key)} target=${target === host ? 'host' : 'webview#' + target.id}`);
+      if (target !== host) {
+        // <webview>(OOPIF) 대상 sendInputEvent 는 mouse 는 되지만 keyboard 는 씹히는
+        // 알려진 Electron 제약이 있다(electron/electron#14905, #20333) — host webContents
+        // 로는 정상 동작하므로, webview 로 라우팅된 경우만 JS 주입으로 우회한다.
+        if (input.action === 'down') await this.injectWebviewKey(target, input.key, input.modifiers || []);
+        return {};
+      }
+      const modifiers = (input.modifiers || []).filter((value): value is InputModifier => (
+        ['shift', 'control', 'ctrl', 'alt', 'meta', 'command', 'cmd'].includes(value)
+      ));
+      target.sendInputEvent({
         type: input.action === 'down' ? 'keyDown' : 'keyUp',
         keyCode: input.key,
-        modifiers: (input.modifiers || []).filter((value): value is InputModifier => (
-          ['shift', 'control', 'ctrl', 'alt', 'meta', 'command', 'cmd'].includes(value)
-        )),
+        modifiers,
       });
+      // keyDown 만으로는 브라우저의 input 이벤트(실제 문자 입력)가 발생하지 않는 대상이
+      // 있다(터미널의 xterm 은 keydown 리스너로 직접 렌더링해서 문제없지만, 일반 <textarea>/
+      // <input> 은 실제 문자가 찍히려면 'char' 타입 이벤트가 별도로 필요) — Ctrl/Alt/Meta
+      // 조합(단축키)까지 char 로 흘리면 예기치 않은 문자가 찍히므로 일반 문자 입력일 때만 보낸다.
+      const hasCombo = modifiers.some(m => ['control', 'ctrl', 'alt', 'meta', 'command', 'cmd'].includes(m));
+      if (input.action === 'down' && input.key.length === 1 && !hasCombo) {
+        target.sendInputEvent({ type: 'char', keyCode: input.key, modifiers });
+      }
       return {};
     }
     if (input.type === 'text' && input.text) {
+      this.boostFrameRate();
+      const target = this.lastPointerTarget && !this.lastPointerTarget.isDestroyed() ? this.lastPointerTarget : host;
+      if (target !== host) {
+        await this.injectWebviewText(target, input.text);
+        return {};
+      }
       for (const char of [...input.text].slice(0, 512)) {
-        contents.sendInputEvent({ type: 'char', keyCode: char });
+        target.sendInputEvent({ type: 'char', keyCode: char });
       }
     }
     return {};
+  }
+
+  // webview 안의 activeElement 에 문자열을 그대로 삽입한다(sendInputEvent 대신 JS 주입).
+  private async injectWebviewText(target: WebContents, text: string): Promise<void> {
+    const safeText = JSON.stringify(text);
+    const result = await target.executeJavaScript(`
+      (() => {
+        const el = document.activeElement;
+        if (!el) return { ok: false, reason: 'no-active-element' };
+        const ok = document.execCommand('insertText', false, ${safeText});
+        return { ok, tag: el.tagName, editable: el.isContentEditable, iframe: window.location.href };
+      })()
+    `, true).catch(err => ({ ok: false, reason: String(err && err.message || err) }));
+    console.log('[pepe-remote-input] injectWebviewText result=' + JSON.stringify(result));
+  }
+
+  // webview 안에서 sendInputEvent keyDown 이 씹히는 특수키(Enter/Backspace/Delete/화살표
+  // 등)를 JS 로 흉내낸다 — execCommand 로 처리되지 않는 키만 다룬다. 그 외 일반 문자키는
+  // 뷰어가 별도로 'text' 메시지(input 이벤트, compositionend 등)를 보내 injectWebviewText 로 처리된다.
+  private async injectWebviewKey(target: WebContents, key: string, modifiers: string[]): Promise<void> {
+    const command =
+      key === 'Enter' ? 'insertParagraph' :
+      key === 'Backspace' ? 'delete' :
+      key === 'Delete' ? 'forwardDelete' :
+      null;
+    if (command) {
+      await target.executeJavaScript(`document.execCommand(${JSON.stringify(command)}, false)`, true).catch(() => {});
+      return;
+    }
+    if (key.length !== 1) return; // 화살표/Tab/Escape 등은 webview 안 텍스트 입력에는 영향 없어 무시
+    if (modifiers.includes('control') || modifiers.includes('meta') || modifiers.includes('cmd')) return;
+    await this.injectWebviewText(target, key);
   }
 }

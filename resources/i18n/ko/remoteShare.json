@@ -35,6 +35,13 @@
     "fixedActive": "고정 PIN 사용 중",
     "placeholder": "숫자 6자리"
   },
+  "mode": {
+    "label": "전송 방식",
+    "webrtc": "WebRTC (권장)",
+    "webrtcHelp": "저지연 화면 전송. 대부분의 네트워크에서 동작하며 화질/반응성이 더 좋습니다.",
+    "mjpeg": "호환 모드",
+    "mjpegHelp": "이미지 폴링 방식. WebRTC 연결이 막히는 네트워크에서 사용하세요."
+  },
   "client": {
     "loginHelp": "PePe 화면에 표시된 6자리 PIN을 입력하세요.",
     "connect": "연결",
@@ -44,6 +51,10 @@
     "directControl": "화면을 터치하거나 클릭해 제어",
     "virtualMouse": "가상 마우스",
     "fitScreen": "화면 맞춤",
+    "zoomOut": "축소",
+    "zoomIn": "확대",
+    "fullscreenEnter": "전체화면",
+    "fullscreenExit": "전체화면 해제",
     "collapse": "접기",
     "scrollUp": "스크롤 ▲",
     "keyboard": "키보드",

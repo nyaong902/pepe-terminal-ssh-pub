@@ -35,6 +35,13 @@
     "fixedActive": "PIN fixe actif",
     "placeholder": "Six chiffres"
   },
+  "mode": {
+    "label": "Mode de transport",
+    "webrtc": "WebRTC (recommandé)",
+    "webrtcHelp": "Diffusion d'écran à faible latence. Fonctionne sur la plupart des réseaux avec une meilleure qualité et réactivité.",
+    "mjpeg": "Mode compatible",
+    "mjpegHelp": "Repli par sondage d'images. À utiliser si les connexions WebRTC sont bloquées sur votre réseau."
+  },
   "client": {
     "loginHelp": "Saisissez le PIN à six chiffres affiché dans PePe.",
     "connect": "Connexion",
@@ -44,6 +51,10 @@
     "directControl": "Touchez ou cliquez pour contrôler",
     "virtualMouse": "Souris virtuelle",
     "fitScreen": "Ajuster",
+    "zoomOut": "Réduire",
+    "zoomIn": "Agrandir",
+    "fullscreenEnter": "Plein écran",
+    "fullscreenExit": "Quitter le plein écran",
     "collapse": "Réduire",
     "scrollUp": "Défiler ▲",
     "keyboard": "Clavier",

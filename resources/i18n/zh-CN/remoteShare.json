@@ -35,6 +35,13 @@
     "fixedActive": "正在使用固定 PIN",
     "placeholder": "六位数字"
   },
+  "mode": {
+    "label": "传输方式",
+    "webrtc": "WebRTC(推荐)",
+    "webrtcHelp": "低延迟屏幕传输,适用于大多数网络,画质与响应更好。",
+    "mjpeg": "兼容模式",
+    "mjpegHelp": "图像轮询方式,当 WebRTC 连接被网络阻止时使用。"
+  },
   "client": {
     "loginHelp": "请输入 PePe 中显示的六位 PIN。",
     "connect": "连接",
@@ -44,6 +51,10 @@
     "directControl": "触摸或点击屏幕进行控制",
     "virtualMouse": "虚拟鼠标",
     "fitScreen": "适合屏幕",
+    "zoomOut": "缩小",
+    "zoomIn": "放大",
+    "fullscreenEnter": "全屏",
+    "fullscreenExit": "退出全屏",
     "collapse": "收起",
     "scrollUp": "滚动 ▲",
     "keyboard": "键盘",
