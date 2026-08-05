@@ -267,7 +267,21 @@ function connectSimple(session, cols, rows, x11Display) {
 
   parentPort.postMessage({ type: 'log', data: `▶ ${session.host}:${session.port || 22} (${session.username}) 연결 중...` });
 
-  conn.on('handshake', () => parentPort.postMessage({ type: 'log-inline', data: '  [handshake OK] ' }));
+  conn.on('handshake', (info) => {
+    // 협상된 암호를 handshake 줄에 함께 보여준다.
+    //
+    // 폭주 시 CPU 의 대부분은 ssh2 의 패킷 처리(복호화·무결성 검사)에서 나온다 — 메인 스레드
+    // 프로파일이 93~96% idle 로 나왔고, 비용은 전부 워커 스레드였다. 그 비용은 어떤 알고리즘이
+    // 선택됐는지에 크게 좌우된다: aes-gcm/ctr 은 Node 의 OpenSSL(AES-NI)을 타지만
+    // chacha20-poly1305 는 ssh2 가 순수 JS 로 처리해 몇 배 비싸다. 서버가 무엇을 골랐는지 보이면
+    // 느릴 때 원인을 바로 가릴 수 있다(서버 sshd_config 의 Ciphers 문제인지 우리 문제인지).
+    let algo = '';
+    try {
+      const c = info && info.cs && info.cs.cipher;
+      if (c) algo = ' · ' + String(c).replace('@openssh.com', '');
+    } catch (_e) {}
+    parentPort.postMessage({ type: 'log-inline', data: `  [handshake OK${algo}] ` });
+  });
   conn.on('banner', () => parentPort.postMessage({ type: 'log-inline', data: '[banner] ' }));
 
   const x11Enabled = typeof x11Display === 'number';
