@@ -475,3 +475,47 @@ export function invalidateIndexCache() {
   indexCache = null;
   knownKeys = null;
 }
+
+// ---- 방 이름 매핑(roomId -> NAVER WORKS 방 이름) — UI 표시 전용, 검색/저장 로직과는 무관.
+// 원래 렌더러 localStorage 에 저장했었는데, dev(Vite dev server, http://localhost:PORT origin)와
+// 패키지된 앱(커스텀 프로토콜/file:// origin)이 origin 이 서로 달라 localStorage 가 격리된다 —
+// dev 에서 백필로 채운 매핑이 실제 설치 앱 화면에는 안 보이는 문제가 있었다(실측). userData 아래
+// 아카이브 폴더와 같은 위치에 파일로 저장해, dev/설치본이 이미 공유하는 userData 경로를 그대로
+// 재사용한다(이 앱은 두 실행 형태가 같은 userData 폴더를 쓰는 것으로 실측 확인됨).
+type RoomNameMap = Record<string, string>;
+let roomNameCache: RoomNameMap | null = null;
+
+function roomNamesPath(): string {
+  return path.join(archiveDir(), 'room-names.json');
+}
+
+function loadRoomNames(): RoomNameMap {
+  if (roomNameCache) return roomNameCache;
+  try {
+    const raw = fs.readFileSync(roomNamesPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    roomNameCache = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    roomNameCache = {};
+  }
+  return roomNameCache!;
+}
+
+export function getRoomNames(): RoomNameMap {
+  return { ...loadRoomNames() };
+}
+
+export function setRoomNames(entries: Array<{ roomId: string; name: string }>) {
+  const map = loadRoomNames();
+  let changed = false;
+  for (const { roomId, name } of entries) {
+    if (!roomId || !name) continue;
+    if (map[roomId] === name) continue;
+    map[roomId] = name;
+    changed = true;
+  }
+  if (!changed) return;
+  const dir = archiveDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(roomNamesPath(), JSON.stringify(map), 'utf8');
+}

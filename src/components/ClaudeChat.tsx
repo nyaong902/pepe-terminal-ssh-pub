@@ -1225,7 +1225,42 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
   // <br> 개행 유실 메시지 복구 참고 — messengerScraper.ts 의 BackfillMode 주석).
   const [archiveBackfillMode, setArchiveBackfillMode] = useState<BackfillMode>('incremental');
   const archiveStopRef = useRef(false);
-  const onMessengerWebviewReady = useCallback((wv: any) => { messengerWebviewRef.current = wv; }, []);
+  // 방 목록도 메시지 목록처럼 가상 스크롤이라, 방금 로그인/새로고침한 직후엔 화면에 로드된 일부
+  // 방만 사이드바에 존재한다(실측: 42개 vs 끝까지 스크롤한 111개) — 사용자가 방 선택 패널을 열기
+  // 전에도 미리 훑어두면(백그라운드로, UI 안 막고) 그 시점에 바로 전체 방이 잡힌다. listAllRoomsWithNames
+  // 가 이미 이 스크롤+이름 수집을 수행하므로 그대로 재사용 — 리턴값(방 목록)은 여기선 이름 매핑
+  // 갱신에만 쓰고 따로 안 들고 있는다(방 선택 패널을 열 때 다시 조회해 최신 상태로 받음).
+  const preloadRoomListRef = useRef(false);
+  const preloadRoomList = useCallback(async (wv: any) => {
+    if (!wv || preloadRoomListRef.current) return;
+    preloadRoomListRef.current = true;
+    try {
+      const rooms = await listAllRoomsWithNames(wv);
+      for (const r of rooms) if (r.name) setRoomName(r.key, r.name);
+    } catch (err) {
+      console.warn('[chat-archive] 방 목록 프리로드 실패', err);
+    } finally {
+      preloadRoomListRef.current = false;
+    }
+  }, []);
+  const onMessengerWebviewReady = useCallback((wv: any) => {
+    messengerWebviewRef.current = wv;
+    if (!wv) return;
+    // dom-ready — 최초 로그인 완료 시에도, reload()/loadURL() 로 다시 로드될 때도 매번 발생.
+    // 이 시점마다 방 목록을 백그라운드로 미리 훑어둬서, 사용자가 방 선택 패널을 열 때 이미
+    // 111개가 다 잡혀있게 한다.
+    try { wv.addEventListener('dom-ready', () => { preloadRoomList(wv); }); } catch {}
+  }, [preloadRoomList]);
+  // 메신저 webview 새로고침 — 뭔가 눌러서 화면이 이상해졌을 때(예: 엉뚱한 링크를 눌러 딴 곳으로
+  // 가버렸거나 렌더링이 꼬였을 때) 원래 talk.worksmobile.com 화면으로 돌아오기 위한 버튼.
+  // reload() 는 현재 페이지를 그대로 새로고침(로그인 세션 유지), goHome 은 로그인 URL로 아예
+  // 다시 진입해 완전히 초기 화면으로 되돌린다. 둘 다 dom-ready 를 다시 발생시켜 방 목록도 재수집된다.
+  const reloadMessengerWebview = useCallback(() => {
+    try { messengerWebviewRef.current?.reload?.(); } catch {}
+  }, []);
+  const goHomeMessengerWebview = useCallback(() => {
+    try { messengerWebviewRef.current?.loadURL?.(COMPANY_MESSENGER_LOGIN_URL); } catch {}
+  }, []);
   // 방 선택 UI — 백필 버튼을 누르면 바로 전체 백필을 도는 대신, 먼저 방 목록(이름 포함)만 빠르게
   // 뽑아 사용자가 원하는 방만 고를 수 있게 한다. 111개 방 전부를 매번 도는 게 너무 느리고(실측:
   // 밤새 돌려도 10번째 방), 그중엔 수집하고 싶지 않은 사적인 대화도 섞여 있다는 지적을 반영.
@@ -1342,6 +1377,39 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
       // q 로 검색해 결과가 없으면, 아카이브에 저장된 원본 발췌 문장(fallbackText)으로 자동 재시도.
       // 원본이 곧 q 와 같다면(=인용문이 아니라 이미 원본으로 검색 중) 재시도할 필요 없음.
       const fallbackQ = messengerJumpQuery.fallbackText ? normalize(messengerJumpQuery.fallbackText) : '';
+      // 실측: li.click() 은 사이드바의 "선택됨" 표시(하이라이트)만 바뀌고, 실제 대화 콘텐츠 영역은
+      // 이전 방 그대로 남는 경우가 있었다 — 방 목록 무한스크롤이 스크립트 합성 이벤트(dispatchEvent
+      // 계열)에 반응하지 않던 것과 같은 원인으로 보인다: 이 페이지의 방 전환 리스너가 신뢰된
+      // (isTrusted) 클릭만 처리하는 것으로 추정. 그래서 좌표만 스크립트로 얻어오고, 실제 클릭은
+      // webview.sendInputEvent(mouseDown+mouseUp, 진짜 입력처럼 처리됨)로 보낸다.
+      const rectRes = await wv.executeJavaScript(`
+(function() {
+  var li = document.querySelector('ul.chat_grp_lst > li.item_chat[data-key="' + ${JSON.stringify(messengerJumpQuery.roomId)} + '"]');
+  if (!li) return { ok: false, error: 'room-not-found' };
+  var r = li.getBoundingClientRect();
+  return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+})()
+`).catch(() => null);
+      if (!rectRes?.ok) return;
+      if (typeof wv.sendInputEvent === 'function') {
+        // 실측: mouseDown 직후 곧바로 mouseUp 을 보내면(간격 0), 사이드바 하이라이트는 바뀌지만
+        // 실제 콘텐츠 전환이 곧 되돌아가는 현상이 있었다 — 네이버웍스 쪽이 "진짜 클릭"으로 보기엔
+        // 너무 빠른 입력을 의심스럽게 처리하는 것으로 추정된다. mouseMove 로 커서를 그 위치에
+        // 먼저 갖다두고, mouseDown/mouseUp 사이에도 짧은 간격을 둬서 실제 사용자 클릭에 가깝게 만든다.
+        wv.sendInputEvent({ type: 'mouseMove', x: rectRes.x, y: rectRes.y });
+        await new Promise(r => setTimeout(r, 30));
+        wv.sendInputEvent({ type: 'mouseDown', x: rectRes.x, y: rectRes.y, button: 'left', clickCount: 1 });
+        await new Promise(r => setTimeout(r, 60));
+        wv.sendInputEvent({ type: 'mouseUp', x: rectRes.x, y: rectRes.y, button: 'left', clickCount: 1 });
+      } else {
+        // sendInputEvent 를 못 쓰는 환경(구버전 Electron 등)에 대한 안전한 폴백 — 안 하는 것보단 낫다.
+        await wv.executeJavaScript(`
+(function() {
+  var li = document.querySelector('ul.chat_grp_lst > li.item_chat[data-key="' + ${JSON.stringify(messengerJumpQuery.roomId)} + '"]');
+  if (li) li.click();
+})()
+`).catch(() => {});
+      }
       const script = `
 (function() {
   var roomKey = ${JSON.stringify(messengerJumpQuery.roomId)};
@@ -1352,9 +1420,6 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
     setter.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  var li = document.querySelector('ul.chat_grp_lst > li.item_chat[data-key="' + roomKey + '"]');
-  if (!li) return { ok: false, error: 'room-not-found' };
-  li.click();
 
   // 검색 결과 리스트는 보통 최신순 정렬이라, 무작정 첫 번째 카드를 클릭하면 검색어와 유사하지만
   // 다른(더 최근) 메시지가 선택되는 경우가 있었다(예: "[65]" 클릭 시 검색어는 정확히 넘어갔지만
@@ -4937,6 +5002,24 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
                   />
                   전체 재백필
                 </label>
+                {/* 메신저 화면에서 뭔가 눌러 엉뚱한 곳으로 가버리거나 렌더링이 꼬였을 때 — 새로고침은
+                    로그인 세션은 유지한 채 현재 페이지만 다시 로드, "처음으로"는 로그인 URL로 다시
+                    진입해 완전히 초기 화면으로 되돌린다. 둘 다 dom-ready 를 다시 트리거해 방 목록도
+                    자동으로 재수집된다(onMessengerWebviewReady 참고). */}
+                <button
+                  onClick={reloadMessengerWebview}
+                  title="메신저 화면 새로고침 (로그인 유지)"
+                  style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer' }}
+                >
+                  🔄 새로고침
+                </button>
+                <button
+                  onClick={goHomeMessengerWebview}
+                  title="메신저 처음 화면으로 돌아가기"
+                  style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer' }}
+                >
+                  🏠 처음으로
+                </button>
               </>
             )}
             {/* 방 선택 패널 — 헤더 바 아래로 펼쳐지는 절대 위치 드롭다운. 111개 방 체크박스를

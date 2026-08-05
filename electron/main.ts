@@ -9794,6 +9794,23 @@ ipcMain.handle('chat-archive:filter-unknown', (_e, { roomId, items }: { roomId: 
     return { ok: false, error: String(e?.message || e) };
   }
 });
+// 방 이름 매핑 — dev/설치본이 공유하는 userData 아래 파일로 저장(chatArchiveStore.ts 주석 참고,
+// 렌더러 localStorage 는 origin 이 달라 dev/설치본끼리 안 보이는 문제가 있었음).
+ipcMain.handle('chat-archive:get-room-names', () => {
+  try {
+    return { ok: true, names: chatArchiveStore.getRoomNames() };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+ipcMain.handle('chat-archive:set-room-names', (_e, { entries }: { entries: Array<{ roomId: string; name: string }> }) => {
+  try {
+    chatArchiveStore.setRoomNames(entries || []);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
 // 진단용 — 검색 로직 문제 vs 백필 누락 문제를 구분하기 위해, 특정 문구가 아카이브에 순수하게
 // (임베딩/스코어링 없이) 존재하는지만 확인한다. 개발자 도구 콘솔에서 직접 호출하는 용도.
 ipcMain.handle('chat-archive:raw-contains', (_e, { substring, roomId }: { substring: string; roomId?: string }) => {

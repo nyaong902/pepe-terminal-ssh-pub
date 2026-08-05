@@ -476,6 +476,8 @@ contextBridge.exposeInMainWorld('api', {
   chatArchiveSearch: (queryText: string, embedding: number[], topK?: number) => ipcRenderer.invoke('chat-archive:search', { queryText, embedding, topK }),
   chatArchiveGetStats: () => ipcRenderer.invoke('chat-archive:get-stats'),
   chatArchiveFilterUnknown: (roomId: string, items: Array<{ ts: number; sender: string }>) => ipcRenderer.invoke('chat-archive:filter-unknown', { roomId, items }),
+  chatArchiveGetRoomNames: () => ipcRenderer.invoke('chat-archive:get-room-names'),
+  chatArchiveSetRoomNames: (entries: Array<{ roomId: string; name: string }>) => ipcRenderer.invoke('chat-archive:set-room-names', { entries }),
   // 진단용 — 특정 문구가 아카이브에 순수 문자열 포함으로 존재하는지 확인(임베딩/스코어링 없음).
   chatArchiveRawContains: (substring: string, roomId?: string) => ipcRenderer.invoke('chat-archive:raw-contains', { substring, roomId }),
   everythingSearch: (query: string, opts?: { matchPath?: boolean; matchCase?: boolean; matchWholeWord?: boolean; regex?: boolean; sort?: number; offset?: number; max?: number }) =>

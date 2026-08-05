@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import { runOneShotPrompt } from '../utils/aiOneShot';
-import { displayRoomLabel } from '../utils/chatArchiveRoomNames';
+import { displayRoomLabel, subscribeRoomNames } from '../utils/chatArchiveRoomNames';
 
 type ContextMessage = { ts: number; sender: string; text: string; isHit: boolean };
 // matchCount — 질문 키워드 중 이 메시지에 그대로 포함된 개수. search() 의 1차 정렬 기준이라,
@@ -227,6 +227,11 @@ export const ChatArchiveSearch: React.FC = () => {
   // 이 워크스페이스를 닫으면 임베딩 프로세스를 내린다 — 검색용 모델이 300MB 대이고 별도
   // 프로세스에 있으므로 통째로 회수된다(메인에서 백필이 돌고 있으면 끝날 때까지 기다린다).
   useEffect(() => () => { void (window as any).api?.chatArchiveReleaseEmbedder?.(); }, []);
+  // 방 이름 매핑(displayRoomLabel)이 비동기로 로드/갱신될 때 이 컴포넌트를 리렌더시키기 위한
+  // 더미 카운터 — displayRoomLabel 자체는 모듈 전역 캐시를 동기로 읽으므로, 캐시가 바뀌었다는
+  // 신호만 받으면 그걸로 충분하다(캐시 값 자체를 state 로 복제할 필요 없음).
+  const [, forceRerenderForRoomNames] = useState(0);
+  useEffect(() => subscribeRoomNames(() => forceRerenderForRoomNames(n => n + 1)), []);
   const [loading, setLoading] = useState(false);
   // 요약 모델 — config.json 의 uiPrefs 에 저장한다(localStorage 아님).
   const [aiModel, setAiModel] = useState<string>('default');
@@ -273,6 +278,7 @@ export const ChatArchiveSearch: React.FC = () => {
   const [candidates, setCandidates] = useState<SearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<RoomStat[] | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   // chatLog — 대화 히스토리. 검색바 없이, 사용자가 채팅 입력창에 치는 첫 메시지가 곧 최초 검색어가
   // 되고, 그 결과 요약이 첫 assistant 메시지가 된다. 이후 모든 대화가 이 하나의 흐름으로 이어진다.
   const [chatLog, setChatLog] = useState<ChatMessage[]>([]);
@@ -311,12 +317,19 @@ export const ChatArchiveSearch: React.FC = () => {
     highlightTimerRef.current = setTimeout(() => setHighlightedIndex(null), 2000);
   }, []);
 
-  const loadStats = useCallback(async () => {
+  // "현황" 버튼 — 토글 동작: 닫혀있으면 조회해서 열고, 열려있으면(stats !== null) 그냥 닫는다.
+  // 다시 누르면 또 새로 조회 — 매번 최신 상태를 보여주기 위해 닫힌 상태에서 다시 열 때는 캐시하지 않음.
+  const toggleStats = useCallback(async () => {
+    if (stats !== null) { setStats(null); return; }
+    setStatsLoading(true);
     try {
       const res = await (window as any).api?.chatArchiveGetStats?.();
       if (res?.ok) setStats(res.stats || []);
-    } catch {}
-  }, []);
+    } catch {
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [stats]);
 
   // 검색 파이프라인 — 질문 문자열 하나를 받아 여러 표현(paraphrase)으로 확장해 검색하고, matchCount
   // 우선 정렬된 SearchResult[] 를 반환한다. 최초 검색(첫 채팅 메시지)과 재검색(RESEARCH 액션) 양쪽에서 재사용.
@@ -482,19 +495,29 @@ export const ChatArchiveSearch: React.FC = () => {
           style={{ width: 72, padding: '5px 6px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', fontSize: 12 }}
         />
         <button
-          onClick={loadStats}
+          onClick={toggleStats}
+          disabled={statsLoading}
           title="방별 아카이브 현황"
-          style={{ padding: '6px 10px', borderRadius: 4, border: '1px solid #3a3a5a', background: '#1a1a2e', color: '#ccc', cursor: 'pointer', fontSize: 12 }}
+          style={{ padding: '6px 10px', borderRadius: 4, border: '1px solid #3a3a5a', background: stats !== null || statsLoading ? '#2b6b9b' : '#1a1a2e', color: stats !== null || statsLoading ? '#fff' : '#ccc', cursor: statsLoading ? 'default' : 'pointer', fontSize: 12, opacity: statsLoading ? 0.7 : 1 }}
         >
-          현황
+          현황 {statsLoading ? '...' : stats !== null ? '▲' : '▼'}
         </button>
       </div>
 
-      {stats && (
+      {(stats || statsLoading) && (
         <div style={{ flex: '0 0 auto', maxHeight: 140, overflowY: 'auto', padding: '6px 10px', fontSize: 11, color: '#9aa', borderBottom: '1px solid #2a2a3a' }}>
-          {stats.length === 0 ? '아카이브된 대화가 없습니다 — 사내 메신저 탭에서 "전체 백필"을 먼저 실행하세요.' : (
-            stats.map(s => (
-              <div key={s.roomId}>방 {displayRoomLabel(s.roomId)} — {s.count}건, 최근 {formatTs(s.lastTs)}</div>
+          {statsLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#889' }}>
+              <style>{`
+                @keyframes chatArchiveStatsSpin { to { transform: rotate(360deg); } }
+                .chat-archive-stats-spinner { display: inline-block; animation: chatArchiveStatsSpin 0.8s linear infinite; }
+              `}</style>
+              <span className="chat-archive-stats-spinner">⏳</span>
+              현황 정리중...
+            </div>
+          ) : stats!.length === 0 ? '아카이브된 대화가 없습니다 — 사내 메신저 탭에서 "전체 백필"을 먼저 실행하세요.' : (
+            stats!.map(s => (
+              <div key={s.roomId}>{displayRoomLabel(s.roomId)} — {s.count}건, 최근 {formatTs(s.lastTs)}</div>
             ))
           )}
         </div>
@@ -523,7 +546,7 @@ export const ChatArchiveSearch: React.FC = () => {
                     }}
                   >
                     <div style={{ color: '#889', marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span>[{i + 1}] 방 {displayRoomLabel(r.roomId)} · {r.sender || '알수없음'} · {formatTs(r.ts)} · 유사도 {r.score.toFixed(2)}</span>
+                      <span>[{i + 1}] {displayRoomLabel(r.roomId)} · {r.sender || '알수없음'} · {formatTs(r.ts)} · 유사도 {r.score.toFixed(2)}</span>
                       <a
                         href="#"
                         onClick={e => {
