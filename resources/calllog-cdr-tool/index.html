@@ -508,8 +508,146 @@ window.addEventListener('message', (evt) => {
     if(!resolve) return;
     pepePending.delete(data.reqId);
     resolve(data);
+  } else if(data.type === 'restore'){
+    // 워크스페이스를 다른 창으로 옮기면(창 분리/재도킹) 이 iframe 은 새 렌더러에서 처음부터
+    // 다시 로드되어 입력과 결과가 전부 사라졌다. 부모가 옮겨 담아둔 입력을 여기서 되살리고
+    // 파싱까지 다시 돌려, 사용자가 보던 화면을 그대로 복원한다.
+    console.log('[pepe-cdr] restore <-', data.state && (data.state.clogSrc || '').length, (data.state && data.state.cdrSrc || '').length);
+    pepeRestoreState(data.state || {});
   }
 });
+
+// ── 창 이동 대비 상태 보존 ──
+// 결과 표는 입력에서 다시 계산되므로 입력과 활성 탭만 옮기면 화면이 그대로 복원된다.
+// (결과 표 자체를 옮기면 수십 MB가 되고, 어차피 파싱은 즉시 끝난다.)
+// 파일이나 SSH 로 불러온 경우 입력창에는 앞 5줄 + 요약만 있고 원문은 CLOG_SRC_TEXT/CDR_SRC_TEXT 에
+// 따로 보관된다(setSourceText 참고) — 그래서 입력창 값만 옮기면 "내용이 다 안 나오는" 상태가 됐다.
+// sourceText() 는 보관본이 있으면 그것을, 없으면 입력창 값을 준다.
+// 크기 제한은 두지 않는다 — 부모(앱)가 큰 원문은 메인 프로세스에 맡겨서 옮기므로(cdr:stash)
+// 여기서는 있는 그대로 넘긴다. 이 postMessage 는 같은 렌더러 안이라 복사 비용이 거의 없다.
+function pepeCollectState(){
+  const active = document.querySelector('.tab-content.active');
+  const activeTab = active ? String(active.id || '').replace(/^tab-/, '') : 'clog';
+  let clogSrc = '', cdrSrc = '';
+  try { clogSrc = sourceText('clog') || ''; } catch {}
+  try { cdrSrc = sourceText('cdr') || ''; } catch {}
+  // 파일명 표시줄과 출처 라벨도 함께 옮긴다 — 데이터는 살아나는데 "어느 파일이었는지" 가
+  // 사라져서 헷갈렸다(실측 지적).
+  const clogNameEl = document.getElementById('fileName');
+  const cdrNameEl = document.getElementById('cdrFileName');
+  return {
+    activeTab, clogSrc, cdrSrc,
+    clogOrigin: CLOG_SRC_ORIGIN, cdrOrigin: CDR_SRC_ORIGIN,
+    clogFileLabel: clogNameEl ? clogNameEl.textContent : '',
+    cdrFileLabel: cdrNameEl ? cdrNameEl.textContent : '',
+  };
+}
+function pepePushState(){
+  try { window.parent.postMessage({ source: 'pepe-cdr', type: 'state', state: pepeCollectState() }, '*'); } catch {}
+}
+// 표 헤더 고정/열 고정 위치는 화면 크기를 실측해서 넣는다(syncStickyHeader/syncPinOffsets).
+// 파싱 직후 한 번만 재는데, 창을 옮긴 직후에는 아직 레이아웃이 잡히지 않아 값이 어긋나 표가
+// 깨져 보였다(헤더가 첫 행을 덮고 열이 밀림). 그래서 복원 뒤에는 레이아웃이 안정될 때까지
+// 몇 번 더 다시 잰다 — 같은 값을 다시 넣는 것이라 여러 번 불러도 문제가 없다.
+function pepeRelayout(){
+  try {
+    const clogTable = document.querySelector('#resultArea table.body-table');
+    if(clogTable) syncStickyHeader(clogTable, 'clog');
+    const cdrTable = document.querySelector('#cdrResultArea table.body-table');
+    if(cdrTable) syncStickyHeader(cdrTable, 'cdr');
+    ['clog', 'cdr'].forEach(k => {
+      const panel = document.getElementById(k + 'ResultPanel');
+      if(panel && panel._applyState) panel._applyState();
+    });
+  } catch {}
+}
+let pepeRelayoutTimer = null;
+let pepeRelayoutTries = 0;
+function pepeRelayoutSoon(){
+  pepeRelayoutTries = 0;
+  requestAnimationFrame(() => requestAnimationFrame(pepeRelayout));
+  pepeRelayoutRetry();
+}
+// 워크스페이스가 아직 화면에 안 보이면(다른 탭이 활성인 상태로 창이 열리는 경우) 높이가 0 으로
+// 재져서 계산이 무의미하다 — 실제로 보일 때까지 짧게 재시도한다.
+function pepeRelayoutRetry(){
+  const area = document.querySelector('#resultArea table.body-table') || document.querySelector('#cdrResultArea table.body-table');
+  const visible = area && area.getBoundingClientRect().height > 0;
+  pepeRelayout();
+  if(visible || pepeRelayoutTries >= 12) return;
+  pepeRelayoutTries++;
+  setTimeout(pepeRelayoutRetry, 300);
+}
+
+function pepeRestoreState(st){
+  try {
+    // 원문을 그대로 되돌려 놓는다 — setSourceText 가 보관본과 입력창 미리보기를 함께 세팅한다.
+    if(typeof st.clogSrc === 'string' && st.clogSrc.trim()) setSourceText('clog', st.clogSrc, st.clogOrigin || '파일');
+    if(typeof st.cdrSrc === 'string' && st.cdrSrc.trim()) setSourceText('cdr', st.cdrSrc, st.cdrOrigin || '파일');
+    // 파일명 표시줄 — setSourceText 가 건드리지 않는 영역이라 따로 되돌린다.
+    const clogNameEl2 = document.getElementById('fileName');
+    const cdrNameEl2 = document.getElementById('cdrFileName');
+    if(clogNameEl2 && st.clogFileLabel) clogNameEl2.textContent = st.clogFileLabel;
+    if(cdrNameEl2 && st.cdrFileLabel) cdrNameEl2.textContent = st.cdrFileLabel;
+    if(st.activeTab) switchTab(st.activeTab);
+    // 원문이 있으면 그 탭의 파싱을 다시 돌린다 — 표가 비어 있으면 복원된 느낌이 안 난다.
+    if(typeof st.clogSrc === 'string' && st.clogSrc.trim() && typeof parseData === 'function') parseData();
+    if(typeof st.cdrSrc === 'string' && st.cdrSrc.trim() && typeof parseCDRMulti === 'function') parseCDRMulti();
+    if(st.activeTab) switchTab(st.activeTab);   // 파싱이 탭을 바꾸는 경우가 있어 마지막에 한 번 더
+    pepeRelayoutSoon();
+  } catch(e) { console.warn('[pepe-cdr] restore 실패', e); }
+}
+// 창 크기가 바뀌면 다시 잰다 — 분리된 창은 크기가 원래 창과 달라서 그 자체로 재계산이 필요하다.
+window.addEventListener('resize', () => { if(pepeRelayoutTimer) clearTimeout(pepeRelayoutTimer); pepeRelayoutTimer = setTimeout(pepeRelayout, 150); });
+// 상태가 바뀌면 부모에 알려둔다 — 창을 옮기는 순간(serializeTab) 부모가 최신값을 들고 있어야 한다.
+//
+// input 이벤트만으로는 부족하다: SSH 세션에서 clog 를 가져오는 경로는 스크립트가 textarea 값을
+// 직접 채우는데 그때는 input 이벤트가 나지 않는다. 그래서 주기적으로 지문을 비교해 바뀌었을 때만
+// 보낸다(값 전체를 매번 보내지 않으므로 비용은 거의 없다).
+// 시작 지문을 현재값으로 잡아둔다 — 마운트 직후의 "빈 상태" 를 부모에 보내면, 창을 옮기려고
+// 부모가 들고 있던 멀쩡한 상태를 방금 뜬 빈 iframe 이 덮어써 버린다(실측: 복원 시 clog=0).
+// 사용자가 실제로 입력을 지우면 지문이 바뀌므로 그때는 정상적으로 보고된다.
+let pepeStateFp = (function(){
+  try {
+    const st = pepeCollectState();
+    return st.activeTab + '|' + st.clogSrc.length + '|' + st.cdrSrc.length + '|' + (st.clogFileLabel || '') + '|' + (st.cdrFileLabel || '');
+  } catch { return ''; }
+})();
+function pepePushStateIfChanged(){
+  const st = pepeCollectState();
+  const fp = st.activeTab + '|' + st.clogSrc.length + '|' + st.cdrSrc.length + '|' + (st.clogFileLabel || '') + '|' + (st.cdrFileLabel || '');
+  if(fp === pepeStateFp) return;
+  pepeStateFp = fp;
+  try { window.parent.postMessage({ source: 'pepe-cdr', type: 'state', state: st }, '*'); } catch {}
+}
+function pepeStateDirty(){ setTimeout(pepePushStateIfChanged, 50); }
+function pepeWireStateWatch(){
+  ['inputData', 'cdrRawInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el || el._pepeWired) return;
+    el._pepeWired = true;
+    el.addEventListener('input', pepeStateDirty);
+    el.addEventListener('change', pepeStateDirty);
+  });
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    if(b._pepeWired) return;
+    b._pepeWired = true;
+    b.addEventListener('click', pepeStateDirty);
+  });
+}
+// 부모에게 "이제 메시지를 받을 수 있다" 고 알린다.
+//
+// 부모가 iframe 의 load 이벤트만 보고 restore 를 보내면 늦거나 이른 경우가 있었다 — 요소 생성
+// 직후의 빈 문서(about:blank)에 보내면 그대로 사라진다(실측: 부모는 보냈다고 로그를 남기는데
+// 여기서는 아무것도 안 받았다). 이 쪽에서 준비됐다고 알리는 편이 확실하다.
+function pepeAnnounceReady(){
+  try { window.parent.postMessage({ source: 'pepe-cdr', type: 'ready' }, '*'); } catch {}
+}
+// 스크립트가 본문 뒤에 있어 요소가 이미 있다 — 기다리지 않고 바로 붙이고, 혹시 아직이면 그때 한 번 더.
+pepeWireStateWatch();
+pepeAnnounceReady();
+window.addEventListener('DOMContentLoaded', () => { pepeWireStateWatch(); pepeAnnounceReady(); });
+setInterval(pepePushStateIfChanged, 1500);
 
 function renderSshSessionOptions(){
   document.querySelectorAll('.pepe-ssh-select').forEach(sel => {
@@ -749,6 +887,10 @@ const CDR_PAGE_SIZE = 200;
 // 입력창 내용이 다시 원본이 된다.
 let CLOG_SRC_TEXT = null;
 let CDR_SRC_TEXT = null;
+// 원문을 어디서 가져왔는지("파일" / "SSH" 등) — 창을 옮긴 뒤에도 입력창 미리보기 문구가 같게
+// 보이도록 기억해둔다.
+let CLOG_SRC_ORIGIN = '';
+let CDR_SRC_ORIGIN = '';
 const SRC_PREVIEW_LINES = 5;
 
 function sourceText(which){
@@ -763,7 +905,8 @@ function clearSourceText(which){
 function setSourceText(which, text, originLabel){
   const t = String(text ?? '');
   const lines = t.split(/\r?\n/).filter(l => l.trim());
-  if(which === 'cdr') CDR_SRC_TEXT = t; else CLOG_SRC_TEXT = t;
+  if(which === 'cdr') { CDR_SRC_TEXT = t; CDR_SRC_ORIGIN = originLabel || ''; }
+  else { CLOG_SRC_TEXT = t; CLOG_SRC_ORIGIN = originLabel || ''; }
   const ta = document.getElementById(which === 'cdr' ? 'cdrRawInput' : 'inputData');
   ta.value = lines.slice(0, SRC_PREVIEW_LINES).join('\n') +
     (lines.length > SRC_PREVIEW_LINES

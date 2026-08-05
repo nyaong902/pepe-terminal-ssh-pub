@@ -7757,6 +7757,30 @@ ipcMain.handle('window:drop-tab', async (e, { payload, point, sourceTabCount }: 
   } catch (err) { console.error('[drop-tab] fail', err); return { docked: false, error: String(err) }; }
 });
 // 분리 창 렌더러가 로드 직후 자기 페이로드를 가져감 (1회성)
+// CDR 도구의 원문(수십 MB)을 창 사이로 넘길 때 잠시 맡아둔다.
+//
+// 워크스페이스 상태(workspaceState)에 실어 보내면 serializeTab 의 JSON 왕복을 타야 해서, 17MB 짜리
+// 로그 하나로 창 이동이 멈춘다. 그래서 큰 원문은 여기 맡기고 상태에는 표식만 넣는다 — 새 창이
+// 뜨면서 tabId 로 받아간다. 문자열은 structured clone 이 그대로 옮기므로 복사 한 번으로 끝난다.
+const cdrHandoff = new Map<string, { state: any; at: number }>();
+const CDR_HANDOFF_TTL_MS = 5 * 60 * 1000;
+ipcMain.handle('cdr:stash', (_e, args: { tabId: string; state: any }) => {
+  const id = String(args?.tabId || '');
+  if (!id) return false;
+  // 오래된 것은 정리 — 창 이동이 취소되면 아무도 받아가지 않는다.
+  const now = Date.now();
+  for (const [k, v] of cdrHandoff) if (now - v.at > CDR_HANDOFF_TTL_MS) cdrHandoff.delete(k);
+  cdrHandoff.set(id, { state: args?.state, at: now });
+  return true;
+});
+ipcMain.handle('cdr:unstash', (_e, args: { tabId: string }) => {
+  const id = String(args?.tabId || '');
+  const hit = cdrHandoff.get(id);
+  if (!hit) return null;
+  cdrHandoff.delete(id);
+  return hit.state;
+});
+
 ipcMain.handle('window:get-detached-init', (e) => {
   const p = detachedInitPayloads.get(e.sender.id);
   detachedInitPayloads.delete(e.sender.id);

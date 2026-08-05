@@ -31,7 +31,10 @@ type EditorMode = 'none' | 'highlight' | 'freetext' | 'ink' | 'stamp';
 
 let nextPdfId = 0;
 
-export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialFilePath?: string }) {
+export function PdfWorkspace({ initialFilePath, initialFilePaths, onOpenPathsChange }: {
+  instanceId: string; initialFilePath?: string;
+  initialFilePaths?: string[]; onOpenPathsChange?: (paths: string[]) => void;
+}) {
   const [docs, setDocs] = useState<OpenPdf[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -120,6 +123,32 @@ export function PdfWorkspace({ initialFilePath }: { instanceId: string; initialF
     openLocalFile(doc.filePath, result.fileName);
     addRecent('pdf', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
+
+
+  // 열려 있는 문서의 파일 경로를 상위(OfficeLauncher)에 알린다 — 워크스페이스를 다른 창으로
+  // 옮기면 이 컴포넌트는 새 렌더러에서 처음부터 다시 마운트되므로, 경로를 넘겨받지 못하면 빈
+  // 편집기가 떠서 "초기화" 로 보인다. 편집 중이던 내용은 옮길 수 없다(편집기는 별도 프로세스의
+  // webview 이고 새 창에서 새로 만들어진다) — 같은 파일을 다시 열어주는 것까지가 한계다.
+  useEffect(() => {
+    if (!onOpenPathsChange) return;
+    onOpenPathsChange(docs.map(d => d.filePath || '').filter(Boolean) as string[]);
+    /* eslint-disable-next-line */
+  }, [docs]);
+
+  // 넘겨받은 경로들을 한 번만 다시 연다.
+  const restoredPathsRef = useRef(false);
+  useEffect(() => {
+    if (restoredPathsRef.current) return;
+    const paths = (initialFilePaths || []).filter(Boolean);
+    if (paths.length === 0) return;
+    restoredPathsRef.current = true;
+    (async () => {
+      for (const fp of paths) {
+        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\\/]/).pop() || fp, openedAt: 0, openCount: 0 });
+      }
+    })();
+    /* eslint-disable-next-line */
+  }, [initialFilePaths]);
 
   const initialFileOpenedRef = useRef(false);
   useEffect(() => {

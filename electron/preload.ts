@@ -87,6 +87,9 @@ contextBridge.exposeInMainWorld('api', {
   dropReorderSession: (id: string, type: 'session' | 'folder', targetParentId: string | null, beforeId?: string | null) => ipcRenderer.invoke('sessions:drop-reorder', { id, type, targetParentId, beforeId }),
 
   // UI Prefs (config.json 에 저장 — sessionData 멀티인스턴스 분리와 무관하게 영속)
+  // CDR 도구 원문(수십 MB)을 창 사이로 넘길 때 메인에 잠시 맡긴다 — workspaceState 의 JSON 왕복을 피한다.
+  cdrStash: (args: { tabId: string; state: any }) => ipcRenderer.invoke('cdr:stash', args),
+  cdrUnstash: (tabId: string) => ipcRenderer.invoke('cdr:unstash', { tabId }),
   getUIPrefs: () => ipcRenderer.invoke('ui-prefs:get'),
   setUIPrefs: (prefs: Record<string, any>) => ipcRenderer.invoke('ui-prefs:set', prefs),
   // AI 채팅 기록 — config.json 이 커지지 않게 별도 파일에 저장한다.

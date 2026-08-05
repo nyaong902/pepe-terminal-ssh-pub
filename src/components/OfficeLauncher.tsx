@@ -43,7 +43,11 @@ function FormatPicker({ onSelect }: { onSelect: (f: OfficeFormat) => void }) {
   );
 }
 
-type Slot = { id: string; format: OfficeFormat };
+// paths — 그 슬롯의 편집기에 열려 있는 파일 경로들. 워크스페이스를 다른 창으로 옮기면
+// (창 분리/재도킹) 편집기는 새 렌더러에서 처음부터 다시 마운트되므로, 이것을 넘겨받지 못하면
+// 빈 편집기가 떠서 "초기화" 로 보였다. 편집 중이던 내용까지는 옮길 수 없다 — 편집기는 별도
+// 프로세스의 webview 이고 새 창에서 새로 만들어지므로, 같은 파일을 다시 열어주는 것까지가 한계다.
+type Slot = { id: string; format: OfficeFormat; paths?: string[] };
 let nextSlotId = 0;
 
 const slotTabStyle = (active: boolean): React.CSSProperties => ({
@@ -100,6 +104,17 @@ export function OfficeLauncher({ instanceId, initialState, onStateChange, initia
     setPendingFilePath(null);
   }, [pendingFilePath]);
 
+  // 편집기가 알려준 열린 파일 목록을 슬롯에 반영한다(값이 같으면 상태를 건드리지 않는다 —
+  // 매번 새 배열이 와서 무한 렌더가 되지 않게).
+  const setSlotPaths = (slotId: string, paths: string[]) => {
+    setSlots(prev => prev.map(sl => {
+      if (sl.id !== slotId) return sl;
+      const cur = sl.paths || [];
+      if (cur.length === paths.length && cur.every((v, i) => v === paths[i])) return sl;
+      return { ...sl, paths };
+    }));
+  };
+
   const closeSlot = (id: string) => {
     const idx = slots.findIndex(s => s.id === id);
     const next = slots.filter(s => s.id !== id);
@@ -147,13 +162,16 @@ export function OfficeLauncher({ instanceId, initialState, onStateChange, initia
           return (
             <div key={slot.id} style={{ position: 'absolute', inset: 0, display: !pickerOpen && slot.id === activeId ? 'flex' : 'none', flexDirection: 'column' }}>
               {slot.format === 'hwp' ? (
-                <OfficeWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot} />
+                <OfficeWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot}
+                  initialFilePaths={slot.paths} onOpenPathsChange={(ps) => setSlotPaths(slot.id, ps)} />
               ) : slot.format === 'pdf' ? (
-                <PdfWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot} />
+                <PdfWorkspace instanceId={instanceId} initialFilePath={filePathForThisSlot}
+                  initialFilePaths={slot.paths} onOpenPathsChange={(ps) => setSlotPaths(slot.id, ps)} />
               ) : slot.format === 'drawio' ? (
                 <FlowChartWorkspace instanceId={instanceId} />
               ) : (
-                <ZiziyiOfficeWorkspace instanceId={instanceId} kind={slot.format} initialFilePath={filePathForThisSlot} />
+                <ZiziyiOfficeWorkspace instanceId={instanceId} kind={slot.format} initialFilePath={filePathForThisSlot}
+                  initialFilePaths={slot.paths} onOpenPathsChange={(ps) => setSlotPaths(slot.id, ps)} />
               )}
             </div>
           );

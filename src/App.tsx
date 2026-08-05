@@ -33,6 +33,7 @@ import { MediaLauncher } from './components/MediaLauncher';
 import { CdrToolWorkspace } from './components/CdrToolWorkspace';
 import { TranslationEditor } from './components/TranslationEditor';
 import { serializeSqlSession, hydrateSqlSession } from './components/SqlToolWorkspace';
+import { serializeCdrState } from './components/CdrToolWorkspace';
 import { SqlToolTabShell } from './components/SqlToolTabShell';
 import { ChatArchiveSearch } from './components/ChatArchiveSearch';
 import { CustomWorkspaceDialog, CustomWorkspaceManager } from './components/CustomWorkspaceDialog';
@@ -3490,6 +3491,12 @@ useEffect(() => {
     if (tab.type === 'sqlTool' && tab.sqlTool?.sessionId) {
       liveWsState = serializeSqlSession(tab.sqlTool.sessionId);
     }
+    // CDR 도구도 같은 이유로 직접 덤프한다 — 상태가 iframe 안에 있어서 컴포넌트가 postMessage 로
+    // 받아 모듈 캐시에 넣어두고, 창을 옮기는 이 시점에 그걸 꺼내 간다. workspaceStateRef 만 믿으면
+    // 갓 뜬 빈 iframe 의 보고에 덮여 빈 상태로 옮겨가는 경우가 있었다(실측).
+    if (tab.type === 'cdrTool') {
+      liveWsState = serializeCdrState(tab.id) || liveWsState;
+    }
     // ipcRenderer.invoke 는 structured clone 을 쓰기 때문에, buffers/styles/siblingSessions 안에
     // (예: quickSession 등 어디선가 섞여 들어온) 함수·클래스 인스턴스 등 클론 불가능한 값이 하나만
     // 있어도 "An object could not be cloned" 로 전체 IPC 호출이 그냥 죽는다(에러 하나 안 뜨고
@@ -6074,6 +6081,8 @@ useEffect(() => {
           <div key={t.id} style={tabSlotStyle(t)}>
             <ErrorBoundary label="CdrTool">
               <CdrToolWorkspace
+                initialState={t.workspaceState || workspaceStateRef.current.get(t.id)}
+                onStateChange={(st: any) => workspaceStateRef.current.set(t.id, st)}
                 instanceId={t.id}
                 sshSessions={tabs.filter(tt => tt.type !== 'fileExplorer' && tt.type !== 'fileEditor' && !tt.type?.match(/browser|compare|logAnalyzer|vpn|i18n|sqlTool|messenger|microsip|sswPhone|sipp|office|media|cdrTool|customWorkspace/)).flatMap(tt => collectAllSessions(tt.layout)).filter(s => s.sessionId).map(s => ({ termId: s.termId, label: s.sessionName }))}
               />

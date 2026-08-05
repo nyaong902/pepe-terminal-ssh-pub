@@ -18,11 +18,14 @@ const toolbarBtn: React.CSSProperties = {
 };
 
 type FileData = { data: ArrayBuffer; fileName: string };
-type OpenHwp = { id: string; title: string; fileData?: FileData };
+type OpenHwp = { id: string; title: string; fileData?: FileData; filePath?: string | null };
 
 let nextHwpId = 0;
 
-export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { instanceId: string; initialFilePath?: string }) {
+export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath, initialFilePaths, onOpenPathsChange }: {
+  instanceId: string; initialFilePath?: string;
+  initialFilePaths?: string[]; onOpenPathsChange?: (paths: string[]) => void;
+}) {
   const [docs, setDocs] = useState<OpenHwp[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [statusById, setStatusById] = useState<Record<string, string>>({});
@@ -65,9 +68,9 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { 
     })().catch((e) => setStatus(id, `초기화 실패: ${e?.message || e}`));
   };
 
-  const addDoc = (title: string, fileData?: FileData) => {
+  const addDoc = (title: string, fileData?: FileData, filePath?: string | null) => {
     const id = `hwp-${++nextHwpId}`;
-    setDocs(prev => [...prev, { id, title, fileData }]);
+    setDocs(prev => [...prev, { id, title, fileData, filePath: filePath || null }]);
     setActiveId(id);
   };
 
@@ -96,7 +99,7 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { 
       return;
     }
     setError('');
-    addDoc(result.fileName, { data: result.data, fileName: result.fileName });
+    addDoc(result.fileName, { data: result.data, fileName: result.fileName }, result.filePath);
     addRecent('hwp', { filePath: result.filePath, fileName: result.fileName }).then(setRecents);
   };
 
@@ -108,12 +111,38 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath }: { 
       return;
     }
     setError('');
-    addDoc(result.fileName, { data: result.data, fileName: result.fileName });
+    addDoc(result.fileName, { data: result.data, fileName: result.fileName }, doc.filePath);
     addRecent('hwp', { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
 
   // Pepe-Thing(파일 검색) 등 외부에서 "이 파일을 오피스 워크스페이스로 열기"를 선택했을 때 —
   // 마운트 시 1회, 사용자가 열기 버튼을 누른 것과 동일하게 자동으로 문서를 연다.
+
+  // 열려 있는 문서의 파일 경로를 상위(OfficeLauncher)에 알린다 — 워크스페이스를 다른 창으로
+  // 옮기면 이 컴포넌트는 새 렌더러에서 처음부터 다시 마운트되므로, 경로를 넘겨받지 못하면 빈
+  // 편집기가 떠서 "초기화" 로 보인다. 편집 중이던 내용은 옮길 수 없다(편집기는 별도 프로세스의
+  // webview 이고 새 창에서 새로 만들어진다) — 같은 파일을 다시 열어주는 것까지가 한계다.
+  useEffect(() => {
+    if (!onOpenPathsChange) return;
+    onOpenPathsChange(docs.map(d => d.filePath || '').filter(Boolean) as string[]);
+    /* eslint-disable-next-line */
+  }, [docs]);
+
+  // 넘겨받은 경로들을 한 번만 다시 연다.
+  const restoredPathsRef = useRef(false);
+  useEffect(() => {
+    if (restoredPathsRef.current) return;
+    const paths = (initialFilePaths || []).filter(Boolean);
+    if (paths.length === 0) return;
+    restoredPathsRef.current = true;
+    (async () => {
+      for (const fp of paths) {
+        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\\/]/).pop() || fp, openedAt: 0, openCount: 0 });
+      }
+    })();
+    /* eslint-disable-next-line */
+  }, [initialFilePaths]);
+
   const initialFileOpenedRef = useRef(false);
   useEffect(() => {
     if (!initialFilePath || initialFileOpenedRef.current) return;

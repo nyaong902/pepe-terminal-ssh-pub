@@ -24,11 +24,14 @@ const toolbarBtn: React.CSSProperties = {
   background: 'var(--win-surface, #161b22)', color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer',
 };
 
-type OpenDoc = { id: string; title: string; src: string; blobUrl: string | null };
+type OpenDoc = { id: string; title: string; src: string; blobUrl: string | null; filePath?: string | null };
 
 let nextDocId = 0;
 
-export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: string; kind: DocKind; initialFilePath?: string }) {
+export function ZiziyiOfficeWorkspace({ kind, initialFilePath, initialFilePaths, onOpenPathsChange }: {
+  instanceId: string; kind: DocKind; initialFilePath?: string;
+  initialFilePaths?: string[]; onOpenPathsChange?: (paths: string[]) => void;
+}) {
   const [docs, setDocs] = useState<OpenDoc[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -40,9 +43,9 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
   const docsRef = useRef<OpenDoc[]>(docs);
   docsRef.current = docs;
 
-  const addDoc = (title: string, src: string, blobUrl: string | null) => {
+  const addDoc = (title: string, src: string, blobUrl: string | null, filePath?: string | null) => {
     const id = `doc-${++nextDocId}`;
-    setDocs(prev => [...prev, { id, title, src, blobUrl }]);
+    setDocs(prev => [...prev, { id, title, src, blobUrl, filePath: filePath || null }]);
     setActiveId(id);
   };
 
@@ -76,13 +79,13 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
   // <webview>(별도 프로세스)인 게스트가 열 수 없다. 그래서 파일을 서빙하는 URL 을 준다 —
   // dev 는 vite 미들웨어(vite.config.ts 의 serveLocalFile), 패키지된 앱은 pepeapp:// 핸들러의
   // __local-file 이 같은 일을 한다. 임시 파일을 만들 필요도 없다.
-  const openUrl = (fileUrl: string, fileName: string) => {
+  const openUrl = (fileUrl: string, fileName: string, filePath?: string) => {
     const src = `${window.location.origin}/office-editor/editor.html?url=${encodeURIComponent(fileUrl)}&fileType=${kind}&fileName=${encodeURIComponent(fileName)}`;
-    addDoc(fileName, src, null);   // blob 을 쓰지 않으므로 해제할 것이 없다
+    addDoc(fileName, src, null, filePath);   // blob 을 쓰지 않으므로 해제할 것이 없다
   };
 
   const openLocalFile = (filePath: string, fileName: string) =>
-    openUrl(`${window.location.origin}/__local-file?path=${encodeURIComponent(filePath)}`, fileName);
+    openUrl(`${window.location.origin}/__local-file?path=${encodeURIComponent(filePath)}`, fileName, filePath);
 
   const handleOpen = async () => {
     const result = await api().officeDocOpenFile?.(kind);
@@ -108,6 +111,32 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath }: { instanceId: s
     openLocalFile(doc.filePath, result.fileName);
     addRecent(kind, { filePath: doc.filePath, fileName: result.fileName }).then(setRecents);
   };
+
+
+  // 열려 있는 문서의 파일 경로를 상위(OfficeLauncher)에 알린다 — 워크스페이스를 다른 창으로
+  // 옮기면 이 컴포넌트는 새 렌더러에서 처음부터 다시 마운트되므로, 경로를 넘겨받지 못하면 빈
+  // 편집기가 떠서 "초기화" 로 보인다. 편집 중이던 내용은 옮길 수 없다(편집기는 별도 프로세스의
+  // webview 이고 새 창에서 새로 만들어진다) — 같은 파일을 다시 열어주는 것까지가 한계다.
+  useEffect(() => {
+    if (!onOpenPathsChange) return;
+    onOpenPathsChange(docs.map(d => d.filePath || '').filter(Boolean) as string[]);
+    /* eslint-disable-next-line */
+  }, [docs]);
+
+  // 넘겨받은 경로들을 한 번만 다시 연다.
+  const restoredPathsRef = useRef(false);
+  useEffect(() => {
+    if (restoredPathsRef.current) return;
+    const paths = (initialFilePaths || []).filter(Boolean);
+    if (paths.length === 0) return;
+    restoredPathsRef.current = true;
+    (async () => {
+      for (const fp of paths) {
+        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\\/]/).pop() || fp, openedAt: 0, openCount: 0 });
+      }
+    })();
+    /* eslint-disable-next-line */
+  }, [initialFilePaths]);
 
   const initialFileOpenedRef = useRef(false);
   useEffect(() => {
