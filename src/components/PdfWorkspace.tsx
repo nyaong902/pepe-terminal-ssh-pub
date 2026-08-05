@@ -135,20 +135,27 @@ export function PdfWorkspace({ initialFilePath, initialFilePaths, onOpenPathsCha
     /* eslint-disable-next-line */
   }, [docs]);
 
-  // 넘겨받은 경로들을 한 번만 다시 연다.
+  // 넘겨받은 경로들을 마운트 때 한 번만 다시 연다.
+  //
+  // 주의: initialFilePaths 는 상위(OfficeLauncher)가 위 onOpenPathsChange 보고로 갱신하는 값이라,
+  // props 변화를 보고 열면 사용자가 방금 연 문서를 "복원 대상" 으로 오인해 같은 문서가 두 번 열린다
+  // (실측). 그래서 마운트 시점 값만 쓰고 이후 변화는 무시한다.
+  const initialPathsRef = useRef(initialFilePaths);
   const restoredPathsRef = useRef(false);
   useEffect(() => {
     if (restoredPathsRef.current) return;
-    const paths = (initialFilePaths || []).filter(Boolean);
+    restoredPathsRef.current = true;   // 빈 목록이어도 표시해서 다시 들어오지 않게 한다
+    // initialFilePath(외부에서 "이 파일 열기" 로 들어온 경우)가 있으면 그쪽이 열어주므로 건너뛴다.
+    if (initialFilePath) return;
+    const paths = (initialPathsRef.current || []).filter(Boolean);
     if (paths.length === 0) return;
-    restoredPathsRef.current = true;
     (async () => {
       for (const fp of paths) {
-        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\\/]/).pop() || fp, openedAt: 0, openCount: 0 });
+        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\/]/).pop() || fp, openedAt: 0, openCount: 0 });
       }
     })();
     /* eslint-disable-next-line */
-  }, [initialFilePaths]);
+  }, []);
 
   const initialFileOpenedRef = useRef(false);
   useEffect(() => {

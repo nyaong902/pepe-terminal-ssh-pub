@@ -79,6 +79,35 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath, initialFilePaths,
   // <webview>(별도 프로세스)인 게스트가 열 수 없다. 그래서 파일을 서빙하는 URL 을 준다 —
   // dev 는 vite 미들웨어(vite.config.ts 의 serveLocalFile), 패키지된 앱은 pepeapp:// 핸들러의
   // __local-file 이 같은 일을 한다. 임시 파일을 만들 필요도 없다.
+  // "확장 프로그램 필요" 팝업 자동 통과.
+  //
+  // ZIZIYI 편집기는 브라우저 확장(다운로드한 문서를 자동으로 편집기로 여는 기능)을 권하는 팝업을
+  // 띄운다. 이 앱은 Electron 이라 크롬 웹스토어가 없어서 "확장 프로그램 설치" 를 눌러도 아무 일이
+  // 일어나지 않는다(설치할 수단 자체가 없다). 우리는 파일을 URL 로 직접 넘겨서 열기 때문에 확장이
+  // 필요하지도 않다 — 팝업의 "확장 프로그램 없이 열어보기" 를 대신 눌러준다.
+  // 팝업이 뜨는 시점이 로드 직후가 아닐 수 있어(라우팅/지연 렌더) MutationObserver 로 기다린다.
+  const AUTO_DISMISS_EXT_POPUP = `(() => {
+    if (window.__pepeExtDismiss) return;
+    window.__pepeExtDismiss = true;
+    const LABEL = '확장 프로그램 없이 열어보기';
+    const hit = () => Array.from(document.querySelectorAll('button, a, [role="button"]'))
+      .find(el => (el.textContent || '').trim().includes(LABEL));
+    const tick = () => { const el = hit(); if (!el) return false; el.click(); return true; };
+    if (tick()) return;
+    const mo = new MutationObserver(() => { if (tick()) mo.disconnect(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    setTimeout(() => { try { mo.disconnect(); } catch {} }, 60000);
+  })();`;
+  const wireWebview = (el: any) => {
+    if (!el || el.__pepeWired) return;
+    el.__pepeWired = true;
+    const run = () => { try { el.executeJavaScript(AUTO_DISMISS_EXT_POPUP).catch(() => {}); } catch {} };
+    el.addEventListener('dom-ready', run);
+    // 편집기 안에서 라우팅이 일어나면 주입한 스크립트가 사라지므로 다시 넣는다.
+    el.addEventListener('did-navigate-in-page', run);
+    el.addEventListener('did-navigate', run);
+  };
+
   const openUrl = (fileUrl: string, fileName: string, filePath?: string) => {
     const src = `${window.location.origin}/office-editor/editor.html?url=${encodeURIComponent(fileUrl)}&fileType=${kind}&fileName=${encodeURIComponent(fileName)}`;
     addDoc(fileName, src, null, filePath);   // blob 을 쓰지 않으므로 해제할 것이 없다
@@ -123,20 +152,27 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath, initialFilePaths,
     /* eslint-disable-next-line */
   }, [docs]);
 
-  // 넘겨받은 경로들을 한 번만 다시 연다.
+  // 넘겨받은 경로들을 마운트 때 한 번만 다시 연다.
+  //
+  // 주의: initialFilePaths 는 상위(OfficeLauncher)가 위 onOpenPathsChange 보고로 갱신하는 값이라,
+  // props 변화를 보고 열면 사용자가 방금 연 문서를 "복원 대상" 으로 오인해 같은 문서가 두 번 열린다
+  // (실측). 그래서 마운트 시점 값만 쓰고 이후 변화는 무시한다.
+  const initialPathsRef = useRef(initialFilePaths);
   const restoredPathsRef = useRef(false);
   useEffect(() => {
     if (restoredPathsRef.current) return;
-    const paths = (initialFilePaths || []).filter(Boolean);
+    restoredPathsRef.current = true;   // 빈 목록이어도 표시해서 다시 들어오지 않게 한다
+    // initialFilePath(외부에서 "이 파일 열기" 로 들어온 경우)가 있으면 그쪽이 열어주므로 건너뛴다.
+    if (initialFilePath) return;
+    const paths = (initialPathsRef.current || []).filter(Boolean);
     if (paths.length === 0) return;
-    restoredPathsRef.current = true;
     (async () => {
       for (const fp of paths) {
-        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\\/]/).pop() || fp, openedAt: 0, openCount: 0 });
+        await handleOpenRecent({ filePath: fp, fileName: fp.split(/[\/]/).pop() || fp, openedAt: 0, openCount: 0 });
       }
     })();
     /* eslint-disable-next-line */
-  }, [initialFilePaths]);
+  }, []);
 
   const initialFileOpenedRef = useRef(false);
   useEffect(() => {
@@ -205,6 +241,7 @@ export function ZiziyiOfficeWorkspace({ kind, initialFilePath, initialFilePaths,
           /* @ts-ignore — webview 는 React 표준 element 가 아니지만 Electron 환경에서 동작 */
           <webview
             key={d.id}
+            ref={wireWebview}
             data-doc-id={d.id}
             src={d.src}
             /* display 는 반드시 flex 여야 한다 — block/inline-block 이면 내부 게스트가 세로로
