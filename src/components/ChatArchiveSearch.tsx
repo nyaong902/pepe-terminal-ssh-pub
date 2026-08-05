@@ -8,7 +8,7 @@
 // (a) 기존 후보 안에서 관련성 재평가 후 필터링/재정렬 하거나 (b) 첫 검색 자체가 빗나갔다고 판단되면
 // 새 검색어로 재검색해 후보 자체를 다시 확보한다 — 검색 로직만으로는 첫 질문의 표현이 안 맞으면
 // 그걸로 끝이라 결과 품질이 "케바케"가 된다는 지적을 반영.
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import { runOneShotPrompt } from '../utils/aiOneShot';
 import { displayRoomLabel } from '../utils/chatArchiveRoomNames';
@@ -151,6 +151,9 @@ function buildCandidateContext(candidates: SearchResult[]): string {
 }
 
 export const ChatArchiveSearch: React.FC = () => {
+  // 이 워크스페이스를 닫으면 임베딩 프로세스를 내린다 — 검색용 모델이 300MB 대이고 별도
+  // 프로세스에 있으므로 통째로 회수된다(메인에서 백필이 돌고 있으면 끝날 때까지 기다린다).
+  useEffect(() => () => { void (window as any).api?.chatArchiveReleaseEmbedder?.(); }, []);
   const [loading, setLoading] = useState(false);
   // candidates — 현재 후보 리스트. 첫 채팅 메시지로 채워지고, 이후 대화에서 AI 가 KEEP(재판단
   // 필터링)/RESEARCH(재검색) 액션을 낼 때마다 통째로 교체된다.

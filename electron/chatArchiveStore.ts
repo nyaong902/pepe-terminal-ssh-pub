@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { pathToFileURL } from 'url';
-import { app, safeStorage } from 'electron';
+import { app, safeStorage, utilityProcess } from 'electron';
 import { ensureBundleExtracted } from './ensureBundleExtracted';
 
 export type ChatChunk = { ts: number; sender: string; text: string };
@@ -54,10 +54,48 @@ function dedupKey(roomId: string, ts: number, sender: string): string {
 // transformers 는 sharp / onnxruntime-node / onnxruntime-web 를 모두 **정적** ESM import 하고,
 // 그 중 sharp 와 @img(합쳐 20MB)는 앱 본체가 이미 써서 항상 그 폴더에 있다. 같은 node_modules
 // 안에 풀어두면 Node 의 상위 탐색으로 그대로 찾으므로 번들에 중복으로 넣지 않아도 된다.
-let embedderPromise: Promise<any> | null = null;
+// 임베딩은 별도 프로세스(utilityProcess)에서 돌린다 — electron/chatArchiveEmbedWorker.cjs.
+//
+// 예전에는 메인 프로세스에서 직접 모델을 로드했다. 그러면 검색 한 번에 메인이 144MB -> 667MB 로
+// 뛰고 392MB 까지만 내려왔다: 모델 가중치(113MB + 토크나이저 16MB)가 상주하고, onnxruntime 의
+// 아레나 할당자는 한 번 늘어난 메모리를 OS 에 반납하지 않는다. 메인은 앱 수명 내내 살아 있으니
+// 여기 얹힌 것은 구조적으로 회수가 불가능했다.
+// 별도 프로세스로 옮기고 유휴 시 종료하면 통째로 회수된다. 대가는 유휴 종료 후 첫 검색의 모델
+// 로드 지연이라, 타임아웃을 넉넉히 두어 연속 검색에는 영향이 없게 한다.
+const EMBED_IDLE_MS = 10 * 60 * 1000;
+let embedProc: Electron.UtilityProcess | null = null;
+let embedReady: Promise<void> | null = null;
+let embedIdleTimer: NodeJS.Timeout | null = null;
+let embedSeq = 0;
+const embedPending = new Map<number, { resolve: (v: number[][]) => void; reject: (e: Error) => void }>();
+
+function rejectAllPending(message: string) {
+  for (const [id, waiter] of embedPending) {
+    embedPending.delete(id);
+    waiter.reject(new Error(message));
+  }
+}
+
+function killEmbedProc(reason: string) {
+  if (embedIdleTimer) { clearTimeout(embedIdleTimer); embedIdleTimer = null; }
+  const proc = embedProc;
+  embedProc = null;
+  embedReady = null;
+  rejectAllPending('임베딩 프로세스가 종료되었습니다.');
+  if (!proc) return;
+  try { proc.kill(); } catch {}
+  console.log(`[chat-archive] 임베딩 프로세스 종료 (${reason})`);
+}
+
+// 요청이 올 때마다 유휴 타이머를 미룬다 — 마지막 요청 이후 EMBED_IDLE_MS 동안 조용하면 내린다.
+function touchEmbedIdle() {
+  if (embedIdleTimer) clearTimeout(embedIdleTimer);
+  embedIdleTimer = setTimeout(() => killEmbedProc('유휴'), EMBED_IDLE_MS);
+}
 
 // 개발 모드에선 프로젝트 node_modules 를 그대로 쓰고(bare specifier), 패키지된 앱에서는
-// 풀린 번들의 엔트리 파일을 file:// URL 로 직접 가리킨다.
+// 풀린 번들의 엔트리 파일을 file:// URL 로 직접 가리킨다. 워커에는 electron 의 app 모듈이 없어서
+// 이 판단은 여기(메인)서 하고 결과만 넘긴다.
 function resolveTransformersSpecifier(): string {
   if (!app.isPackaged) return '@xenova/transformers';
   // 포터블 빌드는 NSIS customInstall 을 거치지 않아 zip 이 그대로 남아 있다 — 첫 사용 시 여기서 푼다.
@@ -77,30 +115,83 @@ function resolveTransformersSpecifier(): string {
   return pathToFileURL(entry).href;
 }
 
-async function getEmbedder(): Promise<any> {
-  if (!embedderPromise) {
-    embedderPromise = (async () => {
-      // 변수 specifier 라 번들러가 정적 분석으로 끌어안지 않고 실제 동적 import 로 남는다.
-      const spec = resolveTransformersSpecifier();
-      const mod: any = await import(spec);
-      try { mod.env.cacheDir = path.join(app.getPath('userData'), 'models'); } catch {}
-      // 다국어(한국어 포함) 지원 모델 — 사내 대화가 한국어 위주라 다국어 모델을 기본으로 사용.
-      return mod.pipeline('feature-extraction', 'Xenova/paraphrase-multilingual-MiniLM-L12-v2');
-    })();
-    // 실패한 promise 를 캐시해두면 이후 모든 호출이 같은 에러로 죽는다 — 다음 시도에 재평가되도록.
-    embedderPromise.catch(() => { embedderPromise = null; });
+function ensureEmbedProc(): Promise<void> {
+  if (embedReady) return embedReady;
+  embedReady = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const fail = (e: Error) => { if (!settled) { settled = true; reject(e); } };
+    try {
+      // 번들이 없으면 여기서 던진다 — 워커를 띄우기 전에 알 수 있다.
+      const specifier = resolveTransformersSpecifier();
+      let cacheDir = '';
+      try { cacheDir = path.join(app.getPath('userData'), 'models'); } catch {}
+      // serviceName 은 app.getAppMetrics() 에 그대로 보여서, 메모리 진단 로그에서 이 프로세스를
+      // 바로 알아볼 수 있다(Utility(PePe Embedder)).
+      const proc = utilityProcess.fork(path.join(__dirname, 'chatArchiveEmbedWorker.cjs'), [], {
+        serviceName: 'PePe Embedder',
+        stdio: 'inherit',
+      });
+      embedProc = proc;
+      proc.on('message', (msg: any) => {
+        if (!msg || typeof msg.type !== 'string') return;
+        if (msg.type === 'ready') { if (!settled) { settled = true; resolve(); } return; }
+        if (msg.type === 'result') {
+          const waiter = embedPending.get(msg.id);
+          if (!waiter) return;
+          embedPending.delete(msg.id);
+          waiter.resolve(Array.isArray(msg.embeddings) ? msg.embeddings : []);
+          return;
+        }
+        if (msg.type === 'error') {
+          const waiter = typeof msg.id === 'number' ? embedPending.get(msg.id) : undefined;
+          if (waiter) {
+            embedPending.delete(msg.id);
+            waiter.reject(new Error(String(msg.message || '임베딩 실패')));
+          } else {
+            console.warn('[chat-archive] 임베딩 오류:', msg.message);
+          }
+        }
+      });
+      proc.on('exit', (code) => {
+        if (embedProc === proc) { embedProc = null; embedReady = null; }
+        rejectAllPending(`임베딩 프로세스가 종료되었습니다 (code ${code}).`);
+        fail(new Error(`임베딩 프로세스를 시작하지 못했습니다 (code ${code}).`));
+      });
+      proc.postMessage({ type: 'init', specifier, cacheDir });
+    } catch (e: any) {
+      fail(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
+  // 실패한 promise 를 캐시해두면 이후 모든 호출이 같은 에러로 죽는다 — 다음 시도에 재평가되도록.
+  embedReady.catch(() => { embedReady = null; });
+  return embedReady;
+}
+
+// 대화 아카이브 검색 워크스페이스를 닫을 때 호출된다 — 유휴 타임아웃을 기다리지 않고 바로 내린다.
+// 처리 중인 요청이 있으면(메신저 스크래퍼의 백필이 백그라운드로 임베딩할 수 있다) 죽이지 않고
+// 짧은 간격으로 다시 확인한다 — 여기서 죽이면 그 작업이 오류로 끝난다.
+export function releaseEmbedder(reason: string) {
+  if (!embedProc) return;
+  if (embedPending.size > 0) {
+    if (embedIdleTimer) clearTimeout(embedIdleTimer);
+    embedIdleTimer = setTimeout(() => releaseEmbedder(reason), 5000);
+    return;
   }
-  return embedderPromise;
+  killEmbedProc(reason);
 }
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
-  const embedder = await getEmbedder();
-  const out: number[][] = [];
-  for (const t of texts) {
-    const result = await embedder(t, { pooling: 'mean', normalize: true });
-    out.push(Array.from(result.data as Float32Array));
-  }
+  await ensureEmbedProc();
+  const proc = embedProc;
+  if (!proc) throw new Error('임베딩 프로세스를 사용할 수 없습니다.');
+  touchEmbedIdle();
+  const id = ++embedSeq;
+  const done = new Promise<number[][]>((resolve, reject) => embedPending.set(id, { resolve, reject }));
+  proc.postMessage({ type: 'embed', id, texts });
+  const out = await done;
+  // 응답을 받은 시점부터 다시 센다 — 모델 로드가 오래 걸려도 그 시간이 유휴로 잡히지 않게.
+  touchEmbedIdle();
   return out;
 }
 

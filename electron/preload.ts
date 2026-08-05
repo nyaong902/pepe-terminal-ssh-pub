@@ -466,6 +466,8 @@ contextBridge.exposeInMainWorld('api', {
   ctagsFindDefinition: (termId: string, remotePath: string, symbol: string) => ipcRenderer.invoke('ctags:find-definition', { termId, remotePath, symbol }),
   chatArchiveAppendChunks: (roomId: string, chunks: Array<{ ts: number; sender: string; text: string }>) => ipcRenderer.invoke('chat-archive:append-chunks', { roomId, chunks }),
   chatArchiveEmbedText: (text: string) => ipcRenderer.invoke('chat-archive:embed-text', { text }),
+  // 검색 워크스페이스를 닫을 때 임베딩 프로세스(모델 300MB 대)를 내린다.
+  chatArchiveReleaseEmbedder: () => ipcRenderer.invoke('chat-archive:release-embedder'),
   chatArchiveSearch: (queryText: string, embedding: number[], topK?: number) => ipcRenderer.invoke('chat-archive:search', { queryText, embedding, topK }),
   chatArchiveGetStats: () => ipcRenderer.invoke('chat-archive:get-stats'),
   chatArchiveFilterUnknown: (roomId: string, items: Array<{ ts: number; sender: string }>) => ipcRenderer.invoke('chat-archive:filter-unknown', { roomId, items }),

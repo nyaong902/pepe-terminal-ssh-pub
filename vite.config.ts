@@ -80,7 +80,7 @@ function serveLocalFile(): Plugin {
 // 앱은 마지막 풀빌드 시점의 사본을 계속 썼다 — 수정이 조용히 무시되는 함정이었다(실제로 하루치
 // worker 최적화가 전부 실행되지 않았고, 그걸 알아내는 데 오래 걸렸다).
 // 그래서 dev 서버 시작 시 한 번 복사하고, 이후 파일이 바뀌면 다시 복사한다.
-const RUNTIME_CJS = ['sshTerminalWorker.cjs', 'sftpTransferWorker.cjs', 'mcpSshServer.cjs'];
+const RUNTIME_CJS = ['sshTerminalWorker.cjs', 'sftpTransferWorker.cjs', 'mcpSshServer.cjs', 'chatArchiveEmbedWorker.cjs'];
 function copyRuntimeCjs(): Plugin {
   const copyOne = (name: string) => {
     const from = path.join(__dirname, 'electron', name);

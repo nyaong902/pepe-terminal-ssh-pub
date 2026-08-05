@@ -9703,6 +9703,12 @@ ipcMain.handle('chat-archive:search', (_e, { queryText, embedding, topK }: { que
     return { ok: false, error: String(e?.message || e) };
   }
 });
+// 검색 워크스페이스를 닫으면 임베딩 프로세스를 내린다 — 모델이 300MB 대라 유휴 타임아웃까지
+// 붙잡고 있을 이유가 없다. 다시 검색하면 알아서 뜬다.
+ipcMain.handle('chat-archive:release-embedder', () => {
+  try { chatArchiveStore.releaseEmbedder('검색 워크스페이스 닫힘'); return { ok: true }; }
+  catch (e: any) { return { ok: false, error: String(e?.message || e) }; }
+});
 ipcMain.handle('chat-archive:get-stats', () => {
   try {
     return { ok: true, stats: chatArchiveStore.getStats() };
