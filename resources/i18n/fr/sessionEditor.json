@@ -100,7 +100,8 @@
     "keepAliveTcp": "Envoyer des paquets TCP keep alive lorsque le réseau est inactif",
     "scrollOnOutput": "Défiler vers le bas lors des entrées/sorties du terminal",
     "scrollOnOutputPauseOnScrollLock": "Suspendre le défilement vers le bas lorsque ScrollLock est actif",
-    "scrollOnKeyPress": "Défiler vers le bas à la frappe"
+    "scrollOnKeyPress": "Défiler vers le bas à la frappe",
+    "altScrollShowsScrollback": "Le défilement vers le haut dans les programmes plein écran (vi, less) affiche l'écran précédent"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / domaine",

@@ -100,7 +100,8 @@
     "keepAliveTcp": "Send TCP keep alive packets when the network is idle",
     "scrollOnOutput": "Scroll to the bottom on terminal input/output",
     "scrollOnOutputPauseOnScrollLock": "Pause scrolling to the bottom while ScrollLock is on",
-    "scrollOnKeyPress": "Scroll to the bottom on key press"
+    "scrollOnKeyPress": "Scroll to the bottom on key press",
+    "altScrollShowsScrollback": "Scrolling up in full-screen programs (vi, less) shows the previous screen"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / domain",

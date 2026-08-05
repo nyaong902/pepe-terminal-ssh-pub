@@ -100,7 +100,8 @@
     "keepAliveTcp": "네트워크가 유휴 상태일 때 TCP 연결 유지 패킷 보냄",
     "scrollOnOutput": "터미널 입출력 시 맨 아래로 스크롤",
     "scrollOnOutputPauseOnScrollLock": "ScrollLock 활성화 시 하단 스크롤 기능 일시 정지",
-    "scrollOnKeyPress": "키를 누르면 맨 아래로 스크롤"
+    "scrollOnKeyPress": "키를 누르면 맨 아래로 스크롤",
+    "altScrollShowsScrollback": "vi 등 전체화면 프로그램에서 위로 스크롤하면 이전 화면 보기"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / 도메인",

@@ -51,6 +51,7 @@ export type Session = {
   scrollOnOutput?: boolean;
   scrollOnOutputPauseOnScrollLock?: boolean;
   scrollOnKeyPress?: boolean;
+  altScrollShowsScrollback?: boolean;
   x11Display?: number;
   browserUrl?: string;
   jumps?: JumpHop[];
@@ -122,6 +123,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
   const [scrollOnOutput, setScrollOnOutput] = useState<boolean>(!!session?.scrollOnOutput);
   const [scrollPauseOnLock, setScrollPauseOnLock] = useState<boolean>(!!session?.scrollOnOutputPauseOnScrollLock);
   const [scrollOnKeyPress, setScrollOnKeyPress] = useState<boolean>(session?.scrollOnKeyPress !== false);
+  const [altScrollShowsScrollback, setAltScrollShowsScrollback] = useState<boolean>(!!session?.altScrollShowsScrollback);
   const [x11Display, setX11Display] = useState<number>(session?.x11Display ?? 0);
   const [browserUrl, setBrowserUrl] = useState(session?.browserUrl ?? '');
   // 다단계 점프 — 편집용 행 배열. host/user/password 는 문자열, port 는 number|'' 로 보관.
@@ -171,6 +173,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
     setScrollOnOutput(!!session?.scrollOnOutput);
     setScrollPauseOnLock(!!session?.scrollOnOutputPauseOnScrollLock);
     setScrollOnKeyPress(session?.scrollOnKeyPress !== false);
+    setAltScrollShowsScrollback(!!session?.altScrollShowsScrollback);
     setX11Display(session?.x11Display ?? 0);
     setBrowserUrl(session?.browserUrl ?? '');
     setJumps(toJumpRows(session));
@@ -234,6 +237,7 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
       scrollOnOutput: scrollOnOutput || undefined,
       scrollOnOutputPauseOnScrollLock: (scrollOnOutput && scrollPauseOnLock) || undefined,
       scrollOnKeyPress: scrollOnKeyPress ? undefined : false,
+      altScrollShowsScrollback: altScrollShowsScrollback || undefined,
     } as Session;
   };
   // ── 점프 행 조작 ──
@@ -456,6 +460,11 @@ export const SessionEditor: React.FC<Props> = ({ session, folders = [], onSave, 
                 <label className="check-row">
                   <input type="checkbox" checked={scrollOnKeyPress} onChange={e => setScrollOnKeyPress(e.target.checked)} />
                   <span>{t('fields.scrollOnKeyPress')}</span>
+                </label>
+                <label className="check-row">
+                  <input type="checkbox" checked={altScrollShowsScrollback}
+                    onChange={e => setAltScrollShowsScrollback(e.target.checked)} />
+                  <span>{t('fields.altScrollShowsScrollback')}</span>
                 </label>
               </div>
             )}

@@ -100,7 +100,8 @@
     "keepAliveTcp": "إرسال حزم TCP لإبقاء الاتصال عند خمول الشبكة",
     "scrollOnOutput": "التمرير إلى الأسفل عند إدخال/إخراج الطرفية",
     "scrollOnOutputPauseOnScrollLock": "إيقاف التمرير إلى الأسفل مؤقتًا عند تشغيل ScrollLock",
-    "scrollOnKeyPress": "التمرير إلى الأسفل عند الضغط على مفتاح"
+    "scrollOnKeyPress": "التمرير إلى الأسفل عند الضغط على مفتاح",
+    "altScrollShowsScrollback": "التمرير للأعلى في البرامج كاملة الشاشة (vi، less) يعرض الشاشة السابقة"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / نطاق",

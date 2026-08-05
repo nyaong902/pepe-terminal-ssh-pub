@@ -100,7 +100,8 @@
     "keepAliveTcp": "网络空闲时发送 TCP 保持连接数据包",
     "scrollOnOutput": "终端输入/输出时滚动到底部",
     "scrollOnOutputPauseOnScrollLock": "启用 ScrollLock 时暂停滚动到底部",
-    "scrollOnKeyPress": "按键时滚动到底部"
+    "scrollOnKeyPress": "按键时滚动到底部",
+    "altScrollShowsScrollback": "在 vi、less 等全屏程序中向上滚动时显示之前的屏幕内容"
   },
   "placeholders": {
     "hostExample": "IPv4 / IPv6 / 域名",

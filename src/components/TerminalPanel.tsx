@@ -250,7 +250,12 @@ function patchSuppressFocusEvents(term: any, termId?: string) {
           if (!buf || buf.type !== 'alternate') return;
           ev.preventDefault();
           ev.stopImmediatePropagation();
-          term.scrollLines(ev.deltaY > 0 ? 3 : -3);
+          const lines = ev.deltaY > 0 ? 3 : -3;
+          // 옵션이 켜져 있고 위로 굴리면, 대체 화면 대신 "실행 전 화면"을 겹쳐 보여준다(XShell 동작).
+          // 대체 버퍼에는 스크롤백이 없어서 아래의 scrollLines 는 어차피 아무 일도 하지 않는다.
+          const b = termId ? (termScrollBehavior.get(termId) ?? DEFAULT_SCROLL_BEHAVIOR) : DEFAULT_SCROLL_BEHAVIOR;
+          if (termId && b.altShowsScrollback && lines < 0) { openAltScrollbackOverlay(termId, lines); return; }
+          term.scrollLines(lines);
         } catch {}
       }, { capture: true });
     }
@@ -1329,9 +1334,154 @@ const termScrollbackOverride: Map<string, number> = new Map();
 // 동작대로 스크롤을 올려둔 자리에 머문다. 예전에는 이 동작이 항상 켜진 셈이어서 지난 내용을
 // 보려고 올려도 새 출력마다 끌려 내려갔다.
 // pauseOnScrollLock: ScrollLock 이 켜진 동안만 위 동작을 멈춘다(로그가 흐르는 중 잠깐 읽을 때).
-type TermScrollBehavior = { onOutput: boolean; pauseOnScrollLock: boolean; onKeyPress: boolean };
+type TermScrollBehavior = { onOutput: boolean; pauseOnScrollLock: boolean; onKeyPress: boolean; altShowsScrollback: boolean };
 const termScrollBehavior: Map<string, TermScrollBehavior> = new Map();
-const DEFAULT_SCROLL_BEHAVIOR: TermScrollBehavior = { onOutput: false, pauseOnScrollLock: false, onKeyPress: true };
+
+// 일반(normal) 버퍼만 직렬화한다 — 아래 오버레이 전용.
+//
+// 기존 serializeTermBuffer 는 SerializeAddon 기본 동작을 쓰는데, 그것은 대체 버퍼가 활성일 때
+// 일반 버퍼 뒤에 "[?1049h + 대체 버퍼 내용" 까지 붙인다(창 분리 시 화면을 그대로 복원하려면
+// 그게 맞다). 오버레이에 그걸 쓰면 vi 화면으로 끝나서 원본과 똑같아 보인다 — 실제로 "안 된다" 는
+// 제보의 원인이었다. 여기서는 excludeAltBuffer 로 일반 버퍼만 가져온다.
+function serializeNormalBufferOnly(termId: string, scrollback: number): string {
+  const entry = termStore.get(termId);
+  if (!entry) return '';
+  try {
+    const addon = new SerializeAddon();
+    entry.term.loadAddon(addon);
+    const out = addon.serialize({ scrollback, excludeAltBuffer: true, excludeModes: true });
+    try { addon.dispose(); } catch {}
+    return out || '';
+  } catch { return ''; }
+}
+
+// ── vi 등 전체화면 프로그램에서 위로 스크롤하면 "실행 전 화면" 보기 (XShell 동작) ──
+//
+// 대체 화면 버퍼(alternate)에는 스크롤백이 없다. 그래서 vi 안에서 휠을 올려도 볼 것이 없고, 실행
+// 전에 화면에 있던 내용은 일반 버퍼(normal)에 남아 있지만 지금 화면에 보이지 않는다. XShell 은
+// 그 상황에서 이전 화면을 보여주는데, 같은 것을 옵션으로 제공한다(기본 꺼짐).
+//
+// 구현: 일반 버퍼를 직렬화해(serializeTermBuffer — 색상까지 보존) 읽기 전용 보조 터미널에 그리고,
+// 원본 터미널 위에 겹쳐 띄운다. 원본 버퍼를 건드리지 않으므로 vi 화면이 깨지지 않고, 서버로
+// 아무것도 보내지 않으므로 부작용도 없다(대체 화면을 빠져나갔다 돌아오는 방식은 vi 화면이 지워진다).
+type AltScrollbackOverlay = { host: HTMLElement; view: any; cleanup: () => void };
+const altScrollbackOverlays = new Map<string, AltScrollbackOverlay>();
+
+export function closeAltScrollbackOverlay(termId: string) {
+  const ov = altScrollbackOverlays.get(termId);
+  if (!ov) return;
+  altScrollbackOverlays.delete(termId);
+  try { ov.cleanup(); } catch {}
+  try { ov.view.dispose(); } catch {}
+  try { ov.host.remove(); } catch {}
+}
+
+function openAltScrollbackOverlay(termId: string, deltaLines: number) {
+  try { openAltScrollbackOverlayInner(termId, deltaLines); }
+  catch (e) { console.error('[alt-scroll] 오버레이 실패', e); }
+}
+
+function openAltScrollbackOverlayInner(termId: string, deltaLines: number) {
+  const existing = altScrollbackOverlays.get(termId);
+  if (existing) { try { existing.view.scrollLines(deltaLines); } catch {} return; }
+  const entry = termStore.get(termId);
+  if (!entry) return;
+  const src: any = entry.term;
+  const parent: HTMLElement | null = src.element?.parentElement || null;
+  if (!parent) return;
+  // position:absolute 로 겹치려면 기준 조상이 필요하다 — 부모가 static 이면 엉뚱한 곳에 붙는다.
+  try {
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+  } catch {}
+
+  const host = document.createElement('div');
+  host.style.cssText = 'position:absolute;inset:0;z-index:6;outline:none;';
+  const hint = document.createElement('div');
+  hint.textContent = i18n.t('terminal.altScrollbackHint', {
+    defaultValue: '이전 화면 — 스크롤해서 보고(드래그 복사 가능), 아무 키나 누르면 돌아갑니다',
+  });
+  hint.style.cssText = 'position:absolute;left:0;right:0;top:0;height:20px;line-height:20px;padding:0 8px;'
+    + 'font-size:11px;background:#1f6feb;color:#fff;z-index:1;pointer-events:none;';
+  const body = document.createElement('div');
+  body.style.cssText = 'position:absolute;left:0;right:0;top:20px;bottom:0;';
+  host.appendChild(hint);
+  host.appendChild(body);
+  parent.appendChild(host);
+
+  const scrollback = src.options?.scrollback ?? 1000;
+  // 배경/투명도는 원본 터미널 설정을 그대로 쓴다 — 이 앱은 창이 투명하게 비치는 외형을 쓰므로
+  // 터미널 배경도 투명해야 한다.
+  const view = new Terminal({
+    fontSize: src.options?.fontSize,
+    fontFamily: src.options?.fontFamily,
+    theme: src.options?.theme,
+    scrollback,
+    disableStdin: true,
+    cursorBlink: false,
+    cursorStyle: 'block',
+    allowProposedApi: true,
+    allowTransparency: true,
+  });
+  const fit = new FitAddon();
+  view.loadAddon(fit);
+  view.open(body);
+  try { fit.fit(); } catch {}
+  // 일반 버퍼만 가져온다(대체 버퍼를 포함하면 vi 화면으로 끝나서 원본과 똑같아 보인다).
+  const dumped = serializeNormalBufferOnly(termId, scrollback);
+  // 앞의 [?25l 는 커서 숨김(DECTCEM). 읽기 전용 화면에 커서가 보이면 포커스가 어디 있는지
+  // 헷갈린다 — 실제로 "포커스가 나간 것 같다" 는 지적이 있었다.
+  view.write('[?25l' + dumped, () => {
+    try { view.scrollToBottom(); view.scrollLines(deltaLines); } catch {}
+  });
+  const close = () => closeAltScrollbackOverlay(termId);
+  // 키는 창 전체에서 잡는다 — 포커스가 오버레이에 있지 않고 원래 터미널에 남아 있어서, 오버레이
+  // 요소에만 리스너를 달면 아무 키를 눌러도 닫히지 않았다(실측).
+  //
+  // 복사 조합과 단독 修飾키는 무시한다: 이전 화면에서 텍스트를 끌어 복사하는 것이 이 기능의 주요
+  // 용도인데, Ctrl+C 에 닫히면 복사를 할 수 없다.
+  const MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock'];
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (MODIFIER_KEYS.includes(ev.key)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    close();
+  };
+  const onDown = (ev: MouseEvent) => {
+    // 텍스트를 끌어 선택하는 것은 막지 않는다 — 클릭만으로 닫으면 복사를 할 수 없다.
+    if (ev.detail > 1) return;
+  };
+  // 아래로 굴려서 맨 아래에 도달하면 닫는다 — vi 로 자연스럽게 복귀한다.
+  // 단, 방금 열렸을 때는 바로 닫지 않는다(열자마자 같은 제스처의 관성 이벤트로 닫히던 문제).
+  const openedAt = Date.now();
+  const onWheel = (ev: WheelEvent) => {
+    if (ev.deltaY <= 0) return;
+    if (Date.now() - openedAt < 400) return;
+    try {
+      const buf = (view as any).buffer?.active;
+      if (buf && buf.viewportY >= buf.baseY) close();
+    } catch {}
+  };
+  window.addEventListener('keydown', onKey, true);
+  host.addEventListener('mousedown', onDown, true);
+  host.addEventListener('wheel', onWheel, { capture: true, passive: true });
+
+  // vi 를 빠져나가면(대체 화면 종료) 오버레이도 닫는다.
+  let offBuf: any = null;
+  try { offBuf = src.buffer?.onBufferChange?.(() => close()); } catch {}
+
+  altScrollbackOverlays.set(termId, {
+    host,
+    view,
+    cleanup: () => {
+      window.removeEventListener('keydown', onKey, true);
+      host.removeEventListener('mousedown', onDown, true);
+      host.removeEventListener('wheel', onWheel, true as any);
+      try { offBuf?.dispose?.(); } catch {}
+    },
+  });
+}
+const DEFAULT_SCROLL_BEHAVIOR: TermScrollBehavior = { onOutput: false, pauseOnScrollLock: false, onKeyPress: true, altShowsScrollback: false };
 
 // ScrollLock 상태. KeyboardEvent.getModifierState 로만 알 수 있어서 키 이벤트에서 갱신한다.
 // ScrollLock 자체를 누른 순간의 keydown 은 토글 전 상태를 보고할 수 있으므로 keyup 도 함께 듣는다.
@@ -1447,6 +1597,7 @@ export function setTermScrollBehavior(termId: string, s: any) {
     onOutput: !!s?.scrollOnOutput,
     pauseOnScrollLock: !!s?.scrollOnOutputPauseOnScrollLock,
     onKeyPress: s?.scrollOnKeyPress !== false,
+    altShowsScrollback: !!s?.altScrollShowsScrollback,
   };
   termScrollBehavior.set(termId, b);
   const entry = termStore.get(termId);

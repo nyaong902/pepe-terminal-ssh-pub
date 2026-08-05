@@ -76,6 +76,10 @@ export type Session = {
   scrollOnOutput?: boolean;                    // 기본 false
   scrollOnOutputPauseOnScrollLock?: boolean;   // 기본 false
   scrollOnKeyPress?: boolean;                  // 기본 true
+  //  - altScrollShowsScrollback: vi/less/top 처럼 대체 화면을 쓰는 프로그램 안에서 위로 스크롤할 때,
+  //    그 프로그램에 스크롤을 전달하는 대신 "프로그램을 실행하기 전의 화면"(일반 버퍼의 스크롤백)을
+  //    겹쳐서 보여준다. XShell 이 그렇게 동작해서 같은 선택지를 둔다. 기본 꺼짐.
+  altScrollShowsScrollback?: boolean;          // 기본 false
   // dbms 필드는 더 이상 여기 없음 — SQL Tool DB 연결 프로필은 sqlSessionsStore.ts(sql-sessions.json)
   // 로 완전히 독립됐다. 과거 데이터 마이그레이션(sqlSessionsStore.migrateFromSshSessions)에서만
   // (s as any).dbms 로 과거 값을 읽어 옮기고 지운다.
