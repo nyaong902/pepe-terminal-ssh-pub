@@ -573,16 +573,34 @@ export function flushCompactedBuffer(termId: string) {
 }
 
 // xterm 5.3 의 rows 증가 시 grow bug 수동 보정.
-// fit() 직후 rows 가 늘어났다면, buffer 끝에 추가된 빈 줄을 제거하고 ybase/ydisp/y 를 재계산해서
-// 스크롤 위치(맨 아래에 컨텐츠 보이도록)를 유지. fit() 호출 전후로 prevRows 와 r 을 비교해야 함.
+// fit() 직후 rows 가 늘어났다면, buffer 끝에 추가된 빈 줄을 제거하고 ybase/ydisp/y 를 재계산한다.
+// fit() 호출 전후로 prevRows 와 r 을 비교해야 함.
+//
+// 스크롤 위치는 사용자가 보고 있던 곳을 그대로 둔다. 예전에는 무조건 맨 아래(ydisp = ybase)로
+// 붙였는데, 분할창을 오가면 그때마다 fit 이 일어나기 때문에 스크롤을 올려 로그를 읽던 중에도
+// 화면이 맨 아래로 쭈루룩 내려가 버렸다(실측 제보).
+// ydisp 를 그대로 두면 화면 위쪽에 있던 줄이 그대로 남는다 — 지운 빈 줄은 사용자가 보던 위치보다
+// 아래에 있으므로 위쪽 줄 번호는 바뀌지 않는다. 맨 아래를 보고 있었다면 ydisp 가 곧 ybase 였으므로
+// 아래의 min() 이 새 ybase 로 따라 내려가 계속 맨 아래에 붙는다(기존 동작 유지).
+const GROWFIX_LOG = false;   // 진단할 때만 켠다 — 분할창을 옮길 때마다 찍혀서 콘솔이 묻힌다
+const growLog = (m: string) => { if (GROWFIX_LOG) console.log(m); };
 export function applyXtermGrowFix(term: any, prevRows: number) {
   const r = term.rows;
-  console.log('[GROWFIX] called prevRows=' + prevRows + ' r=' + r);
-  if (r <= prevRows) { console.log('[GROWFIX] skip (no grow)'); return; }
+  growLog('[GROWFIX] called prevRows=' + prevRows + ' r=' + r);
+  if (r <= prevRows) { growLog('[GROWFIX] skip (no grow)'); return; }
   try {
     const core = term._core;
     const buf = core?.buffer;
-    if (!buf || !buf.lines) { console.log('[GROWFIX] skip (no buf)'); return; }
+    if (!buf || !buf.lines) { growLog('[GROWFIX] skip (no buf)'); return; }
+    // 대체 화면 버퍼(vi/less/top)에서는 손대지 않는다.
+    //
+    // 여기서 고치려는 것은 "스크롤백이 있는 일반 버퍼에서 rows 가 늘어날 때 끝에 빈 줄이 붙는"
+    // 문제다. 대체 버퍼는 스크롤백이 없어 ybase 가 항상 0 이어야 하는데, 여기서 ybase/ydisp 를
+    // 다시 계산해 넣으면 화면이 어긋나 직전 내용이 겹쳐 보인다(vi 로 들어가면 겹쳐 보인다는 증상).
+    // 대체 버퍼의 크기 변경은 xterm 이 알아서 처리한다.
+    try {
+      if (term.buffer?.active?.type === 'alternate') { growLog('[GROWFIX] skip (alt buffer)'); return; }
+    } catch {}
     const cursorAbsolute = buf.ybase + buf.y;
     const before = { ybase: buf.ybase, ydisp: buf.ydisp, y: buf.y, len: buf.lines.length, cursorAbs: cursorAbsolute };
     // 마지막 줄 몇 개가 빈 줄인지 미리 확인
@@ -592,7 +610,7 @@ export function applyXtermGrowFix(term: any, prevRows: number) {
       if (ln && typeof ln.getTrimmedLength === 'function' && ln.getTrimmedLength() === 0) trailingBlanks++;
       else break;
     }
-    console.log('[GROWFIX] before: ' + JSON.stringify(before) + ' trailingBlanks=' + trailingBlanks);
+    growLog('[GROWFIX] before: ' + JSON.stringify(before) + ' trailingBlanks=' + trailingBlanks);
     // 트림 하한: 커서 위치를 포함하면서 viewport rows 이상이어야 함.
     const minLen = Math.max(cursorAbsolute + 1, r);
     const initialLen = buf.lines.length;
@@ -605,19 +623,22 @@ export function applyXtermGrowFix(term: any, prevRows: number) {
     const trimmed = initialLen - buf.lines.length;
     const newYbase = Math.max(0, buf.lines.length - r);
     const newY = cursorAbsolute - newYbase;
-    console.log('[GROWFIX] trim: minLen=' + minLen + ' trimmed=' + trimmed + ' newLen=' + buf.lines.length + ' newYbase=' + newYbase + ' newY=' + newY);
+    // 보고 있던 위치 유지 — 맨 아래였으면(ydisp >= ybase) 자연히 새 ybase 로 내려간다.
+    const newYdisp = Math.max(0, Math.min(before.ydisp, newYbase));
+    growLog('[GROWFIX] trim: minLen=' + minLen + ' trimmed=' + trimmed + ' newLen=' + buf.lines.length
+      + ' newYbase=' + newYbase + ' newY=' + newY + ' newYdisp=' + newYdisp);
     buf.ybase = newYbase;
-    buf.ydisp = newYbase;
+    buf.ydisp = newYdisp;
     buf.y = newY;
     core._viewport?.syncScrollArea?.();
-    try { core._onScroll?.fire?.(newYbase); } catch {}
+    try { core._onScroll?.fire?.(newYdisp); } catch {}
     const vp = term.element?.querySelector?.('.xterm-viewport') as HTMLElement | null;
     if (vp) {
       const cellH = core._renderService?.dimensions?.css?.cell?.height || 17;
-      vp.scrollTop = newYbase * cellH;
+      vp.scrollTop = newYdisp * cellH;
     }
     core._renderService?.refreshRows?.(0, r - 1);
-    console.log('[GROWFIX] done. final: ybase=' + buf.ybase + ' y=' + buf.y + ' len=' + buf.lines.length);
+    growLog('[GROWFIX] done. final: ybase=' + buf.ybase + ' ydisp=' + buf.ydisp + ' y=' + buf.y + ' len=' + buf.lines.length);
   } catch (e) { console.error('[GROWFIX] error', e); }
 }
 

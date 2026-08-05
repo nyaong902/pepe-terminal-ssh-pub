@@ -317,46 +317,118 @@ function connectSimple(session, cols, rows, x11Display) {
       // 어차피 낭비이므로, 16ms 마다 최신 KEEP 바이트만 올려보낸다. 디코딩도 남긴 만큼만 한다
       // (예전에는 버릴 것까지 전부 문자열로 만들었다).
       //
-      // 버릴 때는 줄 경계에서 자른다 — 바이트 중간에서 자르면 UTF-8 문자나 이스케이프
-      // 시퀀스가 쪼개져 화면이 깨진다.
-      const LF_CH = String.fromCharCode(10);   // 소스에 원시 제어문자를 넣지 않는다
-      // 방출 주기를 상황에 따라 나눈다. 프로파일에서 폭주 시 주 프로세스 비용의 상위가
-      // 스레드 간 메시지 처리(worker L333 2.2~3.0%)와 그에 딸린 native/타이머 비용이었다.
-      // 16ms 고정이면 초당 62개 메시지가 오가는데, 폭주 중에는 어차피 화면 한 장씩만 보내므로
-      // 주기를 늘려도 보이는 차이가 없다. 반대로 대화형(타이핑 에코)에서는 지연이 그대로 체감되니
-      // 짧게 유지해야 한다 — 그래서 버리기가 발동한 동안만 늘린다.
-      const OUT_FLUSH_MS_IDLE = 8;      // 대화형 — 예전 16ms 보다 오히려 빠르다
+      // 출력은 모아서 보내고(메시지 수 감소), 폭주 시에는 "버려도 화면이 어긋나지 않는 경우에만"
+      // 앞부분을 버린다.
+      //
+      // 왜 조건부인가 — 2.3.6 에서 조건 없이 버렸다가 vi 화면이 직전 내용과 겹쳐 보였다.
+      // 터미널 스트림은 상태가 있다: 화면 지우기·커서 이동·대체 화면 전환 같은 제어 시퀀스가
+      // 앞부분에 있으면 그것을 버리는 순간 화면이 어긋난다. vi 는 화면 전체를 그리는 출력이
+      // 6KB 를 넘기 때문에 그 앞부분(대체 화면 전환 + 화면 지우기)이 통째로 사라졌다.
+      // 반대로 tail -f 같은 순수 로그 폭주는 줄이 아래로 흐를 뿐이라, 지나간 줄을 버리는 것이
+      // 스크롤백을 넘겨버리는 것과 다르지 않다 — 그때만 버린다.
+      //
+      // 버리기를 아예 없애면 CPU 가 다시 10% 이상으로 올라간다(실측). 초당 2MB 를 xterm 이 전부
+      // 파싱해야 하기 때문이다. 그래서 "안전할 때만 버린다" 가 두 요구를 모두 만족하는 지점이다.
+      const OUT_FLUSH_MS_IDLE = 8;      // 대화형(타이핑 에코) — 짧게 유지해야 지연이 안 느껴진다
       const OUT_FLUSH_MS_FLOOD = 32;    // 폭주 — 메시지 수를 1/4 로
-      // 화면 한 장 분량. 2KB(약 20줄)까지 줄여 실험해봤지만 CPU 는 전혀 내려가지 않았다 —
-      // 렌더러로 가는 양이 원인이 아니라는 증거다. 그래서 보여주는 양이 더 많은 6KB 로 둔다.
-      // 남은 비용은 이 지점보다 앞단(ssh2 의 JS 프로토콜 처리와 초당 수천 건의 소켓 이벤트)
-      // 이고, 그건 여기서 버려도 피할 수 없다. 줄이려면 데이터를 덜 받아야 한다.
-      const OUT_KEEP_BYTES = 6 * 1024;
+      const OUT_KEEP_BYTES = 6 * 1024;  // 폭주 시 남기는 분량(화면 한 장 정도)
       let outChunks = [];
       let outLen = 0;
-      let outDropped = false;
       let outTimer = null;
       let outFlood = false;   // 최근 flush 에서 버렸는가(= 화면이 못 따라가는 상태)
+      // 멀티바이트 문자가 flush 경계에 걸쳐 쪼개지면 깨져 보인다 — 마지막 불완전한 UTF-8 조각은
+      // 다음 flush 로 넘긴다(UTF-8 일 때만. 다른 인코딩은 iconv 에 그대로 맡긴다).
+      let outCarry = null;
+
+      const isUtf8 = (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'utf8');
+      const ESC = 0x1b, LF = 0x0a;
+
+      // buf 끝에서 "아직 완성되지 않은 UTF-8 시퀀스" 의 시작 위치. 없으면 buf.length.
+      const utf8SplitPoint = (buf) => {
+        const max = Math.min(4, buf.length);
+        for (let back = 1; back <= max; back++) {
+          const b = buf[buf.length - back];
+          if ((b & 0x80) === 0) return buf.length;                 // ASCII — 경계가 깔끔하다
+          if ((b & 0xc0) === 0x80) continue;                       // 뒤따르는 바이트 — 더 앞을 본다
+          const need = (b & 0xe0) === 0xc0 ? 2 : (b & 0xf0) === 0xe0 ? 3 : (b & 0xf8) === 0xf0 ? 4 : 1;
+          return back >= need ? buf.length : buf.length - back;     // 모자라면 그 앞에서 끊는다
+        }
+        return buf.length;
+      };
+
+      // 이 구간을 버려도 화면 상태가 어긋나지 않는가?
+      //
+      // 버리면 안 되는 것: 화면을 지우거나(J), 커서를 특정 위치로 보내거나(H/f/A/B/C/D/E/F/G/d),
+      // 커서를 저장·복원하거나(ESC 7/8), 스크롤 영역을 바꾸거나(r), 대체 화면으로 전환하는(?1049/?47)
+      // 시퀀스. 이런 것이 하나라도 있으면 전체화면 프로그램(vi/top/less)이 그리는 중이라는 뜻이다.
+      // 색상(SGR, ...m)과 커서 표시(?25) 는 버려도 화면 배치가 어긋나지 않는다 — 대신 버린 뒤
+      // ESC[0m 을 앞에 붙여 남은 속성이 새 출력에 번지지 않게 한다.
+      const dropIsSafe = (buf, end) => {
+        for (let i = 0; i < end; i++) {
+          if (buf[i] !== ESC) continue;
+          const c1 = buf[i + 1];
+          if (c1 === 0x37 || c1 === 0x38) return false;            // ESC 7 / ESC 8 — 커서 저장/복원
+          if (c1 === 0x4d || c1 === 0x44 || c1 === 0x45) return false; // ESC M / D / E — 줄 스크롤
+          if (c1 !== 0x5b) continue;                               // CSI 가 아니면 신경 쓰지 않는다
+          // CSI 파라미터를 지나 최종 바이트를 찾는다.
+          let j = i + 2;
+          let question = false;
+          while (j < end) {
+            const b = buf[j];
+            if (b === 0x3f) { question = true; j++; continue; }     // '?' — private mode
+            if ((b >= 0x30 && b <= 0x39) || b === 0x3b) { j++; continue; }  // 숫자 / ';'
+            break;
+          }
+          if (j >= end) return false;                              // 시퀀스가 이 구간에서 잘렸다 — 위험
+          const fin = buf[j];
+          if (question) {
+            // ?1049 / ?47 (대체 화면) 은 위험. ?25(커서 표시) 등은 무해.
+            const param = buf.toString('latin1', i + 3, j);
+            if (param === '1049' || param === '47' || param === '1047' || param === '1048') return false;
+          } else if (
+            fin === 0x48 || fin === 0x66 ||                        // H, f — 커서 위치 지정
+            fin === 0x41 || fin === 0x42 || fin === 0x43 || fin === 0x44 ||  // A,B,C,D — 커서 이동
+            fin === 0x45 || fin === 0x46 || fin === 0x47 || fin === 0x64 ||  // E,F,G,d — 커서 이동
+            fin === 0x4a ||                                        // J — 화면 지우기
+            fin === 0x72 ||                                        // r — 스크롤 영역
+            fin === 0x4c || fin === 0x4d || fin === 0x53 || fin === 0x54     // L,M,S,T — 줄 삽입/삭제·스크롤
+          ) return false;
+          i = j;
+        }
+        return true;
+      };
 
       const flushOut = () => {
         outTimer = null;
-        if (outChunks.length === 0) return;
-        const buf = outChunks.length === 1 ? outChunks[0] : Buffer.concat(outChunks, outLen);
-        const dropped = outDropped;
-        outChunks = []; outLen = 0; outDropped = false;
+        if (outChunks.length === 0 && !outCarry) return;
+        if (outCarry) { outChunks.unshift(outCarry); outLen += outCarry.length; outCarry = null; }
+        let buf = outChunks.length === 1 ? outChunks[0] : Buffer.concat(outChunks, outLen);
+        outChunks = []; outLen = 0;
+        if (isUtf8) {
+          const cut = utf8SplitPoint(buf);
+          if (cut < buf.length) { outCarry = buf.subarray(cut); buf = buf.subarray(0, cut); }
+        }
+        if (buf.length === 0) return;
+
+        let dropped = false;
+        if (buf.length > OUT_KEEP_BYTES) {
+          // 줄 경계에서 자른다 — 바이트 중간에서 자르면 UTF-8 문자나 이스케이프 시퀀스가 쪼개진다.
+          let cut = buf.length - OUT_KEEP_BYTES;
+          const nlAt = buf.indexOf(LF, cut);
+          cut = nlAt === -1 ? -1 : nlAt + 1;
+          if (cut > 0 && dropIsSafe(buf, cut)) {
+            buf = Buffer.concat([Buffer.from('\x1b[0m'), buf.subarray(cut)]);
+            dropped = true;
+          }
+          // 안전하지 않으면(전체화면 프로그램이 그리는 중) 전부 보낸다 — 화면 정확성이 우선이다.
+        }
         outFlood = dropped;   // 버릴 게 없어지면 즉시 대화형 주기로 복귀
+
         let str;
         try {
-          str = (encoding.toLowerCase() === 'utf-8' || encoding.toLowerCase() === 'utf8')
-            ? buf.toString('utf8')
-            : iconv.decode(buf, encoding);
+          str = isUtf8 ? buf.toString('utf8') : iconv.decode(buf, encoding);
         } catch (_e) {
           str = buf.toString('utf8');
-        }
-        // 앞부분을 버렸다면 첫 줄은 잘려 있을 수 있으니 줄 경계까지 더 버린다.
-        if (dropped) {
-          const i = str.indexOf(LF_CH);
-          if (i !== -1) str = str.slice(i + 1);
         }
         if (!str) return;
         parentPort.postMessage({ type: 'data', data: str });
@@ -365,32 +437,11 @@ function connectSimple(session, cols, rows, x11Display) {
 
       const pushOut = (data) => {
         lastInboundAt = Date.now();   // 끊김 진단용 — 마지막으로 서버에서 뭔가 온 시점
-        // 조각 하나가 이미 유지 분량을 넘는 경우를 반드시 따로 처리해야 한다. ssh2 는 채널 패킷을
-        // 최대 32KB 로 주므로 이런 일이 흔한데, 예전 구현은 "조각이 2개 이상일 때만 버린다"는
-        // 조건 때문에 32KB 조각을 통째로 올려보냈다 — 상한이 사실상 무력화돼 의도한 375KB/s 대신
-        // 약 2MB/s 를 렌더러로 보내고 있었다. OUT_KEEP_BYTES 를 6KB/2KB 로 바꿔도 CPU 가 변하지
-        // 않았던 이유가 이것이다.
-        if (data.length >= OUT_KEEP_BYTES) {
-          outChunks = [data.subarray(data.length - OUT_KEEP_BYTES)];
-          outLen = OUT_KEEP_BYTES;
-          outDropped = true;
-        } else {
-          outChunks.push(data);
-          outLen += data.length;
-          // 오래된 조각부터 버린다(조각 단위라 복사 없음).
-          while (outLen > OUT_KEEP_BYTES && outChunks.length > 1) {
-            outLen -= outChunks.shift().length;
-            outDropped = true;
-          }
-          // 조각 단위로 버려도 남으면 맨 앞 조각 자체를 잘라 상한을 반드시 지킨다.
-          if (outLen > OUT_KEEP_BYTES) {
-            const cut = outLen - OUT_KEEP_BYTES;
-            outChunks[0] = outChunks[0].subarray(cut);
-            outLen -= cut;
-            outDropped = true;
-          }
+        outChunks.push(data);
+        outLen += data.length;
+        if (!outTimer) {
+          outTimer = setTimeout(flushOut, outFlood ? OUT_FLUSH_MS_FLOOD : OUT_FLUSH_MS_IDLE);
         }
-        if (!outTimer) outTimer = setTimeout(flushOut, outFlood ? OUT_FLUSH_MS_FLOOD : OUT_FLUSH_MS_IDLE);
       };
 
       s.on('data', pushOut);
