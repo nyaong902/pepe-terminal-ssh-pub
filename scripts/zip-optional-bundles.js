@@ -139,6 +139,18 @@ const BUNDLES = [
   { name: 'chat-archive-ai', srcDir: path.join(projectRoot, 'node_modules'), store: true,
     exclude: ['*.map', '*.wasm'],
     only: depClosure('@xenova/transformers') },
+  // 원격 공유(WebRTC) — 시그널링에 쓰는 ws 패키지(약 195KB)만 필요하다. 용량은 작지만 체크를
+  // 해제하면 관련 파일이 아예 안 깔리게 해달라는 요청이라 다른 선택 기능과 같은 방식으로 묶는다.
+  // chat-archive-ai 와 같은 구조(원본이 node_modules) — build.files 에서 asar 대상에서 빼고
+  // 설치 시 app.asar.unpacked/node_modules 로 푼다. ws 는 런타임 의존성이 없어 닫힘도 자기 하나다.
+  { name: 'remote-share', srcDir: path.join(projectRoot, 'node_modules'), store: true,
+    only: depClosure('ws') },
+  // 원격 공유(WebRTC) — 시그널링에 쓰는 ws 패키지(약 195KB)만 필요하다. 용량은 작지만 체크를
+  // 해제하면 관련 파일이 아예 안 깔리게 해달라는 요청이라 다른 선택 기능과 같은 방식으로 묶는다.
+  // chat-archive-ai 와 같은 구조(원본이 node_modules) — build.files 에서 asar 대상에서 빼고
+  // 설치 시 app.asar.unpacked/node_modules 로 푼다. ws 는 런타임 의존성이 없어 닫힘도 자기 하나다.
+  { name: 'remote-share', srcDir: path.join(projectRoot, 'node_modules'), store: true,
+    only: depClosure('ws') },
   // JRE(JDBC 사이드카용) — 체크박스 없이 항상 설치되지만 Temurin 배포본이 300개+ 개별 파일이라
   // (bin/lib/conf/legal 등) X11 서버와 같은 이유로 NSIS 기본 File-by-file 복사가 느리다.
   // x11-server 와 동일한 zip+tar 패턴 적용 — package.json 의 win.extraResources 도 loose 폴더

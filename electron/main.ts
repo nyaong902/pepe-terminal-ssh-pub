@@ -71,7 +71,7 @@ import { ensureBundleExtracted } from './ensureBundleExtracted';
 import { listLanguages, listNamespaces, loadNamespace, loadBundledNamespace, loadOverrideNamespace, saveOverrideNamespace, addLanguage, removeLanguage } from './i18nStore';
 import { t, setCurrentLang } from './i18n';
 import { setupAutoUpdater, checkForUpdatesOnStartup } from './updater';
-import { RemoteShareServer, type RemoteShareStartOptions } from './remoteShareServer';
+import { RemoteShareServer, remoteShareRuntimeAvailable, type RemoteShareStartOptions } from './remoteShareServer';
 import { PlainAppConnectServer } from './plainAppConnectServer';
 import * as cloudBox from './cloudBoxHandlers';
 import { capabilitiesFor as cloudProviderCapabilities } from './cloudProviders/registry';
@@ -8816,6 +8816,13 @@ function pepeBoxFeatureAvailable(): boolean {
   return readInstallerFeatureFlag('PepeBox');
 }
 
+// 원격 공유 — WebRTC 시그널링에 쓰는 ws 패키지가 선택 설치 번들(remote-share)로 분리돼 있다.
+// 파일이 있는지(remoteShareRuntimeAvailable)와 설치 시 체크 여부(레지스트리)를 함께 본다 —
+// 파일이 남아 있어도 체크를 해제했다면 메뉴에서 숨긴다(SswPhone/PepeThing 과 같은 방식).
+function remoteShareFeatureAvailable(): boolean {
+  return remoteShareRuntimeAvailable() && readInstallerFeatureFlag('RemoteShare');
+}
+
 ipcMain.handle('features:get-available', () => ({
   vpn: !!getVpnService().binaryPath(),
   // MicroSIP 과 SSW 소프트폰은 같은 sip-sidecar(sipd.exe) 엔진을 공유한다 — 둘 중 하나만
@@ -8831,6 +8838,7 @@ ipcMain.handle('features:get-available', () => ({
   chatArchive: chatArchiveBundleAvailable(),
   pepeThing: pepeThingFeatureAvailable(),
   pepeBox: pepeBoxFeatureAvailable(),
+  remoteShare: remoteShareFeatureAvailable(),
 }));
 
 // ── OpenVPN ──

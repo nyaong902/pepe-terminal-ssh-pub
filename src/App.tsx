@@ -822,7 +822,7 @@ useEffect(() => {
   // 설치 시 선택 해제됐을 수 있는 기능(VPN/MicroSIP/SIPp — build/installer.nsh 참고) 의 메뉴
   // 항목을 숨기기 위한 가용성. 기본값은 전부 true 로 둬서, IPC 응답 오기 전에 잠깐이라도
   // 메뉴가 있다 없다 깜빡이지 않게 한다(설치돼 있는 게 훨씬 흔한 경우라 false 보다 안전).
-  const [availableFeatures, setAvailableFeatures] = useState({ vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, cdrTool: true, chatArchive: true, pepeThing: true, pepeBox: true });
+  const [availableFeatures, setAvailableFeatures] = useState({ remoteShare: true, vpn: true, microsip: true, sswPhone: true, sipp: true, office: true, media: true, cdrTool: true, chatArchive: true, pepeThing: true, pepeBox: true });
   useEffect(() => {
     (window as any).api?.getAvailableFeatures?.().then((f: any) => { if (f) setAvailableFeatures(f); }).catch(() => {});
   }, []);
@@ -4696,8 +4696,10 @@ useEffect(() => {
         { label: tMenu('tools.i18nWs'), action: addI18nEditorTab },
         ...(availableFeatures.chatArchive ? [{ label: '🗄 대화 아카이브 검색', action: addChatArchiveSearchTab }] : []),
         ...(availableFeatures.pepeThing ? [{ label: tMenu('tools.pepeThingWs'), action: addPepeThingTab }] : []),
-        { separator: true, label: '' },
-        { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) },
+        ...(availableFeatures.remoteShare
+          ? [{ separator: true, label: '' },
+             { label: tMenu('tools.remoteShare'), action: () => setShowRemoteShare(true) }]
+          : []),
         { separator: true, label: '' },
         { label: showToolbar ? tMenu('tools.toolbarHide') : tMenu('tools.toolbarShow'), action: () => setShowToolbar(v => !v) },
         { label: showQuickConnect ? tMenu('tools.quickConnectHide') : tMenu('tools.quickConnectShow'), action: () => setShowQuickConnect(v => !v) },

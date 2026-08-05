@@ -104,6 +104,7 @@ Var OfficeChecked
 Var SswPhoneChecked
 Var CdrToolChecked
 Var ChatArchiveChecked
+Var RemoteShareChecked
 Var PepeThingChecked
 Var PepeBoxChecked
 
@@ -134,6 +135,11 @@ Section "Pepe-Thing - 파일 검색 (추가 용량 없음)" SEC_PEPETHING
 SectionEnd
 Section "Pepe-Box - 클라우드 저장소 (추가 용량 없음)" SEC_PEPEBOX
 SectionEnd
+; 원격 공유(WebRTC) — 시그널링에 쓰는 ws 패키지만 들어간다. 용량은 작지만 체크를 해제하면
+; 관련 파일이 아예 안 깔리도록 다른 선택 기능과 같은 방식으로 번들(remote-share.zip)로 분리했다.
+Section "원격 공유 - 화면 공유(WebRTC) (약 1MB)" SEC_REMOTESHARE
+  AddSize 1000
+SectionEnd
 
 ; MUI_FUNCTION_DESCRIPTION_BEGIN/TEXT 는 $mui.ComponentsPage.DescriptionText 변수를 참조하는데,
 ; 이 변수는 원래 MUI_PAGE_COMPONENTS 매크로가 삽입될 때(customPageAfterChangeDir, 더 뒤에서 실행)
@@ -157,6 +163,7 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SSWPHONE} "MicroSIP 과 독립된 프로세스로 동작하지만 같은 설치 파일을 씁니다 — 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_PEPETHING} "voidtools Everything 의 로컬 인덱스로 파일을 찾는 워크스페이스(Everything 별도 설치 필요). 화면이 앱 본체에 포함돼 있어 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_PEPEBOX} "Dropbox/Google Drive/OneDrive/네이버/카카오 연동 워크스페이스(작업 중인 기능). 해제해도 설치 용량은 줄지 않고 메뉴에서만 숨겨집니다."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_REMOTESHARE} "다른 PC 나 휴대폰의 브라우저로 이 화면을 공유합니다(WebRTC). 해제하면 메뉴에서 숨겨지고 관련 파일도 설치되지 않습니다."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; 레지스트리에 저장된 이전 선택값(없으면 전체 선택)을 컴포넌트 페이지의 기본 체크 상태로 반영.
@@ -229,6 +236,7 @@ SectionEnd
     !insertmacro ApplySectionDefault ${SEC_SSWPHONE} "SswPhone"
     !insertmacro ApplySectionDefault ${SEC_PEPETHING} "PepeThing"
     !insertmacro ApplySectionDefault ${SEC_PEPEBOX} "PepeBox"
+    !insertmacro ApplySectionDefault ${SEC_REMOTESHARE} "RemoteShare"
 
     ; PePe 본체(electron-builder 의 install 섹션)는 필수 — 컴포넌트 페이지에서 해제할 수 없게
     ; 읽기 전용(SF_RO)으로 고정하고, 이름도 "install" 대신 알아볼 수 있게 바꾼다.
@@ -320,6 +328,7 @@ SectionEnd
   !insertmacro ReadSectionChecked ${SEC_SSWPHONE} $SswPhoneChecked
   !insertmacro ReadSectionChecked ${SEC_PEPETHING} $PepeThingChecked
   !insertmacro ReadSectionChecked ${SEC_PEPEBOX} $PepeBoxChecked
+  !insertmacro ReadSectionChecked ${SEC_REMOTESHARE} $RemoteShareChecked
   !insertmacro DbgLog "customInstall: enter DeleteDataChecked=$DeleteDataChecked VpnChecked=$VpnChecked MicroSipChecked=$MicroSipChecked SippChecked=$SippChecked MediaChecked=$MediaChecked OfficeChecked=$OfficeChecked SswPhoneChecked=$SswPhoneChecked CdrToolChecked=$CdrToolChecked ChatArchiveChecked=$ChatArchiveChecked PepeThingChecked=$PepeThingChecked PepeBoxChecked=$PepeBoxChecked"
   ; install 단계 진입 시 detail 출력 활성 (ShowInstDetails 는 section 밖 customHeader 에서만 가능)
   SetDetailsPrint both
@@ -348,6 +357,7 @@ SectionEnd
   ; features:get-available 에서 이 레지스트리 값을 읽어 메뉴 노출을 결정한다(SswPhone 과 동일).
   WriteRegStr HKCU "Software\PePeTerminal\Features" "PepeThing" "$PepeThingChecked"
   WriteRegStr HKCU "Software\PePeTerminal\Features" "PepeBox" "$PepeBoxChecked"
+  WriteRegStr HKCU "Software\PePeTerminal\Features" "RemoteShare" "$RemoteShareChecked"
 
   ; SSW 소프트폰은 MicroSIP과 완전히 같은 sip-sidecar(sipd.exe) 엔진을 쓴다(별도 바이너리 없음) —
   ; 둘 중 하나라도 체크됐으면 엔진을 풀어야 한다. UI 노출 여부는 앱이 레지스트리의 SswPhone 값을
@@ -376,6 +386,9 @@ SectionEnd
   ; 상위 탐색으로 찾는다 — 다른 위치로 풀면 그 20MB 를 번들에 중복으로 넣어야 한다.
   ; 자세한 배경은 electron/chatArchiveStore.ts 의 resolveTransformersSpecifier 주석 참고.
   !insertmacro ExtractOrSkipBundle $ChatArchiveChecked "chat-archive-ai" "app.asar.unpacked\node_modules" "대화 아카이브 검색(AI 런타임)"
+  ; 원격 공유의 ws 패키지도 같은 위치로 — asar 에서 제외했으므로(package.json build.files)
+  ; remoteShareServer 가 이 경로를 직접 require 한다.
+  !insertmacro ExtractOrSkipBundle $RemoteShareChecked "remote-share" "app.asar.unpacked\node_modules" "원격 공유(WebRTC)"
 
   DetailPrint "─────────────────────────────────────────"
   DetailPrint "✓ 1단계 완료: PePe Terminal 본체 파일 복사"

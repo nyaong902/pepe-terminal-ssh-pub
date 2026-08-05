@@ -116,7 +116,8 @@
       "!node_modules/@napi-rs/**/*",
       "!node_modules/katex/**/*",
       "!node_modules/sql-formatter/**/*",
-      "!node_modules/@rhwp/**/*"
+      "!node_modules/@rhwp/**/*",
+      "!node_modules/ws/**/*"
     ],
     "extraResources": [
       {
@@ -229,6 +230,10 @@
         {
           "from": "resources/optional-bundles/chat-archive-ai.zip",
           "to": "chat-archive-ai.zip"
+        },
+        {
+          "from": "resources/optional-bundles/remote-share.zip",
+          "to": "remote-share.zip"
         }
       ]
     },

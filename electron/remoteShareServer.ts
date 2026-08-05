@@ -1,6 +1,50 @@
-import { BrowserWindow, webContents as electronWebContents, type InputEvent, type WebContents } from 'electron';
+import { app, BrowserWindow, webContents as electronWebContents, type InputEvent, type WebContents } from 'electron';
 import http, { IncomingMessage, ServerResponse } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+// ws 는 타입만 정적으로 가져온다(컴파일 시 지워진다) — 런타임 require 는 loadWs() 가 한다.
+//
+// 원격 공유는 선택 설치 기능이라 ws 패키지가 없을 수 있다. 예전처럼 최상위에서 import 하면
+// main.js 가 시작할 때 require('ws') 를 실행해, 이 기능을 체크 해제한 설치본에서 앱 자체가
+// 뜨지 않는다. 그래서 실제로 공유를 시작할 때만 불러온다.
+import type { WebSocketServer as WsServer, WebSocket as WsSocket } from 'ws';
+import { ensureBundleExtracted } from './ensureBundleExtracted';
+
+let wsModule: any = null;
+/** ws 를 필요한 순간에 불러온다. 없으면 사람이 읽을 수 있는 오류를 던진다. */
+function loadWs(): any {
+  if (wsModule) return wsModule;
+  try {
+    if (!app.isPackaged) {
+      wsModule = require('ws');
+      return wsModule;
+    }
+    // 포터블 빌드는 NSIS customInstall 을 거치지 않아 zip 만 남아 있다 — 첫 사용 시 여기서 푼다.
+    ensureBundleExtracted(
+      'remote-share',
+      path.join('app.asar.unpacked', 'node_modules'),
+      path.join('ws', 'package.json'),
+      (m) => console.log(m),
+    );
+    // asar 안에서 bare require('ws') 는 asar 내부 node_modules 만 본다 — 번들로 빠져 있으므로
+    // 풀린 위치를 절대 경로로 직접 가리킨다(chat-archive-ai 가 transformers 를 그렇게 로드한다).
+    wsModule = require(path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ws'));
+    return wsModule;
+  } catch (e: any) {
+    throw new Error(
+      '원격 공유 기능이 설치되지 않았습니다 — 설치 프로그램에서 "원격 공유"를 선택해 다시 설치하세요.'
+      + ` (${String(e?.message || e)})`,
+    );
+  }
+}
+
+/** 이 설치본에 원격 공유 런타임이 있는가 — 메뉴 노출 판단에 쓴다. */
+export function remoteShareRuntimeAvailable(): boolean {
+  try {
+    if (!app.isPackaged) return true;
+    const base = process.resourcesPath;
+    if (fs.existsSync(path.join(base, 'app.asar.unpacked', 'node_modules', 'ws', 'package.json'))) return true;
+    return fs.existsSync(path.join(base, 'remote-share.zip'));
+  } catch { return false; }
+}
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -816,10 +860,10 @@ export class RemoteShareServer {
   private captureBusy = false;
   private lastPointerTarget: WebContents | null = null;
   private boostUntil = 0;
-  private wss: WebSocketServer | null = null;
+  private wss: WsServer | null = null;
   // 시그널링은 한 번에 뷰어 한 명만 지원 — 여러 명이 동시에 WebRTC 로 붙는 시나리오는
   // 없다고 가정(원격 "화면 공유"는 원래 단일 조작자 전제).
-  private viewerSocket: WebSocket | null = null;
+  private viewerSocket: WsSocket | null = null;
   private host: RemoteShareHostWindow;
 
   constructor(private readonly getWindow: () => BrowserWindow | null) {
@@ -864,6 +908,7 @@ export class RemoteShareServer {
 
     const server = http.createServer((req, res) => void this.handleRequest(req, res));
     this.server = server;
+    const { WebSocketServer } = loadWs();
     this.wss = new WebSocketServer({ noServer: true });
     server.on('upgrade', (req, socket, head) => {
       const requestUrl = new URL(req.url || '/', `http://${this.address || '127.0.0.1'}`);
@@ -885,7 +930,7 @@ export class RemoteShareServer {
   // 뷰어 브라우저가 /signal 로 붙는 시그널링 소켓 — WebRTC offer/answer/ICE candidate 를
   // 호스트 캡처 창(RemoteShareHostWindow)과 뷰어 사이에서 그대로 중계한다. 이 서버는
   // media/입력 데이터 자체를 다루지 않고 오직 연결 협상만 중계한다.
-  private handleSignalSocket(ws: WebSocket): void {
+  private handleSignalSocket(ws: WsSocket): void {
     // 이전 뷰어가 남아있으면 새 접속으로 교체(단일 조작자 전제).
     if (this.viewerSocket && this.viewerSocket !== ws) {
       try { this.viewerSocket.close(); } catch { /* already closing */ }
