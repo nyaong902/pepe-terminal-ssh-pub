@@ -345,5 +345,7 @@
   "code": {
     "copy": "复制代码",
     "copied": "已复制"
-  }
+  },
+  "installDocs": "打开安装指南",
+  "installAlsoNpm": "也可以安装"
 }

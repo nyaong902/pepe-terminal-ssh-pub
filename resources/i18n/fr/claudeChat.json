@@ -345,5 +345,7 @@
   "code": {
     "copy": "Copier le code",
     "copied": "Copié"
-  }
+  },
+  "installDocs": "Ouvrir le guide d'installation",
+  "installAlsoNpm": "fonctionne aussi"
 }

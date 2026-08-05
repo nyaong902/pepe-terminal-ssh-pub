@@ -345,5 +345,7 @@
   "code": {
     "copy": "نسخ الكود",
     "copied": "تم النسخ"
-  }
+  },
+  "installDocs": "فتح دليل التثبيت",
+  "installAlsoNpm": "يعمل أيضًا"
 }

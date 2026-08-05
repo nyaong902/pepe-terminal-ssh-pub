@@ -1,4 +1,5 @@
 // src/components/ClaudeChat.tsx
+import { IS_MAC } from '../utils/keybindings';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -4790,8 +4791,32 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             </>
           ) : currentAgent === 'codex' ? (
             <>
-              <p>{tt('installCmd')} <code>npm install -g @openai/codex</code></p>
+              <p>{tt('installCmd')}</p>
+              {IS_MAC ? (
+                <p style={{ marginLeft: 12 }}>
+                  <span style={{ color: '#9aa7b3', marginRight: 6 }}>Homebrew</span>
+                  <code>brew install codex</code>
+                </p>
+              ) : (
+                <p style={{ marginLeft: 12 }}>
+                  <span style={{ color: '#9aa7b3', marginRight: 6 }}>PowerShell</span>
+                  <code>powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"</code>
+                </p>
+              )}
+              <p style={{ fontSize: 11, color: '#9aa7b3', marginLeft: 12 }}>
+                <code>npm install -g @openai/codex</code> {tt('installAlsoNpm')}
+              </p>
               <p>{tt('loginHint', { cmd: 'codex' })}</p>
+              <p style={{ fontSize: 11, marginTop: 6 }}>
+                <a
+                  href="https://learn.chatgpt.com/docs/codex/cli"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    try { (window as any).api?.shellOpenExternal?.('https://learn.chatgpt.com/docs/codex/cli'); } catch {}
+                  }}
+                  style={{ color: '#6ab0ff', cursor: 'pointer' }}
+                >{tt('installDocs')}</a>
+              </p>
             </>
           ) : currentAgent === 'custom' ? (
             <>
@@ -4799,14 +4824,47 @@ export const ClaudeChat: React.FC<Props> = ({ onClose, pendingContext, onContext
             </>
           ) : currentAgent === 'antigravity' ? (
             <>
-              <p><b>{tt('installLabel')}</b> <code>irm https://antigravity.google/cli/install.ps1 | iex</code></p>
+              {/* Antigravity 는 공식 설치 스크립트가 PowerShell 용이다 — mac 에서는 npm 경로를 안내한다. */}
+              <p><b>{tt('installLabel')}</b> {IS_MAC
+                ? <code>npm install -g @google/antigravity-cli</code>
+                : <code>irm https://antigravity.google/cli/install.ps1 | iex</code>}</p>
               <p><b>{tt('loginLabel')}</b> {tt('antigravityLoginHint')}</p>
               <p style={{ fontSize: 11, color: '#aaa', marginTop: 6 }}>{tt('antigravityRestartHint')}</p>
             </>
           ) : (
             <>
-              <p>{tt('installCmd')} <code>npm install -g @anthropic-ai/claude-code</code></p>
+              {/* 공식 설치 스크립트를 우선 안내한다 — npm 전역 설치보다 이쪽이 권장 경로다.
+                  실행 중인 OS 의 명령만 보여준다 — 쓸 수 없는 셸의 명령이 섞여 있으면 헷갈린다.
+                  Windows 는 셸마다 명령이 달라 둘을 함께 보여준다(PowerShell / 명령 프롬프트). */}
+              <p>{tt('installCmd')}</p>
+              {IS_MAC ? (
+                <p style={{ marginLeft: 12 }}>
+                  <span style={{ color: '#9aa7b3', marginRight: 6 }}>Terminal</span>
+                  <code>curl -fsSL https://claude.ai/install.sh | bash</code>
+                </p>
+              ) : (
+                <>
+                  <p style={{ marginLeft: 12 }}>
+                    <span style={{ color: '#9aa7b3', marginRight: 6 }}>PowerShell</span>
+                    <code>irm https://claude.ai/install.ps1 | iex</code>
+                  </p>
+                  <p style={{ marginLeft: 12 }}>
+                    <span style={{ color: '#9aa7b3', marginRight: 6 }}>cmd</span>
+                    <code>curl -fsSL https://claude.ai/install.cmd -o install.cmd &amp;&amp; install.cmd &amp;&amp; del install.cmd</code>
+                  </p>
+                </>
+              )}
               <p>{tt('loginHint', { cmd: 'claude' })}</p>
+              <p style={{ fontSize: 11, marginTop: 6 }}>
+                <a
+                  href="https://code.claude.com/docs/ko/quickstart"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    try { (window as any).api?.shellOpenExternal?.('https://code.claude.com/docs/ko/quickstart'); } catch {}
+                  }}
+                  style={{ color: '#6ab0ff', cursor: 'pointer' }}
+                >{tt('installDocs')}</a>
+              </p>
             </>
           )}
         </div>
