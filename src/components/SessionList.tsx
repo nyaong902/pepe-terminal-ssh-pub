@@ -605,7 +605,12 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
       for (const id of allIds) {
         const f = childFolders.find(x => x.id === id);
         if (f) {
-          if (!collapsed.has(f.id)) walk(f.id);
+          // 렌더링(664행 renderTree)은 검색 중엔 collapsed 여부와 무관하게 폴더를 강제로 펼친다 —
+          // 여기서도 검색 중엔 collapsed 를 무시하고 항상 내려가야 화면에 보이는 순서와 일치한다.
+          // 이전엔 검색 중에도 collapsed 를 체크해서, 평소 접어둔 폴더 안의 세션이 화면엔 보여도
+          // 이 목록(Enter/방향키 이동 대상)에는 빠지는 불일치가 있었다 — 그 폴더 안 세션을 검색해
+          // Enter 를 치면 포커스가 전혀 이동하지 않던 원인.
+          if (searchQuery || !collapsed.has(f.id)) walk(f.id);
           continue;
         }
         const s = childSessions.find(x => x.id === id);
@@ -622,11 +627,14 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
     setSelectedId(sessionId);
     setSelectedType('session');
     setSelectedIds(new Set());
-    setTimeout(() => {
+    // focus 를 스크롤(smooth 애니메이션)보다 먼저 실행 — 순서가 반대이면 스크롤 애니메이션이
+    // 시작되는 시점의 레이아웃 재계산과 겹쳐 focus() 호출이 조용히 무시되는 경우가 있었다
+    // (검색 후 Enter → 리스트로 포커스가 안 넘어가고 검색창에 커서가 남는 증상의 원인).
+    requestAnimationFrame(() => {
+      listRef.current?.focus({ preventScroll: true });
       const el = document.querySelector(`[data-session-id="${sessionId}"]`) as HTMLElement | null;
       el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      listRef.current?.focus({ preventScroll: true });
-    }, 0);
+    });
   }, []);
 
   const moveSelectionBy = useCallback((delta: number) => {
@@ -867,7 +875,6 @@ export const SessionList: React.FC<Props> = ({ onConnect, onMultiConnect, onDisc
                 e.stopPropagation();
                 const nextId = navigationSessionIds[0];
                 if (nextId) focusVisibleSession(nextId);
-                setTimeout(() => listRef.current?.focus({ preventScroll: true }), 0);
               }
             }}
             placeholder={t('searchPlaceholder', { scope: searchScopeLabel[searchScope] })}
