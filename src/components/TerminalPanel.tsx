@@ -254,6 +254,8 @@ function patchSuppressFocusEvents(term: any, termId?: string) {
           // 옵션이 켜져 있고 위로 굴리면, 대체 화면 대신 "실행 전 화면"을 겹쳐 보여준다(XShell 동작).
           // 대체 버퍼에는 스크롤백이 없어서 아래의 scrollLines 는 어차피 아무 일도 하지 않는다.
           const b = termId ? (termScrollBehavior.get(termId) ?? DEFAULT_SCROLL_BEHAVIOR) : DEFAULT_SCROLL_BEHAVIOR;
+          // 오버레이 내용은 "이전 화면 + 지금 vi 화면" 이 이어진 한 줄기다. 맨 아래(=지금 화면)에서
+          // 굴린 만큼 올라가므로, 첫 노치에서 이전 줄이 위에서 밀려 들어온다(XShell 과 같은 모양).
           if (termId && b.altShowsScrollback && lines < 0) { openAltScrollbackOverlay(termId, lines); return; }
           term.scrollLines(lines);
         } catch {}
@@ -1337,21 +1339,26 @@ const termScrollbackOverride: Map<string, number> = new Map();
 type TermScrollBehavior = { onOutput: boolean; pauseOnScrollLock: boolean; onKeyPress: boolean; altShowsScrollback: boolean };
 const termScrollBehavior: Map<string, TermScrollBehavior> = new Map();
 
-// 일반(normal) 버퍼만 직렬화한다 — 아래 오버레이 전용.
+// 오버레이에 그릴 내용 — 일반 버퍼(스크롤백 포함) 뒤에 현재 대체 화면을 "이어진 한 줄기" 로 붙인다.
 //
-// 기존 serializeTermBuffer 는 SerializeAddon 기본 동작을 쓰는데, 그것은 대체 버퍼가 활성일 때
-// 일반 버퍼 뒤에 "[?1049h + 대체 버퍼 내용" 까지 붙인다(창 분리 시 화면을 그대로 복원하려면
-// 그게 맞다). 오버레이에 그걸 쓰면 vi 화면으로 끝나서 원본과 똑같아 보인다 — 실제로 "안 된다" 는
-// 제보의 원인이었다. 여기서는 excludeAltBuffer 로 일반 버퍼만 가져온다.
-function serializeNormalBufferOnly(termId: string, scrollback: number): string {
+// XShell 은 위로 굴리면 이전 내용이 위에서 밀려 들어오고 전체화면 프로그램(vi) 화면은 아래로
+// 밀려난다 — 두 화면이 하나의 버퍼에 이어져 있기 때문이다. 같은 모양을 만들려면 오버레이에도
+// 둘을 이어서 넣어야 한다.
+//
+// SerializeAddon 은 대체 화면을 붙일 때 "[?1049h[H" 로 전환해서 넣는다. 그대로 쓰면
+// 오버레이 터미널도 대체 버퍼로 들어가 스크롤백이 사라져서, 위로 굴려도 아무 일이 없다(실측:
+// viewportY 0 baseY 0). 그 전환 시퀀스만 줄바꿈으로 바꿔, 대체 화면 내용이 일반 버퍼 뒤에 평범한
+// 줄로 이어지게 한다.
+const ALT_SWITCH_SEQ = '[?1049h[H';
+function serializeForAltOverlay(termId: string, scrollback: number): string {
   const entry = termStore.get(termId);
   if (!entry) return '';
   try {
     const addon = new SerializeAddon();
     entry.term.loadAddon(addon);
-    const out = addon.serialize({ scrollback, excludeAltBuffer: true, excludeModes: true });
+    const out = addon.serialize({ scrollback, excludeModes: true }) || '';
     try { addon.dispose(); } catch {}
-    return out || '';
+    return out.split(ALT_SWITCH_SEQ).join(String.fromCharCode(13) + String.fromCharCode(10));
   } catch { return ''; }
 }
 
@@ -1383,7 +1390,8 @@ function openAltScrollbackOverlay(termId: string, deltaLines: number) {
 
 function openAltScrollbackOverlayInner(termId: string, deltaLines: number) {
   const existing = altScrollbackOverlays.get(termId);
-  if (existing) { try { existing.view.scrollLines(deltaLines); } catch {} return; }
+  // 이미 열려 있는데 소스 쪽에서 휠이 왔다면(포인터가 오버레이 밖) 그만큼 굴려준다.
+  if (existing) { try { if (deltaLines) existing.view.scrollLines(deltaLines); } catch {} return; }
   const entry = termStore.get(termId);
   if (!entry) return;
   const src: any = entry.term;
@@ -1425,13 +1433,33 @@ function openAltScrollbackOverlayInner(termId: string, deltaLines: number) {
   const fit = new FitAddon();
   view.loadAddon(fit);
   view.open(body);
+  // 방금 붙인 요소라 아직 크기가 0 일 수 있다 — 레이아웃이 잡힌 다음 프레임에 한 번 더 맞춘다.
+  // 여기서 rows 가 1 같은 엉뚱한 값으로 잡히면 이후 스크롤 위치 계산이 전부 어긋난다.
   try { fit.fit(); } catch {}
-  // 일반 버퍼만 가져온다(대체 버퍼를 포함하면 vi 화면으로 끝나서 원본과 똑같아 보인다).
-  const dumped = serializeNormalBufferOnly(termId, scrollback);
+  requestAnimationFrame(() => { try { fit.fit(); } catch {} });
+  const dumped = serializeForAltOverlay(termId, scrollback);
   // 앞의 [?25l 는 커서 숨김(DECTCEM). 읽기 전용 화면에 커서가 보이면 포커스가 어디 있는지
   // 헷갈린다 — 실제로 "포커스가 나간 것 같다" 는 지적이 있었다.
+  // 처음 보여줄 위치는 "맨 아래에서 굴린 만큼 위" 다 — 사용자가 방금 올린 그 지점부터 이어져야 한다.
+  //
+  // write 콜백 한 번만 믿으면 안 된다: 콜백 시점에 아직 뷰 크기(rows)나 렌더가 확정되지 않아
+  // scrollToBottom 이 먹지 않고 맨 위(ydisp 0)에 머무는 경우가 있었다 — "이전 화면 최상단부터
+  // 한꺼번에 보인다" 는 증상이 그것이다. 레이아웃이 잡히는 몇 시점에 다시 맞춘다(같은 값을 다시
+  // 넣는 것이라 여러 번 불러도 무해하고, 사용자가 그 사이 스크롤하면 아래 settled 로 멈춘다).
+  let settled = false;
+  const goInitial = () => {
+    if (settled) return;
+    try {
+      view.scrollToBottom();
+      if (deltaLines) view.scrollLines(deltaLines);
+    } catch {}
+  };
   view.write('[?25l' + dumped, () => {
-    try { view.scrollToBottom(); view.scrollLines(deltaLines); } catch {}
+    goInitial();
+    requestAnimationFrame(goInitial);
+    setTimeout(goInitial, 60);
+    // 이후에는 사용자 스크롤이 주인이다 — 더 이상 위치를 건드리지 않는다.
+    setTimeout(() => { settled = true; }, 200);
   });
   const close = () => closeAltScrollbackOverlay(termId);
   // 키는 창 전체에서 잡는다 — 포커스가 오버레이에 있지 않고 원래 터미널에 남아 있어서, 오버레이
