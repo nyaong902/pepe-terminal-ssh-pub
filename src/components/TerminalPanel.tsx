@@ -678,9 +678,25 @@ export function refitTerm(termId: string) {
       viewport.style.overflowY = 'hidden';
       void viewport.offsetHeight;
       viewport.style.overflowY = orig || 'auto';
-      const st = viewport.scrollTop;
-      viewport.scrollTop = st + 1;
-      viewport.scrollTop = st;
+      // scrollTop 을 1px 흔들어 되돌리는 것은 "맨 아래를 보고 있을 때" 만 한다.
+      //
+      // 이건 활동 없는 터미널의 scrollbar 가 갱신되지 않는 문제를 위한 강제 재렌더인데, 스크롤을
+      // 올려둔 상태에서 하면 화면이 실제로 움직였다 돌아온다 — xterm 이 viewport 의 scroll 이벤트로
+      // 버퍼 위치(ydisp)를 동기화하기 때문이다. 빠른 PC 에서는 두 줄 사이에 화면이 그려지지 않아
+      // 안 보이지만, 느린 환경(Windows 10 실측)에서는 탭을 전환할 때마다 눈에 보였다.
+      // 탭 전환 시 refitTerm 이 여러 번(rAF/50/200/350ms) 호출되므로 그만큼 반복됐다.
+      // 맨 아래에 있을 때는 1px 이 보이지 않고, 애초에 문제가 되는 대상도 그 경우다.
+      const atBottom = (() => {
+        try {
+          const buf = (entry.term as any).buffer?.active;
+          return !buf || buf.viewportY >= buf.baseY;
+        } catch { return true; }
+      })();
+      if (atBottom) {
+        const st = viewport.scrollTop;
+        viewport.scrollTop = st + 1;
+        viewport.scrollTop = st;
+      }
     }
   } catch {}
 }
@@ -3857,12 +3873,26 @@ export const TerminalPanel: React.FC<Props> = ({
     const stashedEl = (term as any).element as HTMLElement | undefined;
     if (stashedEl && stashedEl.classList.contains('xterm')) {
       containerRef.current.innerHTML = '';
+      // 스크롤 위치를 되돌리기 전까지는 감춰둔다.
+      //
+      // stash(숨은 1x1 컨테이너)에 있는 동안 .xterm-viewport 의 scrollTop 이 0 으로 리셋되므로,
+      // 그냥 붙이면 "맨 위(또는 엉뚱한 위치)" 가 먼저 그려지고 아래 restoreSavedScroll 이 제자리로
+      // 돌린다 — 빠른 PC 에서는 안 보이지만 느린 환경에서는 탭/워크스페이스를 전환할 때마다 화면이
+      // 움직였다 돌아오는 것으로 보인다(Windows 10 실측).
+      // 다음 프레임에 복원까지 끝낸 뒤 보여주면 중간 상태가 화면에 그려지지 않는다(1 프레임이라
+      // 깜빡임으로도 보이지 않는다).
+      const prevVisibility = stashedEl.style.visibility;
+      stashedEl.style.visibility = 'hidden';
+      const reveal = () => { try { stashedEl.style.visibility = prevVisibility; } catch {} };
+      // 어떤 이유로든 복원 경로가 실행되지 않아 화면이 계속 숨는 일은 없어야 한다 — 안전망.
+      setTimeout(reveal, 300);
       containerRef.current.appendChild(stashedEl);
       // stash 복귀 시엔 항상 refit + viewport 재계산 — 활동 없는 터미널의 scrollbar 가 0 으로 멈추는 문제 fix
       // refit 후 stash 직전 저장한 스크롤 위치로 복원 (hidden stash 가 scrollTop=0 으로 만들어 버리는 문제)
       requestAnimationFrame(() => {
         refitTerm(activeTermId);
         restoreSavedScroll(activeTermId);
+        reveal();   // 복원된 위치로 첫 페인트가 나가게 — 위 주석 참고
         tryRecoverWebgl(activeTermId); // 백그라운드에 있는 동안 GPU 컨텍스트가 죽었을 수 있음
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 50);
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 200);
