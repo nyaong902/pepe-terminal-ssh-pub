@@ -8809,6 +8809,10 @@ mark.claude-search-hit.current {
    말풍선과 같은 방식(align-self)으로 왼쪽에 맞춘다. 내 메시지에는 붙이지 않는다. */
 .messenger-sender {
   max-width: min(680px, 78%);
+  /* flex 항목이 눌리지 않게 고정 — overflow:hidden 을 준 항목은 "자동 최소 높이" 가 0 이 되어,
+     대화가 길어져 세로로 넘치는 순간 높이 0 으로 눌린다(렌더는 되지만 안 보인다). 말풍선은
+     overflow 를 주지 않아 min-content 높이가 지켜지는데, 이름줄만 사라져 보인 원인이다. */
+  flex: 0 0 auto;
   margin-bottom: -4px;      /* 아래 말풍선과 한 덩어리로 보이게 gap 을 줄인다 */
   padding: 0 4px;
   font-size: 11px;

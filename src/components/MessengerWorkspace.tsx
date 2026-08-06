@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { notifyConfirm } from './Notify';
 
-type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
+// ver: 상대가 쓰는 PePe 버전(hello 패킷으로 알려온다). 구버전 상대는 없다.
+type Peer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean; ver?: string };
 type WorklogSharePayload = {
   sourceDate: string;
   sourceTodo: {
@@ -996,7 +997,10 @@ export const MessengerWorkspace: React.FC<{
                 <span className="messenger-avatar" title={sideCollapsed ? peer.name : undefined}>{peer.name.slice(0, 1).toUpperCase()}</span>
                 <span className="messenger-peer-main">
                   <b>{peer.name}</b>
-                  <small>{peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtSeenTime(peer.lastSeen) })}</small>
+                  <small>
+                    {peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtSeenTime(peer.lastSeen) })}
+                    {peer.ver && ` · v${peer.ver}`}
+                  </small>
                 </span>
                 {unread > 0 && <span className="messenger-count">{unread}</span>}
               </button>
@@ -1021,7 +1025,11 @@ export const MessengerWorkspace: React.FC<{
             <>
               <div>
                 <h2>{selectedPeer.name}</h2>
-                <p>{selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : t('offline')} · {t('lastSeen', { time: fmtSeenTime(selectedPeer.lastSeen) })}</p>
+                <p>
+                  {selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : t('offline')}
+                  {selectedPeer.ver && ` · PePe ${selectedPeer.ver}`}
+                  {' · '}{t('lastSeen', { time: fmtSeenTime(selectedPeer.lastSeen) })}
+                </p>
               </div>
               <button onClick={() => deleteConversation(selectedPeer.id)}>{t('deleteConversation')}</button>
             </>

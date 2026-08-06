@@ -1906,7 +1906,8 @@ ipcMain.handle('window-theme:set', (_e, id: string) => {
 });
 
 // ── LAN Mini Messenger ─────────────────────────────────────────────
-type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean };
+// ver: 상대가 쓰는 PePe 버전. 예전 버전은 hello 에 안 담아 보내므로 없을 수 있다(그때는 표시 생략).
+type MessengerPeer = { id: string; name: string; host: string; port: number; lastSeen: number; online?: boolean; ver?: string };
 type MessengerMessage = {
   id: string;
   peerId: string;
@@ -2097,6 +2098,7 @@ function messengerLoadPeers() {
           name: String(p.name || 'PePe'),
           host: String(p.host || ''),
           port: Number(p.port) || 0,
+          ver: typeof p.ver === 'string' ? p.ver : undefined,
           lastSeen: Number(p.lastSeen) || 0,
         });
       }
@@ -2135,7 +2137,7 @@ let messengerLastPeersSig = '';
 function messengerPeersSignature() {
   const now = Date.now();
   return [...messengerPeers.values()]
-    .map(p => `${p.id}:${p.name}@${p.host}:${p.port}:${now - p.lastSeen < MSG_ONLINE_WINDOW_MS ? 1 : 0}`)
+    .map(p => `${p.id}:${p.name}@${p.host}:${p.port}:${p.ver || ''}:${now - p.lastSeen < MSG_ONLINE_WINDOW_MS ? 1 : 0}`)
     .sort()
     .join('|');
 }
@@ -2214,6 +2216,9 @@ function messengerPacket(reply = false) {
     id: messengerId,
     name: messengerPrefs.displayName || os.userInfo().username || 'PePe',
     port: messengerPort,
+    // 상대 화면에 "어떤 버전을 쓰는지" 보여주기 위해 함께 알린다 — 문제가 생겼을 때 서로
+    // 버전을 물어보지 않아도 되고, 기능 차이(구버전은 이 필드 자체가 없다)도 바로 드러난다.
+    ver: app.getVersion(),
     reply,
     ts: Date.now(),
   }));
@@ -2509,7 +2514,7 @@ async function messengerStartService(prefs?: MessengerPrefs) {
       try {
         const p = JSON.parse(msg.toString('utf8'));
         if (p?.app !== 'pepe-terminal-ssh' || p?.type !== 'hello' || p?.id === messengerId) return;
-        messengerPeers.set(String(p.id), { id: String(p.id), name: String(p.name || 'PePe'), host: rinfo.address, port: Number(p.port) || 0, lastSeen: Date.now() });
+        messengerPeers.set(String(p.id), { id: String(p.id), name: String(p.name || 'PePe'), host: rinfo.address, port: Number(p.port) || 0, ver: typeof p.ver === 'string' ? p.ver.slice(0, 24) : undefined, lastSeen: Date.now() });
         // 동기 저장/전체 broadcast 를 패킷마다 하면 메인 프로세스가 막힌다 — 뒤로 모아서 처리.
         messengerSavePeersSoon();
         if (!p.reply) messengerSendHelloTo(rinfo.address, true);
