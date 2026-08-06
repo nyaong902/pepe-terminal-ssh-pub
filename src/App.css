@@ -8745,6 +8745,21 @@ mark.claude-search-hit.current {
   flex-direction: column;
   gap: 8px;
 }
+/* 받은 말풍선 덩어리 위에 붙는 상대 이름 — .messenger-messages 가 flex column 이라
+   말풍선과 같은 방식(align-self)으로 왼쪽에 맞춘다. 내 메시지에는 붙이지 않는다. */
+.messenger-sender {
+  max-width: min(680px, 78%);
+  margin-bottom: -4px;      /* 아래 말풍선과 한 덩어리로 보이게 gap 을 줄인다 */
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--win-text-dim, #86a0b6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.messenger-sender.in { align-self: flex-start; }
+
 .messenger-bubble {
   max-width: min(680px, 78%);
   padding: 9px 12px;
@@ -8787,17 +8802,21 @@ mark.claude-search-hit.current {
 .messenger-bubble.sticker-message.in {
   align-self: flex-start;
 }
+/* 이모티콘 말풍선의 시각 표시.
+   width:100% 를 주면 안 된다 — 퍼센트 폭은 부모의 내용 폭(max-content) 계산에 기여하지 않아서
+   말풍선이 그림 폭(작은 이모티콘은 60~80px)에만 맞춰지고, 그 안에서 오른쪽으로 붙은 날짜가
+   왼쪽으로 삐져나가 "2026." 이 잘려 보였다. 폭을 지정하지 않으면 날짜가 말풍선 폭을 넓힌다. */
 .messenger-bubble.sticker-message .messenger-bubble-footer {
   margin-top: 4px;
-  width: 100%;
   justify-content: flex-end;
+}
+.messenger-bubble.sticker-message.in .messenger-bubble-footer {
+  justify-content: flex-start;   /* 받은 이모티콘은 왼쪽 기준 */
 }
 .messenger-bubble.sticker-message .messenger-bubble-footer time {
   color: rgba(231, 245, 255, 0.72);
   font-size: 11px;
-  display: block;
-  width: 100%;
-  text-align: right;
+  white-space: nowrap;           /* 날짜가 여러 줄로 쪼개지지 않게 */
 }
 .messenger-recall-btn {
   border: none;
@@ -8840,20 +8859,30 @@ mark.claude-search-hit.current {
   align-items: flex-end;
   width: fit-content;
   max-width: none;
-  padding-bottom: 18px;
+  padding-bottom: 4px;
+}
+/* 받은 쪽은 그림을 왼쪽에 붙인다 — 날짜가 그림보다 넓어서 아래 규칙으로 말풍선이 날짜 폭이
+   되는데, 그때 flex-end 로 두면 그림이 오른쪽으로 밀려 보인다. */
+.messenger-bubble.emoji-x1.in {
+  align-items: flex-start;
 }
 .messenger-bubble.emoji-x1 time,
 .messenger-bubble.emoji-x2 time,
 .messenger-bubble.emoji-x3 time {
   color: var(--win-text-dim, #86a0b6);
 }
+/* 큰 이모지/이모티콘 말풍선의 시각 표시 — 흐름에서 빼지 않는다.
+   position:absolute 로 두면 이 요소가 말풍선 폭 계산에 기여하지 않는다. 그래서 폭이 그림(48px)
+   에만 맞춰지고, right:0 에 붙은 날짜가 왼쪽으로 삐져나가 "2026." 이 잘렸다(받은 쪽은 대화 영역
+   밖으로 나가 잘림). 흐름에 두면 날짜가 말풍선 폭을 넓혀서 잘리지 않는다. */
 .messenger-bubble.emoji-x1 .messenger-bubble-footer {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  margin-top: 0;
+  position: static;
+  margin-top: 2px;
   width: auto;
   justify-content: flex-end;
+}
+.messenger-bubble.emoji-x1.in .messenger-bubble-footer {
+  justify-content: flex-start;
 }
 .messenger-bubble.emoji-x1 .messenger-bubble-footer time {
   width: auto;

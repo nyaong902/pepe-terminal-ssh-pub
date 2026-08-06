@@ -47,6 +47,17 @@ function fmtTime(ts: number) {
   try { return new Date(ts).toLocaleString(); } catch { return ''; }
 }
 
+// "마지막 발견" 시각은 10초 단위로 내림해서 보여준다.
+//
+// 접속 중인 상대는 presence 신호가 계속 와서 lastSeen 이 초마다 바뀐다 — 그대로 찍으면 헤더의
+// 초 자리가 쉬지 않고 굴러 눈에 거슬린다. 값 자체는 그대로 두고 표시만 묶는다(메시지 시각은
+// 정확해야 하므로 fmtTime 은 건드리지 않는다).
+const SEEN_STEP_MS = 10 * 1000;
+function fmtSeenTime(ts: number) {
+  if (!ts) return fmtTime(ts);
+  return fmtTime(Math.floor(ts / SEEN_STEP_MS) * SEEN_STEP_MS);
+}
+
 function buildJumpChain(sess: any): { host: string; user?: string; port?: number; password?: string }[] {
   const arr = Array.isArray(sess?.jumps) ? sess.jumps : [];
   const out: { host: string; user?: string; port?: number; password?: string }[] = [];
@@ -98,6 +109,27 @@ function path_dirname(p: string): string {
 }
 
 const SIDE_COLLAPSED_PREF = 'messengerSideCollapsed';
+// 읽은 지점 표시. localStorage 에 두면 재설치·재기동으로 렌더러 저장소가 비면 전부 안 읽은
+// 것으로 되돌아간다 — 세션·UI 설정과 같은 config.json(ui-prefs)에 둔다.
+const READ_MARKS_PREF = 'messengerReadMarks';
+
+/** 가로로만 늘어선 줄(이모티콘 분류 탭, 팩 선택 줄)을 세로 휠로 굴릴 수 있게 한다.
+ *
+ *  브라우저는 세로 휠을 가로 스크롤로 바꿔주지 않는다 — overflow-x:auto 만 있으면 휠이 먹지 않고
+ *  드래그나 Shift+휠 밖에 방법이 없다. React 의 onWheel 은 passive 로 붙어서 preventDefault 가
+ *  듣지 않으므로 ref 로 직접 붙인다(popup 밖 영역이 같이 움직이지 않게 기본 동작을 막는다). */
+function attachWheelToScrollX(el: HTMLDivElement | null) {
+  if (!el || (el as any).__pepeWheelX) return;
+  (el as any).__pepeWheelX = true;
+  el.addEventListener('wheel', (ev: WheelEvent) => {
+    if (el.scrollWidth <= el.clientWidth) return;              // 넘칠 게 없으면 그대로 둔다
+    if (Math.abs(ev.deltaY) <= Math.abs(ev.deltaX)) return;    // 트랙패드 가로 제스처는 기본 동작
+    el.scrollLeft += ev.deltaY;
+    ev.preventDefault();
+  }, { passive: false });
+}
+// 이 간격 이상 벌어지면 같은 사람이 이어 보낸 것으로 보지 않고 이름을 다시 붙인다.
+const SENDER_BLOCK_GAP_MS = 10 * 60 * 1000;
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
 function isImageFile(name?: string) {
   const ext = (name || '').split('.').pop()?.toLowerCase() || '';
@@ -206,9 +238,35 @@ export const MessengerWorkspace: React.FC<{
     if (delay > 0) setTimeout(run, delay);
     else requestAnimationFrame(run);
   };
-  const [readMarks, setReadMarks] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('messenger:readMarks') || '{}') || {}; } catch { return {}; }
-  });
+  const [readMarks, setReadMarks] = useState<Record<string, number>>({});
+  const readMarksLoaded = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let loaded: Record<string, number> = {};
+      try {
+        const prefs = await (window as any).api?.getUIPrefs?.();
+        const v = prefs?.[READ_MARKS_PREF];
+        if (v && typeof v === 'object') loaded = v as Record<string, number>;
+      } catch {}
+      // 예전에 localStorage 에 쌓아둔 값이 남아 있으면 한 번 옮긴다 — 둘 다 있으면 더 최근 것.
+      try {
+        const old = JSON.parse(localStorage.getItem('messenger:readMarks') || '{}');
+        if (old && typeof old === 'object') {
+          for (const [k, v2] of Object.entries(old)) {
+            const n = Number(v2) || 0;
+            if (n > (loaded[k] || 0)) loaded[k] = n;
+          }
+          localStorage.removeItem('messenger:readMarks');
+          try { (window as any).api?.setUIPrefs?.({ [READ_MARKS_PREF]: loaded }); } catch {}
+        }
+      } catch {}
+      if (!alive) return;
+      readMarksLoaded.current = true;
+      if (Object.keys(loaded).length) setReadMarks(loaded);
+    })();
+    return () => { alive = false; };
+  }, []);
   const [shareActionBusyId, setShareActionBusyId] = useState('');
   const [shareActionError, setShareActionError] = useState('');
   const [menu, setMenu] = useState<{ x: number; y: number; peerId: string } | null>(null);
@@ -267,6 +325,21 @@ export const MessengerWorkspace: React.FC<{
   // .messenger-chat 도 position:relative 라 실제로는 이게 이모티콘 팝업의 containing block
   // (더 가까운 positioned 조상이 우선) — .messenger-ws 기준으로 좌표를 재면 세션 목록 폭만큼 어긋남.
   const chatMainRef = useRef<HTMLElement | null>(null);
+
+  // 알림 토스트의 "열기" 로 들어온 경우 — 그 상대의 대화를 바로 띄운다.
+  // (App 이 창 이벤트로 알려준다. 이 컴포넌트는 탭이 숨어 있어도 계속 마운트돼 있다.)
+  useEffect(() => {
+    const onSelect = (e: Event) => {
+      const peerId = (e as CustomEvent)?.detail?.peerId;
+      if (typeof peerId === 'string' && peerId) {
+        setSelectedPeerId(peerId);
+        scrollMsgsToBottom();
+        scrollMsgsToBottom(120);
+      }
+    };
+    window.addEventListener('pepe:messenger-select-peer', onSelect as EventListener);
+    return () => window.removeEventListener('pepe:messenger-select-peer', onSelect as EventListener);
+  }, []);
 
   const wasNarrowRef = useRef(false);
   useEffect(() => {
@@ -356,7 +429,10 @@ export const MessengerWorkspace: React.FC<{
     setReadMarks(cur => {
       if ((cur[peerId] || 0) >= upToTs) return cur;
       const next = { ...cur, [peerId]: upToTs };
-      try { localStorage.setItem('messenger:readMarks', JSON.stringify(next)); } catch {}
+      // 아직 불러오는 중이면 기록하지 않는다 — 빈 값으로 저장해 예전 기록을 지워버리지 않게.
+      if (readMarksLoaded.current) {
+        try { (window as any).api?.setUIPrefs?.({ [READ_MARKS_PREF]: next }); } catch {}
+      }
       return next;
     });
   };
@@ -920,7 +996,7 @@ export const MessengerWorkspace: React.FC<{
                 <span className="messenger-avatar" title={sideCollapsed ? peer.name : undefined}>{peer.name.slice(0, 1).toUpperCase()}</span>
                 <span className="messenger-peer-main">
                   <b>{peer.name}</b>
-                  <small>{peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtTime(peer.lastSeen) })}</small>
+                  <small>{peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtSeenTime(peer.lastSeen) })}</small>
                 </span>
                 {unread > 0 && <span className="messenger-count">{unread}</span>}
               </button>
@@ -945,7 +1021,7 @@ export const MessengerWorkspace: React.FC<{
             <>
               <div>
                 <h2>{selectedPeer.name}</h2>
-                <p>{selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : t('offline')} · {t('lastSeen', { time: fmtTime(selectedPeer.lastSeen) })}</p>
+                <p>{selectedOnline ? `${selectedPeer.host}:${selectedPeer.port}` : t('offline')} · {t('lastSeen', { time: fmtSeenTime(selectedPeer.lastSeen) })}</p>
               </div>
               <button onClick={() => deleteConversation(selectedPeer.id)}>{t('deleteConversation')}</button>
             </>
@@ -960,7 +1036,13 @@ export const MessengerWorkspace: React.FC<{
 
         <section className="messenger-messages" ref={msgListRef}>
           {messages.length === 0 && <div className="messenger-empty large">{t('noMessages')}</div>}
-          {messages.map(m => {
+          {messages.map((m, i) => {
+            // 상대 이름은 받은 말풍선 덩어리의 맨 위에 한 번만 붙인다 — 줄마다 붙이면 시끄럽고,
+            // 내 이름은 붙이지 않는다(누가 보낸 건지 이미 오른쪽 정렬로 드러난다).
+            // 덩어리가 갈리는 기준: 보낸 쪽이 바뀌었거나, 앞 메시지와 10분 이상 떨어졌을 때.
+            const prev = i > 0 ? messages[i - 1] : null;
+            const newBlock = !prev || prev.direction !== m.direction || (m.ts - prev.ts) > SENDER_BLOCK_GAP_MS;
+            const senderName = m.direction === 'in' ? (selectedPeer?.name || '') : '';
             const emojiCount = m.kind === 'text' ? emojiOnlyCount(m.text) : 0;
             const emojiSizeClass = emojiCount === 1 ? 'emoji-x1' : emojiCount === 2 ? 'emoji-x2' : emojiCount === 3 ? 'emoji-x3' : '';
             const recallable = m.direction === 'out' && !m.recalled && !m.read;
@@ -973,7 +1055,11 @@ export const MessengerWorkspace: React.FC<{
                 ? t('worklogShareRejected')
                 : '';
             return (
-            <div key={m.id} className={`messenger-bubble ${m.direction} ${emojiSizeClass}${m.kind === 'sticker' ? ' sticker-message' : ''}`}>
+            <React.Fragment key={m.id}>
+            {newBlock && senderName && (
+              <div className="messenger-sender in" title={senderName}>{senderName}</div>
+            )}
+            <div className={`messenger-bubble ${m.direction} ${emojiSizeClass}${m.kind === 'sticker' ? ' sticker-message' : ''}`}>
               {m.recalled ? (
                 <div className="messenger-recalled">{m.direction === 'out' ? t('messageRecalledSelf', { defaultValue: '메시지를 삭제했습니다.' }) : t('messageRecalledPeer', { defaultValue: '상대방이 메시지를 회수했습니다.' })}</div>
               ) : m.kind === 'worklog-share' ? (
@@ -1051,6 +1137,7 @@ export const MessengerWorkspace: React.FC<{
                 )}
               </div>
             </div>
+            </React.Fragment>
             );
           })}
         </section>
@@ -1124,7 +1211,7 @@ export const MessengerWorkspace: React.FC<{
                     style={emojiPopupPos ? { left: emojiPopupPos.left, bottom: emojiPopupPos.bottom, width: emojiPopupPos.width } : undefined}
                     onClick={e => e.stopPropagation()}
                   >
-                    <div className="messenger-emoji-tabs">
+                    <div className="messenger-emoji-tabs" ref={attachWheelToScrollX}>
                       <button
                         className={`messenger-emoji-tab ${emojiCategory === 'recent' ? 'active' : ''}`}
                         title="최근 사용"
@@ -1153,7 +1240,7 @@ export const MessengerWorkspace: React.FC<{
                             이름표 카드 하나만 덩그러니 보이는 게 오히려 UI 잡음이라 숨긴다. */}
                         {emoticonPacks.length > 1 && (
                           <div className="messenger-emoticon-pack-bar">
-                            <div className="messenger-emoticon-pack-strip">
+                            <div className="messenger-emoticon-pack-strip" ref={attachWheelToScrollX}>
                               {emoticonPacks.map(pack => (
                                 <button
                                   key={pack.id}

@@ -7915,7 +7915,20 @@ useEffect(() => {
             }}
           />
           <div className="messenger-popup-actions">
-            <button className="messenger-popup-open" onClick={() => openClaudeChatView('messenger')}>{tMsg('open')}</button>
+            <button
+              className="messenger-popup-open"
+              onClick={() => {
+                // 화면만 띄우면 예전에 보던 상대가 그대로 남는다 — 알림이 온 상대를 고르라고
+                // 알려준다. MessengerWorkspace 는 ClaudeChat 안에 중첩돼 있어 prop 으로 내리려면
+                // 두 단계를 지나야 하고, 항상 마운트돼 있으므로 창 이벤트가 가장 짧다.
+                const peerId = messengerPopup.peerId;
+                openClaudeChatView('messenger');
+                if (peerId) {
+                  try { window.dispatchEvent(new CustomEvent('pepe:messenger-select-peer', { detail: { peerId } })); } catch {}
+                }
+                dismissMessengerPopup();
+              }}
+            >{tMsg('open')}</button>
             <button className="messenger-popup-send" onClick={() => { void sendMessengerPopupReply(); }} disabled={!messengerReplyText.trim()}>{tMsg('sendReply')}</button>
           </div>
         </div>
