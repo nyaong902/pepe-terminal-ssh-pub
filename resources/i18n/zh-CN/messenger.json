@@ -97,5 +97,7 @@
   "worklogShareReject": "拒绝",
   "worklogShareAccepted": "已接受",
   "worklogShareRejected": "已拒绝",
-  "worklogShareFail": "处理工作日志分享失败：{{error}}"
+  "worklogShareFail": "处理工作日志分享失败：{{error}}",
+  "sideCollapse": "折叠列表",
+  "sideExpand": "展开列表"
 }

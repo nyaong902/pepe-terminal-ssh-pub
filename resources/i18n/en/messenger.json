@@ -97,5 +97,7 @@
   "worklogShareReject": "Reject",
   "worklogShareAccepted": "Accepted",
   "worklogShareRejected": "Rejected",
-  "worklogShareFail": "Failed to process work-log share: {{error}}"
+  "worklogShareFail": "Failed to process work-log share: {{error}}",
+  "sideCollapse": "Collapse list",
+  "sideExpand": "Expand list"
 }

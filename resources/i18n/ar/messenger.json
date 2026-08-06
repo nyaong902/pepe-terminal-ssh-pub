@@ -97,5 +97,7 @@
   "worklogShareReject": "رفض",
   "worklogShareAccepted": "مقبول",
   "worklogShareRejected": "مرفوض",
-  "worklogShareFail": "فشل معالجة مشاركة سجل العمل: {{error}}"
+  "worklogShareFail": "فشل معالجة مشاركة سجل العمل: {{error}}",
+  "sideCollapse": "طي القائمة",
+  "sideExpand": "توسيع القائمة"
 }

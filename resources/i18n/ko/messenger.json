@@ -97,5 +97,7 @@
   "worklogShareReject": "거절",
   "worklogShareAccepted": "수락됨",
   "worklogShareRejected": "거절됨",
-  "worklogShareFail": "작업일지 공유 처리 실패: {{error}}"
+  "worklogShareFail": "작업일지 공유 처리 실패: {{error}}",
+  "sideCollapse": "목록 접기",
+  "sideExpand": "목록 펼치기"
 }

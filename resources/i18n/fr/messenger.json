@@ -97,5 +97,7 @@
   "worklogShareReject": "Refuser",
   "worklogShareAccepted": "Accepté",
   "worklogShareRejected": "Refusé",
-  "worklogShareFail": "Échec du traitement du partage du journal de travail : {{error}}"
+  "worklogShareFail": "Échec du traitement du partage du journal de travail : {{error}}",
+  "sideCollapse": "Réduire la liste",
+  "sideExpand": "Développer la liste"
 }

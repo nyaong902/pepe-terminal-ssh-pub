@@ -9253,46 +9253,116 @@ mark.claude-search-hit.current {
   padding-left: 2px;
 }
 
+/* 사용자 목록 접기 — 좁은 창에서 자동으로 되는 모습(아래 container query)과 같게 맞춘다.
+   두 규칙을 한 선택자로 묶지 않는 이유: container query 안의 규칙은 창이 좁을 때만 살아 있어야
+   하고, 이쪽은 창 폭과 무관하게 사용자가 켠 상태여야 한다. */
+.messenger-side-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px 0;
+}
+.messenger-side-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(166, 200, 230, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--win-text-dim, #86a0b6);
+  cursor: pointer;
+}
+.messenger-side-toggle:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--win-text, #dbe8f4);
+}
+.messenger-side.collapsed {
+  width: 84px;
+  min-width: 84px;
+  overflow: hidden;
+}
+.messenger-side.collapsed .messenger-side-toggle-row {
+  justify-content: center;
+  padding: 8px 0 0;
+}
+.messenger-side.collapsed .messenger-brand,
+.messenger-side.collapsed .messenger-settings,
+.messenger-side.collapsed .messenger-scan,
+.messenger-side.collapsed .messenger-peer-main {
+  display: none;
+}
+.messenger-side.collapsed .messenger-peers {
+  padding: 8px 6px;
+  gap: 6px;
+}
+.messenger-side.collapsed .messenger-peer {
+  position: relative;
+  justify-content: center;
+  padding: 8px 7px;
+}
+.messenger-side.collapsed .messenger-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+}
+/* 이름이 안 보이는 상태에서 안 읽은 개수까지 사라지면 접어둘 수 없다 — 아바타 위 배지로. */
+.messenger-side.collapsed .messenger-count {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  font-size: 10px;
+  display: grid;
+}
+
 @container (max-width: 560px) {
-  .messenger-side {
+  /* 손으로 펼쳐도 대화 영역이 남게 — 320px 고정이면 패널이 좁을 때 대화가 100px 만 남는다. */
+  .messenger-side.expanded {
+    width: min(320px, 62%);
+    min-width: 0;
+  }
+  .messenger-side:not(.expanded) {
     width: 84px;
     min-width: 84px;
     overflow: hidden;
   }
-  .messenger-brand,
-  .messenger-settings,
-  .messenger-scan,
-  .messenger-peer-main,
-  .messenger-count {
+  .messenger-side:not(.expanded) .messenger-brand,
+  .messenger-side:not(.expanded) .messenger-settings,
+  .messenger-side:not(.expanded) .messenger-scan,
+  .messenger-side:not(.expanded) .messenger-peer-main,
+  .messenger-side:not(.expanded) .messenger-count {
     display: none;
   }
-  .messenger-peers {
+  .messenger-side:not(.expanded) .messenger-peers {
     padding: 8px 6px;
     gap: 6px;
   }
-  .messenger-peer {
+  .messenger-side:not(.expanded) .messenger-peer {
     justify-content: center;
     padding: 8px 7px;
     gap: 8px;
   }
-  .messenger-avatar {
+  .messenger-side:not(.expanded) .messenger-avatar {
     width: 30px;
     height: 30px;
     border-radius: 10px;
     font-size: 12px;
   }
-  .messenger-peer-main {
+  .messenger-side:not(.expanded) .messenger-peer-main {
     gap: 2px;
   }
-  .messenger-peer-main b {
+  .messenger-side:not(.expanded) .messenger-peer-main b {
     font-size: 12px;
     line-height: 1.15;
   }
-  .messenger-peer-main small {
+  .messenger-side:not(.expanded) .messenger-peer-main small {
     font-size: 10px;
     line-height: 1.2;
   }
-  .messenger-count {
+  .messenger-side:not(.expanded) .messenger-count {
     min-width: 18px;
     height: 18px;
     font-size: 10px;
@@ -9321,26 +9391,11 @@ mark.claude-search-hit.current {
   }
 }
 
-@container (max-width: 440px) {
-  .messenger-ws {
-    flex-direction: column;
-  }
-  .messenger-side {
-    width: auto;
-    min-width: 0;
-    max-height: 132px;
-    border-right: 0;
-    border-bottom: 1px solid rgba(166, 200, 230, 0.14);
-  }
-  .messenger-peers {
-    padding: 6px 4px;
-    gap: 6px;
-  }
-  .messenger-peer {
-    width: 100%;
-    padding: 7px 6px;
-  }
-}
+/* 아주 좁아져도(패널 440px 미만) 사용자 목록은 왼쪽 세로줄 그대로 둔다.
+   예전에는 여기서 위아래로 쌓으려 했지만 그 규칙은 적용된 적이 없다 — container-type 을 가진
+   요소(.messenger-ws)는 자기 폭 조건으로 자신을 스타일링할 수 없다(자손에만 적용). 그 바람에
+   좌우 배치인 채로 사이드에 max-height: 132px 만 걸려서 사용자 목록이 한 명만 보이고 잘렸다.
+   위 560px 규칙(84px 세로줄)이 그대로 이어지게 두는 것이 맞다 — 폭 제한을 걸지 않는다. */
 .messenger-popup {
   position: fixed;
   right: 24px;

@@ -97,6 +97,7 @@ function path_dirname(p: string): string {
   return idx < 0 ? '' : p.slice(0, idx);
 }
 
+const SIDE_COLLAPSED_PREF = 'messengerSideCollapsed';
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
 function isImageFile(name?: string) {
   const ext = (name || '').split('.').pop()?.toLowerCase() || '';
@@ -240,17 +241,46 @@ export const MessengerWorkspace: React.FC<{
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteError, setRemoteError] = useState('');
   const [narrowLayout, setNarrowLayout] = useState(false);
+  // 사용자 목록을 아바타만 남기고 접는다. 좁은 창에서 자동으로 그렇게 되는 레이아웃(container
+  // query)을 손으로도 켤 수 있게 한 것 — 넓은 창에서 대화 영역을 넓게 쓰려는 용도다.
+  //
+  // 3단인 이유: 'auto' 는 창 폭에 맡기는 기존 동작이고(좁으면 접힘), 좁은 창에서도 이름을 보려면
+  // 폭을 무시하고 펼치는 상태가 따로 필요하다. 버튼은 "지금 보이는 모습" 의 반대로 넘긴다.
+  const [sideMode, setSideMode] = useState<'auto' | 'collapsed' | 'expanded'>('auto');
+  const sideModeLoaded = useRef(false);
+  useEffect(() => {
+    (window as any).api?.getUIPrefs?.().then((prefs: any) => {
+      const v = prefs?.[SIDE_COLLAPSED_PREF];
+      if (v === 'collapsed' || v === 'expanded' || v === 'auto') setSideMode(v);
+      else if (typeof v === 'boolean') setSideMode(v ? 'collapsed' : 'auto');   // 이전 형식
+      sideModeLoaded.current = true;
+    }).catch(() => { sideModeLoaded.current = true; });
+  }, []);
+  useEffect(() => {
+    if (!sideModeLoaded.current) return;   // 불러오기 전 초기값으로 덮어쓰지 않게
+    try { (window as any).api?.setUIPrefs?.({ [SIDE_COLLAPSED_PREF]: sideMode }); } catch {}
+  }, [sideMode]);
+  // 지금 실제로 접혀 보이는지 — 좁은 창(560px 미만)에서는 auto 도 접힌 모습이 된다(App.css 의
+  // container query 와 같은 기준). 아이콘 방향과 아바타 tooltip 이 이 값을 따른다.
+  const sideCollapsed = sideMode === 'collapsed' || (sideMode === 'auto' && narrowLayout);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   // .messenger-chat 도 position:relative 라 실제로는 이게 이모티콘 팝업의 containing block
   // (더 가까운 positioned 조상이 우선) — .messenger-ws 기준으로 좌표를 재면 세션 목록 폭만큼 어긋남.
   const chatMainRef = useRef<HTMLElement | null>(null);
 
+  const wasNarrowRef = useRef(false);
   useEffect(() => {
     const el = workspaceRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(entries => {
       const width = entries[0]?.contentRect?.width || 0;
-      setNarrowLayout(width < 560);
+      const narrow = width < 560;
+      setNarrowLayout(narrow);
+      // 좁아지는 순간에는 손으로 펼쳐둔 것도 접는다 — 좁은 폭에서 목록을 펼치면 대화가 남지
+      // 않는다. 'auto' 로 돌리는 것이라 다시 넓히면 저절로 펼쳐지고, 좁은 채로 버튼을 누르면
+      // 그때는 펼쳐진 채로 남는다(다시 좁아질 때만 접힌다).
+      if (narrow && !wasNarrowRef.current) setSideMode(m => (m === 'expanded' ? 'auto' : m));
+      wasNarrowRef.current = narrow;
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -775,7 +805,27 @@ export const MessengerWorkspace: React.FC<{
 
   return (
     <div className={`messenger-ws ${narrowLayout ? 'narrow' : ''}`} ref={workspaceRef} onClick={() => { setMenu(null); setEmojiOpen(false); }}>
-      <aside className="messenger-side">
+      <aside className={`messenger-side ${sideMode === 'collapsed' ? 'collapsed' : ''} ${sideMode === 'expanded' ? 'expanded' : ''}`}>
+        {/* 접기/펼치기 — 접으면 brand·설정이 숨으므로 이 버튼만 항상 보이는 자리에 둔다. */}
+        <div className="messenger-side-toggle-row">
+          <button
+            type="button"
+            className="messenger-side-toggle"
+            onClick={() => setSideMode(sideCollapsed ? 'expanded' : 'collapsed')}
+            aria-expanded={!sideCollapsed}
+            title={sideCollapsed ? t('sideExpand') : t('sideCollapse')}
+            aria-label={sideCollapsed ? t('sideExpand') : t('sideCollapse')}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <rect x="2.2" y="3.2" width="4" height="9.6" rx="1.6" fill="currentColor" opacity="0.6" />
+              <path
+                d={sideCollapsed ? 'M9 5.6 L11.6 8 L9 10.4' : 'M11.6 5.6 L9 8 L11.6 10.4'}
+                fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
         <div className="messenger-brand">
           <div>
             <div className="messenger-title">PePe Messenger</div>
@@ -867,7 +917,7 @@ export const MessengerWorkspace: React.FC<{
                   setMenu({ x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0), peerId: peer.id });
                 }}
               >
-                <span className="messenger-avatar">{peer.name.slice(0, 1).toUpperCase()}</span>
+                <span className="messenger-avatar" title={sideCollapsed ? peer.name : undefined}>{peer.name.slice(0, 1).toUpperCase()}</span>
                 <span className="messenger-peer-main">
                   <b>{peer.name}</b>
                   <small>{peer.online ? `${peer.host}:${peer.port}` : t('offlineLastSeen', { time: fmtTime(peer.lastSeen) })}</small>
