@@ -314,6 +314,27 @@ if (typeof window !== 'undefined') {
 // stash 직전에 xterm 내부 논리 스크롤 라인을 저장.
 const termSavedScroll: Map<string, { viewportY: number; atBottom: boolean }> = new Map();
 
+// 스크롤 위치 보존 진단 로그.
+//
+// 탭/워크스페이스를 전환할 때 화면이 튀는 문제를 네 군데서 고쳤는데(1px 흔들기, stash 복원,
+// fit reflow, 압축 버퍼 재작성), 그중 압축 버퍼 경로는 "오래 떠나 있었을 때만" 발동해서 재현이
+// 간헐적이다. 실제로 어느 경로가 돌았고 위치가 유지됐는지 눈으로 확인할 수 있게 남긴다.
+// 기본은 꺼짐 — 이 경로들은 출력이 도착할 때마다 돌기도 해서 항상 켜두면 폭주 시 부담이 된다.
+// 증상이 재발하면 콘솔에서 window.__pepeScrollLog(true) 로 켠다.
+let SCROLL_LOG = false;
+try { (window as any).__pepeScrollLog = (on: boolean) => { SCROLL_LOG = !!on; }; } catch {}
+const shortId = (termId: string) => termId.slice(-6);
+function scrollLog(termId: string, what: string, extra?: Record<string, any>) {
+  if (!SCROLL_LOG) return;
+  let pos = '';
+  try {
+    const buf: any = termStore.get(termId)?.term?.buffer?.active;
+    if (buf) pos = ` [now y=${buf.viewportY}/base=${buf.baseY}]`;
+  } catch {}
+  const tail = extra ? ' ' + Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(' ') : '';
+  console.log(`[scroll:${shortId(termId)}] ${what}${pos}${tail}`);
+}
+
 export function stashXtermDom(termId: string) {
   const entry = termStore.get(termId);
   if (!entry) return;
@@ -324,9 +345,15 @@ export function stashXtermDom(termId: string) {
       const viewportY = buf.viewportY ?? 0;
       const baseY = buf.baseY ?? 0;
       termSavedScroll.set(termId, { viewportY, atBottom: viewportY >= baseY });
+      scrollLog(termId, '숨김 — 위치 저장', { y: viewportY, base: baseY, atBottom: viewportY >= baseY });
     }
   } catch {}
   const el = term.element as HTMLElement | undefined;
+  if (el) {
+    // 보여주기 직전까지 감춰두는 처리(아래 마운트 경로)가 끝나기 전에 다시 숨겨지는 경우가 있다.
+    // hidden 을 들고 stash 로 들어가면 다시 꺼낼 때 계속 감춰진 상태로 남는다.
+    try { el.style.visibility = ''; } catch {}
+  }
   if (el && el.parentNode && el.parentNode !== getXtermStash()) {
     getXtermStash().appendChild(el);
   }
@@ -337,9 +364,9 @@ export function stashXtermDom(termId: string) {
 
 // stash 에서 꺼낸 후 refit 이 안정화된 시점에 호출 — 저장된 논리 라인 위치로 복원.
 // viewportY 는 라인 단위라 fit 으로 cols/rows 가 바뀌어도 유효함.
-function restoreSavedScroll(termId: string) {
+function restoreSavedScroll(termId: string, why = '') {
   const saved = termSavedScroll.get(termId);
-  if (!saved) return;
+  if (!saved) { if (why) scrollLog(termId, `복원 건너뜀(저장값 없음) ${why}`); return; }
   const entry = termStore.get(termId);
   if (!entry) return;
   const term: any = entry.term;
@@ -349,6 +376,7 @@ function restoreSavedScroll(termId: string) {
     } else {
       const baseY = term.buffer?.active?.baseY ?? 0;
       const target = Math.min(saved.viewportY, baseY);
+      if (why) scrollLog(termId, `복원 ${why}`, { target, saved: saved.viewportY, base: baseY });
       if (typeof term.scrollToLine === 'function') term.scrollToLine(target);
       else {
         const curY = term.buffer?.active?.viewportY ?? 0;
@@ -551,6 +579,11 @@ function scheduleCompaction(termId: string) {
     const entry = termStore.get(termId);
     if (!entry) return;
     try {
+      const buf: any = (entry.term as any).buffer?.active;
+      if (buf && buf.viewportY < buf.baseY) {
+        scrollLog(termId, '압축 건너뜀 — 스크롤을 올려둔 터미널', { y: buf.viewportY, base: buf.baseY });
+        return;
+      }
       const scrollback = (entry.term as any).options?.scrollback ?? 5000;
       // 안 보이는 동안엔 실시간 write 를 건너뛰므로 xterm 버퍼는 stash 시점 상태 그대로 — 그걸
       // 직렬화한 뒤 reset() 으로 메모리를 회수하고, 그 사이 모아둔(더 최신) 청크들 앞에 끼워넣는다.
@@ -570,13 +603,33 @@ function scheduleCompaction(termId: string) {
 // 내용을 먼저 복원해서 순서를 보존한다 (이후 이어지는 새 데이터가 뒤에 붙도록).
 // 청크 단위로 나눠서 write() — 하나로 합쳐서 한 번에 넘기면 xterm 이 그 거대한 문자열을
 // 자체 12ms 양보 없이 통째로 파싱해 멈칫거린다 (프로파일링으로 확인된 patrern).
-export function flushCompactedBuffer(termId: string) {
+/** 압축해둔 버퍼를 다시 써 넣는다. 되돌릴 내용이 있었으면 "파싱까지 끝났을 때" 알려주는 Promise 를,
+ *  없었으면 null 을 준다.
+ *
+ *  xterm 의 write 는 비동기다 — 큐에 넣고 프레임당 일정 시간만 파싱한다. 그래서 되돌릴 양이 많으면
+ *  여러 프레임에 걸쳐 파싱되고, 그동안 매 프레임 화면이 맨 아래로 밀린다. 탭을 오래 떠나 있다가
+ *  (=압축이 발동한 뒤에) 돌아올 때만 "스크롤이 바닥까지 내려갔다 원래 위치로 돌아오는" 증상이
+ *  보였던 이유가 이것이다. 호출한 쪽이 이 Promise 로 그동안 스크롤을 붙잡아둘 수 있게 한다. */
+export function flushCompactedBuffer(termId: string): Promise<void> | null {
   const chunks = termCompactedChunks.get(termId);
-  if (chunks === undefined) return;
+  if (chunks === undefined) return null;
+  scrollLog(termId, '압축 버퍼 되돌리기 시작', {
+    조각: chunks.length,
+    자: chunks.reduce((n: number, c: string) => n + (c ? c.length : 0), 0),
+  });
   clearCompactedBuffer(termId);
   const entry = termStore.get(termId);
-  if (!entry) return;
-  try { for (const chunk of chunks) entry.term.write(chunk); } catch {}
+  if (!entry) return null;
+  try {
+    let done: () => void = () => {};
+    const p = new Promise<void>(res => { done = res; });
+    chunks.forEach((chunk, i) => {
+      const last = i === chunks.length - 1;
+      entry.term.write(chunk, last ? done : undefined);
+    });
+    if (chunks.length === 0) done();
+    return p;
+  } catch { return null; }
 }
 
 // xterm 5.3 의 rows 증가 시 grow bug 수동 보정.
@@ -650,13 +703,28 @@ export function applyXtermGrowFix(term: any, prevRows: number) {
 }
 
 // 외부에서 termId 의 fit + resize 강제 — 워크스페이스 전환 후 풀스크린 터미널 크기 보정 등
-export function refitTerm(termId: string) {
-  if (relayIfRemote(termId, 'refitTerm', [])) return;
+// refreshScrollbar: 스크롤바를 강제로 다시 그리게 한다(overflow 토글 + scrollTop 흔들기).
+//
+// 기본은 하지 않는다. 이 처리는 화면에 보이는 상태에서 하면 스크롤바가 사라졌다 나타나 반짝인다 —
+// 탭을 전환할 때 refitTerm 이 네 번(rAF/50/200/350ms) 불리므로 그만큼 반복됐다(Windows 11 실측).
+// 필요한 곳은 "stash 에서 꺼내 다시 붙인 직후" 하나뿐이고, 그 시점에는 터미널을 visibility:hidden
+// 으로 감춰두므로 반짝임이 화면에 나가지 않는다(아래 마운트 경로 참고).
+export function refitTerm(termId: string, refreshScrollbar = false) {
+  if (relayIfRemote(termId, 'refitTerm', [refreshScrollbar])) return;
   const entry = termStore.get(termId);
   if (!entry) return;
   try {
     const term: any = entry.term;
     const prevRows = term.rows;
+    // fit 전 스크롤 위치를 기억한다.
+    //
+    // cols/rows 가 바뀌면 xterm 이 버퍼를 재배치(reflow)하면서 뷰포트를 맨 아래로 밀어버린다.
+    // 그래서 탭을 전환하면 "화면이 바닥까지 내려갔다가 원래 위치로 돌아오는" 것이 보였다 —
+    // 뒤이어 restoreSavedScroll 이 제자리로 돌려놓기 때문에 결과는 맞지만 그 사이가 그려진다.
+    // 호출한 쪽에서 고치는 대신 refitTerm 자체가 스크롤을 건드리지 않게 만든다.
+    const bufBefore = term.buffer?.active;
+    const prevYdisp = bufBefore?.viewportY ?? 0;
+    const prevAtBottom = !bufBefore || bufBefore.viewportY >= bufBefore.baseY;
     entry.fit.fit();
     const c = term.cols;
     const r = term.rows;
@@ -669,10 +737,28 @@ export function refitTerm(termId: string) {
     } else {
       try { term._core?._viewport?.syncScrollArea?.(); } catch {}
     }
+    // fit 이 옮겨놓은 뷰포트를 원래 위치로 되돌린다.
+    //
+    // 맨 아래를 보고 있었으면 계속 맨 아래에 붙는다(새 출력을 따라가는 기존 동작).
+    // xterm 이 뷰포트 DOM 의 scrollTop 을 다음 렌더에서 맞추는 경우가 있어 rAF 로 한 번 더 한다 —
+    // 같은 값을 다시 넣는 것이라 무해하다.
+    const restoreViewport = () => {
+      try {
+        const b = term.buffer?.active;
+        if (!b) return;
+        if (prevAtBottom) { term.scrollToBottom?.(); return; }
+        const target = Math.max(0, Math.min(prevYdisp, b.baseY));
+        if (b.viewportY === target) return;
+        if (typeof term.scrollToLine === 'function') term.scrollToLine(target);
+        else term.scrollLines?.(target - b.viewportY);
+      } catch {}
+    };
+    restoreViewport();
+    requestAnimationFrame(restoreViewport);
     term.refresh?.(0, term.rows - 1);
     // viewport 의 overflow 토글 + scrollTop 만지기로 브라우저 scrollbar 재렌더 강제
     const elem = term.element as HTMLElement | undefined;
-    const viewport = elem?.querySelector?.('.xterm-viewport') as HTMLElement | null;
+    const viewport = refreshScrollbar ? (elem?.querySelector?.('.xterm-viewport') as HTMLElement | null) : null;
     if (viewport) {
       const orig = viewport.style.overflowY;
       viewport.style.overflowY = 'hidden';
@@ -3864,7 +3950,7 @@ export const TerminalPanel: React.FC<Props> = ({
     try { (window as any).api?.setTermVisibility?.(activeTermId, true); } catch {}
     cancelCompaction(activeTermId);
     // 백그라운드로 오래 있어서 버퍼가 압축(직렬화 후 비움)됐었다면 복귀 시 먼저 복원.
-    flushCompactedBuffer(activeTermId);
+    const flushing = flushCompactedBuffer(activeTermId);
 
     const { term, fit } = getOrCreateTerm(activeTermId);
 
@@ -3881,23 +3967,52 @@ export const TerminalPanel: React.FC<Props> = ({
       // 움직였다 돌아오는 것으로 보인다(Windows 10 실측).
       // 다음 프레임에 복원까지 끝낸 뒤 보여주면 중간 상태가 화면에 그려지지 않는다(1 프레임이라
       // 깜빡임으로도 보이지 않는다).
-      const prevVisibility = stashedEl.style.visibility;
       stashedEl.style.visibility = 'hidden';
-      const reveal = () => { try { stashedEl.style.visibility = prevVisibility; } catch {} };
+      let revealed = false;
+      const reveal = () => {
+        try { stashedEl.style.visibility = ''; } catch {}
+        if (!revealed) {
+          revealed = true;
+          const t: any = term;
+          scrollLog(activeTermId, '보임', { cols: t.cols, rows: t.rows });
+        }
+      };
       // 어떤 이유로든 복원 경로가 실행되지 않아 화면이 계속 숨는 일은 없어야 한다 — 안전망.
-      setTimeout(reveal, 300);
+      // 압축 버퍼를 되돌리는 중이면 그만큼 더 기다려 준다(아래 settle 이 늦게 돌기 때문).
+      setTimeout(reveal, flushing ? 800 : 300);
       containerRef.current.appendChild(stashedEl);
       // stash 복귀 시엔 항상 refit + viewport 재계산 — 활동 없는 터미널의 scrollbar 가 0 으로 멈추는 문제 fix
       // refit 후 stash 직전 저장한 스크롤 위치로 복원 (hidden stash 가 scrollTop=0 으로 만들어 버리는 문제)
-      requestAnimationFrame(() => {
-        refitTerm(activeTermId);
-        restoreSavedScroll(activeTermId);
+      const settle = () => {
+        // 여기서만 스크롤바 재렌더를 켠다 — 아직 visibility:hidden 이라 반짝임이 보이지 않는다.
+        refitTerm(activeTermId, true);
+        restoreSavedScroll(activeTermId, '보이기 직전');
         reveal();   // 복원된 위치로 첫 페인트가 나가게 — 위 주석 참고
         tryRecoverWebgl(activeTermId); // 백그라운드에 있는 동안 GPU 컨텍스트가 죽었을 수 있음
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 50);
         setTimeout(() => { refitTerm(activeTermId); restoreSavedScroll(activeTermId); }, 200);
         setTimeout(() => { restoreSavedScroll(activeTermId); termSavedScroll.delete(activeTermId); }, 350);
-      });
+      };
+      if (!flushing) {
+        requestAnimationFrame(settle);
+      } else {
+        // 압축해둔 버퍼를 다시 쓰는 중이라면, 다 쓰고 나서 자리를 잡고 보여준다.
+        //
+        // xterm 의 write 는 비동기다 — 큐에 넣고 프레임당 일정 시간만 파싱한다. 다 쓰기 전에는
+        // 버퍼가 비어 있어서(baseY=0) 되돌릴 위치 자체가 없다. 먼저 보여주면 "빈 화면 → 맨 아래 →
+        // 원위치" 를 거치게 되므로, 파싱이 끝날 때까지 감춘 채로 기다린다(실측 400KB 에 40ms 대).
+        // 신호가 오지 않는 경우에도 화면이 잠기지 않게 상한을 둔다.
+        const startedAt = performance.now();
+        let settled = false;
+        const once = (why: string) => {
+          if (settled) return;
+          settled = true;
+          scrollLog(activeTermId, `압축 복원 완료 후 자리잡기 (${why})`, { ms: Math.round(performance.now() - startedAt) });
+          requestAnimationFrame(settle);
+        };
+        flushing.then(() => once('쓰기 끝'));
+        setTimeout(() => once('상한 500ms'), 500);
+      }
     } else {
       containerRef.current.innerHTML = '';
       term.open(containerRef.current);
