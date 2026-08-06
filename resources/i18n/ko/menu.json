@@ -69,7 +69,11 @@
     "xStatusRunning": "실행 중",
     "xStatusNone": "실행 중인 X 서버 없음.",
     "xStatusFail": "X 서버 상태 조회 실패",
-    "options": "⚙ 옵션..."
+    "options": "⚙ 옵션...",
+    "captureShow": "📸 화면 캡처 버튼 표시",
+    "captureHide": "📸 화면 캡처 버튼 숨기기",
+    "devToolsShow": "🛠️ 개발자 도구 버튼 표시",
+    "devToolsHide": "🛠️ 개발자 도구 버튼 숨기기"
   },
   "hamburgerTooltip": "메뉴",
   "help": {

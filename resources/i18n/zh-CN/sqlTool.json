@@ -365,5 +365,7 @@
   "sidebarExportedMsg": "已保存至: {{path}}",
   "sidebarImportedMsg": "已添加 {{added}} 个 (共解析 {{total}} 个)",
   "sidebarImportedMsgWithDup": "已添加 {{added}} 个 (共解析 {{total}} 个) — {{dup}} 个因与现有连接重复(名称+主机+端口相同)而跳过",
-  "sidebarDeleteItemsConfirm": "删除选中的 {{count}} 个项目吗?"
+  "sidebarDeleteItemsConfirm": "删除选中的 {{count}} 个项目吗?",
+  "wsScrollPrev": "上一批标签",
+  "wsScrollNext": "下一批标签"
 }

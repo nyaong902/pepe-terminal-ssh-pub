@@ -365,5 +365,7 @@
   "sidebarExportedMsg": "تم الحفظ في: {{path}}",
   "sidebarImportedMsg": "تمت إضافة {{added}} (من أصل {{total}})",
   "sidebarImportedMsgWithDup": "تمت إضافة {{added}} (من أصل {{total}}) — تم تخطي {{dup}} لوجود اتصال مطابق (نفس الاسم+المضيف+المنفذ)",
-  "sidebarDeleteItemsConfirm": "حذف العناصر المحددة ({{count}})؟"
+  "sidebarDeleteItemsConfirm": "حذف العناصر المحددة ({{count}})؟",
+  "wsScrollPrev": "علامات التبويب السابقة",
+  "wsScrollNext": "علامات التبويب التالية"
 }

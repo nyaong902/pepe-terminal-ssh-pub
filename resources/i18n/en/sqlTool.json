@@ -365,5 +365,7 @@
   "sidebarExportedMsg": "Saved to: {{path}}",
   "sidebarImportedMsg": "{{added}} added (of {{total}} parsed)",
   "sidebarImportedMsgWithDup": "{{added}} added (of {{total}} parsed) — {{dup}} skipped as duplicates of existing connections (same name+host+port)",
-  "sidebarDeleteItemsConfirm": "Delete the selected {{count}} items?"
+  "sidebarDeleteItemsConfirm": "Delete the selected {{count}} items?",
+  "wsScrollPrev": "Previous tabs",
+  "wsScrollNext": "Next tabs"
 }

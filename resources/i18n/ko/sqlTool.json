@@ -365,5 +365,7 @@
   "sidebarExportedMsg": "저장됨: {{path}}",
   "sidebarImportedMsg": "{{added}}개 추가됨 (총 {{total}}개 중)",
   "sidebarImportedMsgWithDup": "{{added}}개 추가됨 (총 {{total}}개 중) — {{dup}}개는 이름+호스트+포트가 같은 기존 연결이 있어 건너뜀",
-  "sidebarDeleteItemsConfirm": "선택한 {{count}}개 항목을 삭제하시겠습니까?"
+  "sidebarDeleteItemsConfirm": "선택한 {{count}}개 항목을 삭제하시겠습니까?",
+  "wsScrollPrev": "이전 탭들",
+  "wsScrollNext": "다음 탭들"
 }

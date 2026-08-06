@@ -1,5 +1,6 @@
 // src/components/TerminalPanel.tsx
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { TabListMenu } from './TabListMenu';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
@@ -4636,6 +4637,16 @@ export const TerminalPanel: React.FC<Props> = ({
                 const el = document.querySelector(`[data-panel-tabs="${nodeId}"]`);
                 if (el) el.scrollBy({ left: 100, behavior: 'smooth' });
               }}>›</button>
+              {/* 모든 세션 보기 — 미니탭이 많을 때 목록에서 바로 고른다. */}
+              <TabListMenu
+                items={panel.sessions.map(sess => ({ id: sess.termId, label: sess.sessionName }))}
+                activeId={panel.sessions[panel.activeIdx]?.termId}
+                onSelect={termId => {
+                  const idx = panel.sessions.findIndex(x => x.termId === termId);
+                  if (idx >= 0) onSwitchSession?.(nodeId, idx);
+                }}
+                title={t('ui.allSessions', { defaultValue: '모든 세션' })}
+              />
             </div>
           )
         ) : (

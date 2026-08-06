@@ -3,6 +3,8 @@
 // 나타난다. "+" 를 누르면 형식 선택 화면이 그 자리에 잠깐 나타날 뿐 탭으로 남지 않고, 형식을
 // 고르는 즉시 그 이름의 탭이 새로 생긴다. 각 형식 에디터 내부에는 문서 단위 미니탭이 별도로 있다.
 import { useEffect, useRef, useState } from 'react';
+import { TabListMenu } from './TabListMenu';
+import { middleClickClose, useTabStripScroll } from '../utils/tabStrip';
 import { OfficeWorkspace } from './OfficeWorkspace';
 import { ZiziyiOfficeWorkspace } from './ZiziyiOfficeWorkspace';
 import { PdfWorkspace } from './PdfWorkspace';
@@ -55,6 +57,7 @@ const slotTabStyle = (active: boolean): React.CSSProperties => ({
   background: active ? 'var(--win-surface, #161b22)' : 'transparent',
   border: '1px solid var(--win-border, #30363d)',
   color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer', maxWidth: 160, whiteSpace: 'nowrap',
+  flex: '0 0 auto',
 });
 
 type OfficeLauncherState = { slots: Slot[]; activeId: string | null; pickerOpen: boolean };
@@ -128,27 +131,60 @@ export function OfficeLauncher({ instanceId, initialState, onStateChange, initia
     }
   };
 
+  // 탭 바 — 넘칠 때 ‹ › , 세로 휠로 가로 스크롤(공용 처리).
+  const { tabScrollRef, tabsOverflow, scrollTabs, onTabWheel } = useTabStripScroll(slots);
+
   const showingPicker = pickerOpen || slots.length === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minWidth: 0, minHeight: 0 }}>
+      {/* 탭 목록만 스크롤 영역에 넣고 ‹ › ＋ 는 밖에 고정 — 브라우저 워크스페이스(bp-tabs)와
+          같은 구조. 스크롤바는 CSS 로 완전히 숨기고 세로 휠을 가로 스크롤로 바꿔준다. */}
       {slots.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 8px', borderBottom: '1px solid var(--win-border, #30363d)', overflowX: 'auto', flex: '0 0 auto' }}>
-          {slots.map(slot => {
-            const meta = FORMATS.find(f => f.id === slot.format)!;
-            return (
-              <div key={slot.id} onClick={() => { setActiveId(slot.id); setPickerOpen(false); }} style={slotTabStyle(!pickerOpen && slot.id === activeId)}>
-                <span>{meta.icon}</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta.label}</span>
-                <span onClick={(e) => { e.stopPropagation(); closeSlot(slot.id); }} style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}>×</span>
-              </div>
-            );
-          })}
+        <div className="pepe-tabs pepe-tabs-docs">
+          <div
+            className="pepe-tabs-scroll"
+            ref={tabScrollRef}
+            onWheel={onTabWheel}
+          >
+            {slots.map(slot => {
+              const meta = FORMATS.find(f => f.id === slot.format)!;
+              return (
+                <div
+                  key={slot.id}
+                  onClick={() => { setActiveId(slot.id); setPickerOpen(false); }}
+                  {...middleClickClose(() => closeSlot(slot.id))}
+                  title={meta.label}
+                  style={slotTabStyle(!pickerOpen && slot.id === activeId)}
+                >
+                  <span>{meta.icon}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta.label}</span>
+                  <span onClick={(e) => { e.stopPropagation(); closeSlot(slot.id); }} style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}>×</span>
+                </div>
+              );
+            })}
+          </div>
+          {tabsOverflow && (
+            <div className="pepe-tab-scroll-group">
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(-150)} title="이전">‹</button>
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(150)} title="다음">›</button>
+            </div>
+          )}
           <button
             onClick={() => setPickerOpen(true)}
             title="새 형식 탭"
-            style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text, #e6edf3)', fontSize: 13, cursor: 'pointer' }}
+            style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--win-border, #30363d)', background: 'transparent', color: 'var(--win-text, #e6edf3)', cursor: 'pointer', flex: '0 0 auto' }}
           >＋</button>
+          {/* 모든 탭 보기 */}
+          <TabListMenu
+            items={slots.map(slot => {
+              const meta = FORMATS.find(f => f.id === slot.format);
+              return { id: slot.id, label: meta?.label || slot.format, icon: meta?.icon };
+            })}
+            activeId={pickerOpen ? null : activeId}
+            onSelect={id => { setActiveId(id); setPickerOpen(false); }}
+            onCloseItem={id => closeSlot(id)}
+          />
         </div>
       )}
       <div style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, position: 'relative' }}>

@@ -1,5 +1,6 @@
 // src/components/FileExplorer.tsx
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { TabListMenu } from './TabListMenu';
 import { useTranslation } from 'react-i18next';
 import { FilePanel, PanelSource } from './FilePanel';
 import { TransferLog } from './TransferLog';
@@ -1078,7 +1079,10 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
             key={tab.id}
             draggable
             className={`fe-panel-tab ${idx === active ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
-            onMouseDown={() => {
+            onMouseDown={e => {
+              // 가운데 버튼은 여기서 활성화하지 않는다 — 닫을 탭이므로. 기본 동작(자동 스크롤
+              // 위젯)을 막아야 뒤이어 auxclick 이 온다.
+              if (e.button === 1) { e.preventDefault(); return; }
               setSelectedLeafId(leafId);
               updatePanel(leafId, p => ({ ...p, activeIdx: idx }));
             }}
@@ -1162,6 +1166,20 @@ export const FileExplorer: React.FC<Props> = ({ sessions, initialTermId, initial
           onClick={() => splitLeaf(leafId, 'column')}
           title={t('splitColumn')}
         >⬍</button>
+        {/* 모든 탭 보기 — 탭이 많을 때 목록에서 바로 고른다. */}
+        <TabListMenu
+          items={tabs.map(tab => ({ id: String(tab.id), label: tabLabel(tab), icon: tabIcon(tab) || undefined }))}
+          activeId={String(tabs[active]?.id ?? '')}
+          onSelect={id => {
+            const i = tabs.findIndex(x => String(x.id) === id);
+            if (i >= 0) { setSelectedLeafId(leafId); updatePanel(leafId, p => ({ ...p, activeIdx: i })); }
+          }}
+          onCloseItem={(tabs.length > 1 || totalLeaves > 1) ? (id => {
+            const i = tabs.findIndex(x => String(x.id) === id);
+            if (i >= 0) closeTabInLeaf(leafId, i);
+          }) : undefined}
+          title={t('allTabs', { defaultValue: '모든 탭' })}
+        />
         {totalLeaves > 1 && (
           <button
             className="fe-panel-close-btn"

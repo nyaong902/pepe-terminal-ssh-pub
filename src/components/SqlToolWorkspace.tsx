@@ -1,6 +1,7 @@
 // src/components/SqlToolWorkspace.tsx
 // SQL Tool — JDBC 사이드카(Java) 를 통한 다중 DBMS 지원. 결과/히스토리/스키마 트리/PK 편집/객체 상세.
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useTabStripScroll } from '../utils/tabStrip';
 import { useTranslation } from 'react-i18next';
 import { Editor } from './LazyMonaco';
 import type { OnMount } from '@monaco-editor/react';
@@ -266,7 +267,9 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
   // 탭 이름 인라인 편집 상태
   const [renamingTabId, setRenamingTabId] = useState<string>('');
   const [renameDraft, setRenameDraft] = useState<string>('');
-  const [tabListOpen, setTabListOpen] = useState<boolean>(false);
+  const [tabListOpen, setTabListOpen] = useState<boolean>(false);
+  // 탭이 넘칠 때만 ‹ › — 앱 공용 처리(src/utils/tabStrip.ts).
+  const { tabScrollRef: editorTabScrollRef, tabsOverflow: editorTabsOverflow, scrollTabs: scrollEditorTabs } = useTabStripScroll(editorTabs);
   // 오브젝트 상세 탭 열기 (같은 객체 이미 있으면 그 탭으로 전환)
   const openObjectDetail = useCallback((name: string, kind: ObjectKind, schema?: string, table?: string) => {
     setEditorTabs(prev => {
@@ -2481,6 +2484,7 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
         <div style={{ display: 'flex', alignItems: 'stretch', background: '#252526', borderBottom: '1px solid #333', minHeight: 28 }}>
           <div
             className="pepe-tab-strip"
+            ref={editorTabScrollRef}
             onWheel={e => {
               // 세로 휠을 가로 스크롤로 변환 (가로 휠도 그대로 적용)
               const el = e.currentTarget as HTMLDivElement;
@@ -2559,6 +2563,12 @@ export const SqlToolWorkspace: React.FC<Props> = ({ sessionId, sessionName, aiAg
               );
             })}
           </div>
+          {editorTabsOverflow && (
+            <div className="pepe-tab-scroll-group">
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollEditorTabs(-150)} title={tr('wsScrollPrev')}>‹</button>
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollEditorTabs(150)} title={tr('wsScrollNext')}>›</button>
+            </div>
+          )}
           <button
             onClick={() => {
               const id = newTabId();

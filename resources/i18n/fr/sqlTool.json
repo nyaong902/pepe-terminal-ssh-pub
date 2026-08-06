@@ -365,5 +365,7 @@
   "sidebarExportedMsg": "Enregistré : {{path}}",
   "sidebarImportedMsg": "{{added}} ajouté(s) (sur {{total}} analysés)",
   "sidebarImportedMsgWithDup": "{{added}} ajouté(s) (sur {{total}} analysés) — {{dup}} ignoré(s) car identiques à une connexion existante (même nom+hôte+port)",
-  "sidebarDeleteItemsConfirm": "Supprimer les {{count}} éléments sélectionnés ?"
+  "sidebarDeleteItemsConfirm": "Supprimer les {{count}} éléments sélectionnés ?",
+  "wsScrollPrev": "Onglets précédents",
+  "wsScrollNext": "Onglets suivants"
 }

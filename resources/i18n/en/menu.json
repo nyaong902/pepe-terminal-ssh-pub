@@ -69,7 +69,11 @@
     "pepeBoxWs": "📦 Pepe-Box",
     "pepeThingWs": "🔎 Pepe-Thing",
     "i18nWs": "🌍 Translation Editor",
-    "remoteShare": "📱 PePe Remote Share"
+    "remoteShare": "📱 PePe Remote Share",
+    "captureShow": "📸 Show capture button",
+    "captureHide": "📸 Hide capture button",
+    "devToolsShow": "🛠️ Show DevTools button",
+    "devToolsHide": "🛠️ Hide DevTools button"
   },
   "hamburgerTooltip": "Menu",
   "help": {

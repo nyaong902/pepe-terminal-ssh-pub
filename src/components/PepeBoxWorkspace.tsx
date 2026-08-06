@@ -4,6 +4,8 @@
 // 우측: 연결된 계정별 탭 — 네이티브 3사(Dropbox/Drive/OneDrive)는 FilePanel 로 실제 API 파일 탐색,
 // 나머지 3사(네이버/카카오/iCloud)는 공식 파일 API 가 없어 BrowserPane(webview)으로 서비스 웹 화면을 임베드.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { TabListMenu } from './TabListMenu';
+import { middleClickClose, useTabStripScroll } from '../utils/tabStrip';
 import { useTranslation } from 'react-i18next';
 import { FilePanel, type PanelSource } from './FilePanel';
 import { BrowserPane } from './BrowserPane';
@@ -124,6 +126,8 @@ export const PepeBoxWorkspace: React.FC = () => {
     setActiveTabId(tab.id);
   };
 
+  // 탭 바 — 넘칠 때 ‹ › , 세로 휠로 가로 스크롤(공용 처리).
+  const { tabScrollRef, tabsOverflow, scrollTabs, onTabWheel } = useTabStripScroll(openTabs);
   const closeTab = (id: string) => {
     // 다음 활성 탭 계산을 setOpenTabs 의 함수형 업데이트 콜백 안에서 함께 처리 —
     // 렌더 시점 openTabs 클로저를 읽으면 탭을 빠르게 연속으로 닫을 때(각 클릭이 아직
@@ -215,13 +219,29 @@ export const PepeBoxWorkspace: React.FC = () => {
           <div className="pepebox-empty">{t('emptyState')}</div>
         ) : (
           <>
-            <div className="pepebox-tabbar">
-              {openTabs.map(tab => (
-                <div key={tab.id} className={`pepebox-tab${activeTabId === tab.id ? ' active' : ''}`} onClick={() => setActiveTabId(tab.id)}>
-                  <span>{tab.label}</span>
-                  <span className="pepebox-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
+            <div className="pepebox-tabbar pepe-tabs">
+              <div className="pepe-tabs-scroll" ref={tabScrollRef} onWheel={onTabWheel}>
+                {openTabs.map(tab => (
+                  <div key={tab.id} className={`pepebox-tab${activeTabId === tab.id ? ' active' : ''}`}
+                    onClick={() => setActiveTabId(tab.id)} {...middleClickClose(() => closeTab(tab.id))}>
+                    <span>{tab.label}</span>
+                    <span className="pepebox-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
+                  </div>
+                ))}
+              </div>
+              {tabsOverflow && (
+                <div className="pepe-tab-scroll-group">
+                  <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(-150)} title="이전">‹</button>
+                  <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(150)} title="다음">›</button>
                 </div>
-              ))}
+              )}
+              {/* 모든 탭 보기 */}
+              <TabListMenu
+                items={openTabs.map(tab => ({ id: tab.id, label: tab.label }))}
+                activeId={activeTabId}
+                onSelect={id => setActiveTabId(id)}
+                onCloseItem={id => closeTab(id)}
+              />
             </div>
             <div className="pepebox-tab-content">
               {openTabs.map(tab => {

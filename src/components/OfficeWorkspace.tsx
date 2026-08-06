@@ -5,6 +5,8 @@
 // 메뉴(showOpenFilePicker/showSaveFilePicker)로도 처리되지만, 워드/엑셀/파워포인트와 동일하게
 // 상단 "새 문서"/"열기" 버튼 + 미니탭으로 여러 문서를 동시에 열어둘 수 있게 한다.
 import { useEffect, useRef, useState } from 'react';
+import { TabListMenu } from './TabListMenu';
+import { middleClickClose, useTabStripScroll } from '../utils/tabStrip';
 import { RhwpWebviewEditor } from '../utils/rhwpWebviewEditor';
 import { OfficeBackBar } from './OfficeBackBar';
 import { OfficeEmptyState } from './OfficeEmptyState';
@@ -157,6 +159,9 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath, init
     handleOpenRecent({ filePath: initialFilePath, fileName: initialFilePath.split(/[\\/]/).pop() || initialFilePath, openedAt: 0, openCount: 0 });
   }, [initialFilePath]);
 
+  // 탭 바 — 넘칠 때 ‹ › , 세로 휠로 가로 스크롤(공용 처리).
+  const { tabScrollRef, tabsOverflow, scrollTabs, onTabWheel } = useTabStripScroll(docs);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', width: '100%', height: '100%', minWidth: 0, minHeight: 0, background: 'var(--win-bg, #0d1117)' }}>
       <OfficeBackBar
@@ -170,27 +175,43 @@ export function OfficeWorkspace({ instanceId: _instanceId, initialFilePath, init
         )}
       />
       {docs.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 8px 0', borderBottom: '1px solid var(--win-border, #30363d)', overflowX: 'auto', flex: '0 0 auto' }}>
-          {docs.map(d => (
-            <div
-              key={d.id}
-              onClick={() => setActiveId(d.id)}
-              title={d.title}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: '6px 6px 0 0',
-                background: d.id === activeId ? 'var(--win-surface, #161b22)' : 'transparent',
-                border: '1px solid var(--win-border, #30363d)',
-                color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer', maxWidth: 180, whiteSpace: 'nowrap',
-              }}
-            >
-              <span>📄</span>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</span>
-              <span
-                onClick={(e) => { e.stopPropagation(); closeDoc(d.id); }}
-                style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}
-              >×</span>
+        <div className="pepe-tabs pepe-tabs-docs">
+          <div className="pepe-tabs-scroll" ref={tabScrollRef} onWheel={onTabWheel}>
+            {docs.map(d => (
+              <div
+                key={d.id}
+                onClick={() => setActiveId(d.id)}
+                {...middleClickClose(() => closeDoc(d.id))}
+                title={d.title}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: '6px 6px 0 0',
+                  background: d.id === activeId ? 'var(--win-surface, #161b22)' : 'transparent',
+                  border: '1px solid var(--win-border, #30363d)',
+                  color: 'var(--win-text, #e6edf3)', fontSize: 12, cursor: 'pointer', maxWidth: 180, whiteSpace: 'nowrap', flex: '0 0 auto',
+                }}
+              >
+                <span>📄</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.title}</span>
+                <span
+                  onClick={(e) => { e.stopPropagation(); closeDoc(d.id); }}
+                  style={{ opacity: 0.7, padding: '0 2px', borderRadius: 4 }}
+                >×</span>
+              </div>
+            ))}
+          </div>
+          {tabsOverflow && (
+            <div className="pepe-tab-scroll-group">
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(-150)} title="이전">‹</button>
+              <button className="pepe-tab-scroll-btn" onClick={() => scrollTabs(150)} title="다음">›</button>
             </div>
-          ))}
+          )}
+          {/* 모든 탭 보기 — 탭이 많을 때 ‹ › 로 넘기지 않고 목록에서 바로 고른다. */}
+          <TabListMenu
+            items={docs.map(d => ({ id: d.id, label: d.title, icon: '📄' }))}
+            activeId={activeId}
+            onSelect={id => setActiveId(id)}
+            onCloseItem={id => closeDoc(id)}
+          />
         </div>
       )}
       <div style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, position: 'relative' }}>

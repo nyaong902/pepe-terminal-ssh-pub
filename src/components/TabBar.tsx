@@ -1,5 +1,6 @@
 // src/components/TabBar.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import { TabListMenu } from './TabListMenu';
 import { useTranslation } from 'react-i18next';
 import type { Tab, TabColor } from '../App';
 import { ContextMenu } from './ContextMenu';
@@ -291,6 +292,14 @@ export const TabBar: React.FC<Props> = ({ tabs, activeTabId, onChange, onAddTab,
           <button className="tab-scroll-btn" onClick={() => scrollBy(150)} title={t('scrollNext')}>›</button>
         </div>
       )}
+      {/* 모든 탭 보기 — 워크스페이스가 많을 때 목록에서 바로 고른다. */}
+      <TabListMenu
+        items={tabs.map(tab => ({ id: tab.id, label: tab.title }))}
+        activeId={activeTabId}
+        onSelect={id => onChange(id)}
+        onCloseItem={tabs.length > 1 ? (id => onCloseTab(id)) : undefined}
+        title={t('allTabs', { defaultValue: '모든 탭' })}
+      />
       {themeList && onThemeChange && (
         <select className="theme-select" value={themeName} onChange={e => onThemeChange(e.target.value)}>
           {themeList.map(t => <option key={t} value={t}>{t}</option>)}

@@ -68,7 +68,11 @@
     "vpnWs": "🔒 VPN",
     "pepeThingWs": "🔎 Pepe-Thing",
     "i18nWs": "🌍 Éditeur de traduction",
-    "remoteShare": "📱 Partage distant PePe"
+    "remoteShare": "📱 Partage distant PePe",
+    "captureShow": "📸 Afficher le bouton de capture",
+    "captureHide": "📸 Masquer le bouton de capture",
+    "devToolsShow": "🛠️ Afficher le bouton DevTools",
+    "devToolsHide": "🛠️ Masquer le bouton DevTools"
   },
   "help": {
     "title": "Aide",

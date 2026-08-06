@@ -2,6 +2,8 @@
 // 브라우저 워크스페이스 — Electron <webview> 로 외부 사이트 렌더.
 // 뒤로/앞으로/새로고침/URL 입력 바와 SSH SOCKS 프록시 선택을 제공.
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { TabListMenu } from './TabListMenu';
+import { middleClickClose } from '../utils/tabStrip';
 import { useTranslation } from 'react-i18next';
 import { emitDebugLog, isDebugLogEnabled } from '../utils/debugLog';
 
@@ -1873,7 +1875,7 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
               <div key={tab.id}
                 className={`bp-tab ${isActive ? 'active' : ''}`}
                 onClick={() => setActiveTabId(tab.id)}
-                onAuxClick={e => { if (e.button === 1) closeTab(tab.id); }}
+                {...middleClickClose(() => closeTab(tab.id))}
                 title={tab.url}>
                 <span className="bp-tab-label">{label}</span>
                 {tabs.length > 1 && (
@@ -1892,6 +1894,14 @@ export const BrowserPane: React.FC<Props> = ({ initialUrl, onTitleChange, connec
         )}
         <button className="bp-tab-add" onClick={() => openInNewTab('about:blank')}
           title={t('newTab', { defaultValue: '새 탭' })}>+</button>
+        {/* 모든 탭 보기 */}
+        <TabListMenu
+          items={tabs.map(tab => ({ id: tab.id, label: tab.title || tab.url || '새 탭', icon: '🌐' }))}
+          activeId={activeTabId}
+          onSelect={id => setActiveTabId(id)}
+          onCloseItem={id => closeTab(id)}
+          title={t('allTabs', { defaultValue: '모든 탭' })}
+        />
       </div>}
       {!chromeless && <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', background: '#222', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
         <button className="panel-btn" disabled={!canBack} onClick={() => webviewRef.current?.goBack()} title={t('back')}>◀</button>

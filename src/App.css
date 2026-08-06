@@ -3704,6 +3704,63 @@ body.popout-options .session-editor h3:first-child {
 .bp-tabs-scroll::-webkit-scrollbar-track,
 .bp-tabs-scroll::-webkit-scrollbar-thumb,
 .bp-tabs-scroll::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
+/* 앱 공용 탭 바 — 탭 목록만 스크롤하고 ‹ › ＋ 는 바깥에 고정한다(브라우저 워크스페이스의
+   .bp-tabs 와 같은 구조). 스크롤바는 완전히 숨긴다 — 전역 ::-webkit-scrollbar-button 때문에
+   그냥 두면 굵은 가로 바가 드러난다. 조작(휠/‹ ›/가운데클릭)은 src/utils/tabStrip.ts. */
+.pepe-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+/* 문서형 워크스페이스(오피스/한글/PDF/플로차트/미디어)의 탭 줄 — 원래 인라인 스타일 값 그대로. */
+.pepe-tabs-docs {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--win-border, #30363d);
+}
+.pepe-tabs-scroll {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.pepe-tabs-scroll::-webkit-scrollbar,
+.pepe-tabs-scroll::-webkit-scrollbar-button,
+.pepe-tabs-scroll::-webkit-scrollbar-track,
+.pepe-tabs-scroll::-webkit-scrollbar-thumb,
+.pepe-tabs-scroll::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
+.pepe-tab-scroll-group {
+  display: flex;
+  align-self: center;
+  border: 1px solid var(--win-border, #30363d);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 3px;
+  flex: 0 0 auto;
+}
+.pepe-tab-scroll-btn {
+  background: transparent;
+  border: none;
+  color: var(--win-text-dim, rgba(255,255,255,0.55));
+  font-size: 12px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pepe-tab-scroll-btn:hover { background: rgba(255,255,255,0.08); color: var(--win-text, #e6edf3); }
+
 .bp-tab {
   display: flex;
   align-items: center;
@@ -8416,9 +8473,12 @@ mark.claude-search-hit.current {
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid rgba(166, 200, 230, 0.12);
-  overflow-x: auto;
+  /* 스크롤은 안쪽 .pepe-tabs-scroll 이 담당한다 — 여기에 overflow-x:auto 를 두면 ‹ › 버튼까지
+     같이 밀려 사라지고 굵은 가로 스크롤바도 드러난다. */
+  overflow: hidden;
   flex: 0 0 auto;
 }
+.pepebox-tabbar .pepebox-tab { flex: 0 0 auto; }
 .pepebox-tab {
   display: flex;
   align-items: center;
@@ -9092,7 +9152,15 @@ mark.claude-search-hit.current {
   padding: 6px 8px;
   border-bottom: 1px solid rgba(123, 158, 190, 0.2);
   overflow-x: auto;
+  /* 스크롤바는 숨긴다 — 휠로 굴린다(MessengerWorkspace 의 attachWheelToScrollX). */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.messenger-emoji-tabs::-webkit-scrollbar,
+.messenger-emoji-tabs::-webkit-scrollbar-button,
+.messenger-emoji-tabs::-webkit-scrollbar-track,
+.messenger-emoji-tabs::-webkit-scrollbar-thumb,
+.messenger-emoji-tabs::-webkit-scrollbar-corner { display: none; width: 0; height: 0; }
 .messenger-emoji-tab {
   flex-shrink: 0;
   border: none;

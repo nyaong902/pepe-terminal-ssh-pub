@@ -1809,6 +1809,22 @@ useEffect(() => {
   // (qcWidth 제거됨 — QC 바는 항상 자연 너비)
   useEffect(() => { try { localStorage.removeItem('qcWidth'); } catch {} }, []);
   // 도구모음 바 표시/숨기기
+  // 도구모음의 화면 캡처 / 개발자 도구 버튼 — 둘 다 기본 숨김이고 메뉴 > 도구에서 켠다.
+  // localStorage 대신 config.json 에 남긴다(재설치해도 유지되고, 다른 UI 설정과 같은 자리다).
+  const [showCaptureBtn, setShowCaptureBtn] = useState(false);
+  const [showDevToolsBtn, setShowDevToolsBtn] = useState(false);
+  const toolbarBtnPrefsLoaded = useRef(false);
+  useEffect(() => {
+    (window as any).api?.getUIPrefs?.().then((prefs: any) => {
+      if (typeof prefs?.showCaptureButton === 'boolean') setShowCaptureBtn(prefs.showCaptureButton);
+      if (typeof prefs?.showDevToolsButton === 'boolean') setShowDevToolsBtn(prefs.showDevToolsButton);
+      toolbarBtnPrefsLoaded.current = true;
+    }).catch(() => { toolbarBtnPrefsLoaded.current = true; });
+  }, []);
+  useEffect(() => {
+    if (!toolbarBtnPrefsLoaded.current) return;   // 불러오기 전 초기값으로 덮어쓰지 않게
+    try { (window as any).api?.setUIPrefs?.({ showCaptureButton: showCaptureBtn, showDevToolsButton: showDevToolsBtn }); } catch {}
+  }, [showCaptureBtn, showDevToolsBtn]);
   const [showToolbar, setShowToolbar] = useState<boolean>(() => {
     try { const v = localStorage.getItem('showToolbar'); if (v === '0') return false; } catch {}
     return true;
@@ -4705,6 +4721,10 @@ useEffect(() => {
         { label: showQuickConnect ? tMenu('tools.quickConnectHide') : tMenu('tools.quickConnectShow'), action: () => setShowQuickConnect(v => !v) },
         { label: showClaudeChat ? tMenu('tools.claudeHide') : tMenu('tools.claudeShow'), action: () => setShowClaudeChat(v => !v) },
         { label: showBroadcast ? tMenu('tools.broadcastHide') : tMenu('tools.broadcastShow'), action: () => { setShowBroadcast(v => !v); } },
+        { label: showCaptureBtn ? tMenu('tools.captureHide') : tMenu('tools.captureShow'), action: () => setShowCaptureBtn(v => !v) },
+        // 캡처·개발자 도구 버튼은 도구모음에서 기본으로 뺐다 — 평소 쓰는 버튼이 아니라 자리만
+        // 차지했다. 여기서 켜면 옵션(⚙️) 오른쪽에 붙는다.
+        { label: showDevToolsBtn ? tMenu('tools.devToolsHide') : tMenu('tools.devToolsShow'), action: () => setShowDevToolsBtn(v => !v) },
         { separator: true, label: '' },
         {
           label: (
@@ -5490,12 +5510,6 @@ useEffect(() => {
                 title={tApp('toolbar.dragHint')}
                 onMouseDown={onDragStart}
               >⋮⋮</span>
-              <button
-                className="tool-btn"
-                title="화면 캡처 (F9) — 우클릭: 저장 위치 변경"
-                onClick={() => { void runDevCapture(); }}
-                onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
-              >📸</button>
               <button className="tool-btn" title={tApp('toolbar.fileTransferTooltip')} onClick={() => { void openFileTransferTab(tApp('tabs.fileTransfer')); }}>📁</button>
               <button className="tool-btn" title="SQL Tool" onClick={openSqlToolPicker}>🗄️</button>
               {availableFeatures.chatArchive && <button className="tool-btn" title={tApp('toolbar.chatArchiveSearchTooltip')} onClick={() => addChatArchiveSearchTab()}>🗄</button>}
@@ -5680,11 +5694,23 @@ useEffect(() => {
             try { const p = await (window as any).api.getSessionsPath(); setSessionsPathDisplay(p || ''); } catch {}
             setShowOptions(true);
           }}>⚙️</button>
-          <button
-            className="tool-btn"
-            title={tApp('toolbar.devTools', { defaultValue: '개발자도구' })}
-            onClick={() => { try { (window as any).api?.windowToggleDevTools?.(); } catch {} }}
-          >🛠️</button>
+          {/* 화면 캡처 — 기본은 숨김(메뉴 > 도구에서 켠다). 켜면 옵션 오른쪽에 붙는다. */}
+          {showCaptureBtn && (
+            <button
+              className="tool-btn"
+              title="화면 캡처 (F9) — 우클릭: 저장 위치 변경"
+              onClick={() => { void runDevCapture(); }}
+              onContextMenu={e => { e.preventDefault(); void pickCaptureFolder(); }}
+            >📸</button>
+          )}
+          {/* 개발자 도구 — 기본 숨김(메뉴 > 도구에서 켠다). */}
+          {showDevToolsBtn && (
+            <button
+              className="tool-btn"
+              title={tApp('toolbar.devTools', { defaultValue: '개발자도구' })}
+              onClick={() => { try { (window as any).api?.windowToggleDevTools?.(); } catch {} }}
+            >🛠️</button>
+          )}
             </div>
           );
           return (
