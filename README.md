@@ -15,7 +15,7 @@
 | [소프트폰 (MicroSIP / SSW)](features/softphone.md) | SIP 소프트폰 — 통화, Call Flow, SIP 메시지 시퀀스, 부가서비스 |
 | [미디어 워크스페이스](features/media.md) | 녹취 음원 재생, pcap에서 RTP 오디오 추출 |
 | [파일/디렉터리 비교](features/file-compare.md) | 로컬↔원격 파일·폴더 diff |
-| [로그 분석](features/log-analysis.md) | 실시간 로그 tail, 필터, AI 분석 |
+| [로그 분석](features/log-analysis.md) | 실시간 로그 tail, 필터, AI 분석, pcap 패킷 분석·콜플로우 |
 | [VPN (OpenVPN)](features/vpn.md) | .ovpn 프로필로 사내망 연결 |
 | [PePe Messenger](features/messenger.md) | 같은 네트워크 PePe 사용자와 채팅/파일 전송 |
 | [작업일지](features/work-journal.md) | 일일 할 일 + AI 주간 요약 |
