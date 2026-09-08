@@ -47,6 +47,8 @@ AI Chat 탭을 **창으로 분리하면 `SSH 컨텍스트` 목록이 비어 있�
 
 - 로그인해 둔 `gh auth token` 을 그대로 씁니다 — `copilot login` 을 따로 하지 않아도 됩니다
   (실패하면 토큰을 직접 입력)
+- Windows 설치는 **`winget install GitHub.Copilot`** 으로 안내합니다(npm 전역 설치도
+  그대로 됩니다). mac 은 npm 경로입니다
 - 모델 선택칸이 없습니다. Copilot 에 모델 목록 API 가 없어 `--model auto` 로 맡깁니다
 
 ## 💾 백업 — 두 PC 를 오가도 작업이 사라지지 않게
